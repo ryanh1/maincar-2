@@ -56,7 +56,8 @@ other stacks on this machine (loadwire, maincar, lita, bari).
 | `npm run db:studio`      | Prisma Studio                                              |
 | `npm run docker:up`      | Start Postgres + MinIO                                     |
 | `npm run docker:down`    | Stop them (data is kept — it lives in a named volume)      |
-| `npm run firebase:export`| Save the emulator's accounts to `firebase/data`            |
+| `npm run firebase:dev`   | Just the Firebase emulators                                |
+| `npm run firebase:save`  | Checkpoint the emulator's accounts right now               |
 
 ## The public tunnel
 
@@ -71,9 +72,29 @@ in `.env` is the address callback URLs are built from.
 
 ## Firebase emulator state
 
-The emulators start with `--import data --export-on-exit data`, so the accounts
-you sign in with today are still there tomorrow. A crash skips the export — run
-`npm run firebase:export` to checkpoint without stopping anything.
+The accounts you sign in with locally are meant to survive a restart, and
+`--export-on-exit` alone does not manage it: it runs only on a clean shutdown.
+Kill the terminal, or let the machine sleep, and every local account is gone.
+
+So [`scripts/firebase-emulator.sh`](scripts/firebase-emulator.sh) wraps the
+emulator and does three things the bare command does not:
+
+- **Saves the accounts to `firebase/data` every 60 seconds** while it runs, and
+  once more on the way out. A `kill -9` costs you at most the last minute.
+  Override the interval with `FIREBASE_AUTOSAVE_SECONDS`.
+- **Frees every port `firebase.json` pins** before starting. The emulators are
+  separate processes, so a hard kill can leave any one of them holding its port —
+  and the next start dies on "port taken" for an emulator you were not thinking
+  about. It also saves the accounts off a stale emulator before stopping it.
+- **Skips `--import` when there is nothing to import**, so a fresh clone starts
+  instead of failing with "Could not find import directory".
+
+`npm run firebase:save` checkpoints on demand, without restarting anything.
+
+Accounts are read from the emulator's REST API rather than through
+`firebase emulators:export`, because that command follows a global hub locator
+file and can write an empty export from a different project's emulator over your
+good one. The save refuses to replace a non-empty file with an empty one.
 
 ## Conventions
 

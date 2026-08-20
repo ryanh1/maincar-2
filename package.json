@@ -5,8 +5,10 @@
   "license": "UNLICENSED",
   "description": "maincar-2",
   "scripts": {
-    "dev": "concurrently -n docker,vite,server,firebase -c blue,cyan,green,yellow \"npm run docker:up\" \"npm --prefix vite run dev\" \"npm --prefix server run dev\" \"npm --prefix firebase run start-with-import\"",
-    "dev:tunnel": "concurrently -n docker,vite,server,firebase,tunnel -c blue,cyan,green,yellow,magenta \"npm run docker:up\" \"npm --prefix vite run dev\" \"npm --prefix server run dev\" \"npm --prefix firebase run start-with-import\" \"npm run tunnel\"",
+    "dev": "concurrently -n docker,vite,server,firebase -c blue,cyan,green,yellow \"npm run docker:up\" \"npm --prefix vite run dev\" \"npm --prefix server run dev\" \"npm run firebase:dev\"",
+    "dev:tunnel": "concurrently -n docker,vite,server,firebase,tunnel -c blue,cyan,green,yellow,magenta \"npm run docker:up\" \"npm --prefix vite run dev\" \"npm --prefix server run dev\" \"npm run firebase:dev\" \"npm run tunnel\"",
+    "firebase:dev": "bash scripts/firebase-emulator.sh",
+    "firebase:save": "bash scripts/firebase-emulator.sh --save-only",
     "docker:up": "docker compose --project-directory docker -f docker/docker-compose.yml up -d",
     "docker:down": "docker compose --project-directory docker -f docker/docker-compose.yml down",
     "docker:logs": "docker compose --project-directory docker -f docker/docker-compose.yml logs -f",
@@ -23,7 +25,7 @@
     "db:migrate": "npm --prefix server run db:migrate",
     "db:deploy": "npm --prefix server run db:deploy",
     "db:studio": "npm --prefix server run db:studio",
-    "firebase:export": "npm --prefix firebase run export"
+    "db:studio": "npm --prefix server run db:studio"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
