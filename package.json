@@ -1,0 +1,34 @@
+{
+  "name": "maincar-2",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "maincar-2",
+  "scripts": {
+    "dev": "concurrently -n docker,vite,server,firebase -c blue,cyan,green,yellow \"npm run docker:up\" \"npm --prefix vite run dev\" \"npm --prefix server run dev\" \"npm --prefix firebase run start-with-import\"",
+    "dev:tunnel": "concurrently -n docker,vite,server,firebase,tunnel -c blue,cyan,green,yellow,magenta \"npm run docker:up\" \"npm --prefix vite run dev\" \"npm --prefix server run dev\" \"npm --prefix firebase run start-with-import\" \"npm run tunnel\"",
+    "docker:up": "docker compose --project-directory docker -f docker/docker-compose.yml up -d",
+    "docker:down": "docker compose --project-directory docker -f docker/docker-compose.yml down",
+    "docker:logs": "docker compose --project-directory docker -f docker/docker-compose.yml logs -f",
+    "tunnel": "zrok share public localhost:3010 --headless -n public:maincar2-api",
+    "install:all": "npm install && npm --prefix server install && npm --prefix vite install && npm --prefix firebase install",
+    "build": "npm --prefix server run build && npm --prefix vite run build",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix vite run typecheck",
+    "lint": "npm --prefix server run lint && npm --prefix vite run lint",
+    "test": "npm --prefix server run test && npm --prefix vite run test",
+    "test:watch": "concurrently -n server,web -c green,cyan \"npm --prefix server run test:watch\" \"npm --prefix vite run test:watch\"",
+    "test:server": "npm --prefix server run test",
+    "test:web": "npm --prefix vite run test",
+    "db:generate": "npm --prefix server run db:generate",
+    "db:migrate": "npm --prefix server run db:migrate",
+    "db:deploy": "npm --prefix server run db:deploy",
+    "db:studio": "npm --prefix server run db:studio",
+    "firebase:export": "npm --prefix firebase run export"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

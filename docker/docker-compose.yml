@@ -1,0 +1,92 @@
+# Local dev stack for maincar-2: Postgres + MinIO.
+#
+# The project name is `maincar2` — deliberately different from `maincar`,
+# `loadwire`, `lita` and `bari*`, so this stack shows up as its own group in
+# Docker Desktop and can never adopt another project's containers or volumes.
+#
+# Every published port is unique on this machine too (checked against the other
+# stacks in ~/Documents/Coding/My Projects):
+#   5440  Postgres   (loadwire 5432, bari2 5433, maincar/bari3/lita-ops 5434,
+#                     loadwire-ops 5435)
+#   9010  MinIO API      (loadwire/lita 9000, maincar/bari2 9002, bari3 9004)
+#   9011  MinIO console  (loadwire/lita 9001, maincar/bari2 9003, bari3 9005)
+name: maincar2
+
+networks:
+  app_network:
+    external: false
+
+services:
+  database:
+    container_name: maincar2-postgres
+    image: postgres:16-alpine
+    restart: always
+    volumes:
+      # A NAMED VOLUME, not a host folder. The cluster lives on the Docker VM's own
+      # filesystem, so Postgres writes never cross Docker Desktop's host file bridge.
+      # `name: maincar2` above is pinned, so this always resolves to the same volume
+      # `maincar2_pgdata` no matter which directory compose is run from.
+      # NOTE: this means `docker compose down -v` DELETES the database.
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: maincar2
+    networks:
+      - app_network
+    ports:
+      - 5440:5432
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d maincar2']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command:
+      - -c
+      - listen_addresses=*
+      - -c
+      - wal_level=logical
+
+  minio:
+    container_name: maincar2-minio
+    image: minio/minio:latest
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      # Env names kept aligned with the MinIO docs.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      # A named volume, for the same reason as the database above.
+      - miniodata:/data
+    networks:
+      - app_network
+    ports:
+      - 9010:9000
+      - 9011:9001
+
+  minio-init:
+    container_name: maincar2-minio-init
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    networks:
+      - app_network
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do sleep 1; done;
+      mc mb --ignore-existing local/$$S3_BUCKET;
+      mc anonymous set none local/$$S3_BUCKET;
+      echo 'MinIO ready';
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-maincar2-local}
+
+volumes:
+  # Docker-managed. Inspect with `docker volume inspect maincar2_pgdata`.
+  # To reset local data use `npm run db:reset` — it backs up first.
+  pgdata:
+  miniodata:

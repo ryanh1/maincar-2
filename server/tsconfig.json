@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "outDir": "./dist",
+    // rootDir is the package root, not src/, because `dependencies/` sits beside
+    // `src/` and both are compiled. The build therefore emits dist/src/... and
+    // dist/dependencies/..., which is why `main` is dist/src/index.js.
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*", "dependencies/**/*", "prisma.config.ts", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist", "src/generated"]
+}

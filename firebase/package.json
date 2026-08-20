@@ -1,0 +1,11 @@
+{
+  "name": "maincar2-firebase",
+  "private": true,
+  "scripts": {
+    "start-with-import": "firebase emulators:start --config firebase.json --project maincar-2 --import data --export-on-exit data",
+    "export": "firebase emulators:export data --config firebase.json --project maincar-2 --force"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.19.0"
+  }
+}

@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/*
+!.vscode/tasks.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables (keep the .example files)
+.env
+.env.local
+.env.production
+.env.staging
+.env.development
+.env.old
+.env.deploy.*
+
+# Firebase emulator export/import + debug
+firebase/data/*
+!firebase/data/.gitkeep
+firebase_key.json
+firestore-debug.log
+firebase-debug.log
+firebase-export-*/
+
+# Docker local volumes (this stack uses named volumes, but keep the guard)
+docker/data/
+
+# Prisma generated client
+server/src/generated/
+
+# Test/coverage
+coverage/
+
+.vercel
+.gstack/

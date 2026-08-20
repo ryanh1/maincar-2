@@ -1,0 +1,67 @@
+// The connection URL is NOT set here — it comes from prisma.config.ts, which
+// reads the repo-root .env. That is the Prisma 7 style.
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -----------------------------------------------------------------------------
+// House rules for every model in this file (CLAUDE.md → Database / Prisma):
+//
+//   1. EVERY model has `createdAt` and `updatedAt`. No exceptions.
+//   2. NEVER use a Prisma `enum`. Use a String and document the allowed values in
+//      a comment beside the field, with a matching TypeScript union in app code.
+//      Postgres enums need an ALTER TYPE dance to add or remove a value; a String
+//      column just changes.
+//   3. Every org-scoped model carries `orgId` and is indexed on it. Reads AND
+//      writes filter on it.
+// -----------------------------------------------------------------------------
+
+model Org {
+  id        String   @id @default(cuid())
+  name      String?
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+}
+
+model User {
+  id String @id @default(cuid())
+
+  // The Firebase Auth uid. This is the join between the ID token on a request and
+  // the row here; it is how `requireAuth` resolves a caller.
+  firebaseUid String @unique
+
+  email     String  @unique
+  firstName String?
+  lastName  String?
+  title     String?
+  imageUrl  String?
+
+  // Allowed values: "basic", "admin", "superadmin". A String[] rather than an
+  // enum, per rule 2 above. The TypeScript union lives in vite/src/lib/roles.ts
+  // and server/src/lib/roles.ts.
+  roles String[] @default(["basic"])
+
+  // false blocks sign-in without deleting anything.
+  enabled Boolean @default(true)
+
+  // IANA timezone, e.g. "America/New_York". Captured at onboarding, defaulted
+  // from the browser. Every time-of-day shown to this user renders in it
+  // (CLAUDE.md → Dates & Times).
+  timeZone String?
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+}

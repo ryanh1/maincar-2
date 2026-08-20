@@ -1,0 +1,215 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+ * Tailwind v4 is configured HERE, in CSS — there is no tailwind.config.js and no
+ * postcss.config.js. `@theme inline` maps design tokens onto Tailwind utilities,
+ * so `bg-primary`, `text-muted-foreground`, `border-border` all resolve to the
+ * CSS variables defined in `:root` / `.dark` below.
+ *
+ * Rule: components never hard-code a color. No `bg-emerald-500`, no hex values.
+ * Add a token here and use its semantic utility instead.
+ * ------------------------------------------------------------------------- */
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Neutral (cool slate) shadows, so light-mode surfaces read as real elevated
+     cards rather than faint outlines. Overrides Tailwind's subtle defaults. */
+  --shadow-xs: 0 1px 2px 0 rgb(15 23 42 / 0.05);
+  --shadow-sm: 0 1px 3px 0 rgb(15 23 42 / 0.08), 0 1px 2px -1px rgb(15 23 42 / 0.06);
+  --shadow-md: 0 4px 12px -2px rgb(15 23 42 / 0.1), 0 2px 6px -2px rgb(15 23 42 / 0.06);
+  --shadow-lg: 0 12px 28px -6px rgb(15 23 42 / 0.16), 0 6px 12px -4px rgb(15 23 42 / 0.08);
+  --shadow-xl: 0 24px 48px -12px rgb(15 23 42 / 0.2), 0 10px 20px -8px rgb(15 23 42 / 0.1);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Brand accent — amber. The one true accent: stats, highlights, the
+     "needs you" attention state. Distinct from shadcn's `--accent`, which is the
+     neutral hover/selected surface above. */
+  --color-accent-brand: var(--accent-brand);
+  --color-accent-2: var(--accent-2);
+
+  /* Semantic status colors. Use these, never a raw Tailwind palette class. */
+  --color-status-active: var(--status-active);
+  --color-status-pending: var(--status-pending);
+  --color-status-attention: var(--status-attention);
+  --color-status-success: var(--status-success);
+  --color-status-failed: var(--status-failed);
+  --color-status-muted: var(--status-muted);
+}
+
+:root {
+  --radius: 0.625rem;
+  --primary: #4f46e5; /* indigo-600 */
+  --primary-hover: #4338ca; /* indigo-700 */
+
+  /* Neutrals are TRUE COOL GRAY (slate), NEVER tinted with the brand hue.
+     Tinting every surface with a few percent of indigo makes the whole app read
+     pastel purple. Slate is blue WITHOUT red, so it stays crisp. Indigo appears
+     ONLY on real brand affordances: primary buttons, focus rings, links, and the
+     active nav item. */
+  --background: #ffffff;
+  --foreground: #0f172a; /* slate-900 */
+  --card: #ffffff; /* lifts off the bg via border + shadow, not fill */
+  --card-foreground: var(--foreground);
+  --popover: #ffffff;
+  --popover-foreground: var(--foreground);
+
+  --primary-foreground: #ffffff;
+  --secondary: #f1f5f9; /* slate-100 */
+  --secondary-foreground: var(--foreground);
+  --muted: #f1f5f9; /* slate-100 */
+  --muted-foreground: #64748b; /* slate-500 */
+  --accent: #e2e8f0; /* slate-200 — neutral hover/selected surface */
+  --accent-foreground: var(--foreground);
+  --destructive: #dc2626; /* red-600 */
+  --border: #e2e8f0; /* slate-200 */
+  --input: #e2e8f0;
+  --ring: var(--primary);
+
+  --accent-brand: #f59e0b; /* amber-500 */
+  --accent-2: #fbbf24; /* amber-400 */
+
+  /* Dark sidebar in both themes — the anchor a pale light UI needs. It makes the
+     white content area read brighter by contrast. */
+  --sidebar: #0f172a; /* slate-900 */
+  --sidebar-foreground: #cbd5e1; /* slate-300 */
+  --sidebar-accent: #4338ca; /* indigo-700 — active nav */
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #1e293b; /* slate-800 */
+  --sidebar-ring: var(--ring);
+
+  --status-active: #0284c7; /* sky-600 — in progress, neutral */
+  --status-pending: var(--primary); /* the actionable state — brand indigo */
+  --status-attention: #d97706; /* amber-600 — attention, not error */
+  --status-success: #16a34a; /* green-600 */
+  --status-failed: var(--destructive);
+  --status-muted: var(--muted-foreground); /* cancelled / ignored */
+}
+
+.dark {
+  /* Indigo-600 is too dark to read on a near-black surface, so dark mode steps
+     the brand up to indigo-500. */
+  --primary: #6366f1; /* indigo-500 */
+  --primary-hover: #818cf8; /* indigo-400 */
+
+  /* Same discipline in dark: neutral cool slate-navy, NOT indigo-washed. */
+  --background: #0a0f1a;
+  --foreground: #e6e9f0;
+  --card: #111725;
+  --card-foreground: var(--foreground);
+  --popover: #111725;
+  --popover-foreground: var(--foreground);
+  --primary-foreground: #ffffff;
+  --secondary: #1b2333;
+  --secondary-foreground: var(--foreground);
+  --muted: #161d2b;
+  --muted-foreground: #94a3b8; /* slate-400 */
+  --accent: #1e2738;
+  --accent-foreground: var(--foreground);
+  --destructive: #ef4444; /* red-500 */
+  --border: #273042;
+  --input: #222b3b;
+  --ring: var(--primary);
+
+  --accent-brand: #f59e0b;
+  --accent-2: #fbbf24;
+
+  --sidebar: #0b1120;
+  --sidebar-foreground: #cbd5e1;
+  --sidebar-accent: #4f46e5;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #1e293b;
+  --sidebar-ring: var(--ring);
+
+  --status-active: #38bdf8; /* sky-400 */
+  --status-pending: var(--primary);
+  --status-attention: #f59e0b; /* amber-500 */
+  --status-success: #22c55e; /* green-500 */
+  --status-failed: var(--destructive);
+  --status-muted: var(--muted-foreground);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    height: 100%;
+  }
+  html,
+  body,
+  #root {
+    min-height: 100dvh;
+    height: 100%;
+    overflow: hidden;
+  }
+  #root {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  body {
+    @apply bg-background text-foreground;
+    accent-color: var(--primary);
+    font-feature-settings: "cv11", "ss01", "ss03";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+  button,
+  [role="button"] {
+    @apply cursor-pointer;
+  }
+  button:disabled,
+  [role="button"][aria-disabled="true"] {
+    @apply cursor-not-allowed;
+  }
+}
+
+/* Headline tightening. Apply to page titles and large headings, not body copy. */
+.display {
+  letter-spacing: -0.02em;
+}
+
+/* Tabular figures, so columns of numbers align and counters do not jitter.
+   Use on stats, counts, money — anything in a numeric column. */
+.stat-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "lnum";
+  letter-spacing: -0.01em;
+}
