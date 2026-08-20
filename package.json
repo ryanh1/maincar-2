@@ -24,7 +24,6 @@
     "db:generate": "npm --prefix server run db:generate",
     "db:migrate": "npm --prefix server run db:migrate",
     "db:deploy": "npm --prefix server run db:deploy",
-    "db:studio": "npm --prefix server run db:studio",
     "db:studio": "npm --prefix server run db:studio"
   },
   "devDependencies": {
