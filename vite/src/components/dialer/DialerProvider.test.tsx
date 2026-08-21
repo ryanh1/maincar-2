@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 
 import { DialerProvider } from './DialerProvider'
-import { useDialer } from './dialerContext'
+import { useDialer, useDialerOptional } from './dialerContext'
 
 function renderDialer() {
   return renderHook(() => useDialer(), { wrapper: DialerProvider })
@@ -80,6 +80,14 @@ describe('DialerProvider', () => {
     expect(result.current.phase).toBe('idle')
     expect(result.current.dialing).toBe(false)
     expect(result.current.elapsedSeconds).toBe(0)
+  })
+
+  it('useDialerOptional returns null outside the provider, and the value inside', () => {
+    const { result: outside } = renderHook(() => useDialerOptional())
+    expect(outside.current).toBeNull()
+
+    const { result: inside } = renderHook(() => useDialerOptional(), { wrapper: DialerProvider })
+    expect(inside.current?.phase).toBe('idle')
   })
 
   it('throws when read outside the provider', () => {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 
+import { ApiError } from '@/lib/api'
 import { NumericKeypad } from './NumericKeypad'
 
 /**
@@ -78,6 +79,15 @@ describe('NumericKeypad', () => {
     expect(phoneInput().value).toBe('91')
   })
 
+  it('drops the last character on Delete too', () => {
+    render(<NumericKeypad />)
+
+    pressKey('9')
+    pressKey('1')
+    fireEvent.keyDown(phoneInput(), { key: 'Delete' })
+    expect(phoneInput().value).toBe('9')
+  })
+
   it('places the call on Enter when no call is live', () => {
     render(<NumericKeypad />)
 
@@ -106,6 +116,50 @@ describe('NumericKeypad', () => {
     pressKey('5')
     fireEvent.keyDown(phoneInput(), { key: 'Enter' })
     expect(mutateMock).not.toHaveBeenCalled()
+  })
+
+  it('does not dial again while a placed call is still in flight', () => {
+    useCreateCallMock.mockReturnValue({ mutate: mutateMock, isPending: true })
+    render(<NumericKeypad />)
+
+    pressKey('5')
+    fireEvent.keyDown(phoneInput(), { key: 'Enter' })
+    expect(mutateMock).not.toHaveBeenCalled()
+  })
+
+  it('tells the rep to pick an organization instead of placing a call with none', () => {
+    useAuthMock.mockReturnValue({ org: null })
+    render(<NumericKeypad />)
+
+    pressKey('5')
+    fireEvent.keyDown(phoneInput(), { key: 'Enter' })
+
+    expect(mutateMock).not.toHaveBeenCalled()
+    expect(toastErrorMock).toHaveBeenCalledWith('Select an organization to call from.')
+  })
+
+  it("surfaces the server's own message when the call is refused", () => {
+    mutateMock.mockImplementation((_vars, opts) =>
+      opts.onError(new ApiError('You already have a call to this number in progress.', 409)),
+    )
+    render(<NumericKeypad />)
+
+    pressKey('5')
+    fireEvent.keyDown(phoneInput(), { key: 'Enter' })
+
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      'You already have a call to this number in progress.',
+    )
+  })
+
+  it('falls back to a generic line when the failure is not an ApiError', () => {
+    mutateMock.mockImplementation((_vars, opts) => opts.onError(new Error('network down')))
+    render(<NumericKeypad />)
+
+    pressKey('5')
+    fireEvent.keyDown(phoneInput(), { key: 'Enter' })
+
+    expect(toastErrorMock).toHaveBeenCalledWith('Could not place the call. Try again.')
   })
 
   it('sends a DTMF tone through the seam when a call is live, and still shows the press', () => {

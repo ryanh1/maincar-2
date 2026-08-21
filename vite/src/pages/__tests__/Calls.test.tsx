@@ -195,6 +195,25 @@ describe('URL state', () => {
     expect(screen.queryByRole('button', { name: 'Sort by Transcript' })).not.toBeInTheDocument()
   })
 
+  it('shows a Clear button only while a search is active, and clearing drops q', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Calls />, { initialEntries: ['/calls?q=555&page=2'] })
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }))
+    await waitFor(() =>
+      expect(useGetCallsMock).toHaveBeenLastCalledWith(
+        'org-a',
+        expect.objectContaining({ q: undefined, page: 1 }),
+      ),
+    )
+  })
+
+  it('shows no Clear button when there is no search', () => {
+    renderWithProviders(<Calls />)
+
+    expect(screen.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument()
+  })
+
   it('typing in the search updates q and returns to page one', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Calls />, { initialEntries: ['/calls?page=4'] })

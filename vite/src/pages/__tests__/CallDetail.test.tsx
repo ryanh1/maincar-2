@@ -173,6 +173,16 @@ describe('the transcript', () => {
     ).toBeInTheDocument()
   })
 
+  it('reads a done-but-empty transcript as a plain fact, with no Copy button', () => {
+    useGetCallDetailMock.mockReturnValue(
+      detailState({ data: { call: callDetail({ transcriptStatus: 'done', transcript: '' }) } }),
+    )
+    renderDetail()
+
+    expect(screen.getByText('No speech was transcribed.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Copy transcript' })).not.toBeInTheDocument()
+  })
+
   it('copies the transcript to the clipboard', async () => {
     // fireEvent, not userEvent: userEvent.setup() installs its own clipboard stub
     // that would replace the mock this assertion reads.
@@ -181,6 +191,19 @@ describe('the transcript', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy transcript' }))
     await waitFor(() =>
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Hello, this is a test transcript.'),
+    )
+  })
+
+  it('tells the reader to copy by hand when the clipboard write fails', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
+      configurable: true,
+    })
+    renderDetail()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy transcript' }))
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith('Could not copy the transcript. Copy it by hand.'),
     )
   })
 })

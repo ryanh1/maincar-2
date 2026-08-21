@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 
+import { ApiError } from '@/lib/api'
 import { InCallControls } from './InCallControls'
 
 /**
@@ -49,6 +50,10 @@ describe('InCallControls', () => {
     useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 0 })
     rerender(<InCallControls orgId="org-1" callId="call-1" />)
     expect(screen.getByText('Connected')).toBeInTheDocument()
+
+    useDialerMock.mockReturnValue({ phase: 'completed', elapsedSeconds: 0 })
+    rerender(<InCallControls orgId="org-1" callId="call-1" />)
+    expect(screen.getByText('Call ended')).toBeInTheDocument()
   })
 
   it('toggles mute: flips the visible state and calls the seam', () => {
@@ -91,6 +96,28 @@ describe('InCallControls', () => {
 
     expect(mutateMock).toHaveBeenCalledTimes(1)
     expect(mutateMock.mock.calls[0][0]).toEqual({ orgId: 'org-1', callId: 'call-1' })
+  })
+
+  it("surfaces the server's own message when the hang-up is refused", () => {
+    mutateMock.mockImplementation((_vars, opts) =>
+      opts.onError(new ApiError('This call has already ended, so there is nothing to hang up.', 400)),
+    )
+    renderControls()
+
+    fireEvent.click(screen.getByRole('button', { name: 'End call' }))
+
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      'This call has already ended, so there is nothing to hang up.',
+    )
+  })
+
+  it('falls back to a generic line when the hang-up failure is not an ApiError', () => {
+    mutateMock.mockImplementation((_vars, opts) => opts.onError(new Error('offline')))
+    renderControls()
+
+    fireEvent.click(screen.getByRole('button', { name: 'End call' }))
+
+    expect(toastErrorMock).toHaveBeenCalledWith('Could not end the call. Try again.')
   })
 
   it('does not fire a second hang-up while one is in flight', () => {
