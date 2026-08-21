@@ -1,11 +1,8 @@
-import { Home, LogOut, Pencil, Phone, Settings } from 'lucide-react'
+import { Home, LogOut, Phone, Settings } from 'lucide-react'
 import { Link, NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
-import { useComposerOptional } from '@/components/composer/composerContext'
-import { useIsDesktop } from '@/components/composer/desktopOnly'
 import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { OrgSwitcher } from '@/components/OrgSwitcher'
 import { useGetIntegrationHealth } from '@/hooks/integrations'
 import { cn } from '@/lib/utils'
@@ -44,13 +41,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const health = useGetIntegrationHealth(org?.id)
   const brokenCount = health.data?.broken.length ?? 0
 
-  // Compose is drawn only where it can actually open something. Below `lg` the
-  // dock is gone (see `desktopOnly.ts`), and outside `ComposerProvider` there is
-  // no state to open a card into — a button in either case would be a
-  // live-looking control that does nothing.
-  const composer = useComposerOptional()
-  const isDesktop = useIsDesktop()
-
   return (
     <>
       {open && (
@@ -74,26 +64,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         <div className="border-b border-sidebar-border p-3">
           <OrgSwitcher />
         </div>
-
-        {composer && isDesktop && (
-          <div className="p-3 pb-0">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  className="w-full justify-start"
-                  onClick={() => void composer.openComposer()}
-                >
-                  <Pencil size={16} />
-                  Compose
-                </Button>
-              </TooltipTrigger>
-              {/* The provider comes from App.tsx, at the root. */}
-              <TooltipContent side="right">Press c to compose.</TooltipContent>
-            </Tooltip>
-          </div>
-        )}
 
         <nav className="flex flex-1 flex-col gap-1 p-3">
           {NAV.map(({ to, label, icon: Icon }) => {

@@ -5,6 +5,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { SIDEBAR_WIDTH_PX } from '@/components/sidebarWidth'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import type { EmailDraft } from '@/lib/emailTypes'
 import { ComposerContext, type ComposerContextValue } from './composerContext'
 import { ComposerDock } from './ComposerDock'
@@ -33,6 +34,7 @@ interface Stubs {
   reopenCard: ReturnType<typeof vi.fn>
   discardDraft: ReturnType<typeof vi.fn>
   saveDraft: ReturnType<typeof vi.fn>
+  openComposer: ReturnType<typeof vi.fn>
 }
 
 /**
@@ -53,45 +55,64 @@ function renderDock(
     reopenCard: vi.fn().mockResolvedValue(undefined),
     discardDraft: vi.fn().mockResolvedValue(undefined),
     saveDraft: vi.fn().mockResolvedValue(undefined),
+    openComposer: vi.fn().mockResolvedValue(null),
   }
 
   const value: ComposerContextValue = {
     drafts,
     openDrafts: drafts.filter((d) => d.isOpen),
     keptDrafts: drafts.filter((d) => !d.isOpen),
-    openComposer: vi.fn().mockResolvedValue(null),
     ...stubs,
     closeCard: vi.fn().mockResolvedValue(undefined),
   }
 
+  // The dock's own icon rail (EC-9) wraps an `IconButton`, which throws
+  // outside a `TooltipProvider` — the one `App.tsx` mounts at the root, stood
+  // in for here the way `renderWithProviders` does for a full-page test.
   const { container } = render(
-    <ComposerContext.Provider value={value}>
-      <ComposerDock renderCard={(draft) => <article>{draftTitle(draft)}</article>} />
-    </ComposerContext.Provider>,
+    <TooltipProvider>
+      <ComposerContext.Provider value={value}>
+        <ComposerDock renderCard={(draft) => <article>{draftTitle(draft)}</article>} />
+      </ComposerContext.Provider>
+    </TooltipProvider>,
   )
 
   return { ...stubs, container }
 }
 
 describe('ComposerDock', () => {
-  it('renders nothing at all when the rep has no drafts', () => {
-    const { container } = renderDock([])
+  it('still draws the bar, with only the compose button, when the rep has no drafts', () => {
+    renderDock([])
 
-    expect(container).toBeEmptyDOMElement()
+    // EC-9: the bar hosts a standing action now, so it can no longer render
+    // nothing just because there is nothing to autosave.
+    expect(screen.getByRole('region', { name: 'Email composer dock' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create a new email draft' })).toBeInTheDocument()
+    expect(screen.queryByRole('article')).not.toBeInTheDocument()
   })
 
-  it('reserves the dialer corner and stays transparent to the pointer', () => {
+  it('opens a composer when the rep clicks the compose button', async () => {
+    const user = userEvent.setup()
+    const { openComposer } = renderDock([])
+
+    await user.click(screen.getByRole('button', { name: 'Create a new email draft' }))
+
+    expect(openComposer).toHaveBeenCalledTimes(1)
+  })
+
+  it('draws a real bar the whole width of the main content, not a transparent strip', () => {
     renderDock([makeDraft({ subject: 'Quote' })])
 
-    const dock = screen.getByRole('region', { name: 'Email drafts' })
-    expect(dock).toHaveStyle({ right: '368px' })
-    expect(dock).toHaveClass('pointer-events-none', 'fixed', 'bottom-0', 'z-40')
-    // The card is what takes the click, not the strip around it.
-    expect(screen.getByRole('article').parentElement).toHaveClass('pointer-events-auto')
+    const dock = screen.getByRole('region', { name: 'Email composer dock' })
+    // Starts where the sidebar ends, runs to the window edge, and pads its own
+    // right side clear of the dialer's reserved corner.
+    expect(dock).toHaveStyle({ left: '224px', right: '0px', paddingRight: '368px' })
+    expect(dock).toHaveClass('fixed', 'bottom-0', 'z-40', 'h-10', 'border-t', 'border-border', 'bg-muted')
   })
 
   it('lays the newest card out rightmost', () => {
-    // 2000 - 224 sidebar - 368 dialer = 1408 px, which holds three 396 px slots.
+    // 2000 - 224 sidebar - 368 dialer - 36 icon rail = 1372 px, which holds
+    // three 396 px slots.
     renderDock(
       [
         makeDraft({ id: 'a', subject: 'Oldest' }),
@@ -109,8 +130,8 @@ describe('ComposerDock', () => {
   })
 
   it('collapses the oldest cards to chips when the window cannot fit them all', () => {
-    // 1100 - 224 sidebar - 368 dialer = 508 px of dock, which holds exactly one
-    // 396 px card.
+    // 1100 - 224 sidebar - 368 dialer - 36 icon rail = 472 px of dock, which
+    // holds exactly one 396 px card.
     renderDock(
       [
         makeDraft({ id: 'a', subject: 'Oldest' }),
@@ -130,23 +151,28 @@ describe('ComposerDock', () => {
     // 1280 - 368 = 912 px, fitted two cards into it, and painted the leftmost
     // one from x=132 straight over the sidebar's 0-224.
     //
-    // jsdom lays nothing out, so the strip's own geometry is what can be read
-    // here — and it bounds every card, because the strip is what the cards
-    // sit in: it is anchored `right: 368` and capped at `maxWidth`, so its left
-    // edge is the window minus both. The pixels themselves were measured in a
-    // browser (SPEC-composer-dock.md → Not covered by tests).
+    // jsdom lays nothing out, so the bar's own geometry is what can be read
+    // here. The bar itself now starts flush at the sidebar's edge (`left:
+    // 224px`), so that part of the old defect cannot recur structurally; what
+    // is still worth measuring is that the CARDS stay inside the bar's own
+    // content box, capped at `maxWidth` on the wrapper that holds them, and
+    // not the bar's full width (which also carries the icon rail). The pixels
+    // themselves were measured in a browser (SPEC-composer-dock.md → Not
+    // covered by tests).
     renderDock(
       [makeDraft({ id: 'a', subject: 'Oldest' }), makeDraft({ id: 'b', subject: 'Newest' })],
       { width: 1280 },
     )
 
-    const dock = screen.getByRole('region', { name: 'Email drafts' })
-    const leftEdge =
-      1280 - Number.parseFloat(dock.style.right) - Number.parseFloat(dock.style.maxWidth)
+    const dock = screen.getByRole('region', { name: 'Email composer dock' })
+    expect(dock).toHaveStyle({ left: '224px' })
+    const cardsWrapper = dock.firstElementChild as HTMLElement
+    const leftEdge = 1280 - Number.parseFloat(dock.style.paddingRight) - Number.parseFloat(cardsWrapper.style.maxWidth)
 
     expect(leftEdge).toBeGreaterThanOrEqual(SIDEBAR_WIDTH_PX)
-    // 688 px of clear width holds one 396 px slot, not two, so the older card
-    // collapses rather than sliding under the sidebar.
+    // 1280 - 224 sidebar - 368 dialer - 36 icon rail = 652 px for cards, which
+    // holds one 396 px slot, not two, so the older card collapses rather than
+    // sliding under the sidebar.
     expect(screen.getAllByRole('article').map((el) => el.textContent)).toEqual(['Newest'])
     expect(screen.getByRole('button', { name: 'Oldest' })).toBeInTheDocument()
   })
@@ -163,10 +189,11 @@ describe('ComposerDock', () => {
     expect(narrow.container).toBeEmptyDOMElement()
 
     renderDock([makeDraft({ id: 'a', subject: 'Quote' })], { width: 1024 })
-    expect(screen.getByRole('region', { name: 'Email drafts' })).toBeInTheDocument()
-    // 1024 - 224 sidebar - 368 dialer = 432 px, which still holds one expanded
-    // card. That is the `lg` gate's whole job: the narrowest window the dock
-    // renders at is still wide enough for a card that clears both.
+    expect(screen.getByRole('region', { name: 'Email composer dock' })).toBeInTheDocument()
+    // 1024 - 224 sidebar - 368 dialer - 36 icon rail = 396 px, exactly one
+    // 396 px slot. That is the `lg` gate's whole job: the narrowest window the
+    // dock renders at is still wide enough for a card that clears the sidebar,
+    // the dialer's corner, AND the standing compose button.
     expect(screen.getByRole('article')).toHaveTextContent('Quote')
   })
 
