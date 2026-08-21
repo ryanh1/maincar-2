@@ -36,34 +36,9 @@ import { PUBLIC_BASE_URL } from '../config.js'
 import prisma from '../db.js'
 import { queueUploadRecording } from '../jobs/uploadRecording.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
+import { TERMINAL_CALL_STATUSES, TWILIO_TO_CALL_STATUS } from '../lib/callStatus.js'
 
 const router = Router()
-
-/**
- * Twilio's `CallStatus` → our `Call.status`.
- *
- * Twilio's vocabulary (queued, ringing, in-progress, completed, busy, failed,
- * no-answer, canceled) is exactly the set `Call.status` allows
- * (server/prisma/schema.prisma → Call), so this is a whitelist, not a rename: it
- * exists so a value Twilio might one day add is dropped rather than written blind
- * into the column. A `CallStatus` not in this map leaves `status` untouched.
- */
-const TWILIO_TO_CALL_STATUS: Record<string, string> = {
-  queued: 'queued',
-  ringing: 'ringing',
-  'in-progress': 'in-progress',
-  completed: 'completed',
-  busy: 'busy',
-  failed: 'failed',
-  'no-answer': 'no-answer',
-  canceled: 'canceled',
-}
-
-/**
- * The statuses a call does not come back from. Reaching one of these is the moment
- * the call ended, so `endedAt` is stamped then and only then.
- */
-const TERMINAL_CALL_STATUSES = new Set(['completed', 'busy', 'failed', 'no-answer', 'canceled'])
 
 /**
  * Reject anything that is not a genuine, signed Twilio request BEFORE the handler
