@@ -108,14 +108,14 @@ describe('ComposerDock', () => {
   })
 
   it('collapses the oldest cards to chips when the window cannot fit them all', () => {
-    // 900 - 368 reserved = 532 px of dock, and 532 / 396 holds exactly one card.
+    // 1100 - 368 reserved = 732 px of dock, and 732 / 396 holds exactly one card.
     renderDock(
       [
         makeDraft({ id: 'a', subject: 'Oldest' }),
         makeDraft({ id: 'b', subject: 'Middle' }),
         makeDraft({ id: 'c', subject: 'Newest' }),
       ],
-      { width: 900 },
+      { width: 1100 },
     )
 
     expect(screen.getAllByRole('article').map((el) => el.textContent)).toEqual(['Newest'])
@@ -123,12 +123,21 @@ describe('ComposerDock', () => {
     expect(screen.getByRole('button', { name: 'Middle' })).toBeInTheDocument()
   })
 
-  it('collapses every card once the dock falls under its minimum width', () => {
-    // 500 - 368 = 132 px, under the 240 px minimum.
-    renderDock([makeDraft({ id: 'a', subject: 'Quote' })], { width: 500 })
+  it('renders nothing below lg, rather than a card wider than the phone', () => {
+    // A chip is no better here: it only exists to expand into a 384 px card.
+    const { container } = renderDock([makeDraft({ id: 'a', subject: 'Quote' })], { width: 375 })
 
-    expect(screen.queryByRole('article')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Quote' })).toBeInTheDocument()
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('renders nothing one pixel under lg, and the dock at lg exactly', () => {
+    const narrow = renderDock([makeDraft({ id: 'a', subject: 'Quote' })], { width: 1023 })
+    expect(narrow.container).toBeEmptyDOMElement()
+
+    renderDock([makeDraft({ id: 'a', subject: 'Quote' })], { width: 1024 })
+    expect(screen.getByRole('region', { name: 'Email drafts' })).toBeInTheDocument()
+    // 1024 - 368 = 656 px, which still holds one expanded card.
+    expect(screen.getByRole('article')).toHaveTextContent('Quote')
   })
 
   it('expands a squeezed card when the rep clicks its chip', async () => {
@@ -138,7 +147,7 @@ describe('ComposerDock', () => {
         makeDraft({ id: 'a', subject: 'Oldest' }),
         makeDraft({ id: 'b', subject: 'Newest' }),
       ],
-      { width: 900 },
+      { width: 1100 },
     )
 
     await user.click(screen.getByRole('button', { name: 'Oldest' }))

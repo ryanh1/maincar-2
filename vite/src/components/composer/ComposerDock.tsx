@@ -1,9 +1,10 @@
-import { useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Mail, Pencil } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import type { EmailDraft } from '@/lib/emailTypes'
 import { useComposer } from './composerContext'
+import { LG_BREAKPOINT_PX, useWindowWidth } from './desktopOnly'
 import { draftTitle } from './draftTitle'
 
 /**
@@ -25,13 +26,6 @@ const DIALER_RESERVE_PX = 368
  */
 const CARD_SLOT_PX = 396
 
-/**
- * Narrower than this and there is no room left of the dialer for even one card,
- * so every draft collapses to a chip rather than render a card that runs off the
- * left edge and under the sidebar.
- */
-const MIN_DOCK_WIDTH_PX = 240
-
 interface ComposerDockProps {
   /**
    * How to draw one expanded card.
@@ -49,7 +43,8 @@ interface ComposerDockProps {
  * left, newest on the right, kept drafts gathered into one button.
  *
  * It renders nothing at all when the rep has no drafts, so mounting it costs an
- * empty corner and never a stray border.
+ * empty corner and never a stray border, and nothing below `lg`, where there is
+ * no room for a 384 px card beside the dialer's reserve.
  */
 export function ComposerDock({ renderCard }: ComposerDockProps) {
   const { openDrafts, keptDrafts, setMinimized, reopenCard } = useComposer()
@@ -65,13 +60,14 @@ export function ComposerDock({ renderCard }: ComposerDockProps) {
   const [promotedId, setPromotedId] = useState<string | null>(null)
 
   // Room left of the reserved dialer corner, and the number of cards it holds.
+  // At the `lg` floor that is 1024 - 368 = 656 px, so one card always fits and
+  // the arithmetic never has to decide what to do with no room at all.
   const dockWidth = Math.max(windowWidth - DIALER_RESERVE_PX, 0)
-  const capacity = dockWidth < MIN_DOCK_WIDTH_PX ? 0 : Math.floor(dockWidth / CARD_SLOT_PX)
+  const capacity = Math.floor(dockWidth / CARD_SLOT_PX)
 
   const expandedIds = useMemo(() => {
     // Only cards the rep has not minimized compete for a slot.
     const candidates = openDrafts.filter((d) => !d.isMinimized)
-    if (capacity <= 0) return new Set<string>()
 
     // Newest first, because the newest card is the one being typed in and the
     // oldest are the ones that collapse first.
@@ -81,6 +77,10 @@ export function ComposerDock({ renderCard }: ComposerDockProps) {
 
     return new Set(byPriority.slice(0, capacity).map((d) => d.id))
   }, [openDrafts, capacity, promotedId])
+
+  // Below `lg` the whole dock is gone, chips included: a chip that expanded into
+  // a card wider than the phone it is on is a control that cannot do its job.
+  if (windowWidth < LG_BREAKPOINT_PX) return null
 
   if (openDrafts.length === 0 && keptDrafts.length === 0) return null
 
@@ -141,18 +141,4 @@ export function ComposerDock({ renderCard }: ComposerDockProps) {
       )}
     </div>
   )
-}
-
-function subscribeToResize(onChange: () => void): () => void {
-  window.addEventListener('resize', onChange)
-  return () => window.removeEventListener('resize', onChange)
-}
-
-/**
- * The viewport width, read through `useSyncExternalStore` rather than a
- * `useState` seeded in an effect: the first paint gets the real width, so a card
- * never renders expanded for one frame and snaps to a chip on the next.
- */
-function useWindowWidth(): number {
-  return useSyncExternalStore(subscribeToResize, () => window.innerWidth)
 }

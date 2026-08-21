@@ -1,8 +1,11 @@
-import { Home, LogOut, Settings } from 'lucide-react'
+import { Home, LogOut, Pencil, Settings } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
+import { useComposerOptional } from '@/components/composer/composerContext'
+import { useIsDesktop } from '@/components/composer/desktopOnly'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { OrgSwitcher } from '@/components/OrgSwitcher'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
@@ -15,6 +18,13 @@ const NAV = [
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, signOut } = useAuth()
   const displayName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.email
+
+  // Compose is drawn only where it can actually open something. Below `lg` the
+  // dock is gone (see `desktopOnly.ts`), and outside `ComposerProvider` there is
+  // no state to open a card into — a button in either case would be a
+  // live-looking control that does nothing.
+  const composer = useComposerOptional()
+  const isDesktop = useIsDesktop()
 
   return (
     <>
@@ -39,6 +49,28 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         <div className="border-b border-sidebar-border p-3">
           <OrgSwitcher />
         </div>
+
+        {composer && isDesktop && (
+          <div className="p-3 pb-0">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => void composer.openComposer()}
+                  >
+                    <Pencil size={16} />
+                    Compose
+                  </Button>
+                </TooltipTrigger>
+                {/* The provider is local because the app mounts none at the root. */}
+                <TooltipContent side="right">Press c to compose.</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+        )}
 
         <nav className="flex flex-1 flex-col gap-1 p-3">
           {NAV.map(({ to, label, icon: Icon }) => (
