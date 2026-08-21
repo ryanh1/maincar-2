@@ -22,6 +22,9 @@ const { useGetCallDetailMock } = vi.hoisted(() => ({
 }))
 vi.mock('@/hooks/dialer/useGetCallDetail', () => ({ useGetCallDetail: useGetCallDetailMock }))
 
+const { toastErrorMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn() }))
+vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
+
 const { deviceCtorMock, deviceConnectMock, deviceOnMock, deviceUpdateTokenMock, deviceDestroyMock } =
   vi.hoisted(() => ({
     deviceCtorMock: vi.fn(),
@@ -62,6 +65,7 @@ describe('DialerProvider', () => {
     deviceOnMock.mockClear()
     deviceUpdateTokenMock.mockClear()
     deviceDestroyMock.mockClear()
+    toastErrorMock.mockReset()
   })
 
   it('starts collapsed and idle, on the keypad, with a stopped timer', () => {
@@ -337,6 +341,21 @@ describe('DialerProvider', () => {
       expect(result.current.dialing).toBe(false)
     })
 
+    it.each([
+      ['busy', 'The number is busy. Try again later.'],
+      ['no-answer', 'No one answered. Try again later.'],
+      ['failed', 'The call could not connect. Check your connection and try again.'],
+    ] as const)('explains a %s server outcome and tells the rep what to do next', async (status, message) => {
+      const { result, rerender } = renderDialer()
+      act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
+
+      useGetCallDetailMock.mockReturnValue(detail(status))
+      rerender()
+
+      await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(message))
+      expect(result.current.phase).toBe('completed')
+    })
+
     it('does not reopen a call the dialer already marked completed', async () => {
       const { result, rerender } = renderDialer()
       act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
@@ -445,6 +464,56 @@ describe('DialerProvider', () => {
 
       act(() => callHandlers.disconnect())
       expect(result.current.phase).toBe('completed')
+    })
+
+    it('tells the rep a call dropped when the SDK errors after it was answered', async () => {
+      useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'fake-token', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+      const callHandlers: Record<string, () => void> = {}
+      const fakeCall = { on: vi.fn((event: string, handler: () => void) => (callHandlers[event] = handler)) }
+      deviceConnectMock.mockResolvedValue(fakeCall)
+
+      const { result } = renderDialer()
+      act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
+      await act(() => result.current.placeDeviceCall({ callId: 'call-1' }))
+      act(() => callHandlers.accept())
+      act(() => callHandlers.error())
+
+      expect(toastErrorMock).toHaveBeenCalledWith('The call dropped. Try again.')
+      expect(result.current.phase).toBe('completed')
+    })
+
+    it('cancels the browser call when End is clicked while setup is still resolving', async () => {
+      useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'fake-token', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+      let resolveConnect: (call: { disconnect: () => void; on: () => void }) => void = () => {}
+      deviceConnectMock.mockReturnValue(
+        new Promise((resolve) => {
+          resolveConnect = resolve
+        }),
+      )
+      const disconnectMock = vi.fn()
+      const fakeCall = { disconnect: disconnectMock, on: vi.fn() }
+
+      const { result } = renderDialer()
+      // Let MAI-206's same-tab recovery settle before simulating a user action.
+      // In production that effect runs before a rep can press Call; awaiting it
+      // keeps this test focused on the late Voice SDK connection race.
+      await act(() => Promise.resolve())
+      act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
+      const setup = result.current.placeDeviceCall({ callId: 'call-1' })
+      act(() => result.current.cancelCall())
+      resolveConnect(fakeCall)
+      await act(() => setup)
+
+      expect(disconnectMock).toHaveBeenCalledOnce()
+      expect(result.current.phase).toBe('ringing')
     })
 
     it('destroys the Device on unmount', () => {

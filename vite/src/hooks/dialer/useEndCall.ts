@@ -28,11 +28,15 @@ export interface EndCallVariables {
  */
 export function useEndCall() {
   const queryClient = useQueryClient()
-  const { endCall } = useDialer()
+  const { cancelCall, endCall } = useDialer()
 
   return useMutation({
     mutationFn: ({ orgId, callId }: EndCallVariables) =>
       jsonFetch<CallDetailResponse>(`/api/orgs/${orgId}/calls/${callId}`, { method: 'DELETE' }),
+    // Mark cancellation before the request leaves the browser. A Voice SDK
+    // connect promise can resolve during this round trip; it must see the flag
+    // and drop its late browser leg instead of ringing the callee.
+    onMutate: () => cancelCall(),
     onSuccess: (data, variables) => {
       // Twilio has not always posted the billed duration by the time this DELETE
       // settles the row, so `durationS` here is best-effort — null falls back to

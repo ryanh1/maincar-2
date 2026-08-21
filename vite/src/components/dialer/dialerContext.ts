@@ -105,6 +105,12 @@ export interface DialerContextValue {
    * ended, ahead of whatever the server has recorded yet.
    */
   endCall: (durationS?: number) => void
+  /**
+   * Stops a browser call immediately, including one whose SDK setup promise has
+   * not resolved yet. `useEndCall` calls this as soon as the rep presses End;
+   * the server mutation still settles the Call row.
+   */
+  cancelCall: () => void
   /** Back to the rest state: `idle`, not dialing, timer at 0, ready for the next call. */
   reset: () => void
 
