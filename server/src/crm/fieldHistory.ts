@@ -24,9 +24,28 @@ import { Prisma } from '../generated/prisma/client.js'
 
 import { checkValueShape, type ValidatorAttribute } from './valuesValidator.js'
 
-// A client that can write the history rows. Prisma.TransactionClient — and ONLY
-// that — so calling this outside a transaction is a type error, not a review catch.
-export type HistoryClient = Prisma.TransactionClient
+// A client that can write the history rows, and ONLY inside a transaction.
+//
+// `Prisma.TransactionClient` alone does NOT achieve that. It is
+// `Omit<PrismaClient, ITXClientDenyList>`, and TypeScript is structural, so the
+// full singleton — which has every one of those members and more — is assignable
+// to it. This type used to be the bare alias, with a comment claiming the guard
+// was a type error; a compiler probe showed `recordFieldHistoryInTx(prisma, …)`
+// compiled cleanly. The comment was the only thing enforcing the rule.
+//
+// The brand closes it. `$connect`/`$disconnect`/`$extends` ARE on the deny list,
+// so a real transaction client lacks them and satisfies `?: never` trivially,
+// while a PrismaClient carries all three as functions and is rejected at the call
+// site. (`$transaction` is NOT on this version's deny list — branding on it
+// collapses the type to `never` and rejects everything.)
+//
+// Same brand as `ActivityFeedClient` in ./activityFeed.ts; the two must stay in
+// step. Found while wiring the activity feed (MAI-140).
+export type HistoryClient = Prisma.TransactionClient & {
+  $connect?: never
+  $disconnect?: never
+  $extends?: never
+}
 
 // Who or what made a change (spec §5.7). The DB column is a String (house rule: no
 // Prisma enums); this union is the type-safe half of that pair.

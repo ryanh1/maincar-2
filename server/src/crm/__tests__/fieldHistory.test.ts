@@ -219,4 +219,36 @@ describe('recordFieldHistoryInTx', () => {
     ).rejects.toThrow(FieldHistoryShapeError)
     expect(createMany).not.toHaveBeenCalled()
   })
+
+  /**
+   * The atomicity rule is a TYPE rule, so this is a type test: `@ts-expect-error`
+   * fails the build if the line it guards ever stops being an error.
+   *
+   * It is here because the obvious spelling of the rule DOES NOT WORK, and looks
+   * like it does. `HistoryClient` was once a bare `Prisma.TransactionClient` with
+   * a comment promising that calling it outside a transaction was "a type error,
+   * not a review catch". It was not. `Prisma.TransactionClient` is
+   * `Omit<PrismaClient, ITXClientDenyList>`, and TypeScript is structural, so the
+   * full singleton satisfies it — `recordFieldHistoryInTx(prisma, …)` compiled
+   * cleanly, and "history is atomic with its change" was only ever a comment.
+   *
+   * The brand on `$connect`/`$disconnect`/`$extends` closes it. If someone
+   * simplifies the type back to the bare alias, this test goes red.
+   *
+   * The same brand guards `ActivityFeedClient` in ../activityFeed.ts. Found while
+   * wiring the activity feed (MAI-140).
+   */
+  it('REFUSES the base PrismaClient at the type level, so history cannot be written outside a transaction', () => {
+    const notATransaction = {
+      fieldHistory: { createMany: vi.fn() },
+      $connect: async () => {},
+      $disconnect: async () => {},
+      $extends: () => ({}),
+    }
+
+    // @ts-expect-error a client that can $connect/$disconnect is the singleton, not
+    // a transaction client, and recordFieldHistoryInTx must not accept it.
+    const rejected: HistoryClient = notATransaction
+    expect(rejected).toBeDefined()
+  })
 })
