@@ -185,8 +185,8 @@ export async function transcribeRecordingJob(
 /**
  * Enqueue a transcription run for one call.
  *
- * The recording-upload job (or a later hook) calls this once a recording is stored
- * and ready to transcribe, handing it the call id.
+ * The recording-upload job (jobs/uploadRecording.ts) calls this once a recording
+ * is stored and ready to transcribe, handing it the call id.
  */
 export async function queueTranscribeRecording(callId: string): Promise<string | null> {
   const payload: TranscribeRecordingPayload = { callId }

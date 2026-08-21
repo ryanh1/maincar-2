@@ -13,12 +13,13 @@
  * scoped to the route rather than added globally, so nothing else starts
  * accepting form posts.
  *
- * Today this file owns only the OUTBOUND leg (`Direction === "outbound-api"`),
- * which the composer's POST /calls set in motion. The same URL is where
- * purchased numbers point their INBOUND calls, and the status callback
- * (/api/twilio/voice/status) lands beside this route — both are later issues, so
- * a Direction this handler does not dial is answered with empty TwiML rather than
- * mis-dialed.
+ * This file owns two Twilio endpoints. POST /voice returns TwiML for the OUTBOUND
+ * leg (`Direction === "outbound-api"`), which the composer's POST /calls set in
+ * motion; the same URL is where purchased numbers will point their INBOUND calls
+ * (a later issue), so a Direction this handler does not dial is answered with
+ * empty TwiML rather than mis-dialed. POST /voice/status is the call-progress
+ * status callback: it maps Twilio's CallStatus onto Call.status, records duration
+ * and end time, and kicks off the recording upload/transcribe pipeline.
  */
 import express, { Router, type NextFunction, type Request, type Response } from 'express'
 
@@ -26,9 +27,36 @@ import { logger } from '../../dependencies/logger.js'
 import { buildDialTwiml, buildEmptyTwiml, verifyTwilioSignature } from '../../dependencies/twilio.js'
 import { PUBLIC_BASE_URL } from '../config.js'
 import prisma from '../db.js'
+import { queueUploadRecording } from '../jobs/uploadRecording.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 
 const router = Router()
+
+/**
+ * Twilio's `CallStatus` → our `Call.status`.
+ *
+ * Twilio's vocabulary (queued, ringing, in-progress, completed, busy, failed,
+ * no-answer, canceled) is exactly the set `Call.status` allows
+ * (server/prisma/schema.prisma → Call), so this is a whitelist, not a rename: it
+ * exists so a value Twilio might one day add is dropped rather than written blind
+ * into the column. A `CallStatus` not in this map leaves `status` untouched.
+ */
+const TWILIO_TO_CALL_STATUS: Record<string, string> = {
+  queued: 'queued',
+  ringing: 'ringing',
+  'in-progress': 'in-progress',
+  completed: 'completed',
+  busy: 'busy',
+  failed: 'failed',
+  'no-answer': 'no-answer',
+  canceled: 'canceled',
+}
+
+/**
+ * The statuses a call does not come back from. Reaching one of these is the moment
+ * the call ended, so `endedAt` is stamped then and only then.
+ */
+const TERMINAL_CALL_STATUSES = new Set(['completed', 'busy', 'failed', 'no-answer', 'canceled'])
 
 /**
  * Reject anything that is not a genuine, signed Twilio request BEFORE the handler
@@ -43,21 +71,27 @@ const router = Router()
  *
  * Runs after the urlencoded parser, so `req.body` holds the POST params the
  * signature is computed over.
+ *
+ * A factory rather than a bare middleware so each route logs its own name on a
+ * rejection — the voice webhook and the status callback share this check but are
+ * different endpoints, and a warning that names the wrong one is a debugging trap.
  */
-function verifyTwilioWebhook(req: Request, res: Response, next: NextFunction): void {
-  const signature = req.header('X-Twilio-Signature') ?? undefined
-  const url = `${PUBLIC_BASE_URL}${req.originalUrl}`
-  const params = (req.body ?? {}) as Record<string, string>
+function verifyTwilioWebhook(routeLabel: string) {
+  return function verify(req: Request, res: Response, next: NextFunction): void {
+    const signature = req.header('X-Twilio-Signature') ?? undefined
+    const url = `${PUBLIC_BASE_URL}${req.originalUrl}`
+    const params = (req.body ?? {}) as Record<string, string>
 
-  if (!verifyTwilioSignature({ signature, url, params })) {
-    logger.warn(
-      { route: 'POST /api/twilio/voice', requestId: req.id },
-      'rejected a Twilio voice webhook: invalid signature',
-    )
-    res.status(403).json({ error: 'Invalid Twilio signature' })
-    return
+    if (!verifyTwilioSignature({ signature, url, params })) {
+      logger.warn(
+        { route: routeLabel, requestId: req.id },
+        'rejected a Twilio webhook: invalid signature',
+      )
+      res.status(403).json({ error: 'Invalid Twilio signature' })
+      return
+    }
+    next()
   }
-  next()
 }
 
 // ============================================================
@@ -69,7 +103,7 @@ function verifyTwilioWebhook(req: Request, res: Response, next: NextFunction): v
 router.post(
   '/voice',
   express.urlencoded({ extended: false }),
-  verifyTwilioWebhook,
+  verifyTwilioWebhook('POST /api/twilio/voice'),
   wrapRoute('POST /api/twilio/voice', async (req, res) => {
     const params = (req.body ?? {}) as Record<string, string>
     const direction = params.Direction
@@ -118,6 +152,104 @@ router.post(
     // --- Return TwiML ---
     // text/xml is what Twilio expects; the SDK escapes and well-forms the XML.
     res.status(200).type('text/xml').send(buildDialTwiml(call.toE164))
+  }),
+)
+
+// ============================================================
+// POST /api/twilio/voice/status — call-progress status callback
+// ============================================================
+// Twilio POSTs here as a call moves through its lifecycle (initiated → ringing →
+// answered → completed), the URL registered by initiateOutboundCall
+// (dependencies/twilio.ts → OUTBOUND_STATUS_WEBHOOK_PATH). Each event carries the
+// CallSid we look the row up by, the CallStatus we map onto Call.status, and — on
+// completion — CallDuration and, when the call was recorded, a RecordingSid. The
+// reply body is ignored by Twilio; a 200 just acknowledges receipt.
+router.post(
+  '/voice/status',
+  express.urlencoded({ extended: false }),
+  verifyTwilioWebhook('POST /api/twilio/voice/status'),
+  wrapRoute('POST /api/twilio/voice/status', async (req, res) => {
+    // --- Parse & validate params ---
+    const params = (req.body ?? {}) as Record<string, string>
+    const callSid = params.CallSid
+    const callStatus = params.CallStatus
+    const recordingSid = params.RecordingSid
+    const mappedStatus = callStatus ? TWILIO_TO_CALL_STATUS[callStatus] : undefined
+
+    // --- Find the call ---
+    // By twilioCallSid alone, exactly as the voice webhook does: it is unique and
+    // is the only key Twilio hands us. An unknown SID is a 404 — Twilio is asking
+    // about a call we have no row for.
+    const call = await prisma.call.findFirst({ where: { twilioCallSid: callSid } })
+    if (!call) {
+      logger.warn(
+        { route: 'POST /api/twilio/voice/status', requestId: req.id, callSid },
+        'twilio status callback for an unknown CallSid',
+      )
+      return void res.status(404).json({ error: 'Call not found' })
+    }
+
+    // --- Build the update ---
+    // Only fields Twilio actually reported are written. A CallStatus outside the
+    // whitelist leaves `status` untouched (and is logged), a terminal status
+    // stamps endedAt, and CallDuration — whole seconds, sent as a string only once
+    // the call is billed — becomes durationS when it parses to a finite number.
+    const data: {
+      status?: string
+      endedAt?: Date
+      durationS?: number
+    } = {}
+
+    if (mappedStatus) {
+      data.status = mappedStatus
+      if (TERMINAL_CALL_STATUSES.has(mappedStatus)) data.endedAt = new Date()
+    } else if (callStatus) {
+      logger.warn(
+        { route: 'POST /api/twilio/voice/status', requestId: req.id, callSid, callStatus },
+        'twilio status callback with an unrecognized CallStatus; leaving status unchanged',
+      )
+    }
+
+    const durationS = Number.parseInt(params.CallDuration ?? '', 10)
+    if (Number.isFinite(durationS)) data.durationS = durationS
+
+    // --- Execute the write ---
+    // updateMany scoped by orgId, never update-by-id: the tenant key carries the
+    // boundary (rules/database-and-prisma.md). Skipped when there is nothing to
+    // write, so a bare ping does not churn updatedAt.
+    if (Object.keys(data).length > 0) {
+      await prisma.call.updateMany({ where: { id: call.id, orgId: call.orgId }, data })
+    }
+
+    // --- Chain the recording pipeline ---
+    // A RecordingSid on the callback is the signal a recording exists. Enqueue the
+    // upload job (which fetches it from Twilio and stores it in S3); that job, on a
+    // successful store, chains the transcription. Both jobs are idempotent, so a
+    // status callback Twilio delivers more than once cannot double-store or
+    // double-transcribe. The SID is not persisted on the row — it rides on the job
+    // payload, which is the only place it exists (jobs/uploadRecording.ts).
+    if (recordingSid) {
+      await queueUploadRecording(call.id, recordingSid)
+      logger.info(
+        { route: 'POST /api/twilio/voice/status', requestId: req.id, orgId: call.orgId, callId: call.id },
+        'twilio status callback: recording present, queued upload',
+      )
+    }
+
+    logger.info(
+      {
+        route: 'POST /api/twilio/voice/status',
+        requestId: req.id,
+        orgId: call.orgId,
+        callId: call.id,
+        status: data.status,
+      },
+      'twilio status callback processed',
+    )
+
+    // --- Return response ---
+    // Twilio ignores the body; a keyed 200 acknowledges receipt.
+    res.status(200).json({ received: true })
   }),
 )
 

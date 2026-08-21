@@ -13,7 +13,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
-const { prismaMock, verifySignatureMock } = vi.hoisted(() => ({
+const { prismaMock, verifySignatureMock, queueUploadRecordingMock } = vi.hoisted(() => ({
   prismaMock: {
     call: {
       findFirst: vi.fn(),
@@ -23,9 +23,16 @@ const { prismaMock, verifySignatureMock } = vi.hoisted(() => ({
     },
   },
   verifySignatureMock: vi.fn(),
+  queueUploadRecordingMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
+// The status callback kicks off the recording pipeline through this queue
+// function; mock it so the job (and its OpenAI/S3 imports) never load, and so the
+// enqueue can be asserted with its exact arguments.
+vi.mock('../../jobs/uploadRecording.js', () => ({
+  queueUploadRecording: queueUploadRecordingMock,
+}))
 // Keep the real TwiML builders (so the response body is genuine TwiML) and swap
 // only the signature check for a mock — the one seam that would otherwise need a
 // real auth token and a hand-computed HMAC.
@@ -77,6 +84,7 @@ beforeEach(() => {
   verifySignatureMock.mockReturnValue(true)
   prismaMock.call.findFirst.mockResolvedValue(callRow())
   prismaMock.call.updateMany.mockResolvedValue({ count: 1 })
+  queueUploadRecordingMock.mockResolvedValue('upload_job_1')
 })
 
 // ============================================================
@@ -175,5 +183,170 @@ describe('non-outbound direction', () => {
     // A Direction this handler does not dial neither looks up nor advances a row.
     expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
     expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// POST /api/twilio/voice/status — the call-progress status callback
+// ============================================================
+const STATUS_URL = '/api/twilio/voice/status'
+
+/** POSTs a Twilio-shaped status callback with a signature header. */
+function postStatus(body: Record<string, string>, signature: string | null = SIG) {
+  const req = request(app).post(STATUS_URL).type('form')
+  if (signature !== null) req.set('X-Twilio-Signature', signature)
+  return req.send(body)
+}
+
+/** The single updateMany write the handler made, or undefined if it made none. */
+function statusWrite() {
+  return prismaMock.call.updateMany.mock.calls[0]?.[0] as
+    | { where: Record<string, unknown>; data: Record<string, unknown> }
+    | undefined
+}
+
+describe('status callback — signature', () => {
+  it('403s on a bad signature, before any lookup', async () => {
+    verifySignatureMock.mockReturnValue(false)
+
+    const res = await postStatus({ CallSid: CALL_SID, CallStatus: 'completed' })
+
+    expect(res.status).toBe(403)
+    expect(res.body).toEqual({ error: 'Invalid Twilio signature' })
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+    expect(queueUploadRecordingMock).not.toHaveBeenCalled()
+  })
+
+  it('403s when the signature header is absent', async () => {
+    verifySignatureMock.mockReturnValue(false)
+
+    const res = await postStatus({ CallSid: CALL_SID, CallStatus: 'completed' }, null)
+
+    expect(res.status).toBe(403)
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
+  })
+})
+
+describe('status callback — lookup', () => {
+  it('looks the call up by CallSid', async () => {
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'ringing' })
+
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({ where: { twilioCallSid: CALL_SID } })
+  })
+
+  it('404s when no call matches the CallSid, and writes nothing', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(null)
+
+    const res = await postStatus({ CallSid: 'CAunknownSID', CallStatus: 'completed' })
+
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Call not found' })
+    expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+    expect(queueUploadRecordingMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('status callback — CallStatus → Call.status mapping', () => {
+  // Twilio's vocabulary maps one-to-one onto Call.status; every value is proven.
+  it.each([
+    'queued',
+    'ringing',
+    'in-progress',
+    'completed',
+    'busy',
+    'failed',
+    'no-answer',
+    'canceled',
+  ])('maps %s onto Call.status, scoped by orgId', async (callStatus) => {
+    const res = await postStatus({ CallSid: CALL_SID, CallStatus: callStatus })
+
+    expect(res.status).toBe(200)
+    const write = statusWrite()
+    expect(write?.where).toEqual({ id: 'call-1', orgId: 'org-a' })
+    expect(write?.data.status).toBe(callStatus)
+    // update-by-id is never used for org-scoped data.
+    expect(prismaMock.call.update).not.toHaveBeenCalled()
+  })
+
+  it('leaves status unchanged for an unrecognized CallStatus', async () => {
+    const res = await postStatus({ CallSid: CALL_SID, CallStatus: 'martian' })
+
+    expect(res.status).toBe(200)
+    // Nothing to write: no known status, no duration.
+    expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('status callback — terminal statuses set endedAt', () => {
+  it.each(['completed', 'busy', 'failed', 'no-answer', 'canceled'])(
+    'stamps endedAt on %s',
+    async (callStatus) => {
+      await postStatus({ CallSid: CALL_SID, CallStatus: callStatus })
+
+      expect(statusWrite()?.data.endedAt).toBeInstanceOf(Date)
+    },
+  )
+
+  it.each(['queued', 'ringing', 'in-progress'])(
+    'does not stamp endedAt on the non-terminal status %s',
+    async (callStatus) => {
+      await postStatus({ CallSid: CALL_SID, CallStatus: callStatus })
+
+      expect(statusWrite()?.data).not.toHaveProperty('endedAt')
+    },
+  )
+})
+
+describe('status callback — durationS', () => {
+  it('records durationS from CallDuration on completion', async () => {
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'completed', CallDuration: '42' })
+
+    const write = statusWrite()
+    expect(write?.data.durationS).toBe(42)
+    expect(write?.data.status).toBe('completed')
+    expect(write?.data.endedAt).toBeInstanceOf(Date)
+  })
+
+  it('omits durationS when CallDuration is absent', async () => {
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'ringing' })
+
+    expect(statusWrite()?.data).not.toHaveProperty('durationS')
+  })
+
+  it('omits durationS when CallDuration is not a number', async () => {
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'completed', CallDuration: 'not-a-number' })
+
+    expect(statusWrite()?.data).not.toHaveProperty('durationS')
+  })
+})
+
+describe('status callback — recording pipeline', () => {
+  it('queues the upload job with the call id and RecordingSid when a recording exists', async () => {
+    const res = await postStatus({
+      CallSid: CALL_SID,
+      CallStatus: 'completed',
+      CallDuration: '30',
+      RecordingSid: 'RE0123456789abcdef',
+    })
+
+    expect(res.status).toBe(200)
+    expect(queueUploadRecordingMock).toHaveBeenCalledTimes(1)
+    expect(queueUploadRecordingMock).toHaveBeenCalledWith('call-1', 'RE0123456789abcdef')
+  })
+
+  it('does not queue the upload job when there is no RecordingSid', async () => {
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'completed', CallDuration: '30' })
+
+    expect(queueUploadRecordingMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('status callback — acknowledgement', () => {
+  it('200s with a keyed body Twilio can ignore', async () => {
+    const res = await postStatus({ CallSid: CALL_SID, CallStatus: 'in-progress' })
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ received: true })
   })
 })

@@ -3,6 +3,7 @@ import { putRecording } from '../../dependencies/s3.js'
 import { logger } from '../../dependencies/logger.js'
 import prisma from '../db.js'
 import { JOB_UPLOAD_RECORDING, sendJob, workJob } from './queue.js'
+import { queueTranscribeRecording } from './transcribeRecording.js'
 
 // The job that turns a finished Twilio recording into an object we own: fetch the
 // MP3 from Twilio, put it in S3 under a stable key, point the Call row at that
@@ -198,6 +199,19 @@ export async function uploadRecordingJob(
     return
   }
 
+  // --- Chain the transcription ---
+  //
+  // The recording is in S3 now, and that is the one moment it becomes
+  // transcribable: the transcribe job reads `recordingUrl`, so enqueuing it any
+  // earlier — from the status callback, say — would race ahead of this upload and
+  // settle the call as `skipped-not-recorded`. Enqueuing here, only on a confirmed
+  // FIRST store (updated.count === 1 above), keeps the chain ordered; the
+  // transcribe job's own `transcriptStatus: "done"` guard keeps a duplicate
+  // delivery from re-billing Whisper. It is enqueued before the best-effort Twilio
+  // delete because storing our copy — not deleting theirs — is what makes the audio
+  // transcribable.
+  await queueTranscribeRecording(callId)
+
   // --- Delete Twilio's copy (best effort) ---
   //
   // The recording is safely ours now, so a failure to delete Twilio's copy is a
@@ -218,8 +232,9 @@ export async function uploadRecordingJob(
 /**
  * Enqueue an upload run for one call's recording.
  *
- * The recording-status webhook (a later issue) calls this once Twilio reports the
- * recording is complete, handing it the call id and the recording SID.
+ * The Twilio status callback (routes/twilioVoice.ts → POST /voice/status) calls
+ * this when a completed call reports a recording, handing it the call id and the
+ * recording SID.
  */
 export async function queueUploadRecording(
   callId: string,

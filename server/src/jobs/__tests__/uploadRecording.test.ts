@@ -45,6 +45,14 @@ vi.mock('../queue.js', () => ({
   workJob: queue.workJob,
 }))
 
+// The transcribe chain: a successful store enqueues the transcription. Mocked
+// whole so this suite never loads OpenAI, and so the enqueue can be asserted.
+const transcribe = vi.hoisted(() => ({ queueTranscribeRecording: vi.fn() }))
+
+vi.mock('../transcribeRecording.js', () => ({
+  queueTranscribeRecording: transcribe.queueTranscribeRecording,
+}))
+
 import { logger } from '../../../dependencies/logger.js'
 import {
   queueUploadRecording,
@@ -78,6 +86,7 @@ beforeEach(() => {
   twilio.fetchRecordingMp3.mockResolvedValue({ ...MEDIA })
   twilio.deleteRecording.mockResolvedValue(undefined)
   s3.putRecording.mockResolvedValue(undefined)
+  transcribe.queueTranscribeRecording.mockResolvedValue('transcribe_job_1')
 })
 
 describe('recordingObjectKey', () => {
@@ -137,6 +146,53 @@ describe('uploadRecordingJob — happy path', () => {
     await uploadRecordingJob(PAYLOAD)
 
     expect(deletedBeforeUpdate).toBe(false)
+  })
+})
+
+describe('uploadRecordingJob — transcribe chain', () => {
+  it('enqueues the transcription for the call after a successful store', async () => {
+    await uploadRecordingJob(PAYLOAD)
+
+    expect(transcribe.queueTranscribeRecording).toHaveBeenCalledTimes(1)
+    expect(transcribe.queueTranscribeRecording).toHaveBeenCalledWith(ROW.id)
+  })
+
+  // Ordering matters: the transcribe job reads recordingUrl, so it must not be
+  // enqueued until this upload has actually written the row.
+  it('does not enqueue the transcription before the row is stored', async () => {
+    let enqueuedBeforeStore = false
+    transcribe.queueTranscribeRecording.mockImplementation(async () => {
+      enqueuedBeforeStore = db.updateMany.mock.calls.length === 0
+      return 'transcribe_job_1'
+    })
+
+    await uploadRecordingJob(PAYLOAD)
+
+    expect(enqueuedBeforeStore).toBe(false)
+  })
+
+  it('does not enqueue the transcription when the store lost the race (count 0)', async () => {
+    db.updateMany.mockResolvedValue({ count: 0 })
+
+    await uploadRecordingJob(PAYLOAD)
+
+    expect(transcribe.queueTranscribeRecording).not.toHaveBeenCalled()
+  })
+
+  it('does not enqueue the transcription on a permanent failure', async () => {
+    twilio.fetchRecordingMp3.mockRejectedValue(twilioError(404))
+
+    await uploadRecordingJob(PAYLOAD)
+
+    expect(transcribe.queueTranscribeRecording).not.toHaveBeenCalled()
+  })
+
+  it('does not enqueue the transcription when the recording is already stored', async () => {
+    db.findUnique.mockResolvedValue({ ...ROW, recordingStatus: 'stored' })
+
+    await uploadRecordingJob(PAYLOAD)
+
+    expect(transcribe.queueTranscribeRecording).not.toHaveBeenCalled()
   })
 })
 
