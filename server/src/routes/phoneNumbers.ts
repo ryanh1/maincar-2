@@ -110,6 +110,38 @@ const searchBodySchema = z
     path: ['areaCode'],
   })
 
+// --- Activation input ---
+
+// The one status a number can be dialed from. The others mean "not bought yet"
+// ("searching"), "on its way out" ("releasing"), or "the purchase failed"
+// ("failed") — none of them can carry a call.
+const ACTIVE_STATUS = 'active'
+
+// The same wording whether the id is nonsense, belongs to a colleague, or lives
+// in another org. Three answers would let a caller map what they cannot see.
+const NOT_FOUND_ERROR = 'Phone number not found'
+
+const DEACTIVATE_ERROR =
+  'To stop calling from this number, make a different one active instead. Switching this one off would leave you with no caller ID and no way to place a call.'
+
+// Thrown inside the transaction so a failed check rolls the writes back with it.
+// Classes rather than sentinel strings because the second one carries a value
+// the response has to name.
+class NumberNotFound extends Error {}
+class NumberNotReady extends Error {
+  constructor(readonly actualStatus: string) {
+    super('phone number not active')
+  }
+}
+
+// Only the one field, and only a boolean. `false` is parsed, not rejected here,
+// so the route can answer it with a message that says what to do instead.
+const activationBodySchema = z.object({
+  isActiveForOutbound: z.boolean({
+    error: 'Send isActiveForOutbound as true or false.',
+  }),
+})
+
 router.use(requireAuth)
 
 // ============================================================
@@ -228,6 +260,102 @@ router.post(
       total: numbers.length,
       priceUnit: price.currency,
     })
+  }),
+)
+
+// ============================================================
+// PATCH /api/orgs/:orgId/phone-numbers/:id — choose the outbound caller ID
+// ============================================================
+// This is a radio button, not a checkbox: picking one number is what un-picks
+// the rest, so the whole route is "make THIS one the active one".
+router.patch(
+  '/:id',
+  wrapRoute('PATCH /api/orgs/:orgId/phone-numbers/:id', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    // Before the body is read, and before the row is looked up: a non-member
+    // must not learn whether this org — or this number — exists.
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = activationBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // `false` is refused on purpose rather than silently doing nothing. Turning
+    // the active number off leaves the user with no caller ID and no way to
+    // place a call, and nothing in the UI would explain why dialing stopped
+    // working — so the only supported way out of a number is into another one.
+    // Releasing a number is a separate act, and goes through its own route.
+    if (!parsed.data.isActiveForOutbound) {
+      return void res.status(400).json({ error: DEACTIVATE_ERROR })
+    }
+
+    // --- Execute query ---
+    // One transaction, and the row is READ inside it: the check that the number
+    // is provisioned, the un-picking of the others, and the picking of this one
+    // must all see the same instant. A crash between the two writes would
+    // otherwise leave the user with zero active numbers, or with two.
+    let target: PhoneNumber
+    try {
+      target = await prisma.$transaction(async (tx) => {
+        // All three keys: orgId is the tenant boundary, assignedUserId is
+        // "mine". A colleague's number, or another org's, is simply not found.
+        const found = await tx.phoneNumber.findFirst({
+          where: { id, orgId, assignedUserId: userId },
+        })
+        if (!found) throw new NumberNotFound()
+        // A number still being bought has no Twilio SID to call from, so
+        // activating it would produce a caller ID that does not exist yet.
+        if (found.status !== ACTIVE_STATUS) throw new NumberNotReady(found.status)
+
+        // Scoped to this user in this org, so switching caller ID never touches
+        // a colleague's numbers. Filtered to the rows that are actually on, so
+        // the ones already off keep their `updatedAt` and stay readable as
+        // untouched in an audit. If the data is ever broken with two active,
+        // this clears both.
+        await tx.phoneNumber.updateMany({
+          where: { orgId, assignedUserId: userId, isActiveForOutbound: true, id: { not: id } },
+          data: { isActiveForOutbound: false },
+        })
+
+        // updateMany with the tenant keys, never update by id: the where clause
+        // carries the boundary even if the check above were ever bypassed.
+        const activated = await tx.phoneNumber.updateMany({
+          where: { id, orgId, assignedUserId: userId },
+          data: { isActiveForOutbound: true },
+        })
+        if (activated.count === 0) throw new NumberNotFound()
+
+        // The row just read, with the one field this route writes. Every field
+        // the mapper sends is either unchanged or set right here, so this cannot
+        // disagree with what was stored — and it costs no extra read.
+        return { ...found, isActiveForOutbound: true }
+      })
+    } catch (error) {
+      if (error instanceof NumberNotFound) {
+        return void res.status(404).json({ error: NOT_FOUND_ERROR })
+      }
+      if (error instanceof NumberNotReady) {
+        // The actual status is named so someone waiting on provisioning learns
+        // why, instead of being told "no" twice.
+        return void res.status(400).json({
+          error: `This number is not ready to call from yet — it is ${error.actualStatus}. Pick a number that is active.`,
+        })
+      }
+      throw error
+    }
+
+    logger.info({ orgId, userId, phoneNumberId: id }, 'activated a number for outbound calling')
+
+    // --- Return response ---
+    res.json({ number: mapPhoneNumberToApi(target) })
   }),
 )
 
