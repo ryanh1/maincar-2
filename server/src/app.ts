@@ -6,6 +6,7 @@ import { WEB_ORIGIN } from './config.js'
 import { requestId } from './middleware/requestId.js'
 import authRouter from './routes/auth.js'
 import invitationsRouter from './routes/invitations.js'
+import phoneNumbersRouter from './routes/phoneNumbers.js'
 import teamRouter from './routes/team.js'
 
 // The app is assembled here and started in index.ts. Keeping them apart is what
@@ -41,6 +42,10 @@ app.use('/api', invitationsRouter)
 
 app.use('/api/auth', authRouter)
 app.use('/api/team', teamRouter)
+
+// The org is in the path, so the tenant boundary is checked per request rather
+// than read from the caller's currentOrgId preference.
+app.use('/api/orgs/:orgId/phone-numbers', phoneNumbersRouter)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Not found: ${req.method} ${req.originalUrl}` })

@@ -4,7 +4,7 @@
  * All routes below /api/team require authentication.
  * Routes touching org-scoped data verify the user is a member and include orgId in filters.
  */
-import { Router, type Response } from 'express'
+import { Router } from 'express'
 import crypto from 'crypto'
 import { z } from 'zod'
 
@@ -14,8 +14,9 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { logger } from '../../dependencies/logger.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { buildPaginationParams } from '../lib/queryHelpers.js'
-import { assignableRolesSchema, isAdmin, type OrgRole, type UserRole } from '../lib/roles.js'
-import type { Invitation, Membership, Org, User } from '../generated/prisma/client.js'
+import { requireMembership } from '../lib/membership.js'
+import { assignableRolesSchema, type OrgRole, type UserRole } from '../lib/roles.js'
+import type { Invitation, Org, User } from '../generated/prisma/client.js'
 
 const router = Router()
 
@@ -54,42 +55,6 @@ function mapOrgToApi(org: Org) {
 
 function buildInviteUrl(token: string): string {
   return `${WEB_ORIGIN.replace(/\/+$/, '')}/join/${encodeURIComponent(token)}`
-}
-
-/**
- * The org gate every org-scoped route goes through.
- *
- * Membership IS the tenant boundary now, so it is checked on the server for each
- * request rather than trusted from `currentOrgId` (a preference the client can
- * set). A caller with no membership, or one whose org is disabled, gets the same
- * answer an org that does not exist would give: 404. Telling them the org is real
- * but off-limits leaks that it exists.
- *
- * Pass `{ admin: true }` for a route only an org admin may call. That is a 403,
- * not a 404 — the caller can see the org, they just cannot do this to it.
- */
-async function requireMembership(
-  req: AuthenticatedRequest,
-  res: Response,
-  orgId: string,
-  opts: { admin?: boolean } = {},
-): Promise<(Membership & { org: Org }) | null> {
-  const membership = await prisma.membership.findFirst({
-    where: { userId: req.user!.id, orgId },
-    include: { org: true },
-  })
-
-  if (!membership || !membership.org.enabled) {
-    res.status(404).json({ error: 'Organization not found' })
-    return null
-  }
-
-  if (opts.admin && !isAdmin(membership.roles as UserRole[])) {
-    res.status(403).json({ error: 'Only an admin can do this' })
-    return null
-  }
-
-  return membership
 }
 
 // Mount auth middleware for all routes below

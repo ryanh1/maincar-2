@@ -105,3 +105,36 @@ export async function seedMember(
     membershipId: membership.id,
   }
 }
+
+/**
+ * Adds a phone number to an org, assigned to a user.
+ *
+ * `createdAt` is settable because the list route's tie-break sorts on it, and a
+ * test cannot prove "oldest first" with rows written milliseconds apart.
+ */
+export async function seedPhoneNumber(
+  prisma: PrismaClient,
+  opts: {
+    orgId: string
+    assignedUserId: string
+    e164?: string
+    twilioSid?: string | null
+    status?: string
+    isActiveForOutbound?: boolean
+    createdAt?: Date
+  },
+): Promise<{ id: string; e164: string }> {
+  const suffix = uid()
+  const number = await prisma.phoneNumber.create({
+    data: {
+      orgId: opts.orgId,
+      assignedUserId: opts.assignedUserId,
+      e164: opts.e164 ?? `+1202555${suffix.slice(-4)}`,
+      twilioSid: opts.twilioSid === undefined ? `PN${suffix}` : opts.twilioSid,
+      status: opts.status ?? 'active',
+      isActiveForOutbound: opts.isActiveForOutbound ?? false,
+      ...(opts.createdAt ? { createdAt: opts.createdAt } : {}),
+    },
+  })
+  return { id: number.id, e164: number.e164 }
+}
