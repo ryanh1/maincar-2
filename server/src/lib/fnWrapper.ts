@@ -35,6 +35,12 @@ type RouteHandler = (req: Request, res: Response) => Promise<void>
  * The wrapper logs the route name plus userId, orgId and requestId on every call,
  * and on a throw it logs, reports, and answers 503 (database down) or 500.
  *
+ * `orgId` is the org the request ACTS IN, taken from the route path. It is
+ * deliberately not the caller's `currentOrgId`: on `PATCH /orgs/:orgId` those two
+ * can differ, and logging the preference would name the wrong org in the one
+ * record someone reads while working out what a request touched. Routes that are
+ * not org-scoped log no org rather than a misleading one.
+ *
  * Pass `{ quiet: true }` for a high-frequency polling endpoint: the per-request
  * "called" line drops to `debug` so it does not flood the logs. Errors are always
  * logged at `error`.
@@ -43,9 +49,9 @@ export function wrapRoute(name: string, handler: RouteHandler, opts: { quiet?: b
   return async (req: Request, res: Response): Promise<void> => {
     const authReq = req as unknown as AuthenticatedRequest
     const userId = authReq.user?.id ?? 'anon'
-    const currentOrgId = authReq.user?.currentOrgId ?? 'none'
+    const orgId = typeof req.params?.orgId === 'string' ? req.params.orgId : undefined
     const requestId = req.id
-    const fields = { route: name, requestId, userId, currentOrgId }
+    const fields = { route: name, requestId, userId, ...(orgId ? { orgId } : {}) }
 
     if (opts.quiet) logger.debug(fields, `${name} called`)
     else logger.info(fields, `${name} called`)

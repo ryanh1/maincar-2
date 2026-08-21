@@ -5,6 +5,16 @@ import { verifyFirebaseIdToken } from '../../dependencies/firebaseAdmin.js'
 import prisma from '../db.js'
 import type { UserRole } from '../lib/roles.js'
 
+/**
+ * The verified caller. Every field here is safe to act on.
+ *
+ * There is deliberately NO org on this object. Which org a request acts in comes
+ * from the route (`/orgs/:orgId`) and is authorized per request against the
+ * caller's Membership. `User.currentOrgId` is only a UI preference, and putting
+ * it here — among fields that ARE authoritative — would invite a future route to
+ * filter on it and inherit a stale org after a membership is revoked. Read it
+ * from the database in the one place that needs it instead.
+ */
 export interface AuthUser {
   id: string
   firebaseUid: string
@@ -13,7 +23,6 @@ export interface AuthUser {
   lastName: string | null
   roles: UserRole[]
   enabled: boolean
-  currentOrgId: string | null
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -83,7 +92,6 @@ export async function requireAuth(
     lastName: user.lastName,
     roles: user.roles as UserRole[],
     enabled: user.enabled,
-    currentOrgId: user.currentOrgId,
   }
 
   next()
