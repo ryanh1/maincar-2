@@ -33,6 +33,18 @@ export const queryKeys = {
     // cleared on sign-out, so one signed-in rep only ever sees their own rows.
     drafts: (orgId: string) => ['email', 'drafts', orgId] as const,
   },
+  calls: {
+    all: ['calls'] as const,
+    // Keyed by org AND the list query, like the member list, because paging,
+    // sorting, and searching happen on the SERVER: two different pages are two
+    // different answers, so they must not share one cache entry. Switching orgs
+    // reads a different entry rather than showing the previous org's history.
+    list: (orgId: string, query?: Record<string, unknown>) =>
+      ['calls', 'list', orgId, query ?? {}] as const,
+    // Keyed by org and call id: the detail route scopes the lookup to both, so
+    // the cache entry does too.
+    detail: (orgId: string, callId: string) => ['calls', 'detail', orgId, callId] as const,
+  },
   invitations: {
     all: ['invitations'] as const,
     // Keyed by token, not by org: the reader of this one has no org yet.
