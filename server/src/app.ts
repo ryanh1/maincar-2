@@ -7,6 +7,7 @@ import { requestId } from './middleware/requestId.js'
 import authRouter from './routes/auth.js'
 import callsRouter from './routes/calls.js'
 import emailRouter from './routes/email.js'
+import integrationsRouter from './routes/integrations.js'
 import invitationsRouter from './routes/invitations.js'
 import membersRouter from './routes/members.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
@@ -58,6 +59,11 @@ app.use('/api/email', emailRouter)
 app.use('/api/orgs/:orgId/phone-numbers', phoneNumbersRouter)
 app.use('/api/orgs/:orgId/calls', callsRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
+
+// The authenticated half of the Integration Hub. The org is in the path so
+// membership is re-proven per request. The OAuth callback is NOT here: it is
+// unauthenticated and not org-scoped, and mounts on its own in a later ticket.
+app.use('/api/integrations/orgs/:orgId', integrationsRouter)
 
 // Twilio's voice webhook. Mounted at /api/twilio (the router owns /voice, and the
 // status callback /voice/status lands here later). Deliberately NOT org-scoped
