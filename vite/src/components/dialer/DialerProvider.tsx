@@ -6,6 +6,7 @@ import { useAuth } from '@/providers/useAuth'
 import { useGetCallDetail } from '@/hooks/dialer/useGetCallDetail'
 import { useGetVoiceToken } from '@/hooks/dialer/useGetVoiceToken'
 import type { CallStatus } from '@/lib/callTypes'
+import { callOutcomeMessage } from '@/lib/callOutcomeMessage'
 import {
   DialerContext,
   type ActiveCall,
@@ -97,6 +98,14 @@ export function DialerProvider({ children }: { children: ReactNode }) {
   // reach it directly (MAI-195). Set once `device.connect()` resolves; cleared by
   // endCall and reset, which run on every path off a live call.
   const callRef = useRef<TwilioVoiceCall | null>(null)
+  // End can land between startCall and Device.connect resolving. This flag must
+  // survive reset: the pending promise checks it before it can create a browser
+  // leg and ring the callee. Only a fresh call is allowed to clear it.
+  const canceledRef = useRef(false)
+  // A terminal status can arrive through the SDK and the server poll almost
+  // together. Handle it once so the dialer does not emit two errors or reset
+  // the final duration twice.
+  const terminalRef = useRef(false)
   // Whether THIS call has already reset the timer at answer. The Device's own
   // `accept` event and the server-status poll below can each report the callee
   // answered, and only the first one to do so should zero the timer — a second
@@ -118,6 +127,8 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     setElapsedSeconds(0)
     answeredRef.current = false
     serverStartedAtRef.current = null
+    canceledRef.current = false
+    terminalRef.current = false
     setActiveCall(call ?? null)
     setCanControlAudio(false)
     setPhase('ringing')
@@ -162,11 +173,27 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     // `elapsedSeconds` at the call's final length. When the caller knows the
     // server's billed duration, show that exact value instead of the local
     // estimate (MAI-190) — otherwise the local count stands, as before.
+    terminalRef.current = true
     setPhase('completed')
     setDialing(false)
     if (typeof durationS === 'number') setElapsedSeconds(durationS)
     callRef.current = null
     setCanControlAudio(false)
+  }, [])
+
+  const finishCall = useCallback(
+    (message?: string, durationS?: number) => {
+      if (terminalRef.current) return
+      terminalRef.current = true
+      if (message && !canceledRef.current) toast.error(message)
+      endCall(durationS)
+    },
+    [endCall],
+  )
+
+  const cancelCall = useCallback(() => {
+    canceledRef.current = true
+    callRef.current?.disconnect()
   }, [])
 
   const reset = useCallback(() => {
@@ -270,10 +297,14 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       if (call.status === 'in-progress') {
         connectCall(call.startedAt)
       } else if (TERMINAL_CALL_STATUSES.has(call.status) && phase !== 'completed') {
-        endCall(call.durationS ?? undefined)
+        const message =
+          call.status === 'busy' || call.status === 'no-answer' || call.status === 'failed'
+            ? callOutcomeMessage(call.status)
+            : undefined
+        finishCall(message, call.durationS ?? undefined)
       }
     })
-  }, [liveCallDetail, phase, connectCall, endCall])
+  }, [liveCallDetail, phase, connectCall, finishCall])
 
   // --- The rep's browser Voice SDK Device ---
   // One Device per rep, built lazily from a minted access token and kept for the
@@ -321,15 +352,24 @@ export function DialerProvider({ children }: { children: ReactNode }) {
         throw new Error('The dialer is still starting up. Wait a moment and try again.')
       }
       const call: TwilioVoiceCall = await device.connect({ params })
+      // The rep may have pressed End while Device.connect() was waiting. Do not
+      // attach or keep that late call: dropping it immediately prevents the
+      // canceled attempt from ringing the callee after the UI returned to idle.
+      if (canceledRef.current) {
+        call.disconnect()
+        return
+      }
       callRef.current = call
       setCanControlAudio(true)
       call.on('accept', () => connectCall())
-      call.on('disconnect', () => endCall())
-      call.on('cancel', () => endCall())
-      call.on('reject', () => endCall())
-      call.on('error', () => endCall())
+      call.on('disconnect', () => finishCall())
+      call.on('cancel', () => finishCall(callOutcomeMessage('no-answer')))
+      call.on('reject', () => finishCall(callOutcomeMessage('busy')))
+      call.on('error', () =>
+        finishCall(callOutcomeMessage(answeredRef.current ? 'dropped' : 'failed')),
+      )
     },
-    [connectCall, endCall],
+    [connectCall, finishCall],
   )
 
   // Mute/DTMF: forward straight to the live Call object callRef holds. See the
@@ -358,6 +398,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       adoptCall,
       connectCall,
       endCall,
+      cancelCall,
       reset,
       placeDeviceCall,
       muteCall,
@@ -378,6 +419,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       adoptCall,
       connectCall,
       endCall,
+      cancelCall,
       reset,
       placeDeviceCall,
       muteCall,
