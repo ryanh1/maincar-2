@@ -4,6 +4,7 @@ import express from 'express'
 import { logger } from '../dependencies/logger.js'
 import { WEB_ORIGIN } from './config.js'
 import { requestId } from './middleware/requestId.js'
+import activityRouter from './routes/activity.js'
 import authRouter from './routes/auth.js'
 import callsRouter from './routes/calls.js'
 import companiesRouter from './routes/companies.js'
@@ -90,6 +91,14 @@ app.use('/api/orgs/:orgId/messages', messagesRouter)
 // are two separate fields all the way out to the client — a room is not a video
 // link (spec §6).
 app.use('/api/orgs/:orgId/meetings', meetingsRouter)
+
+// The denormalized account feed (MAI-140 T12) — "everything that happened here",
+// newest first, in ONE indexed query with no joins and no union across the four
+// activity tables above. READ ONLY, and not because a writer is a later spec: feed
+// rows are written by whatever wrote the underlying activity, inside that
+// activity's own transaction (server/src/crm/activityFeed.ts). A POST here would be
+// a way to put a line in the feed that nothing stands behind.
+app.use('/api/orgs/:orgId/activity', activityRouter)
 
 // Schema-as-data (MAI-133 T5): ObjectDef + AttributeDef describe every object and
 // field. Both org-scoped; the org is in the path so the tenant boundary is checked

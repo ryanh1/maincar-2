@@ -96,6 +96,11 @@ model Org {
   // CRM spine already uses.
   meetings         Meeting[]
   meetingAttendees MeetingAttendee[]
+
+  // The denormalized feed (MAI-140 T12). Back-relation so a deleted org cascades
+  // its feed rows away — the same onDelete: Cascade the rest of the CRM spine
+  // already uses.
+  activityEntries ActivityEntry[]
 }
 
 model User {
@@ -140,6 +145,11 @@ model User {
   // User). SetNull on that side, so deleting a user never destroys the org's
   // record of what was said (MAI-138 T10).
   smsMessages SmsMessage[] @relation("SmsMailbox")
+
+  // Feed rows this user is the actor on (ActivityEntry.createdByUserId → User).
+  // SetNull on that side, so deleting a user never destroys the org's record of
+  // what happened (MAI-140 T12).
+  activityEntries ActivityEntry[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -607,6 +617,10 @@ model Company {
   // Meetings rolled up to this account (Meeting.companyId → Company). SetNull on
   // that side too, for the same reason (MAI-139 T11).
   meetings    Meeting[]
+  // The account page's feed (ActivityEntry.companyId → ActivityEntry). SetNull on
+  // that side too: trashing a company unlinks its feed rows rather than erasing
+  // the record of what happened (MAI-140 T12).
+  activity    ActivityEntry[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -700,6 +714,9 @@ model Person {
   // Meetings this person organised (Meeting.organizerPersonId → Person). SetNull
   // on that side too — Meeting.organizerEmail is what the row falls back to.
   organizedMeetings   Meeting[]          @relation("MeetingOrganizer")
+  // This person's feed (ActivityEntry.personId → Person). SetNull on that side
+  // too, for the same reason (MAI-140 T12).
+  activity            ActivityEntry[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -915,6 +932,9 @@ model Deal {
   // Meetings logged against this deal (Meeting.dealId → Deal). SetNull on that
   // side too, for the same reason (MAI-139 T11).
   meetings    Meeting[]
+  // The deal page's feed (ActivityEntry.dealId → Deal). SetNull on that side too,
+  // for the same reason (MAI-140 T12).
+  activity    ActivityEntry[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1690,4 +1710,116 @@ model MeetingAttendee {
   // The match path: "which unlinked attendees have this address?"
   @@index([orgId, email])
   @@index([personId])
+}
+
+// -----------------------------------------------------------------------------
+// Activities — ActivityEntry, the denormalized feed (MAI-140, Phase 3 / T12).
+//
+// Spec: docs/specs/SPEC-CRM-SCHEMA.md §5.11a / §6. Plan: tasks/plan-crm-schema.md
+// (T12). CHECKPOINT C.
+//
+// This table exists for ONE reason: an account page's "everything that happened
+// here" list must be a SINGLE indexed query. Without it, that list is a UNION
+// across Call, Email, SmsMessage, Meeting, Note and (later) stage changes —
+// five sorted reads merged in application memory, re-paginated by hand, growing
+// a sixth branch every time the product learns a new kind of activity. With it,
+// the feed is `WHERE (orgId, companyId) ORDER BY occurredAt DESC LIMIT n` against
+// a composite index, with NO joins at all.
+//
+// THE COST OF THAT IS DUPLICATION, and duplication is only safe when it cannot
+// drift. Two rules make it safe, and both are enforced rather than documented:
+//
+//   1. A feed row is written in the SAME TRANSACTION as the activity it
+//      summarizes. server/src/crm/activityFeed.ts accepts only a
+//      Prisma.TransactionClient, exactly as fieldHistory.ts does, so writing one
+//      outside the activity's own transaction is a TYPE ERROR. Either both rows
+//      commit or neither does — the feed can never claim a call that rolled back.
+//   2. `@@unique([orgId, sourceType, sourceId])` makes a re-save UPDATE the one
+//      row rather than append a second. Both key columns are NON-NULL for that
+//      reason: Postgres treats NULLs as distinct in a unique index, so a nullable
+//      column silently turns a unique constraint into no constraint at all.
+//
+// THIS TABLE IS NEVER THE SOURCE OF TRUTH. It is a cache of rows that live
+// elsewhere. Nothing reads it to answer "what did that call cost" or "who was on
+// that email" — `sourceType` + `sourceId` point at the real row for that. Deleting
+// the underlying activity is expected to delete its feed row; the spine links are
+// SetNull, so trashing a Company unlinks the feed row without erasing the history
+// of what happened.
+// -----------------------------------------------------------------------------
+model ActivityEntry {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // --- What this row summarizes ----------------------------------------------
+  // Allowed values: "call", "email", "sms", "meeting", "note", "stage_change".
+  // A String, not a Prisma enum, because this list WILL gain values and a Postgres
+  // enum needs an ALTER TYPE dance to do it (.claude/rules/database-and-prisma.md
+  // → No Enums). The type-safe half is ACTIVITY_SOURCE_TYPES in
+  // server/src/crm/activityFeed.ts.
+  //
+  // NOT NULL, and neither is sourceId — see rule 2 in the block comment above.
+  sourceType String
+  // The id of the real Call / Email / SmsMessage / Meeting / Note row. Deliberately
+  // NOT a foreign key: one column cannot point at six tables, and a polymorphic FK
+  // per source would be six nullable columns and six indexes to keep in step.
+  sourceId   String
+
+  // --- What the feed renders, without a join ---------------------------------
+  // The whole point of the denormalization: a feed row paints itself. `summary` is
+  // the short cached line ("Called +12025550123 — 4m 12s"); `preview` is the
+  // optional snippet under it (an email's first line, a text's body). Both are
+  // WRITE-TIME captures, so editing the underlying row does not silently rewrite
+  // history unless the writer re-saves and the upsert refreshes them.
+  summary String
+  preview String?
+
+  // Allowed values: "outbound", "inbound", or NULL where the idea does not apply
+  // (a note has no direction, and neither does a stage change).
+  direction String?
+
+  // --- Ordering ---------------------------------------------------------------
+  // When the activity HAPPENED, which is not when the row was written: a calendar
+  // sync backfills last week's meetings today, and the feed must still place them
+  // last week. Every index below ends on this column because every read of this
+  // table is "newest first" within a scope.
+  occurredAt DateTime
+
+  // --- Who did it -------------------------------------------------------------
+  // The "just my activity" filter. Nullable because plenty of activity has no
+  // internal actor at all — an inbound text, a synced meeting somebody else
+  // organised. SetNull so deleting a user never destroys the org's record of what
+  // happened; the summary still reads correctly without them.
+  createdByUserId String?
+  createdByUser   User?   @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // --- The spine links: the reason this is one query --------------------------
+  // All three nullable, all three SetNull. A feed row for a call from an unknown
+  // number carries no links and still logs; trashing a Company unlinks its feed
+  // rows rather than deleting the fact that the calls happened.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  personId  String?
+  person    Person?  @relation(fields: [personId], references: [id], onDelete: SetNull)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Idempotency. One feed row per source row, forever: a re-sync, a retried job, or
+  // a webhook delivered twice updates this row instead of appending a duplicate.
+  // Both key columns are NOT NULL, which is what makes the constraint bite.
+  @@unique([orgId, sourceType, sourceId])
+
+  // The account-page feeds. Each one is (tenant, scope, time) so the read is an
+  // index range scan in exactly the order it is returned — no sort, no join, no
+  // union. These three ARE the acceptance criterion.
+  @@index([orgId, companyId, occurredAt])
+  @@index([orgId, personId, occurredAt])
+  @@index([orgId, dealId, occurredAt])
+  // "Just my activity", org-wide.
+  @@index([orgId, createdByUserId, occurredAt])
+  // The unscoped org feed — "what happened today" with no account chosen.
+  @@index([orgId, occurredAt])
 }

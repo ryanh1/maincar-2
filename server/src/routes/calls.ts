@@ -24,6 +24,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { matchCallToCrm } from '../lib/callMatch.js'
+import { activityFromCall, recordActivityInTx } from '../crm/activityFeed.js'
 import type { Call } from '../generated/prisma/client.js'
 
 // mergeParams, or :orgId from the mount path never reaches req.params here —
@@ -384,7 +385,7 @@ router.post(
         // orgId comes from the path and userId from the verified caller — neither
         // is read off the body. status is written out rather than left to the
         // schema default because this response promises it.
-        return tx.call.create({
+        const call = await tx.call.create({
           data: {
             orgId,
             userId,
@@ -398,6 +399,17 @@ router.post(
             dealId: crmLinks.dealId,
           },
         })
+
+        // Append the ONE denormalized feed row for this call (MAI-140, spec
+        // §5.11a), so the account page's activity list stays a single indexed
+        // query. Inside this transaction, and only ever inside one:
+        // recordActivityInTx accepts a Prisma.TransactionClient and nothing else,
+        // so a call that rolls back cannot leave a feed row claiming it happened.
+        // The write is an upsert on (orgId, sourceType, sourceId), so a re-save
+        // refreshes the line instead of appending a second one.
+        await recordActivityInTx(tx, activityFromCall(call))
+
+        return call
       })
     } catch (error) {
       if (error instanceof NoActiveNumber) {

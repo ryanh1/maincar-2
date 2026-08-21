@@ -29,6 +29,12 @@ const { prismaMock, verifyTokenMock, initiateCallMock, hangUpCallMock, presignMo
     // transaction. Defaulted to "no match" in beforeEach, so an unknown number
     // still logs; the CRM-spine tests override it with a hit.
     personPhone: { findFirst: vi.fn() },
+    // The denormalized feed row the POST transaction appends (MAI-140 T12). It is
+    // written through crm/activityFeed.ts with the SAME tx the Call is created on,
+    // and $transaction below hands the route this very mock as that tx — so the
+    // upsert lands here, and a test can prove the feed row and the call are one
+    // unit of work.
+    activityEntry: { upsert: vi.fn() },
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   },
@@ -147,6 +153,7 @@ beforeEach(() => {
   // Default: the dialed number matches no person, so a call to it still logs with
   // null CRM links. The CRM-spine tests override this to a match.
   prismaMock.personPhone.findFirst.mockResolvedValue(null)
+  prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'feed-1' })
   // Runs the callback against the same mock, so the assertions below see the
   // reads and writes the route makes INSIDE the transaction.
   prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock))
@@ -503,6 +510,57 @@ describe('POST /api/orgs/:orgId/calls', () => {
       from: '+12025550123',
       callId: 'call-1',
     })
+  })
+
+  it('appends the ONE activity-feed row, inside the same transaction as the call (MAI-140)', async () => {
+    prismaMock.call.create.mockResolvedValue(callRow({ id: 'call-1', status: 'queued' }))
+
+    await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    // Exactly one, and an UPSERT rather than a create — so a retried job or a
+    // redelivered webhook refreshes the line instead of appending a second copy.
+    expect(prismaMock.activityEntry.upsert).toHaveBeenCalledTimes(1)
+    const args = prismaMock.activityEntry.upsert.mock.calls[0]![0] as {
+      where: { orgId_sourceType_sourceId: Record<string, string> }
+      create: Record<string, unknown>
+    }
+    // Keyed on all three NON-NULL columns, org first: a source id colliding across
+    // tenants can never make one org's write land on another org's row.
+    expect(args.where.orgId_sourceType_sourceId).toEqual({
+      orgId: ORG_A,
+      sourceType: 'call',
+      sourceId: 'call-1',
+    })
+    // The row paints itself: the number dialed is in the summary, so the feed needs
+    // no join back to Call.
+    expect(args.create).toMatchObject({
+      orgId: ORG_A,
+      sourceType: 'call',
+      sourceId: 'call-1',
+      direction: 'outbound',
+      createdByUserId: 'user-a',
+    })
+    expect(args.create.summary).toContain('+13035550199')
+
+    // INSIDE the transaction, and after the call it summarizes. The route hands
+    // recordActivityInTx the tx client, never the singleton — which the type system
+    // also enforces (see crm/activityFeed.ts → ActivityFeedClient).
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    const createOrder = prismaMock.call.create.mock.invocationCallOrder[0]!
+    const feedOrder = prismaMock.activityEntry.upsert.mock.invocationCallOrder[0]!
+    expect(createOrder).toBeLessThan(feedOrder)
+  })
+
+  it('does not write a feed row when the call itself is refused', async () => {
+    // A call already in flight to this number: the guard throws before the create,
+    // so neither the call nor its feed line is written.
+    prismaMock.call.findFirst.mockResolvedValue(callRow({ id: 'call-live', status: 'ringing' }))
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(409)
+    expect(prismaMock.call.create).not.toHaveBeenCalled()
+    expect(prismaMock.activityEntry.upsert).not.toHaveBeenCalled()
   })
 
   it('returns exactly the fields the client needs, and no others', async () => {
