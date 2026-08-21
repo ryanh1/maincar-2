@@ -185,12 +185,18 @@ export function ComposerCard({ draft }: ComposerCardProps) {
   // an empty card, which needs no question.
   const [confirmTemplate, setConfirmTemplate] = useState<EmailTemplate | null>(null)
 
-  // Cc and Bcc hide behind a link, and are open from the start when the draft
-  // already carries either — a rep who added a Cc and refreshed finds the row
-  // still there with its chip, not a link they have to press again.
-  const [showCcBcc, setShowCcBcc] = useState(
-    () => draft.ccAddrs.length > 0 || draft.bccAddrs.length > 0,
-  )
+  // Cc and Bcc hide behind two links, "Add Cc" and "Add Bcc", and only one of
+  // the two fields can be open at a time — picking one commits to it and the
+  // other link never appears. Open from the start when the draft already
+  // carries one of them, so a rep who added a Cc and refreshed finds the row
+  // still there with its chip, not a link they have to press again. A draft
+  // carrying both (from before this field became exclusive) keeps Cc, since
+  // that is the field a rep reaches for first.
+  const [ccBcc, setCcBcc] = useState<'none' | 'cc' | 'bcc'>(() => {
+    if (draft.ccAddrs.length > 0) return 'cc'
+    if (draft.bccAddrs.length > 0) return 'bcc'
+    return 'none'
+  })
 
   // What has already been reported upward. Comparing against this is what makes
   // the first render silent — opening a card is not editing it, and a PATCH that
@@ -362,7 +368,10 @@ export function ComposerCard({ draft }: ComposerCardProps) {
       aria-label={title}
       // Flush to the bottom edge: a top radius, no bottom radius, and no gap
       // beneath it, so the card grows out of the edge the way Gmail's does.
-      className="flex h-[26rem] w-96 flex-col overflow-hidden rounded-t-md border border-border bg-background shadow-md"
+      // `w-80` matches the dialer's own expanded card (`DialerDock.tsx`) — the
+      // two are the only cards that float above the dock, and MAI-209 asks
+      // that they read as the same size.
+      className="flex h-96 w-80 flex-col overflow-hidden rounded-t-md border border-border bg-background shadow-md"
     >
       <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-muted px-2">
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{title}</h2>
@@ -397,25 +406,36 @@ export function ComposerCard({ draft }: ComposerCardProps) {
         <div className="min-w-0 flex-1">
           <RecipientField label="To" chips={toChips} onChange={setToChips} autoFocus />
         </div>
-        {showCcBcc ? null : (
-          <button
-            type="button"
-            onClick={() => setShowCcBcc(true)}
-            // `flex items-start` rather than the button's own centering: the row
-            // grows as chips wrap, and a link that drifts to the middle of it
-            // stops lining up with the `To` label beside it.
-            className="flex shrink-0 cursor-pointer items-start border-b border-border px-3 py-1 text-xs leading-6 font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-          >
-            Cc/Bcc
-          </button>
-        )}
+        {ccBcc === 'none' ? (
+          <div className="flex shrink-0 items-start border-b border-border px-3 py-1">
+            {/* `flex items-start` on the wrapper rather than the buttons' own
+                centering: the row grows as chips wrap, and a link that drifts
+                to the middle of it stops lining up with the `To` label beside
+                it. */}
+            <button
+              type="button"
+              onClick={() => setCcBcc('cc')}
+              className="cursor-pointer text-xs leading-6 font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+            >
+              Add Cc
+            </button>
+            <span className="px-1 text-xs leading-6 text-muted-foreground" aria-hidden>
+              /
+            </span>
+            <button
+              type="button"
+              onClick={() => setCcBcc('bcc')}
+              className="cursor-pointer text-xs leading-6 font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+            >
+              Add Bcc
+            </button>
+          </div>
+        ) : null}
       </div>
 
-      {showCcBcc ? (
-        <>
-          <RecipientField label="Cc" chips={ccChips} onChange={setCcChips} />
-          <RecipientField label="Bcc" chips={bccChips} onChange={setBccChips} />
-        </>
+      {ccBcc === 'cc' ? <RecipientField label="Cc" chips={ccChips} onChange={setCcChips} /> : null}
+      {ccBcc === 'bcc' ? (
+        <RecipientField label="Bcc" chips={bccChips} onChange={setBccChips} />
       ) : null}
 
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3">

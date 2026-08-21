@@ -266,8 +266,8 @@ describe('ComposerCard', () => {
 
     const card = screen.getByRole('article', { name: 'New message' })
     expect(card).toHaveClass(
-      'w-96',
-      'h-[26rem]',
+      'w-80',
+      'h-96',
       'rounded-t-md',
       'border',
       'border-border',
@@ -550,8 +550,12 @@ function chipAddresses(): string[] {
     .map((button) => button.getAttribute('aria-label')!.replace(/^Remove /, ''))
 }
 
-function ccBccLink() {
-  return screen.queryByRole('button', { name: 'Cc/Bcc' })
+function addCcLink() {
+  return screen.queryByRole('button', { name: 'Add Cc' })
+}
+
+function addBccLink() {
+  return screen.queryByRole('button', { name: 'Add Bcc' })
 }
 
 describe('ComposerCard recipients', () => {
@@ -561,47 +565,62 @@ describe('ComposerCard recipients', () => {
     expect(recipientBox('To')).toHaveFocus()
   })
 
-  it('hides Cc and Bcc behind a link, and the link leaves once both rows are up', () => {
+  it('hides Cc and Bcc behind two links, and picking one leaves only that row', () => {
     renderCard()
 
     expect(screen.queryByLabelText('Cc')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Bcc')).not.toBeInTheDocument()
 
-    fireEvent.click(ccBccLink()!)
+    fireEvent.click(addCcLink()!)
 
     expect(screen.getByLabelText('Cc')).toBeInTheDocument()
-    expect(screen.getByLabelText('Bcc')).toBeInTheDocument()
-    // Nothing left for it to reveal.
-    expect(ccBccLink()).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Bcc')).not.toBeInTheDocument()
+    // Mutually exclusive: neither link is left to reveal the other.
+    expect(addCcLink()).not.toBeInTheDocument()
+    expect(addBccLink()).not.toBeInTheDocument()
   })
 
-  it('shows both rows from the start when the draft already carries a Cc', () => {
+  it('picking Add Bcc shows only the Bcc row', () => {
+    renderCard()
+
+    fireEvent.click(addBccLink()!)
+
+    expect(screen.getByLabelText('Bcc')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Cc')).not.toBeInTheDocument()
+    expect(addCcLink()).not.toBeInTheDocument()
+    expect(addBccLink()).not.toBeInTheDocument()
+  })
+
+  it('shows the Cc row from the start when the draft already carries a Cc', () => {
     renderCard(makeDraft({ ccAddrs: ['bob@acme.test'] }))
 
     expect(screen.getByLabelText('Cc')).toBeInTheDocument()
-    expect(screen.getByLabelText('Bcc')).toBeInTheDocument()
-    expect(ccBccLink()).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Bcc')).not.toBeInTheDocument()
+    expect(addCcLink()).not.toBeInTheDocument()
     expect(chipAddresses()).toEqual(['bob@acme.test'])
   })
 
-  it('shows both rows from the start for a Bcc-only draft', () => {
+  it('shows the Bcc row from the start for a Bcc-only draft', () => {
     renderCard(makeDraft({ bccAddrs: ['legal@acme.test'] }))
 
-    expect(screen.getByLabelText('Cc')).toBeInTheDocument()
     expect(screen.getByLabelText('Bcc')).toBeInTheDocument()
-    expect(ccBccLink()).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Cc')).not.toBeInTheDocument()
+    expect(addBccLink()).not.toBeInTheDocument()
   })
 
-  it('seeds every row from the draft it opened with', () => {
+  it('seeds every visible row from the draft it opened with', () => {
+    // Cc and Bcc are mutually exclusive on screen, so a draft carrying both
+    // (from before this field became exclusive) shows only Cc — the field it
+    // picks first. The Bcc chip stays in the draft's own data untouched; see
+    // "shows the Cc row from the start" above for the exclusivity itself.
     renderCard(
       makeDraft({
         toAddrs: ['ann@acme.test'],
         ccAddrs: ['bob@acme.test'],
-        bccAddrs: ['legal@acme.test'],
       }),
     )
 
-    expect(chipAddresses()).toEqual(['ann@acme.test', 'bob@acme.test', 'legal@acme.test'])
+    expect(chipAddresses()).toEqual(['ann@acme.test', 'bob@acme.test'])
   })
 
   it('rides the same debounce as the body, and sends only the field that changed', async () => {
@@ -621,14 +640,13 @@ describe('ComposerCard recipients', () => {
     expect(saveDraft).toHaveBeenCalledTimes(1)
   })
 
-  it('sends To, Cc, Bcc, subject, and body in one save', async () => {
+  it('sends To, Cc, subject, and body in one save', async () => {
     vi.useFakeTimers()
     const { saveDraft } = renderCard()
 
     addRecipient('To', 'ann@acme.test')
-    fireEvent.click(ccBccLink()!)
+    fireEvent.click(addCcLink()!)
     addRecipient('Cc', 'bob@acme.test')
-    addRecipient('Bcc', 'legal@acme.test')
     type(subjectField(), 'Quote')
     await typeBody('Numbers attached.')
 
@@ -640,8 +658,19 @@ describe('ComposerCard recipients', () => {
       bodyHtml: '<p>Numbers attached.</p>',
       toAddrs: ['ann@acme.test'],
       ccAddrs: ['bob@acme.test'],
-      bccAddrs: ['legal@acme.test'],
     })
+  })
+
+  it('sends Bcc instead of Cc when the rep picks Add Bcc', async () => {
+    vi.useFakeTimers()
+    const { saveDraft } = renderCard()
+
+    fireEvent.click(addBccLink()!)
+    addRecipient('Bcc', 'legal@acme.test')
+
+    await advance(AUTOSAVE_DELAY_MS)
+
+    expect(saveDraft).toHaveBeenCalledWith('draft-1', { bccAddrs: ['legal@acme.test'] })
   })
 
   it('saves the shorter list when Backspace removes a whole recipient', async () => {
@@ -702,12 +731,12 @@ describe('ComposerCard recipients', () => {
     )
   })
 
-  it('keeps three recipient rows out of the body height, so the card stays 26rem', () => {
+  it('keeps the recipient rows out of the body height, so the card stays a fixed height', () => {
     renderCard(makeDraft({ ccAddrs: ['bob@acme.test'] }))
 
     // The card is a fixed height, so every row above the body has to refuse to
     // shrink and the body has to be the one that gives up the space.
-    for (const label of ['To', 'Cc', 'Bcc']) {
+    for (const label of ['To', 'Cc']) {
       const row = recipientBox(label).closest('div.shrink-0')
       expect(row).not.toBeNull()
     }
@@ -718,7 +747,7 @@ describe('ComposerCard recipients', () => {
     const scroller = bodyField().closest('.overflow-y-auto')
     expect(scroller).toHaveClass('min-h-0', 'flex-1')
     expect(scroller!.parentElement).toHaveClass('min-h-0', 'flex-1')
-    expect(screen.getByRole('article', { name: 'New message' })).toHaveClass('h-[26rem]')
+    expect(screen.getByRole('article', { name: 'New message' })).toHaveClass('h-96')
   })
 })
 
@@ -768,11 +797,13 @@ describe('ComposerCard templates', () => {
   it('replaces the subject and the body and leaves every recipient alone', async () => {
     const user = userEvent.setup()
     useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [makeTemplate()] }))
+    // Only Cc is on screen — Cc and Bcc are mutually exclusive (MAI-209) and a
+    // draft carrying both picks Cc — but the point of this test is the same
+    // either way: a template must not touch a row the rep already addressed.
     renderCard(
       makeDraft({
         toAddrs: ['ann@acme.test'],
         ccAddrs: ['bob@acme.test'],
-        bccAddrs: ['legal@acme.test'],
       }),
     )
 
@@ -783,7 +814,7 @@ describe('ComposerCard templates', () => {
     expect(bodyField()).toHaveTextContent('Thanks for your time.')
     // The rep addressed the email first. A template that emptied the rows would
     // undo the work they did before reaching for it.
-    expect(chipAddresses()).toEqual(['ann@acme.test', 'bob@acme.test', 'legal@acme.test'])
+    expect(chipAddresses()).toEqual(['ann@acme.test', 'bob@acme.test'])
   })
 
   it('asks nothing when only the recipients are filled in', async () => {

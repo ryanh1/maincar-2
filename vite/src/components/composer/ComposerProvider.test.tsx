@@ -144,6 +144,12 @@ function renderProvider(client: QueryClient = makeTestQueryClient()) {
 }
 
 beforeEach(() => {
+  // jsdom's own default (1024 px) sits below `LG_BREAKPOINT_PX` (1204 px,
+  // MAI-209 → `desktopOnly.ts`), which would hide the dock in every test here
+  // that mounts the real `ProtectedLayout` and expects to find a real,
+  // expanded `ComposerCard`. A plain desktop width is what these tests are
+  // actually meant to run at.
+  window.innerWidth = 1440
   created = 0
   draftsByOrg.clear()
   deleted.clear()

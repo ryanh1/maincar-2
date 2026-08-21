@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
-import { ChevronDown, ChevronUp, Phone } from 'lucide-react'
+import { ChevronDown, Phone } from 'lucide-react'
 
+import { cn } from '@/lib/utils'
 import { formatElapsed } from '@/lib/duration'
 import { InCallControls } from '@/components/dialer/InCallControls'
 import { NumericKeypad } from '@/components/dialer/NumericKeypad'
@@ -53,21 +54,36 @@ export function DialerDock() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [toggleView, collapseDialer, inCall])
 
+  // "Start call" only while idle and collapsed — the label naming what a
+  // click does. Mid-call there is nothing left to start, so the collapsed
+  // button reads "Dialer" instead, same as the expanded title bar always has.
+  const label = !expanded && phase === 'idle' ? 'Start call' : 'Dialer'
+
   return (
     <div
       role="region"
       aria-label="Dialer"
-      className="fixed bottom-0 right-6 z-[100] flex w-80 flex-col rounded-t-md border border-b-0 border-border bg-card text-card-foreground shadow-md"
+      className={cn(
+        'fixed bottom-0 right-6 z-[100] flex flex-col bg-card text-card-foreground',
+        // Expanded keeps the floating-card look it always had. Collapsed is
+        // one flat segment in the dock's own row: no top border, no rounded
+        // corners — only the side borders that separate it from its neighbor
+        // (MAI-209 → edge-to-edge borders), sized to its own content instead
+        // of the card's fixed width.
+        expanded
+          ? 'w-80 rounded-t-md border border-b-0 border-border shadow-md'
+          : 'w-auto border-x border-border',
+      )}
     >
       <button
         type="button"
         onClick={toggleView}
         aria-expanded={expanded}
         aria-controls={BODY_ID}
-        className="flex h-8 items-center gap-2 rounded-t-md px-3 text-left text-sm font-medium transition-colors hover:bg-accent/50"
+        className="flex h-8 items-center gap-2 px-3 text-left text-sm font-medium transition-colors hover:bg-accent/50"
       >
         <Phone size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
-        <span className="flex-1 truncate">Dialer</span>
+        <span className="flex-1 truncate">{label}</span>
         {phase !== 'idle' ? (
           <span className="text-xs tabular-nums text-muted-foreground" aria-label="Call duration">
             {formatElapsed(elapsedSeconds)}
@@ -75,9 +91,7 @@ export function DialerDock() {
         ) : null}
         {expanded ? (
           <ChevronDown size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronUp size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
-        )}
+        ) : null}
       </button>
 
       {expanded ? (
