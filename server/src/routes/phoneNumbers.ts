@@ -26,6 +26,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { queueProvisionNumber } from '../jobs/provisionNumber.js'
+import { queueReleaseNumber } from '../jobs/releaseNumber.js'
 import type { PhoneNumber } from '../generated/prisma/client.js'
 
 // mergeParams, or :orgId from the mount path never reaches req.params here —
@@ -172,13 +173,48 @@ const NOT_FOUND_ERROR = 'Phone number not found'
 const DEACTIVATE_ERROR =
   'To stop calling from this number, make a different one active instead. Switching this one off would leave you with no caller ID and no way to place a call.'
 
+// --- Release ---
+
+// The status a number sits in between "the person asked to give it up" and
+// "Twilio has confirmed it". Reachable only through the release route, and acted
+// on only by src/jobs/releaseNumber.ts.
+const RELEASING_STATUS = 'releasing'
+
+// A purchase still in flight. Releasing one would race the provisioning job: the
+// row could be deleted a moment before Twilio sells us the number, which is the
+// one outcome nothing downstream can clean up — a rented number with no row.
+const RELEASE_IN_FLIGHT_ERROR =
+  'This number is still being bought. Wait until it is ready, then release it.'
+
+// Refused, not merely warned about, because there is a first step that fixes it
+// and the person can take it right now. The other branch — this is their ONLY
+// dialable number — is allowed through, and the confirm dialog states the
+// consequence instead (vite/src/pages/Settings_PhoneNumbers_Row.tsx).
+const RELEASE_ACTIVE_CALLER_ID_ERROR =
+  'Make a different number your caller ID first, then release this one.'
+
 // Thrown inside the transaction so a failed check rolls the writes back with it.
-// Classes rather than sentinel strings because the second one carries a value
-// the response has to name.
+// Classes rather than sentinel strings because two of them carry a value the
+// response has to name.
 class NumberNotFound extends Error {}
 class NumberNotReady extends Error {
   constructor(readonly actualStatus: string) {
     super('phone number not active')
+  }
+}
+// Carries the message rather than the status, because the two release refusals
+// are different sentences for different reasons, and both are already written
+// above in the words the person reads.
+class ReleaseRefused extends Error {
+  constructor(readonly reason: string) {
+    super('phone number cannot be released')
+  }
+}
+// Not a failure. The row was already on its way out when the request arrived, so
+// the answer is the row itself and no second job.
+class AlreadyReleasing extends Error {
+  constructor(readonly row: PhoneNumber) {
+    super('phone number is already releasing')
   }
 }
 
@@ -519,6 +555,168 @@ router.patch(
     logger.info({ orgId, userId, phoneNumberId: id }, 'activated a number for outbound calling')
 
     // --- Return response ---
+    res.json({ number: mapPhoneNumberToApi(target) })
+  }),
+)
+
+// ============================================================
+// DELETE /api/orgs/:orgId/phone-numbers/:id — give the number back
+// ============================================================
+// The only way to stop paying Twilio for a number, and the inverse of the buy
+// route in every way that matters. Like that one, it does NOT call Twilio: it
+// moves the row to "releasing" and hands the rest to src/jobs/releaseNumber.ts,
+// so the person gets an answer immediately and the release keeps its retries even
+// if this request, this process, or their browser goes away.
+//
+// It is irreversible. Twilio puts a released number back in the pool and does not
+// sell "the same" one back, so the confirm dialog on the client says so and this
+// route refuses the one case that has an obvious first step instead.
+router.delete(
+  '/:id',
+  wrapRoute('DELETE /api/orgs/:orgId/phone-numbers/:id', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    // Before the row is looked up: a non-member must not learn whether this org —
+    // or this number — exists.
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    // One transaction, and the caller's numbers are LOCKED inside it. Postgres
+    // runs at READ COMMITTED, so without the lock two releases fired at once
+    // would both read "there is another active number to fall back on" and both
+    // commit, leaving the rep with none. Raw SQL because Prisma cannot express a
+    // row lock; parameterised, and orgId/userId come from the verified path and
+    // token, never from the body. The rows themselves are read with Prisma on the
+    // next line — this query exists only to take the locks.
+    let target: PhoneNumber
+    let previousStatus: string
+    try {
+      const settled = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`
+          SELECT "id" FROM "PhoneNumber"
+          WHERE "orgId" = ${orgId}
+            AND "assignedUserId" = ${userId}
+          FOR UPDATE
+        `
+
+        // Every number this caller holds in this org, in one read: the one they
+        // asked to release, and the ones the fallback check below counts. Two
+        // reads could disagree with each other; this cannot.
+        const mine = await tx.phoneNumber.findMany({ where: { orgId, assignedUserId: userId } })
+
+        // All three keys are in the query above, so a colleague's number, or
+        // another org's, is simply not here.
+        const found = mine.find((number) => number.id === id)
+        if (!found) throw new NumberNotFound()
+
+        // A purchase still in flight. The provisioning job is about to spend
+        // money on this row, and deleting it a moment before Twilio answers
+        // would leave a rented number with no row behind it — the one outcome
+        // nothing downstream can find, let alone clean up.
+        if (found.status === 'searching') throw new ReleaseRefused(RELEASE_IN_FLIGHT_ERROR)
+
+        // Already on its way out. Answered with the row rather than an error:
+        // the caller asked for this number to be gone, and it is going. No
+        // second job is queued — the first one still owns it.
+        if (found.status === RELEASING_STATUS) throw new AlreadyReleasing(found)
+
+        // Releasing the caller ID is refused ONLY while there is another
+        // dialable number to switch to, because then the person has a first step
+        // and the refusal names it. If this is their last dialable number, the
+        // release goes ahead: refusing there would make the final number
+        // unreleasable and rent it forever, which is the bug this route exists
+        // to fix. The consequence is stated in the confirm dialog instead.
+        if (found.isActiveForOutbound) {
+          const fallback = mine.some(
+            (number) => number.id !== id && number.status === ACTIVE_STATUS,
+          )
+          if (fallback) throw new ReleaseRefused(RELEASE_ACTIVE_CALLER_ID_ERROR)
+        }
+
+        // updateMany with the tenant keys, never update by id. `status` is in the
+        // filter too, making this a compare-and-set: two releases of the SAME row
+        // cannot both queue a job.
+        //
+        // isActiveForOutbound is cleared in the same write, and that is not
+        // tidying. calls.ts picks the caller ID with `WHERE isActiveForOutbound =
+        // true` and does not look at the status, so a releasing row left switched
+        // on would keep placing calls from a number on its way out of the account.
+        const moved = await tx.phoneNumber.updateMany({
+          where: { id, orgId, assignedUserId: userId, status: found.status },
+          data: { status: RELEASING_STATUS, isActiveForOutbound: false },
+        })
+        if (moved.count === 0) throw new NumberNotFound()
+
+        // The row just read, with the two fields this route writes. Every field
+        // the mapper sends is either unchanged or set right here, so this cannot
+        // disagree with what was stored — and it costs no extra read.
+        return {
+          row: { ...found, status: RELEASING_STATUS, isActiveForOutbound: false },
+          previousStatus: found.status,
+        }
+      })
+      target = settled.row
+      previousStatus = settled.previousStatus
+    } catch (error) {
+      if (error instanceof AlreadyReleasing) {
+        return void res.json({ number: mapPhoneNumberToApi(error.row) })
+      }
+      if (error instanceof NumberNotFound) {
+        return void res.status(404).json({ error: NOT_FOUND_ERROR })
+      }
+      if (error instanceof ReleaseRefused) {
+        return void res.status(409).json({ error: error.reason })
+      }
+      throw error
+    }
+
+    try {
+      await queueReleaseNumber(target.id)
+    } catch (error) {
+      // This is NOT the hand-rolled try/catch the route rules forbid. Nothing is
+      // swallowed: the rethrow below leaves wrapRoute owning the log, the report
+      // and the 500. What this block does is undo a half-finished write.
+      //
+      // A "releasing" row with no job behind it is the worst state to walk away
+      // from: the number is still rented, the list shows it leaving, and no
+      // second release can be started because this route refuses a row that is
+      // already releasing. Putting the status back makes the failure honest and
+      // lets the person try again.
+      //
+      // Compare-and-set on "releasing", scoped by orgId, so it can only touch the
+      // row just written and only while nothing else has settled it.
+      // isActiveForOutbound stays false: the number is dialable again, but a
+      // caller ID is picked on purpose, not restored by a rollback.
+      try {
+        await prisma.phoneNumber.updateMany({
+          where: { id: target.id, orgId, status: RELEASING_STATUS },
+          data: { status: previousStatus },
+        })
+      } catch (cleanupError) {
+        // The database is a likely reason the enqueue failed at all, so this
+        // failing too is expected rather than surprising. Log it, and let the
+        // ORIGINAL error be the one that reaches wrapRoute.
+        logger.error(
+          { orgId, userId, phoneNumberId: target.id, error: cleanupError },
+          'could not put an unqueued phone number back',
+        )
+      }
+      throw error
+    }
+
+    // Identifiers only. The number itself is not logged: it is a phone number,
+    // which is PII, and the row id is enough to find it.
+    logger.info({ orgId, userId, phoneNumberId: id }, 'queued a phone number release')
+
+    // --- Return response ---
+    // 200 with the row, not 204: the number is not gone yet, it is "releasing",
+    // and the client polls this shape until the row disappears. Answering with no
+    // body would say the opposite of what is true.
     res.json({ number: mapPhoneNumberToApi(target) })
   }),
 )

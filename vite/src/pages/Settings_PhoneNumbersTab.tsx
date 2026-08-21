@@ -1,15 +1,12 @@
 import { useState } from 'react'
-import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useGetNumbers, useSetActiveNumber } from '@/hooks/phoneNumbers'
-import type { PhoneNumber } from '@/hooks/phoneNumbers'
-import { ApiError } from '@/lib/api'
-import { getPhoneNumberStatusLabel } from '@/lib/phoneNumberLabels'
+import { useGetNumbers } from '@/hooks/phoneNumbers'
 import { useAuth } from '@/providers/useAuth'
 
 import { Settings_PhoneNumbers_BuyDialog } from './Settings_PhoneNumbers_BuyDialog'
+import { Settings_PhoneNumbers_Row } from './Settings_PhoneNumbers_Row'
 
 /**
  * Settings → Phone numbers: the numbers this organization owns, and the caller ID
@@ -19,13 +16,15 @@ import { Settings_PhoneNumbers_BuyDialog } from './Settings_PhoneNumbers_BuyDial
  * rest, so the control is disabled on the number that is already active and on any
  * number that is not yet dialable (a `searching` row is still provisioning). The
  * server re-checks all of it — every disabled control here is a courtesy.
+ *
+ * Each row also carries the one action that stops the org paying for a number:
+ * releasing it. That lives in Settings_PhoneNumbers_Row, behind a confirm.
  */
 export function Settings_PhoneNumbersTab() {
   const { org } = useAuth()
   const orgId = org?.id ?? null
 
   const numbersQuery = useGetNumbers(orgId)
-  const setActive = useSetActiveNumber()
 
   const [buyOpen, setBuyOpen] = useState(false)
 
@@ -33,19 +32,6 @@ export function Settings_PhoneNumbersTab() {
 
   const data = numbersQuery.data
   const numbers = data?.numbers ?? []
-
-  function onSetActive(number: PhoneNumber) {
-    setActive.mutate(
-      { orgId: orgId!, id: number.id },
-      {
-        onSuccess: () => toast.success('Caller ID updated.'),
-        onError: (err) =>
-          toast.error(
-            err instanceof ApiError ? err.message : 'Could not update the caller ID. Try again.',
-          ),
-      },
-    )
-  }
 
   return (
     <section className="flex flex-col gap-6">
@@ -99,37 +85,25 @@ export function Settings_PhoneNumbersTab() {
                 <th scope="col" className="w-48 px-3 py-2 text-left text-xs font-medium text-muted-foreground">
                   Caller ID
                 </th>
+                <th scope="col" className="w-12 px-2 py-2">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody role="radiogroup" aria-label="Outbound caller ID">
-              {numbers.map((number) => {
-                const isActive = number.isActiveForOutbound
-                // Only a dialable number that is not already the caller ID can be
-                // picked. `searching`, `releasing`, and `failed` cannot call out.
-                const canActivate = number.status === 'active' && !isActive
-                return (
-                  <tr key={number.id} className="border-b border-border last:border-0">
-                    <td className="px-3 py-2 text-sm tabular-nums">{number.e164}</td>
-                    <td className="px-3 py-2 text-sm">{getPhoneNumberStatusLabel(number)}</td>
-                    <td className="px-3 py-2 text-sm">
-                      <label className="inline-flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="caller-id"
-                          className="size-4 accent-primary"
-                          checked={isActive}
-                          disabled={!canActivate || setActive.isPending}
-                          onChange={() => onSetActive(number)}
-                          aria-label={`Set ${number.e164} as caller ID`}
-                        />
-                        <span className={isActive ? 'text-foreground' : 'text-muted-foreground'}>
-                          {isActive ? 'Caller ID' : 'Set as caller ID'}
-                        </span>
-                      </label>
-                    </td>
-                  </tr>
-                )
-              })}
+              {numbers.map((number) => (
+                <Settings_PhoneNumbers_Row
+                  key={number.id}
+                  number={number}
+                  orgId={orgId}
+                  // Counted here rather than in the row, because it is a fact
+                  // about the whole list: whether releasing THIS number would
+                  // leave the rep with a caller ID to fall back on.
+                  hasOtherActiveNumber={numbers.some(
+                    (other) => other.id !== number.id && other.status === 'active',
+                  )}
+                />
+              ))}
             </tbody>
           </table>
         </div>

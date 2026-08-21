@@ -182,6 +182,28 @@ export async function buyPhoneNumber(purchase: NumberPurchase): Promise<Purchase
   return { sid: bought.sid, e164: bought.phoneNumber, voiceUrl: bought.voiceUrl }
 }
 
+/**
+ * Give a number back to Twilio, so the org stops being billed for it.
+ *
+ * The exact inverse of `buyPhoneNumber`, and the only thing in this codebase that
+ * stops a recurring charge. Twilio's own verb is a DELETE on the IncomingPhoneNumber
+ * resource, keyed by the `PN…` SID rather than by the E.164 — the SID is what the
+ * purchase returned and what our row stores, and it stays unambiguous even if the
+ * same E.164 is later sold to somebody else.
+ *
+ * This does not itself cost money; it ends a charge that is already running. But it
+ * is IRREVERSIBLE: Twilio puts a released number back in the pool, and buying "the
+ * same" number back is not something Twilio offers. The caller is responsible for
+ * having asked the person first.
+ *
+ * A number Twilio no longer has under this account answers 404. That is not an
+ * error the caller needs to distinguish by hand — `twilioErrorStatus` reads the
+ * status off it, exactly as it does for the other calls in this module.
+ */
+export async function releasePhoneNumber(twilioSid: string): Promise<void> {
+  await getTwilioClient().incomingPhoneNumbers(twilioSid).remove()
+}
+
 // --- Outbound dialing ---------------------------------------------------------
 //
 // The browser places the call directly: the rep's Device (the Voice SDK,

@@ -8,27 +8,39 @@ import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock, listNumbersMock, getPriceMock, queueProvisionMock } =
-  vi.hoisted(() => ({
-    prismaMock: {
-      user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
-      membership: { findFirst: vi.fn() },
-      phoneNumber: {
-        findMany: vi.fn(),
-        findFirst: vi.fn(),
-        create: vi.fn(),
-        updateMany: vi.fn(),
-        // Present only so a test can prove nothing ever calls them.
-        delete: vi.fn(),
-        deleteMany: vi.fn(),
-      },
-      $transaction: vi.fn(),
+const {
+  prismaMock,
+  verifyTokenMock,
+  listNumbersMock,
+  getPriceMock,
+  queueProvisionMock,
+  queueReleaseMock,
+} = vi.hoisted(() => ({
+  prismaMock: {
+    user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
+    membership: { findFirst: vi.fn() },
+    phoneNumber: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      create: vi.fn(),
+      updateMany: vi.fn(),
+      // Present only so a test can prove nothing ever calls them. Releasing a
+      // number DOES eventually delete its row, but that happens in
+      // src/jobs/releaseNumber.ts — no route may delete an org-scoped row.
+      delete: vi.fn(),
+      deleteMany: vi.fn(),
     },
-    verifyTokenMock: vi.fn(),
-    listNumbersMock: vi.fn(),
-    getPriceMock: vi.fn(),
-    queueProvisionMock: vi.fn(),
-  }))
+    $transaction: vi.fn(),
+    // The release route's row lock. Raw SQL because Prisma cannot express
+    // `FOR UPDATE`; the tests read the text back to prove the lock is taken.
+    $queryRaw: vi.fn(),
+  },
+  verifyTokenMock: vi.fn(),
+  listNumbersMock: vi.fn(),
+  getPriceMock: vi.fn(),
+  queueProvisionMock: vi.fn(),
+  queueReleaseMock: vi.fn(),
+}))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
 vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
@@ -55,6 +67,13 @@ vi.mock('../../../dependencies/twilio.js', () => ({
 // keeps the unit suite from ever reaching a queue, a database, or Twilio.
 vi.mock('../../jobs/provisionNumber.js', () => ({
   queueProvisionNumber: queueProvisionMock,
+}))
+
+// The release route's contract with the background job is the same single
+// function call, mocked for the same reason: the route's job is to mark the row
+// and hand it over, and a real queue here would prove nothing about that.
+vi.mock('../../jobs/releaseNumber.js', () => ({
+  queueReleaseNumber: queueReleaseMock,
 }))
 
 import app from '../../app.js'
@@ -132,9 +151,13 @@ beforeEach(() => {
   // writes the route makes INSIDE the transaction.
   prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock))
   prismaMock.phoneNumber.create.mockResolvedValue(numberRow())
+  // The row lock takes no decision of its own — findMany below is what the
+  // release route reads. It just has to resolve.
+  prismaMock.$queryRaw.mockResolvedValue([])
   listNumbersMock.mockResolvedValue([])
   getPriceMock.mockResolvedValue({ amount: '1.15', currency: 'USD' })
   queueProvisionMock.mockResolvedValue('job-1')
+  queueReleaseMock.mockResolvedValue('job-2')
 })
 
 /** What the Twilio wrapper hands back for one number Twilio has for sale. */
@@ -1229,7 +1252,282 @@ describe('PATCH /api/orgs/:orgId/phone-numbers/:id — org isolation', () => {
 })
 
 // ============================================================
-// requireAuth — the gate ahead of ALL FOUR routes
+// DELETE /api/orgs/:orgId/phone-numbers/:id — give the number back
+// ============================================================
+// The route that stops the org paying Twilio. It does not call Twilio itself: it
+// moves the row to "releasing" and hands the rest to the background job, so what
+// these tests assert is the marking, the refusals, and the hand-off.
+const DELETE_A = `${URL_A}/num-1`
+
+/**
+ * Puts `rows` behind the release route's one read.
+ *
+ * The route reads every number the caller holds in one findMany — the target and
+ * the ones the fallback check counts — so a test sets up the whole list at once.
+ */
+function callerHolds(...rows: ReturnType<typeof numberRow>[]): void {
+  prismaMock.phoneNumber.findMany.mockResolvedValue(rows)
+}
+
+describe('DELETE /api/orgs/:orgId/phone-numbers/:id', () => {
+  it('marks the number releasing and queues the release', async () => {
+    callerHolds(numberRow({ status: 'active' }))
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.number).toMatchObject({ id: 'num-1', status: 'releasing' })
+    expect(queueReleaseMock).toHaveBeenCalledWith('num-1')
+  })
+
+  // updateMany with all three keys, never update by id, and a compare-and-set on
+  // the status the route just read.
+  it('scopes the write by org and caller, and compare-and-sets on the status', async () => {
+    callerHolds(numberRow({ status: 'active' }))
+
+    await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith({
+      where: { id: 'num-1', orgId: ORG_A, assignedUserId: 'user-a', status: 'active' },
+      data: { status: 'releasing', isActiveForOutbound: false },
+    })
+  })
+
+  // calls.ts picks the caller ID with `WHERE isActiveForOutbound = true` and does
+  // not look at the status. A releasing row left switched on would keep placing
+  // calls from a number on its way out of the account.
+  it('switches the number off as caller ID in the same write', async () => {
+    callerHolds(numberRow({ status: 'active', isActiveForOutbound: true }))
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.phoneNumber.updateMany.mock.calls[0]![0].data.isActiveForOutbound).toBe(false)
+    expect(res.body.number.isActiveForOutbound).toBe(false)
+  })
+
+  // The whole point of doing this in one transaction with a lock: two releases
+  // fired at once must not both read "there is a fallback" and both commit.
+  it('locks the caller’s numbers FOR UPDATE before it reads them', async () => {
+    callerHolds(numberRow({ status: 'active' }))
+
+    await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(prismaMock.$transaction).toHaveBeenCalled()
+    expect((prismaMock.$queryRaw.mock.calls[0]![0] as string[]).join('?')).toContain('FOR UPDATE')
+  })
+
+  // A failed purchase is a row for a number Twilio never sold us. Clearing it out
+  // goes through the same route, so the person has one way to remove a row.
+  it('releases a failed row too, so a dead purchase can be cleared', async () => {
+    callerHolds(numberRow({ status: 'failed', twilioSid: null }))
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.phoneNumber.updateMany.mock.calls[0]![0].where.status).toBe('failed')
+    expect(queueReleaseMock).toHaveBeenCalledWith('num-1')
+  })
+
+  // No route may delete an org-scoped row. The row goes in the job, after Twilio
+  // has confirmed — deleting it here would lose the SID and with it any way to
+  // ever stop the charge.
+  it('never deletes the row itself', async () => {
+    callerHolds(numberRow({ status: 'active' }))
+
+    await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(prismaMock.phoneNumber.delete).not.toHaveBeenCalled()
+    expect(prismaMock.phoneNumber.deleteMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('DELETE /api/orgs/:orgId/phone-numbers/:id — the refusals', () => {
+  // The provisioning job is about to spend money on this row. Deleting it a
+  // moment before Twilio answers leaves a rented number with no row behind it.
+  it('409s a number that is still being bought, and queues nothing', async () => {
+    callerHolds(numberRow({ status: 'searching', twilioSid: null }))
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe(
+      'This number is still being bought. Wait until it is ready, then release it.',
+    )
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+    expect(queueReleaseMock).not.toHaveBeenCalled()
+  })
+
+  // Refused only while there is somewhere to switch TO, and the message names
+  // that first step rather than just saying no.
+  it('409s the caller ID while another dialable number exists', async () => {
+    callerHolds(
+      numberRow({ id: 'num-1', status: 'active', isActiveForOutbound: true }),
+      numberRow({ id: 'num-2', status: 'active', e164: '+12025550999' }),
+    )
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('Make a different number your caller ID first, then release this one.')
+    expect(queueReleaseMock).not.toHaveBeenCalled()
+  })
+
+  // The other half of the same rule, and the more important half: refusing here
+  // would make a rep's last number unreleasable and rent it forever, which is
+  // the bug this route exists to fix. The confirm dialog states the cost instead.
+  it('allows the caller ID through when it is the only dialable number left', async () => {
+    callerHolds(
+      numberRow({ id: 'num-1', status: 'active', isActiveForOutbound: true }),
+      // Not a fallback: neither of these can carry a call.
+      numberRow({ id: 'num-2', status: 'failed', e164: '+12025550888' }),
+      numberRow({ id: 'num-3', status: 'searching', e164: '+12025550777' }),
+    )
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(queueReleaseMock).toHaveBeenCalledWith('num-1')
+  })
+
+  // Asked twice. The answer is the row, not an error — the caller wants this
+  // number gone and it is going — but the first job still owns it.
+  it('answers a number that is already releasing without queueing a second job', async () => {
+    callerHolds(numberRow({ status: 'releasing' }))
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.number.status).toBe('releasing')
+    expect(queueReleaseMock).not.toHaveBeenCalled()
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('DELETE /api/orgs/:orgId/phone-numbers/:id — the queue is down', () => {
+  // A "releasing" row with no job behind it is the worst state to walk away
+  // from: the number is still rented, and this route refuses a row that is
+  // already releasing, so nothing could ever start a second release.
+  it('puts the status back and still reports the failure', async () => {
+    callerHolds(numberRow({ status: 'active' }))
+    queueReleaseMock.mockRejectedValue(new Error('queue is down'))
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(500)
+    const rollback = prismaMock.phoneNumber.updateMany.mock.calls[1]![0]
+    expect(rollback).toEqual({
+      where: { id: 'num-1', orgId: ORG_A, status: 'releasing' },
+      data: { status: 'active' },
+    })
+  })
+
+  // A caller ID is picked on purpose, not restored by a rollback.
+  it('does not hand the number its caller-ID flag back', async () => {
+    callerHolds(numberRow({ status: 'active', isActiveForOutbound: true }))
+    queueReleaseMock.mockRejectedValue(new Error('queue is down'))
+
+    await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(prismaMock.phoneNumber.updateMany.mock.calls[1]![0].data).not.toHaveProperty(
+      'isActiveForOutbound',
+    )
+  })
+
+  // The rollback failing must not hide the original error.
+  it('still 500s when the rollback fails too', async () => {
+    callerHolds(numberRow({ status: 'active' }))
+    queueReleaseMock.mockRejectedValue(new Error('queue is down'))
+    prismaMock.phoneNumber.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockRejectedValueOnce(new Error('database is down too'))
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(500)
+  })
+})
+
+// ============================================================
+// DELETE — org isolation (mandatory — .claude/rules/testing.md)
+// ============================================================
+describe('DELETE /api/orgs/:orgId/phone-numbers/:id — org isolation', () => {
+  it('401s without auth, and queues nothing', async () => {
+    const res = await request(app).delete(DELETE_A)
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+    expect(queueReleaseMock).not.toHaveBeenCalled()
+  })
+
+  it('404s for an org the caller does not belong to, before it reads any number', async () => {
+    authAs(null)
+
+    const res = await request(app)
+      .delete(`/api/orgs/${ORG_B}/phone-numbers/num-1`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Organization not found')
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+    expect(queueReleaseMock).not.toHaveBeenCalled()
+  })
+
+  it('404s when the org is disabled, rather than admitting it exists', async () => {
+    authAs(membershipRow({ org: { id: ORG_A, name: 'Org A', enabled: false } }))
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
+  // A colleague's number is not a 403: saying "forbidden" would confirm the id is
+  // real and tell the caller whose it is not.
+  it('404s a number that belongs to a colleague, and reads scoped to the caller', async () => {
+    callerHolds()
+
+    const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Phone number not found')
+    expect(prismaMock.phoneNumber.findMany).toHaveBeenCalledWith({
+      where: { orgId: ORG_A, assignedUserId: 'user-a' },
+    })
+    expect(queueReleaseMock).not.toHaveBeenCalled()
+  })
+
+  // The caller is a real member of Org B; the number lives in Org A. The orgId in
+  // the read is what makes that a 404 instead of a cross-tenant release.
+  it('404s a number that lives in another org, scoping the read to the PATH org', async () => {
+    authAs(membershipRow({ orgId: ORG_B, org: { id: ORG_B, name: 'Org B', enabled: true } }))
+    callerHolds()
+
+    const res = await request(app)
+      .delete(`/api/orgs/${ORG_B}/phone-numbers/num-1`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.phoneNumber.findMany).toHaveBeenCalledWith({
+      where: { orgId: ORG_B, assignedUserId: 'user-a' },
+    })
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+    expect(queueReleaseMock).not.toHaveBeenCalled()
+  })
+
+  // The lock query is raw SQL, so the tenant keys are parameters rather than
+  // something Prisma builds. This is what proves they are still both there.
+  it('carries the org and the caller into the lock as parameters', async () => {
+    callerHolds(numberRow({ status: 'active' }))
+
+    await request(app).delete(DELETE_A).set('Authorization', AUTH)
+
+    expect(prismaMock.$queryRaw.mock.calls[0]!.slice(1)).toEqual([ORG_A, 'user-a'])
+  })
+})
+
+// ============================================================
+// requireAuth — the gate ahead of ALL FIVE routes
 // ============================================================
 // The blocks above each prove their own route refuses a NON-MEMBER. That is
 // requireMembership. This block is the other gate: a caller who never got past
@@ -1268,15 +1566,23 @@ const ROUTE_CALLS = [
       return (auth === null ? r : r.set('Authorization', auth)).send({ isActiveForOutbound: true })
     },
   },
+  {
+    name: 'DELETE /phone-numbers/:id',
+    call: (auth: string | null) => {
+      const r = request(app).delete(`${URL_A}/num-1`)
+      return auth === null ? r : r.set('Authorization', auth)
+    },
+  },
 ]
 
 /**
  * Nothing happened: no tenant lookup, no row read or written, no Twilio call,
- * and — the expensive one — no purchase queued.
+ * and — the two expensive ones — no purchase queued and no release queued.
  *
  * Asserted on every rejection because a status code alone does not prove the
  * work was skipped. A handler that ran and then answered 401 would still have
- * spent this org's Twilio quota and still have queued a number to buy.
+ * spent this org's Twilio quota, still have queued a number to buy, and still
+ * have given away a number the org is using.
  */
 function expectNoWorkDone(): void {
   expect(prismaMock.membership.findFirst).not.toHaveBeenCalled()
@@ -1287,6 +1593,7 @@ function expectNoWorkDone(): void {
   expect(listNumbersMock).not.toHaveBeenCalled()
   expect(getPriceMock).not.toHaveBeenCalled()
   expect(queueProvisionMock).not.toHaveBeenCalled()
+  expect(queueReleaseMock).not.toHaveBeenCalled()
 }
 
 describe('phone-number routes — requireAuth', () => {

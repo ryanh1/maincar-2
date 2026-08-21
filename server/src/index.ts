@@ -3,6 +3,7 @@ import { initErrorReporter } from '../dependencies/errorReporter.js'
 import app from './app.js'
 import { APP_NAME, PORT } from './config.js'
 import { registerProvisionNumberWorker } from './jobs/provisionNumber.js'
+import { registerReleaseNumberWorker } from './jobs/releaseNumber.js'
 import { registerUploadRecordingWorker } from './jobs/uploadRecording.js'
 import { registerTranscribeRecordingWorker } from './jobs/transcribeRecording.js'
 import { startQueue, stopQueue } from './jobs/queue.js'
@@ -38,6 +39,7 @@ const server = app.listen(PORT, () => {
 async function startWorkers(): Promise<void> {
   await startQueue()
   await registerProvisionNumberWorker()
+  await registerReleaseNumberWorker()
   await registerUploadRecordingWorker()
   await registerTranscribeRecordingWorker()
   logger.info(
