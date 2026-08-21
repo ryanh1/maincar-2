@@ -106,8 +106,16 @@ const AUTHORIZE_ONLY_SCOPES: Record<Provider, readonly string[]> = {
   microsoft: ['offline_access'],
 }
 
-/** The human name of a provider. The one place this copy lives. */
+// The FULL product name, for the card title — the only place the provider is
+// introduced. Buttons, toasts, and dialogs use the shorter `providerShortName`
+// instead: "Connect Google" reads naturally, "Connect Google Workspace" does not.
 const PROVIDER_LABELS: Record<Provider, string> = {
+  google: 'Google Workspace',
+  microsoft: 'Microsoft 365',
+}
+
+/** The short name. The one place this copy lives. */
+const PROVIDER_SHORT_NAMES: Record<Provider, string> = {
   google: 'Google',
   microsoft: 'Microsoft',
 }
@@ -131,9 +139,14 @@ export function allRequestedScopes(provider: Provider): string[] {
   return [...REQUIRED_SCOPES[provider].map((s) => s.param), ...AUTHORIZE_ONLY_SCOPES[provider]]
 }
 
-/** The human-facing name of a provider, e.g. `'Google'`. */
+/** The full product name, for the card title, e.g. `'Google Workspace'`. */
 export function providerLabel(provider: Provider): string {
   return PROVIDER_LABELS[provider]
+}
+
+/** The short name, for a button, toast, or dialog, e.g. `'Google'`. */
+export function providerShortName(provider: Provider): string {
+  return PROVIDER_SHORT_NAMES[provider]
 }
 
 /**

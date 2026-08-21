@@ -6,6 +6,7 @@ import {
   evaluateGrant,
   missingScopeParams,
   providerLabel,
+  providerShortName,
 } from '../oauthScopes.js'
 
 // The four Google scopes, by capability, so a test can build a grant that is
@@ -117,8 +118,15 @@ describe('allRequestedScopes', () => {
 })
 
 describe('providerLabel', () => {
-  it('gives the human name of each provider', () => {
-    expect(providerLabel('google')).toBe('Google')
-    expect(providerLabel('microsoft')).toBe('Microsoft')
+  it('gives the full product name of each provider', () => {
+    expect(providerLabel('google')).toBe('Google Workspace')
+    expect(providerLabel('microsoft')).toBe('Microsoft 365')
+  })
+})
+
+describe('providerShortName', () => {
+  it('gives the short name of each provider', () => {
+    expect(providerShortName('google')).toBe('Google')
+    expect(providerShortName('microsoft')).toBe('Microsoft')
   })
 })

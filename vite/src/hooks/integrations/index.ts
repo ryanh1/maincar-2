@@ -42,6 +42,7 @@ export {
   recoveryFor,
   PRE_CONNECT_NOTES,
   preConnectNotesFor,
+  CARD_SUBTITLE,
   OAUTH_MESSAGE_TYPE,
   isOAuthPopupMessage,
 } from '@/lib/integrationTypes'

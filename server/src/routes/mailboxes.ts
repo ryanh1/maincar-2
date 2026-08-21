@@ -29,7 +29,7 @@ import { wrapRoute } from '../lib/fnWrapper.js'
 import { deleteMailbox, setPrimaryMailbox } from '../lib/mail/mailAccounts.js'
 import { isProvider } from '../lib/mail/oauthProviders.js'
 import { requireMembership } from '../lib/membership.js'
-import { providerLabel } from '../lib/oauthScopes.js'
+import { providerShortName } from '../lib/oauthScopes.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 
 // mergeParams so `:orgId` from the mount path (/api/mailboxes/orgs/:orgId) reaches
@@ -89,7 +89,7 @@ function serializeMailbox(row: MailboxRow): Mailbox {
   return {
     id: row.id,
     provider: isProvider(row.provider) ? row.provider : 'google',
-    providerLabel: isProvider(row.provider) ? providerLabel(row.provider) : row.provider,
+    providerLabel: isProvider(row.provider) ? providerShortName(row.provider) : row.provider,
     emailAddress: row.emailAddress,
     displayName: row.displayName ?? null,
     isPrimary: row.isPrimary,

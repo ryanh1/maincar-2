@@ -70,7 +70,7 @@ describe('PRE_CONNECT_NOTES', () => {
       'Google warns that this app is not verified. Choose Advanced, then continue.',
     )
     expect(google).toContain(
-      'If you see "Access blocked", your Google Workspace admin must allow Maincar first.',
+      'If you see "Access blocked", your Google Workspace admin must allow Maincar in Security → API controls.',
     )
     expect(microsoft).toContain(
       'If you see "Need admin approval", your Microsoft 365 admin must approve Maincar first.',

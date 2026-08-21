@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import {
   recoveryFor,
   preConnectNotesFor,
+  CARD_SUBTITLE,
   useDisconnectIntegration,
   useTestIntegration,
 } from '@/hooks/integrations'
@@ -99,12 +100,13 @@ export function Settings_Integrations_ProviderCard({
   return (
     <div className="rounded-md border border-border bg-card p-4">
       <div className="flex items-start gap-3">
-        <Settings_Integrations_ProviderMark provider={card.provider} />
+        <Settings_Integrations_ProviderMark provider={card.provider} label={card.providerLabel} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-semibold">{card.providerLabel}</span>
             <StatusLine connection={connection} />
           </div>
+          <p className="text-sm text-muted-foreground">{CARD_SUBTITLE[card.provider]}</p>
           {connection ? (
             <ConnectedBody
               card={card}
@@ -152,9 +154,6 @@ function NotConnectedBody({
 }) {
   return (
     <div className="mt-2 space-y-3">
-      <p className="text-sm text-muted-foreground">
-        Connect to send email as you and to see meetings on your records.
-      </p>
       <PermissionList permissions={card.requiredPermissions} state={() => 'unknown'} />
       <BeforeYouConnect notes={preConnectNotesFor(card.provider)} />
       <div>
@@ -309,7 +308,7 @@ function ConnectedBody({
         <DisconnectButton
           orgId={orgId}
           connection={connection}
-          providerLabel={card.providerLabel}
+          providerShortName={card.providerShortName}
         />
       </div>
     </div>
@@ -368,11 +367,11 @@ function TestResult({ result }: { result: TestConnectionResult }) {
 function DisconnectButton({
   orgId,
   connection,
-  providerLabel,
+  providerShortName,
 }: {
   orgId: string
   connection: IntegrationConnection
-  providerLabel: string
+  providerShortName: string
 }) {
   const disconnect = useDisconnectIntegration()
   const [open, setOpen] = useState(false)
@@ -403,7 +402,7 @@ function DisconnectButton({
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Disconnect {providerLabel}?</AlertDialogTitle>
+            <AlertDialogTitle>Disconnect {providerShortName}?</AlertDialogTitle>
             <AlertDialogDescription>
               Maincar stops reading {connection.emailAddress}. Connect it again any time.
             </AlertDialogDescription>

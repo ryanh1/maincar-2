@@ -1,26 +1,30 @@
+import googleLogo from '@/assets/google.jpeg'
+import microsoftLogo from '@/assets/microsoft.jpeg'
 import type { Provider } from '@/hooks/integrations'
 
 /**
- * The provider glyph on a card: a monochrome monogram tile, one letter per provider.
- *
- * Deliberately NOT the brand's own multi-colour logo. The design system allows one
- * accent and rules out a rainbow of tints (rules/design-system.md → Color), and
- * Google's four-colour "G" and Microsoft's four-square mark are exactly that. A neutral
- * tile matches `Settings_Members_Avatar` and stays inside the system. The provider's
- * name still reads in words beside it, so the glyph is decoration, not the label.
+ * The provider's own brand logo, saved locally rather than fetched at runtime. This is
+ * the one deliberate exception to the one-accent, no-brand-colour rule
+ * (rules/design-system.md → Color): a third-party OAuth provider's mark identifies THEM,
+ * not Maincar's own UI, so it is never recoloured to fit our palette.
  */
-const MONOGRAM: Record<Provider, string> = {
-  google: 'G',
-  microsoft: 'M',
+const LOGO: Record<Provider, string> = {
+  google: googleLogo,
+  microsoft: microsoftLogo,
 }
 
-export function Settings_Integrations_ProviderMark({ provider }: { provider: Provider }) {
+export function Settings_Integrations_ProviderMark({
+  provider,
+  label,
+}: {
+  provider: Provider
+  label: string
+}) {
   return (
-    <div
-      aria-hidden
-      className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-sm font-semibold text-muted-foreground"
-    >
-      {MONOGRAM[provider] ?? '?'}
-    </div>
+    <img
+      src={LOGO[provider]}
+      alt={`${label} logo`}
+      className="size-8 shrink-0 rounded-md border border-border object-contain"
+    />
   )
 }

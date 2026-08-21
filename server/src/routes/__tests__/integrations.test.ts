@@ -324,11 +324,13 @@ describe('GET /api/integrations/orgs/:orgId', () => {
     const google = res.body.integrations.find((c: { provider: string }) => c.provider === 'google')
     const microsoft = res.body.integrations.find((c: { provider: string }) => c.provider === 'microsoft')
 
-    expect(google.providerLabel).toBe('Google')
+    expect(google.providerLabel).toBe('Google Workspace')
+    expect(google.providerShortName).toBe('Google')
     expect(google.requiredPermissions).toContain('Send email as you')
     expect(google.connection.emailAddress).toBe('rep@acme.com')
 
-    expect(microsoft.providerLabel).toBe('Microsoft')
+    expect(microsoft.providerLabel).toBe('Microsoft 365')
+    expect(microsoft.providerShortName).toBe('Microsoft')
     expect(microsoft.connection).toBeNull()
   })
 

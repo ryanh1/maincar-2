@@ -82,7 +82,10 @@ export interface IntegrationConnection {
  */
 export interface IntegrationCard {
   provider: Provider
+  /** The full product name ("Google Workspace"), for the card title only. */
   providerLabel: string
+  /** The short name ("Google"), for buttons, toasts, and the disconnect dialog. */
+  providerShortName: string
   /** The plain-words permissions Maincar asks for, shown on the card. */
   requiredPermissions: string[]
   connection: IntegrationConnection | null
@@ -261,7 +264,7 @@ export const PRE_CONNECT_NOTES: readonly PreConnectNote[] = [
   },
   {
     provider: 'google',
-    note: 'If you see "Access blocked", your Google Workspace admin must allow Maincar first.',
+    note: 'If you see "Access blocked", your Google Workspace admin must allow Maincar in Security → API controls.',
   },
   {
     provider: 'microsoft',
@@ -272,6 +275,14 @@ export const PRE_CONNECT_NOTES: readonly PreConnectNote[] = [
 /** The pre-connect notes for one provider, in order. */
 export function preConnectNotesFor(provider: Provider): string[] {
   return PRE_CONNECT_NOTES.filter((n) => n.provider === provider).map((n) => n.note)
+}
+
+// --- Card subtitle ------------------------------------------------------------
+
+/** What the connection is for, per provider — shown under the title on every card. */
+export const CARD_SUBTITLE: Record<Provider, string> = {
+  google: 'Read and send from Gmail mailboxes.',
+  microsoft: 'Read and send from Outlook mailboxes.',
 }
 
 // --- The OAuth popup message -------------------------------------------------

@@ -38,17 +38,21 @@ const ORG = { id: 'org-1', name: 'Acme' }
 const LIST_URL = '/api/integrations/orgs/org-1'
 const GOOGLE_AUTHORIZE_URL = '/api/integrations/orgs/org-1/google/authorize'
 
-function card(provider: 'google' | 'microsoft', label: string): IntegrationCard {
+function card(provider: 'google' | 'microsoft', label: string, shortName: string): IntegrationCard {
   return {
     provider,
     providerLabel: label,
+    providerShortName: shortName,
     requiredPermissions: ['Read your email', 'Send email as you'],
     connection: null,
   }
 }
 
 const TWO_PROVIDERS: GetIntegrationsResponse = {
-  integrations: [card('google', 'Google'), card('microsoft', 'Microsoft')],
+  integrations: [
+    card('google', 'Google Workspace', 'Google'),
+    card('microsoft', 'Microsoft 365', 'Microsoft'),
+  ],
 }
 
 /** Route jsonFetch by URL, so the GET list and the POST authorize each get their own answer. */
@@ -91,8 +95,8 @@ describe('rendering the cards', () => {
   it('renders one card per provider from the server list', async () => {
     renderWithProviders(<Settings_IntegrationsTab />)
 
-    expect(await screen.findByText('Google')).toBeInTheDocument()
-    expect(screen.getByText('Microsoft')).toBeInTheDocument()
+    expect(await screen.findByText('Google Workspace')).toBeInTheDocument()
+    expect(screen.getByText('Microsoft 365')).toBeInTheDocument()
     // Each unconnected card offers exactly one Connect.
     expect(screen.getAllByRole('button', { name: 'Connect' })).toHaveLength(2)
     expect(screen.getAllByText('Not connected')).toHaveLength(2)
@@ -110,7 +114,7 @@ describe('rendering the cards', () => {
     const { container } = renderWithProviders(<Settings_IntegrationsTab />)
 
     expect(container.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0)
-    expect(screen.queryByText('Google')).not.toBeInTheDocument()
+    expect(screen.queryByText('Google Workspace')).not.toBeInTheDocument()
   })
 
   it('renders the server message and a retry when the list fails', async () => {
@@ -128,7 +132,7 @@ describe('the popup consent flow', () => {
     vi.spyOn(window, 'open').mockReturnValue(null)
     renderWithProviders(<Settings_IntegrationsTab />)
 
-    const google = (await screen.findByText('Google')).closest('div.rounded-md') as HTMLElement
+    const google = (await screen.findByText('Google Workspace')).closest('div.rounded-md') as HTMLElement
     await userEvent.click(within(google).getByRole('button', { name: 'Connect' }))
 
     expect(toastErrorMock).toHaveBeenCalledWith(
@@ -144,7 +148,7 @@ describe('the popup consent flow', () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
     renderWithProviders(<Settings_IntegrationsTab />)
 
-    const google = (await screen.findByText('Google')).closest('div.rounded-md') as HTMLElement
+    const google = (await screen.findByText('Google Workspace')).closest('div.rounded-md') as HTMLElement
     await userEvent.click(within(google).getByRole('button', { name: 'Connect' }))
 
     // Opened synchronously with an empty URL, then navigated after the server answers.
@@ -154,7 +158,7 @@ describe('the popup consent flow', () => {
 
   it('ignores a message from a foreign origin', async () => {
     renderWithProviders(<Settings_IntegrationsTab />)
-    await screen.findByText('Google')
+    await screen.findByText('Google Workspace')
     jsonFetch.mockClear()
 
     window.dispatchEvent(
@@ -170,7 +174,7 @@ describe('the popup consent flow', () => {
 
   it('refetches and toasts on a same-origin success message', async () => {
     renderWithProviders(<Settings_IntegrationsTab />)
-    await screen.findByText('Google')
+    await screen.findByText('Google Workspace')
     jsonFetch.mockClear()
 
     window.dispatchEvent(
@@ -187,7 +191,7 @@ describe('the popup consent flow', () => {
     vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
     renderWithProviders(<Settings_IntegrationsTab />)
 
-    const google = (await screen.findByText('Google')).closest('div.rounded-md') as HTMLElement
+    const google = (await screen.findByText('Google Workspace')).closest('div.rounded-md') as HTMLElement
     await userEvent.click(within(google).getByRole('button', { name: 'Connect' }))
 
     // The card is busy while the popup is open.
@@ -206,7 +210,7 @@ describe('the popup consent flow', () => {
   it('removes the message listener on unmount', async () => {
     const remove = vi.spyOn(window, 'removeEventListener')
     const { unmount } = renderWithProviders(<Settings_IntegrationsTab />)
-    await screen.findByText('Google')
+    await screen.findByText('Google Workspace')
 
     unmount()
     expect(remove).toHaveBeenCalledWith('message', expect.any(Function))

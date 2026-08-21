@@ -59,7 +59,8 @@ const CONNECTED: IntegrationConnection = {
 function makeCard(connection: IntegrationConnection | null): IntegrationCard {
   return {
     provider: 'google',
-    providerLabel: 'Google',
+    providerLabel: 'Google Workspace',
+    providerShortName: 'Google',
     requiredPermissions: REQUIRED,
     connection,
   }
@@ -89,6 +90,14 @@ describe('a provider that is not connected', () => {
 
     await userEvent.click(connect)
     expect(onConnect).toHaveBeenCalledWith('connect')
+  })
+
+  it('shows the full product name in the title and its own logo, not the monogram', () => {
+    renderCard(null)
+
+    expect(screen.getByText('Google Workspace')).toBeInTheDocument()
+    expect(screen.getByAltText('Google Workspace logo')).toBeInTheDocument()
+    expect(screen.getByText('Read and send from Gmail mailboxes.')).toBeInTheDocument()
   })
 
   it('keeps "Before you connect" collapsed until it is opened', async () => {

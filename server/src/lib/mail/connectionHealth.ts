@@ -17,7 +17,7 @@
 
 import prisma from '../../db.js'
 import type { IntegrationErrorCode } from './integrationErrors.js'
-import { providerLabel, type Provider } from '../oauthScopes.js'
+import { providerShortName, type Provider } from '../oauthScopes.js'
 
 /**
  * The slim shape the health badge reads: enough to COUNT and to deep-link to the fix,
@@ -27,7 +27,7 @@ import { providerLabel, type Provider } from '../oauthScopes.js'
 export interface BrokenConnection {
   connectionId: string
   provider: Provider
-  /** The plain-words provider name the card shows, so badge and card agree. */
+  /** The provider's short name — a compact sidebar chip, not the card's full title. */
   providerLabel: string
   emailAddress: string
   /** The stable code from int-oauth's one table; keys the client's recovery steps. */
@@ -61,7 +61,7 @@ export async function listBrokenConnections(orgId: string, userId: string): Prom
     return {
       connectionId: row.id,
       provider,
-      providerLabel: providerLabel(provider),
+      providerLabel: providerShortName(provider),
       emailAddress: row.emailAddress,
       errorCode: row.errorCode as IntegrationErrorCode | null,
       detail: row.statusDetail ?? '',

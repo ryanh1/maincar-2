@@ -20,7 +20,8 @@ vi.mock('@/lib/api', async () => {
 function googleCard(connected: boolean): IntegrationCard {
   return {
     provider: 'google',
-    providerLabel: 'Google',
+    providerLabel: 'Google Workspace',
+    providerShortName: 'Google',
     requiredPermissions: ['Read email', 'Send email', 'See your calendar'],
     connection: connected
       ? {

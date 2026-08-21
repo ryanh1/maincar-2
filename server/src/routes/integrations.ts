@@ -57,6 +57,7 @@ import {
   allRequestedScopes,
   missingScopeParams,
   providerLabel,
+  providerShortName,
   REQUIRED_SCOPES,
   type Provider,
 } from '../lib/oauthScopes.js'
@@ -73,7 +74,10 @@ router.use(requireAuth)
 /** The card the hub renders per provider. One per PROVIDER, never per connection. */
 interface IntegrationCard {
   provider: Provider
+  /** The full product name ("Google Workspace"), for the card title only. */
   providerLabel: string
+  /** The short name ("Google"), for buttons, toasts, and the disconnect dialog. */
+  providerShortName: string
   /** The plain-words permissions Maincar asks for, shown on the card. */
   requiredPermissions: string[]
   /** The rep's connection for this provider, token-free — or null when none exists. */
@@ -223,6 +227,7 @@ router.get(
       return {
         provider,
         providerLabel: providerLabel(provider),
+        providerShortName: providerShortName(provider),
         requiredPermissions: REQUIRED_SCOPES[provider].map((scope) => scope.label),
         connection: row ? serializeConnection(row) : null,
       }

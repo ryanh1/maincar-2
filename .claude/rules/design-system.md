@@ -51,6 +51,11 @@ dense grid. shadcn/ui page templates for surface and border treatment. Airtable 
 - **One accent: `primary` — ocean, a deep blue-cyan (`#0E7490`).** It marks the
   primary button, the active nav row, focus rings, and selection. Nothing else.
   A second accent is forbidden.
+- **The one exception: a third-party OAuth provider's own brand mark** (Google,
+  Microsoft) in the Integration Hub. That logo identifies THEM, not Maincar's UI, so
+  it is never recoloured or replaced with a token — `Settings_Integrations_ProviderMark.tsx`
+  renders it as-is, at a fixed small size, and nowhere else in the app uses a brand
+  colour or a non-token image.
 - **The accent is never in a status family.** `success` is green, `warning` amber,
   `danger` red, and the accent stays clear of all three. The Call button is `success`,
   so it must never read as "the primary button".
