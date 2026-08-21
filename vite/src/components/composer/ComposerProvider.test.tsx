@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Link, Route, Routes } from 'react-router-dom'
 import type { QueryClient } from '@tanstack/react-query'
@@ -25,6 +25,7 @@ vi.mock('@/lib/api', async () => {
 })
 vi.mock('@/components/Sidebar', () => ({ Sidebar: () => <nav>sidebar</nav> }))
 
+import { ApiError } from '@/lib/api'
 import { ProtectedLayout } from '@/components/ProtectedLayout'
 import { ComposerProvider } from './ComposerProvider'
 import { useComposer, useComposerOptional } from './composerContext'
@@ -50,6 +51,12 @@ function makeDraft(overrides: Partial<EmailDraft> = {}): EmailDraft {
 /** What the fake server answers a GET with, per org. */
 const draftsByOrg = new Map<string, EmailDraft[]>()
 let created = 0
+/**
+ * Rows this fake server has already destroyed. The route deletes by id AND
+ * userId, so a second DELETE of the same row finds nothing and 404s — which is
+ * the whole point of the double-confirm test below.
+ */
+const deleted = new Set<string>()
 
 function orgOf(url: string): string {
   return /orgs\/([^/]+)\/drafts/.exec(url)?.[1] ?? ''
@@ -74,7 +81,10 @@ function serve(url: string, init?: RequestInit): unknown {
     const patch = JSON.parse(String(init?.body ?? '{}')) as Partial<EmailDraft>
     return { draft: makeDraft({ id: draftIdOf(url), ...patch }) }
   }
-  return { draft: { id: draftIdOf(url) } }
+  const id = draftIdOf(url)
+  if (deleted.has(id)) throw new ApiError('Draft not found', 404)
+  deleted.add(id)
+  return { draft: { id } }
 }
 
 function callsWithMethod(method: string) {
@@ -120,9 +130,16 @@ function renderProvider(client: QueryClient = makeTestQueryClient()) {
 beforeEach(() => {
   created = 0
   draftsByOrg.clear()
+  deleted.clear()
   jsonFetch.mockReset()
   toastErrorMock.mockReset()
-  jsonFetch.mockImplementation((url: string, init?: RequestInit) => Promise.resolve(serve(url, init)))
+  jsonFetch.mockImplementation((url: string, init?: RequestInit) => {
+    try {
+      return Promise.resolve(serve(url, init))
+    } catch (err) {
+      return Promise.reject(err)
+    }
+  })
   useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
 })
 
@@ -384,5 +401,47 @@ describe('mounted in ProtectedLayout', () => {
     // half-written email survived the navigation.
     expect(screen.getByText('cards 1')).toBeInTheDocument()
     expect(callsWithMethod('POST')).toHaveLength(1)
+  })
+
+  it('sends one DELETE when the rep double-clicks the discard confirmation', async () => {
+    useAuthMock.mockReturnValue({
+      org: { id: 'org-1' },
+      isLoading: false,
+      isAuthenticated: true,
+      needsOnboarding: false,
+      needsOrg: false,
+    })
+
+    const user = userEvent.setup()
+    render(
+      withProviders(
+        <Routes>
+          <Route path="/" element={<ProtectedLayout />}>
+            <Route path="home" element={<Page name="home page" to="/team" />} />
+          </Route>
+        </Routes>,
+        { initialEntries: ['/home'] },
+      ),
+    )
+
+    await user.keyboard('c')
+    await screen.findByLabelText('Message')
+
+    await user.click(screen.getByRole('button', { name: 'Discard draft' }))
+    const confirm = await screen.findByRole('button', { name: 'Discard' })
+
+    // Both activations land before the render that closes the dialog, which is
+    // what a double-click on the confirm is. Unguarded, the second one sent a
+    // DELETE for a row the first had already destroyed: a 404 the rep read as
+    // "Draft not found", over a card the invalidate-on-error resync put back.
+    await act(async () => {
+      confirm.click()
+      confirm.click()
+    })
+
+    await waitFor(() => expect(screen.getByText('cards 0')).toBeInTheDocument())
+    expect(callsWithMethod('DELETE')).toHaveLength(1)
+    expect(toastErrorMock).not.toHaveBeenCalled()
+    expect(screen.queryByLabelText('Message')).not.toBeInTheDocument()
   })
 })

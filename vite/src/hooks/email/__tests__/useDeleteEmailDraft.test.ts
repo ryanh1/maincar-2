@@ -52,8 +52,8 @@ describe('useDeleteEmailDraft', () => {
     expect(invalidate).not.toHaveBeenCalled()
   })
 
-  it('invalidates this org drafts on error, to resync a dock that now disagrees', async () => {
-    jsonFetch.mockRejectedValue(new ApiError('Draft not found', 404))
+  it('invalidates this org drafts on a real failure, to resync a dock that now disagrees', async () => {
+    jsonFetch.mockRejectedValue(new ApiError('Something went wrong. Try again.', 500))
     const client = makeTestQueryClient()
     const invalidate = vi.spyOn(client, 'invalidateQueries')
 
@@ -62,7 +62,23 @@ describe('useDeleteEmailDraft', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true))
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.email.drafts('org-1') })
-    expect((result.current.error as ApiError).message).toBe('Draft not found')
-    expect((result.current.error as ApiError).status).toBe(404)
+    expect((result.current.error as ApiError).message).toBe('Something went wrong. Try again.')
+    expect((result.current.error as ApiError).status).toBe(500)
+  })
+
+  it('counts a 404 as the discard that was asked for, and says nothing about it', async () => {
+    // Already gone is the outcome the rep wanted, so this resolves rather than
+    // rejecting: no "Draft not found" toast, and no invalidation to bring the
+    // row back on a list read that raced the delete (MAI-88).
+    jsonFetch.mockRejectedValue(new ApiError('Draft not found', 404))
+    const client = makeTestQueryClient()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    const { result } = renderDeleteDraft(client)
+    result.current.mutate({ orgId: 'org-1', draftId: 'draft-1' })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.draft.id).toBe('draft-1')
+    expect(invalidate).not.toHaveBeenCalled()
   })
 })

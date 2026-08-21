@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/lib/api'
@@ -64,6 +64,11 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       return [...fresh, ...current]
     })
   }
+
+  // Draft ids whose DELETE is in flight, so a second confirm of the same card is
+  // ignored rather than sent. A ref rather than state: nothing renders from it,
+  // and it has to be readable and writable inside one synchronous call.
+  const discarding = useRef(new Set<string>())
 
   const openComposer = useCallback(
     async (seed?: EmailDraftInput): Promise<EmailDraft | null> => {
@@ -137,6 +142,17 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
     async (draftId: string) => {
       if (!orgId) return
 
+      // ONE confirmed discard is ONE delete, however many times the confirm is
+      // activated. The AlertDialog's `Discard` button is still mounted and
+      // clickable between the click and the render that closes the dialog, and
+      // the card behind it stays on screen for the whole of the flush this call
+      // is awaited after — so a rep who double-clicks the confirm ran this twice.
+      // The second DELETE 404s on a row that is already gone, and the rep read
+      // that as "Draft not found" over a card the invalidate-on-error resync had
+      // just put back (MAI-88).
+      if (discarding.current.has(draftId)) return
+      discarding.current.add(draftId)
+
       // Dropped from the dock first: the rep already confirmed the AlertDialog,
       // so the card leaves now rather than after a round trip. A failed delete
       // is resynced by the invalidation `useDeleteEmailDraft` fires on error,
@@ -147,6 +163,8 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         await deleteDraft({ orgId, draftId })
       } catch (err) {
         toast.error(err instanceof ApiError ? err.message : 'Could not discard the draft. Try again.')
+      } finally {
+        discarding.current.delete(draftId)
       }
     },
     [orgId, deleteDraft],
