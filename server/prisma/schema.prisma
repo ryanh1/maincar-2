@@ -384,3 +384,79 @@ model MailAccount {
   @@unique([orgId, emailAddress])
   @@index([orgId, userId])
 }
+
+// -----------------------------------------------------------------------------
+// CRM — Company (MAI-129, Phase 1 / T1). The identity anchor for an account:
+// groups people, deals, and the account feed.
+//
+// Spec: docs/specs/SPEC-CRM-SCHEMA.md (§5.15 identity anchors, §5.11 what the DB
+// enforces vs. app code). Plan: tasks/plan-crm-schema.md (T1).
+//
+// name / legalName are NULLABLE on purpose (§5.15): a company can be created from
+// just a domain seen on an email, then enriched. App code (routes/companies.ts)
+// requires at least one identity ANCHOR — name, domain, or linkedinUrl — because
+// "at least one of these nullable columns is non-null" is not a constraint Prisma
+// can express. Display name = name ?? domain ?? "Untitled company".
+//
+// NOTE ON RELATIONS: this ticket ONLY adds the Company model, so there is no
+// Prisma relation back to Org or User (that would require adding back-relation
+// fields to those protected models). orgId and ownerUserId are plain String
+// columns — the tenant boundary is enforced in the route with findFirst /
+// updateMany filtered on orgId, exactly as the house rules require, and the
+// @@unique([orgId, domain]) key works on the plain column. This mirrors the
+// bare-String precedent EmailDraft uses for not-yet-wired references. The Person /
+// Deal / Email / Meeting back-relations the full spec shows arrive with their own
+// tickets (T2, T3, T9, T11).
+model Company {
+  id    String @id @default(cuid())
+  orgId String
+
+  // The common name you actually call them ("Google"). Nullable — see the header.
+  name String?
+  // The formal entity ("Alphabet Inc"), optional. Enrichment fills it.
+  legalName String?
+
+  // Business CATEGORY / model: saas | agency | manufacturer | retailer | services
+  // | non_profit | ... A user-editable picklist (custom values allowed). Distinct
+  // from `industry` below, which is the vertical/sector.
+  companyType String?
+
+  domain           String?
+  alternateDomains String[] @default([])
+  // Company LinkedIn page — an identity anchor + enrichment key.
+  linkedinUrl String?
+
+  // Vertical / sector — healthcare | finance | retail | ... Distinct from companyType.
+  industry      String?
+  sizeEmployees Int?
+  // Enrichment-filled; the UI falls back to an initials monogram when absent.
+  logoUrl String?
+
+  mergedIntoId String? // tombstone → survivor after a merge (5.3c)
+  deletedById  String? // who soft-deleted it (Trash + audit)
+
+  parentCompanyId String?
+  parentCompany   Company?  @relation("CompanyParent", fields: [parentCompanyId], references: [id], onDelete: SetNull)
+  childCompanies  Company[] @relation("CompanyParent")
+
+  ownerUserId String?
+
+  // on_deck | on_hold | backburner | disqualified
+  attentionStatus String    @default("on_deck")
+  attentionReason String?
+  callbackDate    DateTime?
+  source          String? // manual | import | enrichment | inbound_call | ...
+
+  customJson Json @default("{}")
+
+  isArchived Boolean   @default(false)
+  deletedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, domain]) // HubSpot's natural key. NULL domains do not collide.
+  @@index([orgId])
+  @@index([orgId, parentCompanyId])
+  @@index([orgId, ownerUserId])
+}
