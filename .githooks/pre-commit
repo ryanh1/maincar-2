@@ -78,18 +78,34 @@ attributable "vite typecheck"   vite   npm --prefix vite   run typecheck --silen
 attributable "server lint"      server npm --prefix server run lint      --silent
 attributable "vite lint"        vite   npm --prefix vite   run lint      --silent
 
-# --- Unattributable checks: tests ----------------------------------------------
-# A test failure cannot be pinned to a file — your change can break a test you
-# did not stage. These always block.
-echo "pre-commit: tests…"
-npm test --silent || fail "tests failed.
-    A test failure is never written off as another session's: your change
-    can break a test you did not stage."
+# --- Workspace-attributed checks: tests ----------------------------------------
+# A test failure cannot be pinned to a FILE — your change to members.ts can break
+# team.test.ts, which you never staged. But it can be pinned to a WORKSPACE: a
+# commit that stages nothing reaching vite/ cannot have broken a vite test. That
+# is the dependency graph, not a guess. See touches_workspace() in lib/verify.sh.
+workspace_tests() {
+  local label="$1" ws="$2"; shift 2
+  echo "pre-commit: $label…"
+  if "$@" > "$TMP/out" 2>&1; then return 0; fi
 
-echo "pre-commit: integration tests…"
-npm run test:integration --silent || fail "integration tests failed.
-    These are the only tests that prove the concurrency guardrails —
-    that two admins cannot both quit at once. Do not skip them."
+  if touches_workspace "$ws"; then
+    echo ""
+    grep -E "FAIL|✕|Test Files|Tests " "$TMP/out" | sed 's/^/    /' | head -20
+    fail "$label failed, and this commit touches $ws/.
+    A test failure is never written off as another session's when your
+    change could have caused it."
+  fi
+
+  foreign+=("$label")
+  echo "  ⚠ $label is red, but this commit stages nothing that reaches $ws/:"
+  grep -E "FAIL|Tests " "$TMP/out" | sed 's/^/      /' | head -6
+  echo "    Another session is mid-work. Letting the commit through, and"
+  echo "    stamping the commit message to say $label did not pass."
+}
+
+workspace_tests "server tests"      server npm --prefix server run test --silent
+workspace_tests "vite tests"        vite   npm --prefix vite   run test --silent
+workspace_tests "integration tests" server npm run test:integration --silent
 
 # --- Record the verdict for prepare-commit-msg ---------------------------------
 if [ ${#foreign[@]} -gt 0 ]; then

@@ -71,3 +71,30 @@ red_is_ours() {
   done < "$failing"
   return 1
 }
+
+# Could this commit possibly affect workspace $1 ("server" or "vite")?
+#
+# Test failures cannot be pinned to a file — your change to members.ts can break
+# team.test.ts, which you never staged. But they CAN be pinned to a workspace: if
+# a commit stages nothing that reaches `vite/`, a vite test failure is not its
+# doing. That is a fact about the dependency graph, not a guess.
+#
+# Shared ground counts as reaching everything: the root package.json, docker/,
+# firebase/, scripts/, .env.example. Prose and git hooks reach nothing — no
+# vitest run has ever been changed by a markdown file.
+#
+# Exit 0 = yes, this commit reaches that workspace (its test failures block).
+touches_workspace() {
+  local ws="$1" f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+      "$ws"/*)                      return 0 ;;
+      server/*|vite/*)              continue ;;   # the OTHER workspace
+      .claude/*|.githooks/*|docs/*) continue ;;   # inert
+      *.md)                         continue ;;   # inert
+      *)                            return 0 ;;   # shared ground
+    esac
+  done < <(staged_files)
+  return 1
+}

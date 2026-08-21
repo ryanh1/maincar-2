@@ -81,5 +81,26 @@ cause. If you use it:
 - **A feature commit carries its own tests**, committed together, never as a
   follow-up. [testing.md](testing.md) says where they live and what each kind
   must cover. That holds even when the files you touched do not load testing.md.
+## The index is shared — commit by pathspec
+
+There is one git index for the whole clone, and more than one session stages into
+it. So `git add` followed by `git commit` is a race: whoever commits first takes
+**everything** staged, including files the other session was still preparing.
+
+That is not hypothetical. Commit `4eaf809` (MAI-16, buying a phone number) silently
+carried `CLAUDE.md`, `.claude/rules/committing.md`, and three `.githooks/` files
+belonging to a different session, under a message that mentions none of them.
+
+**Always name your paths on the commit itself:**
+
+```bash
+git commit -- path/one path/two
+```
+
+The pathspec form commits exactly those paths and ignores whatever else is in the
+index. It is the only form that is safe here.
+
 - **Stage only your own files.** Never commit or stash what another session left
   in the tree.
+- **Never `git reset` or `git stash` to tidy the index.** You would be discarding
+  another session's staged work.
