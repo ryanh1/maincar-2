@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
+import { SIDEBAR_WIDTH_PX } from '@/components/sidebarWidth'
 import type { EmailDraft } from '@/lib/emailTypes'
 import { ComposerContext, type ComposerContextValue } from './composerContext'
 import { ComposerDock } from './ComposerDock'
@@ -90,7 +91,7 @@ describe('ComposerDock', () => {
   })
 
   it('lays the newest card out rightmost', () => {
-    // 2000 - 368 reserved = 1632 px, which holds four of the 396 px slots.
+    // 2000 - 224 sidebar - 368 dialer = 1408 px, which holds three 396 px slots.
     renderDock(
       [
         makeDraft({ id: 'a', subject: 'Oldest' }),
@@ -108,7 +109,8 @@ describe('ComposerDock', () => {
   })
 
   it('collapses the oldest cards to chips when the window cannot fit them all', () => {
-    // 1100 - 368 reserved = 732 px of dock, and 732 / 396 holds exactly one card.
+    // 1100 - 224 sidebar - 368 dialer = 508 px of dock, which holds exactly one
+    // 396 px card.
     renderDock(
       [
         makeDraft({ id: 'a', subject: 'Oldest' }),
@@ -121,6 +123,32 @@ describe('ComposerDock', () => {
     expect(screen.getAllByRole('article').map((el) => el.textContent)).toEqual(['Newest'])
     expect(screen.getByRole('button', { name: 'Oldest' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Middle' })).toBeInTheDocument()
+  })
+
+  it('keeps the leftmost card clear of the sidebar', () => {
+    // The defect this test exists for (MAI-88): at 1280 px the dock counted
+    // 1280 - 368 = 912 px, fitted two cards into it, and painted the leftmost
+    // one from x=132 straight over the sidebar's 0-224.
+    //
+    // jsdom lays nothing out, so the strip's own geometry is what can be read
+    // here — and it bounds every card, because the strip is what the cards
+    // sit in: it is anchored `right: 368` and capped at `maxWidth`, so its left
+    // edge is the window minus both. The pixels themselves were measured in a
+    // browser (SPEC-composer-dock.md → Not covered by tests).
+    renderDock(
+      [makeDraft({ id: 'a', subject: 'Oldest' }), makeDraft({ id: 'b', subject: 'Newest' })],
+      { width: 1280 },
+    )
+
+    const dock = screen.getByRole('region', { name: 'Email drafts' })
+    const leftEdge =
+      1280 - Number.parseFloat(dock.style.right) - Number.parseFloat(dock.style.maxWidth)
+
+    expect(leftEdge).toBeGreaterThanOrEqual(SIDEBAR_WIDTH_PX)
+    // 688 px of clear width holds one 396 px slot, not two, so the older card
+    // collapses rather than sliding under the sidebar.
+    expect(screen.getAllByRole('article').map((el) => el.textContent)).toEqual(['Newest'])
+    expect(screen.getByRole('button', { name: 'Oldest' })).toBeInTheDocument()
   })
 
   it('renders nothing below lg, rather than a card wider than the phone', () => {
@@ -136,7 +164,9 @@ describe('ComposerDock', () => {
 
     renderDock([makeDraft({ id: 'a', subject: 'Quote' })], { width: 1024 })
     expect(screen.getByRole('region', { name: 'Email drafts' })).toBeInTheDocument()
-    // 1024 - 368 = 656 px, which still holds one expanded card.
+    // 1024 - 224 sidebar - 368 dialer = 432 px, which still holds one expanded
+    // card. That is the `lg` gate's whole job: the narrowest window the dock
+    // renders at is still wide enough for a card that clears both.
     expect(screen.getByRole('article')).toHaveTextContent('Quote')
   })
 

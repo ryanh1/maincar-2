@@ -184,7 +184,9 @@ below is a token — no hex, no Tailwind palette colour.
 | Gap between cards | `gap-3` (12 px) |
 | Dock | `fixed bottom-0 z-40`, `right: 368px`, `pointer-events-none` on the strip and `pointer-events-auto` on the cards |
 | Dialer reserve | **368 px** = the dialer's 320 px card + its 24 px right margin + a 24 px gap. Reserved whether the dialer is open or shut. |
+| Sidebar reserve | **224 px** = `w-56` on the `<aside>`. The dock is `fixed`, so `<main>`'s `lg:ml-56` does not protect it — subtract this on the left too, or the leftmost card paints over the sidebar (MAI-88). |
 | Card slot | **396 px** = `w-96` (384) + `gap-3` (12) |
+| Cards that fit | `floor((window - 224 - 368) / 396)`. At the `lg` floor of 1024 that is 432 px, so one card always fits. |
 | Minimum dock width | **240 px** before everything becomes a chip |
 
 Title-bar text, in order of preference: `"{subject} — {first recipient}"`, then

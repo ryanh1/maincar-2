@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Mail, Pencil } from 'lucide-react'
 
+import { SIDEBAR_WIDTH_PX } from '@/components/sidebarWidth'
 import { Button } from '@/components/ui/button'
 import type { EmailDraft } from '@/lib/emailTypes'
 import { useComposer } from './composerContext'
@@ -43,8 +44,8 @@ interface ComposerDockProps {
  * left, newest on the right, kept drafts gathered into one button.
  *
  * It renders nothing at all when the rep has no drafts, so mounting it costs an
- * empty corner and never a stray border, and nothing below `lg`, where there is
- * no room for a 384 px card beside the dialer's reserve.
+ * empty corner and never a stray border, and nothing below `lg`, where the
+ * sidebar and the dialer's reserve leave no corner to put a 384 px card in.
  */
 export function ComposerDock({ renderCard }: ComposerDockProps) {
   const { openDrafts, keptDrafts, setMinimized, reopenCard } = useComposer()
@@ -59,10 +60,16 @@ export function ComposerDock({ renderCard }: ComposerDockProps) {
    */
   const [promotedId, setPromotedId] = useState<string | null>(null)
 
-  // Room left of the reserved dialer corner, and the number of cards it holds.
-  // At the `lg` floor that is 1024 - 368 = 656 px, so one card always fits and
-  // the arithmetic never has to decide what to do with no room at all.
-  const dockWidth = Math.max(windowWidth - DIALER_RESERVE_PX, 0)
+  // Room between the sidebar and the reserved dialer corner, and the number of
+  // cards it holds. BOTH edges come off the window width by hand: the strip is
+  // `fixed`, so its box is the whole viewport and not the `<main>` that the
+  // sidebar's `lg:ml-56` already indents. Subtracting only the dialer is what
+  // painted the leftmost card over the sidebar (MAI-88).
+  //
+  // At the `lg` floor that is 1024 - 224 - 368 = 432 px, still wider than one
+  // 396 px slot, so a card always fits and the arithmetic never has to decide
+  // what to do with no room at all.
+  const dockWidth = Math.max(windowWidth - SIDEBAR_WIDTH_PX - DIALER_RESERVE_PX, 0)
   const capacity = Math.floor(dockWidth / CARD_SLOT_PX)
 
   const expandedIds = useMemo(() => {
@@ -104,7 +111,7 @@ export function ComposerDock({ renderCard }: ComposerDockProps) {
       className="pointer-events-none fixed bottom-0 z-40 flex items-end gap-3"
       style={{
         right: DIALER_RESERVE_PX,
-        // Chips squeeze rather than let the strip grow past the left edge.
+        // Chips squeeze rather than let the strip grow over the sidebar.
         maxWidth: dockWidth,
       }}
     >

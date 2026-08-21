@@ -4,9 +4,10 @@ import { useSyncExternalStore } from 'react'
  * The one place that says the composer is desktop-only, read by both halves of
  * it: the dock in the corner and the Compose button in the sidebar.
  *
- * The card is 384 px wide and the dock reserves 368 px for the dialer beside it,
- * so below Tailwind's `lg` there is no corner to put a card in. Rather than
- * shrink one onto a phone, both halves render nothing there
+ * The sidebar takes 224 px on the left, the dock reserves 368 px for the dialer
+ * on the right, and the card itself is 384 px — 976 px spoken for before
+ * anything else, so below Tailwind's `lg` there is no corner to put a card in.
+ * Rather than shrink one onto a phone, both halves render nothing there
  * (SPEC-composer-dock.md → Open questions).
  *
  * Measured in JavaScript rather than with a `hidden lg:flex` class, because
