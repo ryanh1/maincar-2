@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 
 import { ApiError } from '@/lib/api'
+import { renderWithProviders, withProviders } from '@/test/utils'
 import { InCallControls } from './InCallControls'
 
 /**
@@ -31,7 +32,7 @@ beforeEach(() => {
 })
 
 function renderControls(props: Partial<Parameters<typeof InCallControls>[0]> = {}) {
-  return render(<InCallControls orgId="org-1" callId="call-1" {...props} />)
+  return renderWithProviders(<InCallControls orgId="org-1" callId="call-1" {...props} />)
 }
 
 describe('InCallControls', () => {
@@ -48,11 +49,11 @@ describe('InCallControls', () => {
     expect(screen.getByText('Ringing')).toBeInTheDocument()
 
     useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 0 })
-    rerender(<InCallControls orgId="org-1" callId="call-1" />)
+    rerender(withProviders(<InCallControls orgId="org-1" callId="call-1" />))
     expect(screen.getByText('Connected')).toBeInTheDocument()
 
     useDialerMock.mockReturnValue({ phase: 'completed', elapsedSeconds: 0 })
-    rerender(<InCallControls orgId="org-1" callId="call-1" />)
+    rerender(withProviders(<InCallControls orgId="org-1" callId="call-1" />))
     expect(screen.getByText('Call ended')).toBeInTheDocument()
   })
 
@@ -61,38 +62,44 @@ describe('InCallControls', () => {
     renderControls({ onToggleMute })
 
     // Starts unmuted — the control offers to mute.
-    const muteButton = screen.getByRole('button', { name: 'Mute' })
+    const muteButton = screen.getByRole('button', { name: 'Mute the call' })
     expect(muteButton).toHaveAttribute('aria-pressed', 'false')
 
     fireEvent.click(muteButton)
 
     // The seam heard the new state, and the button now offers to unmute.
     expect(onToggleMute).toHaveBeenCalledWith(true)
-    const unmuteButton = screen.getByRole('button', { name: 'Unmute' })
+    const unmuteButton = screen.getByRole('button', { name: 'Unmute the call' })
     expect(unmuteButton).toHaveAttribute('aria-pressed', 'true')
 
     fireEvent.click(unmuteButton)
     expect(onToggleMute).toHaveBeenLastCalledWith(false)
-    expect(screen.getByRole('button', { name: 'Mute' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Mute the call' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
   })
 
   it('toggles hold: flips the visible state and calls the seam', () => {
     const onToggleHold = vi.fn()
     renderControls({ onToggleHold })
 
-    const holdButton = screen.getByRole('button', { name: 'Hold' })
+    const holdButton = screen.getByRole('button', { name: 'Hold the call' })
     expect(holdButton).toHaveAttribute('aria-pressed', 'false')
 
     fireEvent.click(holdButton)
 
     expect(onToggleHold).toHaveBeenCalledWith(true)
-    expect(screen.getByRole('button', { name: 'Resume' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Resume the call' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
 
   it('ends the call through useEndCall with the org and call ids', () => {
     renderControls()
 
-    fireEvent.click(screen.getByRole('button', { name: 'End call' }))
+    fireEvent.click(screen.getByRole('button', { name: 'End the call' }))
 
     expect(mutateMock).toHaveBeenCalledTimes(1)
     expect(mutateMock.mock.calls[0][0]).toEqual({ orgId: 'org-1', callId: 'call-1' })
@@ -104,7 +111,7 @@ describe('InCallControls', () => {
     )
     renderControls()
 
-    fireEvent.click(screen.getByRole('button', { name: 'End call' }))
+    fireEvent.click(screen.getByRole('button', { name: 'End the call' }))
 
     expect(toastErrorMock).toHaveBeenCalledWith(
       'This call has already ended, so there is nothing to hang up.',
@@ -115,7 +122,7 @@ describe('InCallControls', () => {
     mutateMock.mockImplementation((_vars, opts) => opts.onError(new Error('offline')))
     renderControls()
 
-    fireEvent.click(screen.getByRole('button', { name: 'End call' }))
+    fireEvent.click(screen.getByRole('button', { name: 'End the call' }))
 
     expect(toastErrorMock).toHaveBeenCalledWith('Could not end the call. Try again.')
   })
@@ -124,7 +131,7 @@ describe('InCallControls', () => {
     useEndCallMock.mockReturnValue({ mutate: mutateMock, isPending: true })
     renderControls()
 
-    const endButton = screen.getByRole('button', { name: 'End call' })
+    const endButton = screen.getByRole('button', { name: 'End the call' })
     expect(endButton).toBeDisabled()
   })
 
@@ -132,16 +139,20 @@ describe('InCallControls', () => {
     const { rerender } = renderControls({ recording: false })
     expect(screen.queryByText('Recording')).not.toBeInTheDocument()
 
-    rerender(<InCallControls orgId="org-1" callId="call-1" recording />)
+    rerender(withProviders(<InCallControls orgId="org-1" callId="call-1" recording />))
     expect(screen.getByText('Recording')).toBeInTheDocument()
   })
 
-  it('gives every control an accessible label', () => {
+  it('gives every icon-only control a verb-and-object accessible name', () => {
     renderControls({ recording: true })
 
-    expect(screen.getByRole('button', { name: 'Mute' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Hold' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'End call' })).toBeInTheDocument()
+    // Each icon button owes a screen reader a name that is a verb phrase naming
+    // both the action and its object — "Mute the call", never a lone "Mute".
+    // The name comes from IconButton's required `tooltip`, so the visible
+    // tooltip and the accessible name are the same string.
+    expect(screen.getByRole('button', { name: 'Mute the call' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Hold the call' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'End the call' })).toBeInTheDocument()
     expect(screen.getByLabelText('Call duration')).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Call controls' })).toBeInTheDocument()
   })

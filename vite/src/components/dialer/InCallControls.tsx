@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { ApiError } from '@/lib/api'
 import { formatElapsed } from '@/lib/duration'
-import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import type { CallPhase } from '@/components/dialer/dialerContext'
 import { useDialer } from '@/components/dialer/dialerContext'
 import { useEndCall } from '@/hooks/dialer'
@@ -140,40 +140,36 @@ export function InCallControls({
       </div>
 
       <div className="flex items-center gap-2" role="group" aria-label="Call controls">
-        <Button
+        <IconButton
           type="button"
           variant={muted ? 'secondary' : 'outline'}
-          size="icon-sm"
           aria-pressed={muted}
-          aria-label={muted ? 'Unmute' : 'Mute'}
+          tooltip={muted ? 'Unmute the call' : 'Mute the call'}
           onClick={toggleMute}
         >
-          {muted ? <MicOff size={16} /> : <Mic size={16} />}
-        </Button>
+          {muted ? <MicOff size={16} aria-hidden /> : <Mic size={16} aria-hidden />}
+        </IconButton>
 
-        <Button
+        <IconButton
           type="button"
           variant={held ? 'secondary' : 'outline'}
-          size="icon-sm"
           aria-pressed={held}
-          aria-label={held ? 'Resume' : 'Hold'}
+          tooltip={held ? 'Resume the call' : 'Hold the call'}
           onClick={toggleHold}
         >
-          {held ? <Play size={16} /> : <Pause size={16} />}
-        </Button>
+          {held ? <Play size={16} aria-hidden /> : <Pause size={16} aria-hidden />}
+        </IconButton>
 
-        <Button
+        <IconButton
           type="button"
           variant="destructive"
-          size="sm"
           className="ml-auto"
-          aria-label="End call"
+          tooltip="End the call"
           disabled={endCall.isPending}
           onClick={hangUp}
         >
-          <PhoneOff size={16} />
-          End
-        </Button>
+          <PhoneOff size={16} aria-hidden />
+        </IconButton>
       </div>
     </div>
   )
