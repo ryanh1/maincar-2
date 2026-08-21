@@ -33,6 +33,7 @@ model Org {
   invitations  Invitation[]
   phoneNumbers PhoneNumber[]
   calls        Call[]
+  emailDrafts  EmailDraft[]
 }
 
 model User {
@@ -68,6 +69,7 @@ model User {
   invitationsAccepted Invitation[]  @relation("InvitationAcceptor")
   phoneNumbers        PhoneNumber[]
   calls               Call[]
+  emailDrafts         EmailDraft[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -225,4 +227,55 @@ model Call {
   @@index([userId])
   @@index([toE164])
   @@index([createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// Email composer
+//
+// The dock (docs/specs/SPEC-composer-dock.md) keeps half-written emails in the
+// corner of the app. One row per card.
+// -----------------------------------------------------------------------------
+
+// One half-written email. Org-scoped AND user-scoped: a draft is private to its
+// author, so every read and every write filters on userId as well as orgId, and
+// another member's draft is a 404 — never a 403, which would confirm it exists.
+model EmailDraft {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // The rep writing it. Cascade: a deleted user's unsent drafts go with them.
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The mailbox this will go out on. Null until composer-mailbox lands.
+  // Deliberately a bare String, not a relation: MailAccount does not exist yet.
+  mailAccountId String?
+
+  // The record the composer was opened from, so reopening lands back in context.
+  // Null until the CRM port lands. Also a bare String, for the same reason.
+  recordId String?
+
+  toAddrs  String[]
+  ccAddrs  String[]
+  bccAddrs String[]
+
+  subject  String?
+  bodyHtml String?
+
+  // Dock state, so a refresh restores the corner exactly as the rep left it.
+  //
+  // Two flags, not one, because Gmail's X and its - are different acts. isOpen
+  // false means the card is out of the dock but the draft is KEPT — closing an
+  // email has never meant throwing it away. isMinimized means the card is still
+  // in the dock, collapsed to a chip. Discarding is a DELETE, and nothing else is.
+  isOpen      Boolean @default(true)
+  isMinimized Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The dock's only query: this rep's drafts in this org, by last edit.
+  @@index([orgId, userId, updatedAt])
 }
