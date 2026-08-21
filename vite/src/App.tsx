@@ -8,6 +8,7 @@ import { AuthProvider } from '@/providers/AuthProvider'
 
 import { SignIn } from '@/pages/auth/SignIn'
 import { SignUp } from '@/pages/auth/SignUp'
+import { Calls } from '@/pages/Calls'
 import { CreateOrg } from '@/pages/CreateOrg'
 import { Home } from '@/pages/Home'
 import { JoinOrg } from '@/pages/JoinOrg'
@@ -28,6 +29,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/home" replace /> },
       { path: 'home', element: <Home /> },
+      { path: 'calls', element: <Calls /> },
       { path: 'welcome', element: <Welcome /> },
       { path: 'create-org', element: <CreateOrg /> },
       { path: 'settings', element: <Settings /> },

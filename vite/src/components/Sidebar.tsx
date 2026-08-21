@@ -1,4 +1,4 @@
-import { Home, LogOut, Pencil, Settings } from 'lucide-react'
+import { Home, LogOut, Pencil, Phone, Settings } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
@@ -12,6 +12,7 @@ import { useAuth } from '@/providers/useAuth'
 
 const NAV = [
   { to: '/home', label: 'Home', icon: Home },
+  { to: '/calls', label: 'Calls', icon: Phone },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 

@@ -49,26 +49,29 @@ export interface Call {
 }
 
 /**
- * One row of the history list. Everything `Call` carries, plus the three fields a
- * history table shows and sorts on — `durationS` and the two run timestamps.
+ * One row of the history list. Everything `Call` carries, plus the fields a
+ * history table shows and sorts on — `durationS` and the two run timestamps — and
+ * `transcriptStatus`, so the Transcript column reads a real value without
+ * fetching each row's detail. It stops short of the transcript TEXT and the
+ * signed recording link, which only `CallDetail` carries.
  */
 export interface CallHistoryItem extends Call {
   durationS: number | null
   startedAt: string | null
   endedAt: string | null
+  transcriptStatus: TranscriptStatus
 }
 
 /**
- * The full record a call-detail view shows: every history field, plus the ones a
- * table has no use for — the recording flags, the transcript, and its status —
- * and a freshly signed `recordingUrl`. That URL is NOT the stored column value
- * (a bare object key): the server signs it at request time, so it is null until
- * a recording exists.
+ * The full record a call-detail view shows: every history field (including
+ * `transcriptStatus`), plus the ones a table has no use for — the recording flags
+ * and the transcript TEXT — and a freshly signed `recordingUrl`. That URL is NOT
+ * the stored column value (a bare object key): the server signs it at request
+ * time, so it is null until a recording exists.
  */
 export interface CallDetail extends CallHistoryItem {
   recordingEnabled: boolean | null
   recordingUrl: string | null
-  transcriptStatus: TranscriptStatus
   transcript: string | null
 }
 

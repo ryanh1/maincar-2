@@ -49,9 +49,12 @@ function mapCallToApi(call: Call) {
   }
 }
 
-// The history-list shape. It carries everything mapCallToApi does, plus the three
+// The history-list shape. It carries everything mapCallToApi does, plus the
 // fields a history table shows and sorts on — durationS and the two timestamps —
-// which the POST response has no reason to send back (the call has not run yet).
+// which the POST response has no reason to send back (the call has not run yet),
+// and transcriptStatus, so the history table's Transcript column reads a real
+// value rather than fetching each row's detail. It stops short of the transcript
+// TEXT and the signed recording link, which only the detail view needs.
 // A separate mapper, not an extended shared one, so the POST contract test that
 // pins its exact key set does not have to loosen to admit fields it never sends.
 function mapCallToHistoryApi(call: Call) {
@@ -62,6 +65,7 @@ function mapCallToHistoryApi(call: Call) {
     fromE164: call.fromE164,
     toE164: call.toE164,
     recordingConsent: call.recordingConsent,
+    transcriptStatus: call.transcriptStatus,
     twilioCallSid: call.twilioCallSid,
     durationS: call.durationS,
     startedAt: call.startedAt ? call.startedAt.toISOString() : null,

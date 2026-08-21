@@ -199,10 +199,13 @@ describe('GET /api/orgs/:orgId/calls', () => {
       'startedAt',
       'status',
       'toE164',
+      'transcriptStatus',
       'twilioCallSid',
     ])
     expect(res.body.calls[0].durationS).toBe(42)
     expect(res.body.calls[0].startedAt).toBe(NOW.toISOString())
+    // The Transcript column reads this off the row rather than fetching detail.
+    expect(res.body.calls[0].transcriptStatus).toBe('pending')
   })
 
   it('defaults to page 1, limit 25, newest first', async () => {
