@@ -125,3 +125,52 @@ export function twilioErrorStatus(error: unknown): number | null {
   const status = (error as { status?: unknown } | null)?.status
   return typeof status === 'number' ? status : null
 }
+
+/** What to buy, and how the number should be wired once Twilio owns it for us. */
+export interface NumberPurchase {
+  /** E.164, exactly as it came back from `listAvailableLocalNumbers`. */
+  e164: string
+  /** Absolute URL Twilio POSTs to when a call comes in. Built from PUBLIC_BASE_URL. */
+  voiceUrl: string
+  /** Optional label shown in the Twilio console. Twilio formats the number if omitted. */
+  friendlyName?: string
+}
+
+/** A number Twilio has actually sold us, echoed back from its own response. */
+export interface PurchasedNumber {
+  /** Twilio's `PN…` SID for the number. The only proof the purchase happened. */
+  sid: string
+  /** E.164, as Twilio recorded it — not as we asked for it. */
+  e164: string
+  /** The voice webhook Twilio confirmed it saved. */
+  voiceUrl: string
+}
+
+/**
+ * Buy one number and configure it for voice, in a single Twilio call.
+ *
+ * Twilio's create-incoming-number API sets the webhooks at purchase time, so the
+ * number is never live-but-unrouted the way a buy-then-configure pair would leave
+ * it if the second call failed.
+ *
+ * `voiceReceiveMode: "voice"` tells Twilio to answer calls to this number as
+ * calls rather than as inbound faxes. Capabilities themselves (voice/SMS/MMS) are
+ * a property of the number Twilio sold, not something a caller can turn on.
+ *
+ * THIS COSTS MONEY. Every successful call rents a number for a month. The caller
+ * is responsible for making sure it only ever runs once per row.
+ *
+ * Returns only what Twilio echoed back, so nothing downstream can persist an
+ * optimistic value that Twilio never confirmed.
+ */
+export async function buyPhoneNumber(purchase: NumberPurchase): Promise<PurchasedNumber> {
+  const bought = await getTwilioClient().incomingPhoneNumbers.create({
+    phoneNumber: purchase.e164,
+    voiceUrl: purchase.voiceUrl,
+    voiceMethod: 'POST',
+    voiceReceiveMode: 'voice',
+    ...(purchase.friendlyName ? { friendlyName: purchase.friendlyName } : {}),
+  })
+
+  return { sid: bought.sid, e164: bought.phoneNumber, voiceUrl: bought.voiceUrl }
+}
