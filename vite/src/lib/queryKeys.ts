@@ -90,4 +90,9 @@ export const queryKeys = {
     all: (orgId: string) => ['mailboxes', orgId] as const,
     list: (orgId: string) => ['mailboxes', orgId, 'list'] as const,
   },
+  crm: {
+    all: (orgId: string) => ['crm', orgId] as const,
+    objects: (orgId: string) => ['crm', orgId, 'objects'] as const,
+    lists: (orgId: string) => ['crm', orgId, 'lists'] as const,
+  },
 } as const

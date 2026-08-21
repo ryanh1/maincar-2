@@ -1,9 +1,10 @@
-import { Home, LogOut, Phone, Settings } from 'lucide-react'
+import { Database, Home, List, LogOut, Phone, Settings } from 'lucide-react'
 import { Link, NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
 import { Button } from '@/components/ui/button'
 import { OrgSwitcher } from '@/components/OrgSwitcher'
+import { useGetLists, useGetObjects } from '@/hooks/crm'
 import { useGetIntegrationHealth } from '@/hooks/integrations'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
@@ -40,6 +41,10 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   // org, so nothing fetches for a user who has none yet.
   const health = useGetIntegrationHealth(org?.id)
   const brokenCount = health.data?.broken.length ?? 0
+  const objects = (useGetObjects(org?.id).data?.objects ?? []).filter(
+    (object) => !object.isHidden && !object.isArchived,
+  )
+  const lists = (useGetLists(org?.id).data?.lists ?? []).filter((list) => !list.isArchived)
 
   return (
     <>
@@ -65,8 +70,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <OrgSwitcher />
         </div>
 
-        <nav className="flex flex-1 flex-col gap-1 p-3">
-          {NAV.map(({ to, label, icon: Icon }) => {
+        <nav aria-label="Main navigation" className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
+          <NavSection label="Favorites">
+            {NAV.map(({ to, label, icon: Icon }) => {
             // The badge rides the Settings row, but is its own link so a click lands on
             // the Integrations tab rather than the default Settings tab. Rendered as a
             // sibling, never a child of the NavLink — an anchor inside an anchor is
@@ -105,7 +111,36 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 )}
               </div>
             )
-          })}
+            })}
+          </NavSection>
+
+          <NavSection label="Records">
+            {objects.map((object) => (
+              <NavLink
+                key={object.id}
+                to={`/records/${object.slug}`}
+                onClick={onClose}
+                className={({ isActive }) => navRowClass(isActive)}
+              >
+                <Database size={16} aria-hidden />
+                {object.namePlural}
+              </NavLink>
+            ))}
+          </NavSection>
+
+          <NavSection label="Lists">
+            {lists.map((list) => (
+              <NavLink
+                key={list.id}
+                to={`/lists/${list.id}`}
+                onClick={onClose}
+                className={({ isActive }) => navRowClass(isActive)}
+              >
+                <List size={16} aria-hidden />
+                {list.name}
+              </NavLink>
+            ))}
+          </NavSection>
         </nav>
 
         <div className="border-t border-sidebar-border p-3">
@@ -122,5 +157,21 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       </aside>
     </>
+  )
+}
+
+function NavSection({ children, label }: { children: React.ReactNode; label: string }) {
+  return (
+    <section className="flex flex-col gap-1" aria-label={label}>
+      <h2 className="px-3 text-xs font-medium text-sidebar-foreground/70">{label}</h2>
+      {children}
+    </section>
+  )
+}
+
+function navRowClass(isActive: boolean): string {
+  return cn(
+    'flex h-8 items-center gap-3 rounded-md px-3 text-sm transition-colors',
+    isActive ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'hover:bg-white/5',
   )
 }
