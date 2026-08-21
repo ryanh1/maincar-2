@@ -138,3 +138,39 @@ export async function seedPhoneNumber(
   })
   return { id: number.id, e164: number.e164 }
 }
+
+/**
+ * Adds a Call row, for the outbound-call routes' guards and lookups.
+ *
+ * `status` and `toE164` are settable because the double-call guard turns on both:
+ * a test cannot prove "an in-flight call to this number blocks a second" without
+ * choosing which status counts as in-flight and which destination it is to.
+ */
+export async function seedCall(
+  prisma: PrismaClient,
+  opts: {
+    orgId: string
+    userId: string
+    fromE164?: string
+    toE164?: string
+    direction?: string
+    status?: string
+    recordingConsent?: string | null
+    twilioCallSid?: string | null
+  },
+): Promise<{ id: string; toE164: string }> {
+  const suffix = uid()
+  const call = await prisma.call.create({
+    data: {
+      orgId: opts.orgId,
+      userId: opts.userId,
+      fromE164: opts.fromE164 ?? '+12025550000',
+      toE164: opts.toE164 ?? `+1202556${suffix.slice(-4)}`,
+      direction: opts.direction ?? 'outbound',
+      status: opts.status ?? 'queued',
+      recordingConsent: opts.recordingConsent ?? null,
+      twilioCallSid: opts.twilioCallSid ?? null,
+    },
+  })
+  return { id: call.id, toE164: call.toE164 }
+}

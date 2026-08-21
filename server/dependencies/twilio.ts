@@ -1,6 +1,6 @@
 import twilio, { type Twilio } from 'twilio'
 
-import { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN } from '../src/config.js'
+import { PUBLIC_BASE_URL, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN } from '../src/config.js'
 
 // The Twilio SDK is constructed HERE and nowhere else
 // (CLAUDE.md → Third-party APIs / SDKs). Route and service code calls the
@@ -173,4 +173,97 @@ export async function buyPhoneNumber(purchase: NumberPurchase): Promise<Purchase
   })
 
   return { sid: bought.sid, e164: bought.phoneNumber, voiceUrl: bought.voiceUrl }
+}
+
+// --- Outbound dialing ---------------------------------------------------------
+
+/**
+ * The path Twilio fetches for TwiML once it has our outbound call in hand — the
+ * same voice webhook a purchased number points its inbound calls at. The handler
+ * branches on `Direction` to tell the two apart. That handler is a later issue
+ * (POST /api/twilio/voice); this constant is where its outbound leg is wired in
+ * from, so the two names cannot drift.
+ */
+export const OUTBOUND_VOICE_WEBHOOK_PATH = '/api/twilio/voice'
+
+/**
+ * The path Twilio POSTs call-progress events to (initiated → ringing → answered
+ * → completed). Its handler — POST /api/twilio/voice/status — is a later issue;
+ * it looks the Call row up by the SID this function returns and advances its
+ * status. Named here so the URL Twilio is told to call and the route that later
+ * answers it are defined in one place.
+ */
+export const OUTBOUND_STATUS_WEBHOOK_PATH = '/api/twilio/voice/status'
+
+/**
+ * Raised when PUBLIC_BASE_URL is not set, so no absolute webhook URL can be built.
+ *
+ * Thrown rather than tolerated, for the same reason the provisioning job refuses
+ * a hostless voice URL: Twilio accepts a relative `url` and then can never reach
+ * it, so the call would connect to nothing and drop. A named, up-front failure is
+ * better than a call that silently goes nowhere.
+ */
+export class WebhookBaseUrlMissingError extends Error {
+  constructor() {
+    super(
+      'PUBLIC_BASE_URL is not set, so no Twilio call webhook URL can be built. ' +
+        'Set it to the public origin this API is reachable on (see .env.example).',
+    )
+    this.name = 'WebhookBaseUrlMissingError'
+  }
+}
+
+/** What to dial, and which Call row the webhooks should tie the legs back to. */
+export interface OutboundCallRequest {
+  /** E.164 destination, already validated by the route. */
+  to: string
+  /** The caller's active outbound number, in E.164. Must be a number Twilio owns. */
+  from: string
+  /** The Call row's id, threaded onto the TwiML URL so the webhook can find it. */
+  callId: string
+}
+
+/** What Twilio echoed back when it accepted the call. */
+export interface InitiatedCall {
+  /** Twilio's `CA…` SID for the call. The key the status webhook looks the row up by. */
+  sid: string
+  /** Twilio's own initial status for the call, e.g. "queued". */
+  status: string
+}
+
+/**
+ * Ask Twilio to place an outbound call.
+ *
+ * THIS COSTS MONEY: a connected call is billed per minute. The route above is
+ * responsible for the double-call guard that keeps one click from becoming two
+ * calls; this function just translates the request into the SDK call and hands
+ * back only what Twilio confirmed.
+ *
+ * The webhook URLs are built here, from PUBLIC_BASE_URL, rather than passed in:
+ * this is the one layer that already owns Twilio's webhook wiring (see
+ * `buyPhoneNumber`), and keeping the config read out of the route is what lets
+ * the route be unit-tested without a public origin set. A missing base is a
+ * named throw, never a relative URL Twilio cannot call back.
+ */
+export async function initiateOutboundCall(request: OutboundCallRequest): Promise<InitiatedCall> {
+  if (!PUBLIC_BASE_URL) throw new WebhookBaseUrlMissingError()
+
+  // callId is threaded onto the TwiML URL so the voice webhook can find the row
+  // even in the window before the SID this call returns has been stored.
+  const twimlUrl = `${PUBLIC_BASE_URL}${OUTBOUND_VOICE_WEBHOOK_PATH}?callId=${encodeURIComponent(
+    request.callId,
+  )}`
+  const statusCallback = `${PUBLIC_BASE_URL}${OUTBOUND_STATUS_WEBHOOK_PATH}`
+
+  const call = await getTwilioClient().calls.create({
+    to: request.to,
+    from: request.from,
+    url: twimlUrl,
+    method: 'POST',
+    statusCallback,
+    statusCallbackMethod: 'POST',
+    statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+  })
+
+  return { sid: call.sid, status: call.status }
 }
