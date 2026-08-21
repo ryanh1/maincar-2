@@ -1,0 +1,86 @@
+/* ---------------------------------------------------------------------------
+ * The editable region's own styles.
+ *
+ * These cannot be Tailwind utilities: ProseMirror owns the markup inside the
+ * contenteditable, so there is no JSX to put a class on. `.tiptap` is the class
+ * `RichTextEditor` puts on the editable element itself; everything below is
+ * scoped under it.
+ *
+ * Every color reads a design token (`vite/src/index.css`). No hex, no Tailwind
+ * palette color — a raw color here would be a light-mode-only editor.
+ * ------------------------------------------------------------------------- */
+
+.tiptap {
+  /* The editable area fills its scroll container, so clicking the empty space
+     under the last line puts the caret in the document rather than nowhere. */
+  height: 100%;
+}
+
+/* Tailwind's preflight strips list markers from every ul/ol, which is right for
+   the app chrome and wrong inside prose. Put them back, and only here. */
+.tiptap ul,
+.tiptap ol {
+  padding-left: 1.5rem; /* 24px — on the 4px rhythm */
+  margin: 0.5rem 0; /* 8px */
+}
+
+.tiptap ul {
+  list-style: disc;
+}
+
+.tiptap ol {
+  list-style: decimal;
+}
+
+.tiptap li {
+  margin: 0.25rem 0; /* 4px */
+}
+
+.tiptap li p {
+  margin: 0;
+}
+
+/* Paragraph rhythm. A single blank line between paragraphs, matching what the
+   same HTML looks like in a mail client. */
+.tiptap p {
+  margin: 0 0 0.5rem; /* 8px */
+}
+
+.tiptap p:last-child {
+  margin-bottom: 0;
+}
+
+.tiptap a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* The placeholder. TipTap marks the empty first node with `is-editor-empty` and
+   carries the text in `data-placeholder`, so the string lives in the component
+   and this rule only says where it goes. `float` plus `height: 0` keeps it out
+   of the layout, so the caret sits at the start of the line and not after the
+   placeholder text. It disappears on the first keystroke because the class does.
+ */
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--muted-foreground);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+/* The focus ring belongs to the card, not to the text. A ring drawn around the
+   editable region inside an already-bordered card draws two edges where the
+   design system asks for one. */
+.tiptap:focus,
+.tiptap:focus-visible {
+  outline: none;
+}
+
+/* ProseMirror's own gap cursor, used when the caret sits beside a block it
+   cannot enter. Left unstyled it is invisible. */
+.tiptap .ProseMirror-gapcursor::after {
+  border-top-color: var(--foreground);
+}
