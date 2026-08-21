@@ -24,10 +24,13 @@ export const JOB_UPLOAD_RECORDING = 'upload-recording'
 
 export const JOB_TRANSCRIBE_RECORDING = 'transcribe-recording'
 
+export const JOB_REAP_STALE_CALLS = 'reap-stale-calls'
+
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
   JOB_UPLOAD_RECORDING,
   JOB_TRANSCRIBE_RECORDING,
+  JOB_REAP_STALE_CALLS,
 ] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
@@ -51,6 +54,10 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }
   // call is expensive enough that hammering it on a persistent failure buys
   // nothing, so a single retry then a `failed` transcriptStatus is the ceiling.
   [JOB_TRANSCRIBE_RECORDING]: { retryLimit: 1, retryDelay: 30 },
+  // No retry. This is a scheduled sweep (see scheduleJob below), re-run every 15
+  // minutes regardless — a failed run is caught by the next tick, and retrying
+  // immediately would just repeat the same Twilio/database failure sooner.
+  [JOB_REAP_STALE_CALLS]: { retryLimit: 0, retryDelay: 0 },
 }
 
 let boss: PgBoss | null = null
@@ -123,6 +130,22 @@ export async function sendJob(
 ): Promise<string | null> {
   const instance = await startQueue()
   return instance.send(name, data, options)
+}
+
+/**
+ * Put one job on a recurring cron schedule instead of enqueuing it once.
+ *
+ * pg-boss owns the timekeeping — this just tells it to send `name` on `cron`
+ * from now on, deduping so a restart does not stack up duplicate schedules.
+ * Idempotent to call on every boot, exactly like `createQueue` above.
+ */
+export async function scheduleJob(
+  name: JobName,
+  cron: string,
+  data: object | null = null,
+): Promise<void> {
+  const instance = await startQueue()
+  await instance.schedule(name, cron, data)
 }
 
 /**

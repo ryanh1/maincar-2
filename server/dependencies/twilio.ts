@@ -431,6 +431,35 @@ export async function hangUpCall(callSid: string): Promise<HungUpCall> {
   return { sid: call.sid, status: call.status }
 }
 
+/** What Twilio reports for a call's current state, fetched fresh from its API. */
+export interface FetchedCallStatus {
+  /** The `CA…` SID this was fetched for. */
+  sid: string
+  /** Twilio's own status string, e.g. "completed", "in-progress". */
+  status: string
+  /** Billed duration in whole seconds, or null if Twilio has none to report yet. */
+  durationS: number | null
+}
+
+/**
+ * Ask Twilio directly what a call's real, current status is.
+ *
+ * Used by the stale-call reaper (jobs/reapStaleCalls.ts) to reconcile a call
+ * stuck past the staleness threshold against the truth, rather than assuming a
+ * lost status webhook means the call failed. Pure translation, like the rest of
+ * this module — the reaper decides what a given status means for `Call.status`.
+ */
+export async function fetchCallStatus(callSid: string): Promise<FetchedCallStatus> {
+  const call = await getTwilioClient().calls(callSid).fetch()
+  const durationS = Number.parseInt(call.duration ?? '', 10)
+
+  return {
+    sid: call.sid,
+    status: call.status,
+    durationS: Number.isFinite(durationS) ? durationS : null,
+  }
+}
+
 // --- Call recordings (Twilio → S3) -----------------------------------------
 
 /** One recording's media, downloaded from Twilio as raw bytes. */

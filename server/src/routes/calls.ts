@@ -24,6 +24,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { matchCallToCrm } from '../lib/callMatch.js'
+import { IN_FLIGHT_STATUSES } from '../lib/callStatus.js'
 import { activityFromCall, recordActivityInTx } from '../crm/activityFeed.js'
 import type { Call } from '../generated/prisma/client.js'
 
@@ -184,13 +185,6 @@ const listQuerySchema = z.object({
       .optional(),
   ),
 })
-
-// The call states that mean "a call is already up". A second call to the same
-// number while one of these is in flight is the double-click this route guards
-// against. Terminal states (completed, busy, failed, no-answer, canceled) are
-// absent on purpose: once a call has ended, dialing the number again is a new,
-// wanted call.
-const IN_FLIGHT_STATUSES = ['queued', 'ringing', 'in-progress']
 
 // The states in which a call has already ended. Hanging one of these up is a
 // no-op the client should be told about rather than a silent success, so the
