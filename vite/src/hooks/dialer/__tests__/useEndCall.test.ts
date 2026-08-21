@@ -82,6 +82,18 @@ describe('useEndCall', () => {
     expect(result.current.dialer.dialing).toBe(false)
   })
 
+  it('shows the server-billed duration once the DELETE response carries one', async () => {
+    jsonFetch.mockResolvedValue({ call: { ...canceledCall('call-1'), durationS: 47 } })
+
+    const { result } = renderEndCall()
+    act(() => result.current.dialer.startCall())
+
+    result.current.end.mutate({ orgId: 'org-1', callId: 'call-1' })
+
+    await waitFor(() => expect(result.current.dialer.phase).toBe('completed'))
+    expect(result.current.dialer.elapsedSeconds).toBe(47)
+  })
+
   it('invalidates both the history and this call detail on success', async () => {
     jsonFetch.mockResolvedValue({ call: canceledCall('call-1') })
     const client = makeTestQueryClient()

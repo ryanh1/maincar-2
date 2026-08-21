@@ -13,8 +13,9 @@ export interface EndCallVariables {
 
 /**
  * Hang up a live call: DELETE it, then move the shared dialer into its completed
- * state, which stops the timer and freezes the elapsed time at the call's final
- * length.
+ * state, which stops the timer and freezes the elapsed time at the DELETE
+ * response's `durationS` (or the local estimate, when Twilio has not reported one
+ * yet — see `endCall`, MAI-190).
  *
  * The context transition happens on SUCCESS: if the hang-up is refused — the
  * call already ended (400), or was never this org's to end (404) — the dialer's
@@ -32,8 +33,11 @@ export function useEndCall() {
   return useMutation({
     mutationFn: ({ orgId, callId }: EndCallVariables) =>
       jsonFetch<CallDetailResponse>(`/api/orgs/${orgId}/calls/${callId}`, { method: 'DELETE' }),
-    onSuccess: (_data, variables) => {
-      endCall()
+    onSuccess: (data, variables) => {
+      // Twilio has not always posted the billed duration by the time this DELETE
+      // settles the row, so `durationS` here is best-effort — null falls back to
+      // the dialer's own local estimate, same as before this argument existed.
+      endCall(data.call.durationS ?? undefined)
       void queryClient.invalidateQueries({ queryKey: queryKeys.calls.list(variables.orgId) })
       void queryClient.invalidateQueries({
         queryKey: queryKeys.calls.detail(variables.orgId, variables.callId),

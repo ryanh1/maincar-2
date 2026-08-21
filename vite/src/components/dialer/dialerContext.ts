@@ -76,16 +76,26 @@ export interface DialerContextValue {
    * real call id.
    */
   startCall: (call?: ActiveCall) => void
-  /** The callee answered: go to `in-progress`. Wired for the status webhook to drive. */
+  /**
+   * The callee answered: go to `in-progress`, and — the first time this fires for
+   * the current call — reset `elapsedSeconds` to 0, so the running timer counts
+   * from answer rather than from placement. Driven by the Voice SDK Device's own
+   * `accept` event and by the server-status poll, whichever reports it first;
+   * idempotent against the other one arriving after.
+   */
   connectCall: () => void
   /**
    * The call ended: go to `completed` and stop the timer, freezing
-   * `elapsedSeconds` at its last value. `useEndCall` calls this on a successful
-   * hang-up, and it also fires from the Voice SDK Device's own `disconnect` /
-   * `cancel` / `reject` / `error` events (see `placeDeviceCall`) — those are the
-   * ground truth for when the browser's leg of the call actually ends.
+   * `elapsedSeconds` at its last value — or, when the caller knows the server's
+   * billed `durationS`, at that exact value instead of the local estimate.
+   * `useEndCall` calls this on a successful hang-up (with the DELETE response's
+   * `durationS`), the server-status poll calls it once Twilio reports a terminal
+   * status (with the polled `durationS`), and it also fires with no argument from
+   * the Voice SDK Device's own `disconnect` / `cancel` / `reject` / `error` events
+   * (see `placeDeviceCall`) — the browser's own signal that its leg of the call
+   * ended, ahead of whatever the server has recorded yet.
    */
-  endCall: () => void
+  endCall: (durationS?: number) => void
   /** Back to the rest state: `idle`, not dialing, timer at 0, ready for the next call. */
   reset: () => void
 

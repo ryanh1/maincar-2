@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 
 // DialerProvider now builds a browser Voice SDK Device once an org and a token
 // are known. These three are mocked at the module boundary so the state-machine
@@ -13,6 +13,14 @@ const { useGetVoiceTokenMock } = vi.hoisted(() => ({
   useGetVoiceTokenMock: vi.fn(() => ({ data: undefined as unknown, refetch: vi.fn() })),
 }))
 vi.mock('@/hooks/dialer/useGetVoiceToken', () => ({ useGetVoiceToken: useGetVoiceTokenMock }))
+
+// The server-status poll (MAI-190). Mocked at the module boundary the same way
+// useGetVoiceToken is above: DialerProvider is rendered with no QueryClient in
+// this file, so the real hook (a real useQuery) would throw.
+const { useGetCallDetailMock } = vi.hoisted(() => ({
+  useGetCallDetailMock: vi.fn(() => ({ data: undefined as unknown })),
+}))
+vi.mock('@/hooks/dialer/useGetCallDetail', () => ({ useGetCallDetail: useGetCallDetailMock }))
 
 const { deviceCtorMock, deviceConnectMock, deviceOnMock, deviceUpdateTokenMock, deviceDestroyMock } =
   vi.hoisted(() => ({
@@ -47,6 +55,7 @@ describe('DialerProvider', () => {
   beforeEach(() => {
     useAuthMock.mockReturnValue({ org: null })
     useGetVoiceTokenMock.mockReturnValue({ data: undefined, refetch: vi.fn() })
+    useGetCallDetailMock.mockReturnValue({ data: undefined })
     deviceCtorMock.mockClear()
     deviceConnectMock.mockReset()
     deviceOnMock.mockClear()
@@ -199,6 +208,111 @@ describe('DialerProvider', () => {
       expect(clearSpy).toHaveBeenCalledTimes(2)
 
       clearSpy.mockRestore()
+    })
+  })
+
+  describe('the elapsed-seconds timer counts from answer (MAI-190)', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('does not count the ringing period once the callee answers', () => {
+      const { result } = renderDialer()
+
+      act(() => result.current.startCall())
+      act(() => vi.advanceTimersByTime(4000))
+      expect(result.current.elapsedSeconds).toBe(4)
+
+      act(() => result.current.connectCall())
+      expect(result.current.elapsedSeconds).toBe(0)
+
+      act(() => vi.advanceTimersByTime(2000))
+      expect(result.current.elapsedSeconds).toBe(2)
+    })
+
+    it('a second answered report does not restart the timer', () => {
+      const { result } = renderDialer()
+
+      act(() => result.current.startCall())
+      act(() => result.current.connectCall())
+      act(() => vi.advanceTimersByTime(3000))
+      expect(result.current.elapsedSeconds).toBe(3)
+
+      // e.g. the Device's own `accept` fires, then the server-status poll also
+      // reports `in-progress` a moment later — the second report must not zero
+      // a timer that is already counting.
+      act(() => result.current.connectCall())
+      expect(result.current.elapsedSeconds).toBe(3)
+    })
+  })
+
+  describe('the server-status poll (MAI-190)', () => {
+    function detail(status: string, durationS: number | null = null) {
+      return { data: { call: { status, durationS } } }
+    }
+
+    it('polls with the live call identity only while dialing', () => {
+      const { result } = renderDialer()
+      expect(useGetCallDetailMock).toHaveBeenLastCalledWith(undefined, undefined, {
+        refetchInterval: expect.any(Number),
+      })
+
+      act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
+      expect(useGetCallDetailMock).toHaveBeenLastCalledWith('org-1', 'call-1', {
+        refetchInterval: expect.any(Number),
+      })
+
+      act(() => result.current.endCall())
+      expect(useGetCallDetailMock).toHaveBeenLastCalledWith(undefined, undefined, {
+        refetchInterval: expect.any(Number),
+      })
+    })
+
+    it('moves ringing to in-progress once the server reports in-progress', async () => {
+      const { result, rerender } = renderDialer()
+      act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
+
+      useGetCallDetailMock.mockReturnValue(detail('in-progress'))
+      rerender()
+
+      await waitFor(() => expect(result.current.phase).toBe('in-progress'))
+    })
+
+    it('catches a remote hang-up the dialer never otherwise sees, and shows the billed duration', async () => {
+      const { result, rerender } = renderDialer()
+      act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
+      act(() => result.current.connectCall())
+
+      useGetCallDetailMock.mockReturnValue(detail('completed', 47))
+      rerender()
+
+      await waitFor(() => expect(result.current.phase).toBe('completed'))
+      expect(result.current.dialing).toBe(false)
+      expect(result.current.elapsedSeconds).toBe(47)
+    })
+
+    it('ends a call the callee never answered — busy, failed, no-answer, canceled', async () => {
+      const { result, rerender } = renderDialer()
+      act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
+
+      useGetCallDetailMock.mockReturnValue(detail('no-answer'))
+      rerender()
+
+      await waitFor(() => expect(result.current.phase).toBe('completed'))
+      expect(result.current.dialing).toBe(false)
+    })
+
+    it('does not reopen a call the dialer already marked completed', async () => {
+      const { result, rerender } = renderDialer()
+      act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
+      act(() => result.current.endCall(5))
+      expect(result.current.elapsedSeconds).toBe(5)
+
+      useGetCallDetailMock.mockReturnValue(detail('completed', 99))
+      rerender()
+
+      // Give any (wrongly) queued microtask a turn, then confirm nothing changed.
+      await act(() => Promise.resolve())
+      expect(result.current.elapsedSeconds).toBe(5)
     })
   })
 

@@ -39,9 +39,10 @@ function renderGetDetail(
   orgId: string | null | undefined,
   callId: string | null | undefined,
   client: QueryClient = makeTestQueryClient(),
+  options?: { refetchInterval?: number | false },
 ) {
   const wrapper = ({ children }: { children: ReactNode }) => withProviders(children, { client })
-  return { client, ...renderHook(() => useGetCallDetail(orgId, callId), { wrapper }) }
+  return { client, ...renderHook(() => useGetCallDetail(orgId, callId, options), { wrapper }) }
 }
 
 beforeEach(() => {
@@ -89,5 +90,23 @@ describe('useGetCallDetail', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true))
     expect((result.current.error as ApiError).status).toBe(404)
+  })
+
+  it('does not repeat the fetch on its own — refetchInterval is off by default', async () => {
+    jsonFetch.mockResolvedValue({ call: detail('call-1') })
+
+    const { result } = renderGetDetail('org-1', 'call-1')
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(jsonFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('polls at the given interval when refetchInterval is set (MAI-190)', async () => {
+    jsonFetch.mockResolvedValue({ call: detail('call-1') })
+
+    renderGetDetail('org-1', 'call-1', undefined, { refetchInterval: 5 })
+
+    await waitFor(() => expect(jsonFetch.mock.calls.length).toBeGreaterThan(1))
   })
 })
