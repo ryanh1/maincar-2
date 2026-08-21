@@ -32,6 +32,11 @@ export const queryKeys = {
     // previous org's half-written emails. Not keyed by user: the cache is
     // cleared on sign-out, so one signed-in rep only ever sees their own rows.
     drafts: (orgId: string) => ['email', 'drafts', orgId] as const,
+    // Keyed by org only, like the drafts list, and for a stronger reason: a
+    // template belongs to the ORG rather than to the rep who wrote it, so every
+    // member of an org reads and writes this one entry. There is no per-user
+    // key to add — see lib/emailTypes.ts → EmailTemplate.
+    templates: (orgId: string) => ['email', 'templates', orgId] as const,
   },
   calls: {
     all: ['calls'] as const,
@@ -58,5 +63,15 @@ export const queryKeys = {
     all: ['invitations'] as const,
     // Keyed by token, not by org: the reader of this one has no org yet.
     public: (token: string) => ['invitations', 'public', token] as const,
+  },
+  integrations: {
+    // Keyed by org, like the member list, because a rep's connections belong to one
+    // org and switching orgs must read a different cache entry rather than show the
+    // previous org's cards. The org comes FIRST, before `list` / `health`, so that
+    // `all(orgId)` is a prefix of both — invalidating it after a Connect, Test,
+    // Refresh, or Disconnect refreshes the cards AND the health badge in one call.
+    all: (orgId: string) => ['integrations', orgId] as const,
+    list: (orgId: string) => ['integrations', orgId, 'list'] as const,
+    health: (orgId: string) => ['integrations', orgId, 'health'] as const,
   },
 } as const
