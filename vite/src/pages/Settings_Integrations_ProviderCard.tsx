@@ -26,10 +26,13 @@ import type {
   TestConnectionResult,
 } from '@/hooks/integrations'
 import type { ConnectMode } from '@/hooks/integrations'
+import { useGetMailboxes } from '@/hooks/mailboxes'
+import type { Mailbox } from '@/lib/mailboxTypes'
 import { ApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 import { Settings_Integrations_ProviderMark } from './Settings_Integrations_ProviderMark'
+import { Settings_Integrations_MailboxList } from './Settings_Integrations_MailboxRow'
 
 // The governing rule of the whole Integration Hub, and the one this card exists to
 // keep: GREEN MEANS EVERY REQUESTED PERMISSION IS PRESENT AND WORKING, AND NOTHING
@@ -77,6 +80,9 @@ interface Props {
   onConnect: (mode: ConnectMode) => void
   /** True while the tab's popup is open, so the connect-family button reads busy. */
   connectBusy?: boolean
+  /** Mailbox-level callbacks for opening settings and reconnecting. */
+  onMailboxOpenSettings?: (mailboxId: string) => void
+  onMailboxReconnect?: (mailbox: Mailbox) => void
 }
 
 /** One card per provider, showing its honest state and the one action that moves it forward. */
@@ -85,6 +91,8 @@ export function Settings_Integrations_ProviderCard({
   orgId,
   onConnect,
   connectBusy = false,
+  onMailboxOpenSettings,
+  onMailboxReconnect,
 }: Props) {
   const { connection } = card
 
@@ -104,6 +112,8 @@ export function Settings_Integrations_ProviderCard({
               orgId={orgId}
               onConnect={onConnect}
               connectBusy={connectBusy}
+              onMailboxOpenSettings={onMailboxOpenSettings}
+              onMailboxReconnect={onMailboxReconnect}
             />
           ) : (
             <NotConnectedBody card={card} onConnect={onConnect} connectBusy={connectBusy} />
@@ -196,15 +206,20 @@ function ConnectedBody({
   orgId,
   onConnect,
   connectBusy,
+  onMailboxOpenSettings,
+  onMailboxReconnect,
 }: {
   card: IntegrationCard
   connection: IntegrationConnection
   orgId: string
   onConnect: (mode: ConnectMode) => void
   connectBusy: boolean
+  onMailboxOpenSettings?: (mailboxId: string) => void
+  onMailboxReconnect?: (mailbox: Mailbox) => void
 }) {
   const test = useTestIntegration()
   const testResult = test.data?.result ?? null
+  const mailboxes = useGetMailboxes(orgId)
 
   function runTest(): void {
     test.mutate(
@@ -246,6 +261,19 @@ function ConnectedBody({
         permissions={card.requiredPermissions}
         state={(label) => permissionState(label, connection, testResult)}
       />
+
+      {/* The mailboxes this connection provides. Only render when we have data, and pass
+          the callbacks for mailbox-level actions (settings drawer and reconnect). */}
+      {mailboxes.data && (
+        <div className="border-t border-border pt-3">
+          <Settings_Integrations_MailboxList
+            mailboxes={mailboxes.data.mailboxes}
+            orgId={orgId}
+            onOpenSettings={onMailboxOpenSettings ?? (() => {})}
+            onReconnect={onMailboxReconnect ?? (() => {})}
+          />
+        </div>
+      )}
 
       {/* Names what broke, in the server's plain words. The status word says a permission
           is missing; this line says which capability it costs. */}

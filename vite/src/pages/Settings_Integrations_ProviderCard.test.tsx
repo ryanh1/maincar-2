@@ -26,6 +26,9 @@ vi.mock('@/lib/api', async () => {
   return { ...actual, jsonFetch }
 })
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('@/hooks/mailboxes', () => ({
+  useGetMailboxes: vi.fn(() => ({ data: { mailboxes: [] }, isLoading: false, isError: false })),
+}))
 
 import { Settings_Integrations_ProviderCard } from './Settings_Integrations_ProviderCard'
 
