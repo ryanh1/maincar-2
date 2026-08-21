@@ -31,9 +31,17 @@ vi.mock('@/hooks/dialer', () => ({ useCreateCall: useCreateCallMock }))
 vi.mock('@/hooks/phoneNumbers', () => ({ useGetNumbers: useGetNumbersMock }))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
 
-const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#']
+const ENTRY_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '0']
+const IN_CALL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#']
 
-/** An org with one active caller ID — the common case, so the Call button is live. */
+/** A real, dialable US number, typed the way a rep types one. */
+const NATIONAL = '2025550123'
+const E164 = '+12025550123'
+
+/**
+ * An org with one active caller ID — the common case, so the Call button is live.
+ * The number is a US one, which is also what makes ten bare digits readable.
+ */
 function numbersWithActive() {
   return {
     data: {
@@ -42,6 +50,11 @@ function numbersWithActive() {
       activeCount: 1,
     },
   }
+}
+
+/** Type a whole number into the field, the way a paste or fast typing lands. */
+function typeNumber(value: string) {
+  fireEvent.change(phoneInput(), { target: { value } })
 }
 
 function phoneInput(): HTMLInputElement {
@@ -69,44 +82,61 @@ beforeEach(() => {
 })
 
 describe('NumericKeypad', () => {
-  it('renders a twelve-button grid of 1-9, *, 0, #', () => {
+  it('renders an eleven-key entry grid of 1-9, +, 0', () => {
+    render(<NumericKeypad />)
+
+    const grid = screen.getByRole('group', { name: 'Keypad' })
+    const buttons = within(grid).getAllByRole('button')
+    expect(buttons).toHaveLength(11)
+    expect(buttons.map((b) => b.textContent)).toEqual(ENTRY_KEYS)
+  })
+
+  it('swaps in * and # once a call is live, where they are real tones', () => {
+    useDialerMock.mockReturnValue({ dialing: true })
     render(<NumericKeypad />)
 
     const grid = screen.getByRole('group', { name: 'Keypad' })
     const buttons = within(grid).getAllByRole('button')
     expect(buttons).toHaveLength(12)
-    expect(buttons.map((b) => b.textContent)).toEqual(KEYS)
+    expect(buttons.map((b) => b.textContent)).toEqual(IN_CALL_KEYS)
   })
 
-  it('appends a clicked digit to the number field', () => {
+  it('formats the number as the rep presses keys', () => {
     render(<NumericKeypad />)
 
-    pressKey('4')
-    pressKey('1')
-    pressKey('5')
-    expect(phoneInput().value).toBe('415')
+    '415'.split('').forEach(pressKey)
+    expect(phoneInput().value).toBe('(415)')
+
+    '5550100'.split('').forEach(pressKey)
+    expect(phoneInput().value).toBe('(415) 555-0100')
   })
 
-  it('lets the rep type into the field directly', () => {
+  it('formats what the rep types or pastes, however it is punctuated', () => {
     render(<NumericKeypad />)
 
-    fireEvent.change(phoneInput(), { target: { value: '5551234' } })
-    expect(phoneInput().value).toBe('5551234')
+    typeNumber('202-555-0123')
+    expect(phoneInput().value).toBe('(202) 555-0123')
   })
 
-  it('drops the last character on Backspace', () => {
+  it('formats an international number in its own grouping', () => {
     render(<NumericKeypad />)
 
-    pressKey('9')
-    pressKey('1')
-    pressKey('1')
-    expect(phoneInput().value).toBe('911')
+    typeNumber('+442071838750')
+    expect(phoneInput().value).toBe('+44 20 7183 8750')
+  })
 
+  it('drops the last digit on Backspace, not the last separator', () => {
+    render(<NumericKeypad />)
+
+    '415'.split('').forEach(pressKey)
+    expect(phoneInput().value).toBe('(415)')
+
+    // A dumb trim would eat the ")" and look like nothing happened.
     fireEvent.keyDown(phoneInput(), { key: 'Backspace' })
-    expect(phoneInput().value).toBe('91')
+    expect(phoneInput().value).toBe('41')
   })
 
-  it('drops the last character on Delete too', () => {
+  it('drops the last digit on Delete too', () => {
     render(<NumericKeypad />)
 
     pressKey('9')
@@ -115,18 +145,27 @@ describe('NumericKeypad', () => {
     expect(phoneInput().value).toBe('9')
   })
 
-  it('places the call on Enter when no call is live', () => {
+  it('normalises a nationally typed number to E.164 and calls it', () => {
     render(<NumericKeypad />)
 
-    '5551234'.split('').forEach(pressKey)
+    NATIONAL.split('').forEach(pressKey)
     fireEvent.keyDown(phoneInput(), { key: 'Enter' })
 
     expect(mutateMock).toHaveBeenCalledTimes(1)
     expect(mutateMock.mock.calls[0][0]).toEqual({
       orgId: 'org-1',
-      toE164: '5551234',
+      toE164: E164,
       recordingConsent: 'declined',
     })
+  })
+
+  it('sends an already-E.164 entry through unchanged', () => {
+    render(<NumericKeypad />)
+
+    typeNumber(E164)
+    fireEvent.keyDown(phoneInput(), { key: 'Enter' })
+
+    expect(mutateMock.mock.calls[0][0].toE164).toBe(E164)
   })
 
   it('does not dial a blank number', () => {
@@ -171,7 +210,7 @@ describe('NumericKeypad', () => {
     )
     render(<NumericKeypad />)
 
-    pressKey('5')
+    typeNumber(NATIONAL)
     fireEvent.keyDown(phoneInput(), { key: 'Enter' })
 
     expect(toastErrorMock).toHaveBeenCalledWith(
@@ -183,7 +222,7 @@ describe('NumericKeypad', () => {
     mutateMock.mockImplementation((_vars, opts) => opts.onError(new Error('network down')))
     render(<NumericKeypad />)
 
-    pressKey('5')
+    typeNumber(NATIONAL)
     fireEvent.keyDown(phoneInput(), { key: 'Enter' })
 
     expect(toastErrorMock).toHaveBeenCalledWith('Could not place the call. Try again.')
@@ -213,31 +252,86 @@ describe('NumericKeypad', () => {
   it('places the call when the Call button is clicked', () => {
     render(<NumericKeypad />)
 
-    '5551234'.split('').forEach(pressKey)
+    NATIONAL.split('').forEach(pressKey)
     fireEvent.click(callButton())
 
     expect(mutateMock).toHaveBeenCalledTimes(1)
     expect(mutateMock.mock.calls[0][0]).toEqual({
       orgId: 'org-1',
-      toE164: '5551234',
+      toE164: E164,
       recordingConsent: 'declined',
     })
   })
 
-  it('disables the Call button while the number is blank', () => {
+  it('disables the Call button until the number is one we can call', () => {
     render(<NumericKeypad />)
 
     expect(callButton()).toBeDisabled()
 
-    pressKey('5')
+    typeNumber('202')
+    expect(callButton()).toBeDisabled()
+
+    typeNumber(NATIONAL)
     expect(callButton()).toBeEnabled()
+  })
+
+  it('says nothing while the number is only half typed', () => {
+    render(<NumericKeypad />)
+
+    typeNumber('202')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('refuses a number that does not exist, and says why', () => {
+    render(<NumericKeypad />)
+
+    typeNumber('9999999999')
+
+    expect(callButton()).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'That is not a number we can call. Check the digits.',
+    )
+    fireEvent.keyDown(phoneInput(), { key: 'Enter' })
+    expect(mutateMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a foreign number typed without its country code rather than guessing', () => {
+    render(<NumericKeypad />)
+
+    // London, typed by a rep on a US line. Guessing NANP here dials Bermuda.
+    typeNumber('442071838750')
+
+    expect(callButton()).toBeDisabled()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    expect(mutateMock).not.toHaveBeenCalled()
+  })
+
+  it('calls the same foreign number once the rep types the plus', () => {
+    render(<NumericKeypad />)
+
+    typeNumber('+442071838750')
+    fireEvent.click(callButton())
+
+    expect(mutateMock.mock.calls[0][0].toE164).toBe('+442071838750')
+  })
+
+  it('marks the field invalid so a screen reader hears the reason', () => {
+    render(<NumericKeypad />)
+
+    typeNumber('9999999999')
+
+    const input = phoneInput()
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(input).toHaveAccessibleDescription(
+      'That is not a number we can call. Check the digits.',
+    )
   })
 
   it('disables the Call button while a placed call is still in flight', () => {
     useCreateCallMock.mockReturnValue({ mutate: mutateMock, isPending: true })
     render(<NumericKeypad />)
 
-    pressKey('5')
+    typeNumber(NATIONAL)
     expect(callButton()).toBeDisabled()
   })
 
@@ -265,9 +359,19 @@ describe('NumericKeypad', () => {
     useGetNumbersMock.mockReturnValue({ data: undefined })
     render(<NumericKeypad />)
 
-    pressKey('5')
+    typeNumber(NATIONAL)
     // Numbers still loading: no buy prompt yet, but the button cannot dial from a
     // caller ID we do not have.
     expect(callButton()).toBeDisabled()
+  })
+
+  it('asks for a country code when there is no active number to read digits against', () => {
+    useGetNumbersMock.mockReturnValue({ data: undefined })
+    render(<NumericKeypad />)
+
+    typeNumber(NATIONAL)
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Start with + and the country code, like +12025550123.',
+    )
   })
 })
