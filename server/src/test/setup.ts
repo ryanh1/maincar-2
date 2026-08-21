@@ -15,6 +15,12 @@ process.env.DATABASE_URL =
 // depends on a developer's local secrets.
 process.env.TOKEN_ENC_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
 
+// A fixed ≥32-char HMAC key so config.ts boots and oauthState signs/verifies
+// deterministically. Set here rather than read from .env so the suite never
+// depends on a developer's local secrets. oauthState.test.ts reads this exact
+// value back to forge validly-signed-but-malformed payloads.
+process.env.OAUTH_STATE_SECRET = 'test-oauth-state-secret-0123456789abcdef'
+
 // Keep log output out of the test report, and make it deterministic.
 process.env.LOG_LEVEL = 'silent'
 process.env.NODE_ENV = 'test'

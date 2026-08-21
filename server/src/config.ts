@@ -67,6 +67,24 @@ function decodeTokenEncKey(raw: string): Buffer {
   return key
 }
 
+// --- OAuth signed state (CSRF for the consent round-trip) ---
+// The HMAC-SHA256 key that signs the stateless `state` carried through the OAuth
+// redirect (server/src/lib/oauthState.ts). It is deliberately NOT the token
+// encryption key: two independent secrets, so rotating one never touches the
+// other. This is the single place it is read. A short key is a weak MAC — the
+// process refuses to start under 32 characters rather than sign with it, on
+// purpose, here at startup rather than at the first callback.
+export const OAUTH_STATE_SECRET = requireMinLength('OAUTH_STATE_SECRET', 32)
+
+/** A required var that also enforces a minimum length, failing fast when short. */
+function requireMinLength(name: string, min: number): string {
+  const value = required(name)
+  if (value.length < min) {
+    throw new Error(`${name} must be at least ${min} characters; got ${value.length}.`)
+  }
+  return value
+}
+
 // --- Firebase Admin ---
 // Verifies the ID token on every authenticated request. In local dev the emulator
 // host is set instead, and the SDK picks it up automatically.
