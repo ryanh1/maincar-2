@@ -9,6 +9,7 @@ import callsRouter from './routes/calls.js'
 import companiesRouter from './routes/companies.js'
 import dealsRouter from './routes/deals.js'
 import emailRouter from './routes/email.js'
+import emailsRouter from './routes/emails.js'
 import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import invitationsRouter from './routes/invitations.js'
@@ -68,6 +69,12 @@ app.use('/api/orgs/:orgId/companies', companiesRouter)
 app.use('/api/orgs/:orgId/people', peopleRouter)
 app.use('/api/orgs/:orgId/deals', dealsRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
+
+// Logged email activity (MAI-137 T9). READ ONLY: composing and mailbox sync are a
+// later spec. Distinct from /api/email above, which is the COMPOSER (drafts and
+// templates — half-written mail that has not happened yet); this is the record of
+// mail that HAS. Org-scoped like the rest of the CRM, with the org in the path.
+app.use('/api/orgs/:orgId/emails', emailsRouter)
 
 // Schema-as-data (MAI-133 T5): ObjectDef + AttributeDef describe every object and
 // field. Both org-scoped; the org is in the path so the tenant boundary is checked

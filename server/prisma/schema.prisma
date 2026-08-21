@@ -77,6 +77,13 @@ model Org {
   // rest of the CRM spine already uses.
   fieldHistory FieldHistory[]
   provenance   Provenance[]
+
+  // Email activity (MAI-137 T9). Back-relations so a deleted org cascades its
+  // messages, their participants, and their attachments away — the same
+  // onDelete: Cascade the rest of the CRM spine already uses.
+  emails            Email[]
+  emailParticipants EmailParticipant[]
+  emailAttachments  EmailAttachment[]
 }
 
 model User {
@@ -482,6 +489,13 @@ model MailAccount {
   // Exactly one per (orgId, userId) is true. Moved atomically in mailAccounts.ts.
   isPrimary Boolean @default(false)
 
+  // The synced messages that came from this mailbox (Email.mailAccountId →
+  // MailAccount). ADDITIVE ONLY (MAI-137 T9): nothing else on this model changes,
+  // and no credential, token, or scope ever leaves it. The FK on the Email side is
+  // NULLABLE with onDelete: SetNull, so disconnecting a mailbox orphans its
+  // messages rather than destroying the org's message history.
+  emails Email[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -567,6 +581,9 @@ model Company {
   // Calls rolled up to this account (Call.companyId → Company). SetNull on that
   // side, so deleting a company never destroys call history (MAI-132 T4).
   calls Call[]
+  // Emails rolled up to this account (Email.companyId → Company). SetNull on that
+  // side too, so deleting a company never destroys message history (MAI-137 T9).
+  emails Email[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -645,6 +662,10 @@ model Person {
   // Calls with this person (Call.personId → Person). SetNull on that side, so
   // deleting a person never destroys call history (MAI-132 T4).
   calls     Call[]
+  // Every email this person was a from/to/cc/bcc on (EmailParticipant.personId →
+  // Person). SetNull on that side: deleting a person leaves the participant row
+  // and its RAW address intact, so the message still reads correctly (MAI-137 T9).
+  emailParticipations EmailParticipant[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -851,6 +872,9 @@ model Deal {
   // Calls logged against this deal (Call.dealId → Deal). SetNull on that side, so
   // deleting a deal never destroys call history (MAI-132 T4).
   calls       Call[]
+  // Emails logged against this deal (Email.dealId → Deal). SetNull on that side
+  // too, so deleting a deal never destroys message history (MAI-137 T9).
+  emails      Email[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1130,4 +1154,163 @@ model Provenance {
   updatedAt DateTime @updatedAt
 
   @@index([orgId, objectSlug, recordId, attribute])
+}
+
+// -----------------------------------------------------------------------------
+// Activities — Email + EmailParticipant + EmailAttachment (MAI-137, Phase 3 / T9).
+//
+// Spec: docs/specs/SPEC-CRM-SCHEMA.md (§5.12 "email works even when nobody on it
+// is in the CRM", §6). Plan: tasks/plan-crm-schema.md (T9).
+//
+// Same shape as Call: a real table, first-class from day 1, with nullable spine
+// links so a message from total strangers still logs. Compose/send/sync journeys
+// are a LATER spec — this is only the data those journeys will write into, plus
+// the read routes over it (server/src/routes/emails.ts).
+//
+// THE CREDENTIAL BOUNDARY. Mail auth is owned by OAuthConnection (the encrypted
+// grant) and MailAccount (the mailbox identity). Those two are the SINGLE source
+// of truth, and NOTHING here duplicates them: this model holds no refresh token,
+// no access token, no scopes, no secret, and no copy of the mailbox address. It
+// points at a mailbox with one nullable foreign key and stops there.
+// -----------------------------------------------------------------------------
+
+// Email — a provider-agnostic superset of Gmail's Message and Microsoft Graph's
+// message. The record does NOT carry a single personId: an email has MANY
+// participants (from/to/cc/bcc), stored as EmailParticipant rows. That is exactly
+// what lets us ingest or send email when nobody on it is in the CRM yet (§5.12).
+// companyId/dealId ARE here — they are the account-level roll-ups the feed reads,
+// and they mirror how Call was wired in T4 (nullable, onDelete: SetNull, so
+// trashing a Company or Deal never destroys message history).
+model Email {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  // WHICH SYNCED MAILBOX this row came from — not "the sender", which is an
+  // EmailParticipant with role "from". MailAccount is the mailbox model owned by
+  // the Integration Hub; this is a pointer to it and nothing more.
+  //
+  // Nullable + onDelete: SetNull, deliberately, and NOT Cascade: a rep
+  // disconnecting their mailbox must not delete the org's record of what was said.
+  // The message survives with mailAccountId = null. Nullable also covers a row
+  // written by something other than a mailbox sync (an import, a backfill).
+  mailAccountId String?
+  mailAccount   MailAccount? @relation(fields: [mailAccountId], references: [id], onDelete: SetNull)
+
+  direction String // outbound | inbound
+  subject   String?
+  bodyHtml  String?
+  bodyText  String? // plaintext part, also used for full-text search
+  snippet   String? // Gmail snippet / Graph bodyPreview — the list-row preview
+
+  // Threading — the cross-provider keys. internetMessageId (the RFC5322 Message-ID
+  // header) is the one identifier that is stable across Gmail AND Graph AND plain
+  // IMAP, which is why it is the dedupe key below. conversationId groups a chain.
+  internetMessageId String? // RFC5322 Message-ID
+  conversationId    String? // Gmail threadId / Graph conversationId
+  inReplyTo         String?
+  references        String[] @default([])
+
+  importance     String  @default("normal") // low | normal | high
+  isRead         Boolean @default(false)
+  isDraft        Boolean @default(false)
+  hasAttachments Boolean @default(false)
+
+  // Provider bookkeeping for sync + deep-linking back to the source. All of it is
+  // non-secret: ids, labels, a link, a change marker. No token ever lands here.
+  provider          String? // gmail | m365 | imap
+  providerMessageId String? // Gmail id / Graph id (per-mailbox; changes on move in Graph)
+  providerThreadId  String?
+  folderOrLabels    String[] @default([]) // Gmail labelIds / Graph parentFolderId path
+  webLink           String? // "open in Gmail/Outlook"
+  syncCursor        String? // Gmail historyId / Graph changeKey, for delta sync
+
+  sentAt     DateTime?
+  receivedAt DateTime?
+
+  participants EmailParticipant[]
+  attachments  EmailAttachment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // IDEMPOTENT RE-SYNC. Re-reading the same message from the same mailbox hits
+  // this key and updates instead of inserting a duplicate. Keyed on the MAILBOX
+  // (mailAccountId), not on the mailbox's owner: one rep can connect two mailboxes,
+  // and the same Message-ID legitimately appears in both — they are two rows,
+  // because two people were sent it. Postgres allows many NULLs under a unique
+  // index, so rows with no Message-ID yet (a local draft, a partial sync) do not
+  // collide with each other.
+  @@unique([orgId, mailAccountId, internetMessageId])
+  @@index([orgId])
+  // The hot paths: the org's message list newest-first, and the same list narrowed
+  // to one account or one deal — the Company/Deal feed in one indexed round-trip.
+  @@index([orgId, sentAt])
+  @@index([orgId, companyId, sentAt])
+  @@index([orgId, dealId, sentAt])
+  // "Show me the rest of this thread."
+  @@index([orgId, conversationId])
+}
+
+// One address on an email. THE ADDRESS IS ALWAYS KEPT RAW, and personId is
+// NULLABLE: a participant who is not (yet) in the CRM is stored as a plain
+// name + address, and a later match writes personId on THIS row — the email
+// itself is never rewritten, and the address it was actually sent to never
+// changes. onDelete: SetNull on the person side, for the same reason: deleting a
+// Person unlinks, it does not erase who was on the message.
+model EmailParticipant {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  emailId String
+  email   Email  @relation(fields: [emailId], references: [id], onDelete: Cascade)
+
+  role    String // from | sender | to | cc | bcc | reply_to
+  name    String?
+  address String // the RAW email address, exactly as it appeared on the message
+
+  personId String?
+  person   Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, emailId])
+  // The match path: "which unlinked participants have this address?"
+  @@index([orgId, address])
+  @@index([personId])
+}
+
+// One attachment on an email. storageUrl is the seam to our own copy: it holds a
+// bare S3 object KEY, not a link a browser can open — the read route presigns it
+// at request time, exactly as Call.recordingUrl does. Null until the download job
+// runs, so the row exists (and the list can say "2 attachments") before the bytes
+// are ours.
+model EmailAttachment {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  emailId String
+  email   Email  @relation(fields: [emailId], references: [id], onDelete: Cascade)
+
+  filename    String?
+  contentType String? // the MIME type, e.g. "application/pdf"
+  sizeBytes   Int?
+  isInline    Boolean @default(false)
+  contentId   String? // cid: for inline images referenced from bodyHtml
+
+  storageUrl           String? // our S3 object key (null until the download job runs)
+  providerAttachmentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, emailId])
 }
