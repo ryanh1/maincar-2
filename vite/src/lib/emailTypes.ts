@@ -92,3 +92,82 @@ export interface RecipientChip {
   displayName: string | null
   recordId: string | null
 }
+
+/**
+ * The client's view of an email template.
+ *
+ * Mirrors `mapTemplateToApi` in `server/src/routes/email.ts` exactly. `orgId` is
+ * absent for the same reason it is absent from a draft — the caller named the
+ * org in the path.
+ *
+ * A template is ORG-SHARED, not private to whoever wrote it, which is why there
+ * is no `userId` here and no way to ask for "my" templates. Any member may read,
+ * edit, or delete any of them (SPEC-composer-templates.md § 2).
+ */
+export interface EmailTemplate {
+  id: string
+  /** What the dropdown shows. Never blank — the route refuses an empty name. */
+  name: string
+  /**
+   * Never null, unlike a draft's. The columns are not nullable: a template saved
+   * without a subject or a body stores the empty string.
+   */
+  subject: string
+  bodyHtml: string
+  /**
+   * Attribution only, never a filter. **Null is not an error** — it means the
+   * rep who wrote this template has left the org, and the template outlived
+   * them, which is the point of an org-shared template.
+   */
+  createdById: string | null
+  /**
+   * The distinct merge-field ids this template uses, derived SERVER-SIDE from
+   * the subject and body on every write. Null on every template today: the
+   * column stays empty until merge fields land with the CRM port
+   * (SPEC-composer-body.md § Deferred). Read it, never send it — the server
+   * strips a client-supplied value, because the text wins.
+   */
+  fieldsJson: string[] | null
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * What POST accepts. `name` is the one field a template cannot do without: it is
+ * what the dropdown shows, and an unnamed template is unpickable. Subject and
+ * body may be omitted — a rep saving a shell to fill in later is not an error.
+ *
+ * `fieldsJson` is absent on purpose. It is derived, and the server ignores it.
+ */
+export interface EmailTemplateInput {
+  name: string
+  subject?: string
+  bodyHtml?: string
+}
+
+/**
+ * What PATCH accepts: the same fields, all optional, but a patch with no keys at
+ * all is a 400. The route writes exactly the keys the body carries, so
+ * `{ name }` alone leaves the body untouched.
+ */
+export interface EmailTemplatePatch {
+  name?: string
+  subject?: string
+  bodyHtml?: string
+}
+
+/** The templates list. Alphabetical, because that is what the settings screen shows. */
+export interface GetEmailTemplatesResponse {
+  templates: EmailTemplate[]
+  total: number
+}
+
+/** What POST and PATCH return: the stored row, wrapped. */
+export interface EmailTemplateResponse {
+  template: EmailTemplate
+}
+
+/** What DELETE returns — the id, so the client can drop exactly that row. */
+export interface DeleteEmailTemplateResponse {
+  template: { id: string }
+}
