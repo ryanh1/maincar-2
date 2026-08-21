@@ -10,7 +10,7 @@ import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock, initiateCallMock } = vi.hoisted(() => ({
+const { prismaMock, verifyTokenMock, initiateCallMock, presignMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
@@ -30,6 +30,7 @@ const { prismaMock, verifyTokenMock, initiateCallMock } = vi.hoisted(() => ({
   },
   verifyTokenMock: vi.fn(),
   initiateCallMock: vi.fn(),
+  presignMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
@@ -43,6 +44,13 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
 // only possible because the SDK is constructed in exactly one file.
 vi.mock('../../../dependencies/twilio.js', () => ({
   initiateOutboundCall: initiateCallMock,
+}))
+// The S3 wrapper, not the AWS SDK. Mocking our own module is what lets the detail
+// route be tested without an object store, credentials, or a signing round-trip —
+// and, as with Twilio, it is only possible because the SDK lives in exactly one
+// file. The route hands this a stored object key; the test asserts on that.
+vi.mock('../../../dependencies/s3.js', () => ({
+  getRecordingDownloadUrl: presignMock,
 }))
 
 import app from '../../app.js'
@@ -134,6 +142,9 @@ beforeEach(() => {
   // reads and writes the route makes INSIDE the transaction.
   prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock))
   initiateCallMock.mockResolvedValue({ sid: 'CA123', status: 'queued' })
+  // A stand-in for the URL the real presigner signs. The route's job is to call
+  // this with the stored key and return what comes back, never to sign itself.
+  presignMock.mockResolvedValue('https://minio.local/maincar2-local/recordings/call-1.mp3?sig=abc')
 })
 
 // ============================================================
@@ -317,6 +328,142 @@ describe('GET /api/orgs/:orgId/calls — org isolation', () => {
 
     expect(res.status).toBe(404)
     expect(prismaMock.call.findMany).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// GET /:id — one call, with its transcript and a signed recording link
+// ============================================================
+describe('GET /api/orgs/:orgId/calls/:id', () => {
+  it('returns the full call, including the transcript', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(
+      callRow({
+        id: 'call-9',
+        status: 'completed',
+        recordingEnabled: true,
+        recordingUrl: 'recordings/call-9.mp3',
+        transcriptStatus: 'done',
+        transcript: 'Hello, this is the transcript.',
+        durationS: 73,
+        startedAt: NOW,
+        endedAt: NOW,
+      }),
+    )
+
+    const res = await request(app).get(`${URL_A}/call-9`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    // Read by id AND orgId together — the tenant key is half the lookup.
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({
+      where: { id: 'call-9', orgId: ORG_A },
+    })
+    // The whole record a detail view needs, and no tenant internals.
+    expect(Object.keys(res.body.call).sort()).toEqual([
+      'createdAt',
+      'direction',
+      'durationS',
+      'endedAt',
+      'fromE164',
+      'id',
+      'recordingConsent',
+      'recordingEnabled',
+      'recordingUrl',
+      'startedAt',
+      'status',
+      'toE164',
+      'transcript',
+      'transcriptStatus',
+      'twilioCallSid',
+    ])
+    expect(res.body.call.id).toBe('call-9')
+    expect(res.body.call.transcript).toBe('Hello, this is the transcript.')
+    expect(res.body.call.transcriptStatus).toBe('done')
+    expect(res.body.call.durationS).toBe(73)
+  })
+
+  it('signs the stored recording key at request time and returns the presigned URL', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(
+      callRow({ id: 'call-9', recordingUrl: 'recordings/call-9.mp3' }),
+    )
+    presignMock.mockResolvedValue('https://minio.local/maincar2-local/recordings/call-9.mp3?sig=xyz')
+
+    const res = await request(app).get(`${URL_A}/call-9`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    // The stored value is a bare KEY; the route signs it rather than echoing it.
+    expect(presignMock).toHaveBeenCalledTimes(1)
+    expect(presignMock).toHaveBeenCalledWith('recordings/call-9.mp3')
+    expect(res.body.call.recordingUrl).toBe(
+      'https://minio.local/maincar2-local/recordings/call-9.mp3?sig=xyz',
+    )
+    // Never the raw key — that is the whole point of signing.
+    expect(res.body.call.recordingUrl).not.toBe('recordings/call-9.mp3')
+  })
+
+  it('returns a null recordingUrl and signs nothing when there is no recording', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(callRow({ id: 'call-9', recordingUrl: null }))
+
+    const res = await request(app).get(`${URL_A}/call-9`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.call.recordingUrl).toBeNull()
+    expect(presignMock).not.toHaveBeenCalled()
+  })
+
+  it('404s a call id that does not exist', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).get(`${URL_A}/nope`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Call not found')
+    expect(presignMock).not.toHaveBeenCalled()
+  })
+
+  it('404s a call that belongs to another org — never a 403', async () => {
+    // The row exists, but not in this org: the id+orgId where clause finds
+    // nothing, so the caller cannot even learn the call is real.
+    prismaMock.call.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).get(`${URL_A}/call-in-org-b`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Call not found')
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({
+      where: { id: 'call-in-org-b', orgId: ORG_A },
+    })
+  })
+})
+
+// ============================================================
+// GET /:id — org isolation (mandatory — .claude/rules/testing.md)
+// ============================================================
+describe('GET /api/orgs/:orgId/calls/:id — org isolation', () => {
+  it('401s without auth, and reads nothing', async () => {
+    const res = await request(app).get(`${URL_A}/call-9`)
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
+    expect(presignMock).not.toHaveBeenCalled()
+  })
+
+  it('404s for an org the caller does not belong to, before it reads any call', async () => {
+    authAs(null)
+
+    const res = await request(app).get(`/api/orgs/${ORG_B}/calls/call-9`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Organization not found')
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
+  })
+
+  it('404s when the org is disabled, rather than admitting it exists', async () => {
+    authAs(membershipRow({ org: { id: ORG_A, name: 'Org A', enabled: false } }))
+
+    const res = await request(app).get(`${URL_A}/call-9`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
   })
 })
 

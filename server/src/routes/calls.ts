@@ -19,6 +19,7 @@ import { z } from 'zod'
 import prisma from '../db.js'
 import { logger } from '../../dependencies/logger.js'
 import { initiateOutboundCall } from '../../dependencies/twilio.js'
+import { getRecordingDownloadUrl } from '../../dependencies/s3.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
@@ -60,6 +61,33 @@ function mapCallToHistoryApi(call: Call) {
     fromE164: call.fromE164,
     toE164: call.toE164,
     recordingConsent: call.recordingConsent,
+    twilioCallSid: call.twilioCallSid,
+    durationS: call.durationS,
+    startedAt: call.startedAt ? call.startedAt.toISOString() : null,
+    endedAt: call.endedAt ? call.endedAt.toISOString() : null,
+    createdAt: call.createdAt.toISOString(),
+  }
+}
+
+// The single-call detail shape. The whole record a call-detail view shows: every
+// field mapCallToHistoryApi carries, plus the three the history table has no use
+// for — recordingEnabled, the transcript, and its status — and the signed
+// recordingUrl. recordingUrl is NOT the stored column value: the caller passes in
+// a freshly signed link (or null), because the stored value is a bare object key.
+// orgId and userId stay absent, as in the other mappers — the caller is the
+// requester and the org is the path.
+function mapCallToDetailApi(call: Call, recordingUrl: string | null) {
+  return {
+    id: call.id,
+    direction: call.direction,
+    status: call.status,
+    fromE164: call.fromE164,
+    toE164: call.toE164,
+    recordingConsent: call.recordingConsent,
+    recordingEnabled: call.recordingEnabled,
+    recordingUrl,
+    transcriptStatus: call.transcriptStatus,
+    transcript: call.transcript,
     twilioCallSid: call.twilioCallSid,
     durationS: call.durationS,
     startedAt: call.startedAt ? call.startedAt.toISOString() : null,
@@ -230,6 +258,49 @@ router.get(
 
     // --- Return response ---
     res.json({ calls: calls.map(mapCallToHistoryApi), total, page, limit })
+  }),
+)
+
+// ============================================================
+// GET /api/orgs/:orgId/calls/:id — one call, with its transcript
+// ============================================================
+// The full record for a single call — every field, the transcript, and a freshly
+// signed link to the recording. Scoped to the org in the path: a call in another
+// org, or one that does not exist, is answered 404 the same way, so this route
+// never confirms the existence of a row it must not reveal (MAI-28).
+router.get(
+  '/:id',
+  wrapRoute('GET /api/orgs/:orgId/calls/:id', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+
+    // --- Verify ownership ---
+    // Before any row is read: a non-member must not see this org's calls, and must
+    // not learn whether the org exists.
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    // id AND orgId together, never id alone: the tenant key is half the lookup, so
+    // a real id belonging to another org matches nothing and falls to the 404
+    // below. Org isolation lives in the where clause, not in a check bolted on
+    // after the read.
+    const call = await prisma.call.findFirst({ where: { id, orgId } })
+    if (!call) {
+      return void res.status(404).json({ error: 'Call not found' })
+    }
+
+    // --- Sign the recording link ---
+    // The recordingUrl column holds a bare S3 object KEY, not a link a browser can
+    // open. It is signed HERE, at request time, so the URL the client receives is
+    // always inside its one-hour life; a link signed once when the recording
+    // uploaded and then stored would be expired by the time anyone clicked it. No
+    // recording yet → null, not a signed link to nothing.
+    const recordingUrl = call.recordingUrl ? await getRecordingDownloadUrl(call.recordingUrl) : null
+
+    // --- Return response ---
+    res.json({ call: mapCallToDetailApi(call, recordingUrl) })
   }),
 )
 

@@ -416,3 +416,69 @@ describe('call history list (integration, real Postgres)', () => {
     expect(listA.calls.some((c) => c.toE164 === '+13035557002')).toBe(false)
   })
 })
+
+// The detail route's read against real Postgres: that a single call comes back
+// whole — transcript, recording key and all — when read by id within its org, and
+// that the SAME id read from another org finds nothing. The id+orgId where clause
+// is the tenant boundary MAI-28 turns 404 on; here it is proved against the real
+// columns, not a mock. The presigning of the recording key is pure local signing
+// with no Postgres in it, so it is proved in the unit suite (mocked) rather than
+// here.
+describe('single call detail (integration, real Postgres)', () => {
+  let prisma: PrismaClient
+
+  beforeAll(() => {
+    prisma = createTestPrisma()
+  })
+
+  afterAll(async () => {
+    await prisma.$disconnect()
+  })
+
+  it('reads one call whole, transcript and recording key included, by id within the org', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const seeded = await seedCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035556001',
+      status: 'completed',
+    })
+    // seedCall sets neither the transcript nor the recording key; both — the
+    // fields the detail route exists to return — are written here.
+    await prisma.call.update({
+      where: { id: seeded.id },
+      data: {
+        transcript: 'The whole conversation, word for word.',
+        transcriptStatus: 'done',
+        recordingEnabled: true,
+        recordingUrl: 'recordings/call-detail.mp3',
+        durationS: 42,
+      },
+    })
+
+    // The route's read body, verbatim: id AND orgId together.
+    const call = await prisma.call.findFirst({ where: { id: seeded.id, orgId: org.orgId } })
+
+    expect(call).not.toBeNull()
+    expect(call!.transcript).toBe('The whole conversation, word for word.')
+    expect(call!.transcriptStatus).toBe('done')
+    // The stored value is the bare object KEY the route signs at request time.
+    expect(call!.recordingUrl).toBe('recordings/call-detail.mp3')
+    expect(call!.durationS).toBe(42)
+  })
+
+  it('does not read a call that belongs to another org', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+    const seeded = await seedCall(prisma, {
+      orgId: orgB.orgId,
+      userId: orgB.adminUserId,
+      toE164: '+13035556002',
+    })
+
+    // Org A asks for Org B's call id. id alone would find it; id AND orgId must
+    // not — the 404 the route returns lives in this null.
+    const call = await prisma.call.findFirst({ where: { id: seeded.id, orgId: orgA.orgId } })
+    expect(call).toBeNull()
+  })
+})
