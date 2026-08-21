@@ -60,6 +60,7 @@ import {
   PROVISION_NUMBER_RETRY_LIMIT,
   provisionNumberJob,
   queueProvisionNumber,
+  registerProvisionNumberWorker,
   voiceWebhookUrl,
   WebhookBaseUrlMissingError,
 } from '../provisionNumber.js'
@@ -280,5 +281,97 @@ describe('queueProvisionNumber', () => {
       { phoneNumberId: ROW.id },
       expect.objectContaining({ retryLimit: 1 }),
     )
+  })
+})
+
+// ============================================================
+// registerProvisionNumberWorker — the wiring between pg-boss and the handler
+// ============================================================
+// The tests above call `provisionNumberJob` directly and hand it an attempt
+// object by hand. That proves the decision tree, and proves nothing at all about
+// where the real attempt numbers come from.
+//
+// This is the seam that supplies them. Everything that makes a retry safe —
+// "rethrow while budget remains, mark failed once it is spent" — is decided from
+// `attempt.retryCount` and `attempt.retryLimit`, so a handler wired up with the
+// wrong pair, or with the defaults, retries forever or never retries at all.
+// Either one is a money bug on the one job in this codebase that spends money.
+describe('registerProvisionNumberWorker', () => {
+  /** Registers the worker and hands back the callback pg-boss would invoke. */
+  async function registeredHandler() {
+    queue.workJob.mockResolvedValue('worker_1')
+    await registerProvisionNumberWorker()
+    const [, , handler] = queue.workJob.mock.calls[0]!
+    return handler as (job: {
+      data: { phoneNumberId: string }
+      retryCount: number
+      retryLimit: number
+    }) => Promise<void>
+  }
+
+  it('subscribes to the provision-number queue one job at a time', async () => {
+    await registeredHandler()
+
+    expect(queue.workJob).toHaveBeenCalledTimes(1)
+    const [name, options] = queue.workJob.mock.calls[0]!
+    expect(name).toBe('provision-number')
+    // One purchase per job: a partial batch failure would be far harder to
+    // reason about than a queue of singles, and there is nothing to batch.
+    expect(options).toEqual({ batchSize: 1 })
+  })
+
+  it('passes the job payload through to the handler unchanged', async () => {
+    const handler = await registeredHandler()
+
+    await handler({ data: { phoneNumberId: ROW.id }, retryCount: 0, retryLimit: 1 })
+
+    expect(twilio.buyPhoneNumber).toHaveBeenCalledWith({
+      e164: ROW.e164,
+      voiceUrl: `${PUBLIC_BASE_URL}/api/twilio/voice`,
+    })
+  })
+
+  // The first attempt of a real job. The queue says a retry is still available,
+  // so a transient failure has to go back to the queue rather than be written
+  // off — and the row has to stay "searching" for that retry to find.
+  it('hands the queue’s remaining budget to the handler, so a first failure retries', async () => {
+    const handler = await registeredHandler()
+    twilio.buyPhoneNumber.mockRejectedValue(twilioError(503))
+
+    await expect(
+      handler({ data: { phoneNumberId: ROW.id }, retryCount: 0, retryLimit: 1 }),
+    ).rejects.toThrow('twilio said no')
+
+    expect(db.updateMany).not.toHaveBeenCalled()
+  })
+
+  // The same failure on the last attempt pg-boss will make. Read together with
+  // the test above, this is what proves the worker forwards the REAL counters
+  // rather than the defaults: identical input, opposite outcome, and the only
+  // thing that differs is what the job object said.
+  it('hands the queue’s spent budget through, so the last failure settles the row', async () => {
+    const handler = await registeredHandler()
+    twilio.buyPhoneNumber.mockRejectedValue(twilioError(503))
+
+    await expect(
+      handler({ data: { phoneNumberId: ROW.id }, retryCount: 1, retryLimit: 1 }),
+    ).resolves.toBeUndefined()
+
+    expect(db.updateMany).toHaveBeenCalledWith({
+      where: { id: ROW.id, orgId: ROW.orgId, status: 'searching' },
+      data: { status: 'failed' },
+    })
+  })
+
+  // pg-boss retries on a throw. A worker that swallowed the handler's error
+  // would mark every job complete, and a transient Twilio blip would silently
+  // become a number the user paid for the intent of and never received.
+  it('lets the handler’s throw reach pg-boss rather than swallowing it', async () => {
+    const handler = await registeredHandler()
+    twilio.buyPhoneNumber.mockRejectedValue(new Error('ECONNRESET'))
+
+    await expect(
+      handler({ data: { phoneNumberId: ROW.id }, retryCount: 0, retryLimit: 1 }),
+    ).rejects.toThrow('ECONNRESET')
   })
 })
