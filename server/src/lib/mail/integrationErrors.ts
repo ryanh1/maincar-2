@@ -44,6 +44,8 @@ import { logger } from '../../../dependencies/logger.js'
  *                              that is not one of the more specific codes below.
  * - `identity_fetch_failed`  — tokens obtained, but the "which account is this?"
  *                              call failed, so we cannot name the mailbox. Retry.
+ * - `account_mismatch`       — a targeted reconnect authenticated as a different
+ *                              provider identity. Retry with the original mailbox.
  * - `token_unreadable`       — a stored ciphertext would not decrypt (key rotated,
  *                              corruption). The connection must be re-made.
  * - `provider_unreachable`   — the provider's endpoint could not be reached at all
@@ -65,6 +67,7 @@ export const INTEGRATION_ERROR_CODES = [
   'state_invalid',
   'token_exchange_failed',
   'identity_fetch_failed',
+  'account_mismatch',
   'token_unreadable',
   'provider_unreachable',
   'redirect_uri_mismatch',

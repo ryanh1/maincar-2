@@ -1,5 +1,13 @@
 import { useState } from 'react'
-import { Check, CircleAlert, RefreshCw, Settings, TriangleAlert, Unplug } from 'lucide-react'
+import {
+  Check,
+  CircleAlert,
+  FlaskConical,
+  RefreshCw,
+  Settings,
+  TriangleAlert,
+  Unplug,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -15,26 +23,14 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
+import { recoveryFor, useTestIntegration } from '@/hooks/integrations'
+import type { TestConnectionResult } from '@/hooks/integrations'
 import { useDisconnectMailbox, useSetPrimaryMailbox } from '@/hooks/mailboxes'
-import type { Mailbox } from '@/lib/mailboxTypes'
-import type { ConnectionStatus } from '@/lib/integrationTypes'
 import { ApiError } from '@/lib/api'
+import type { ConnectionStatus } from '@/lib/integrationTypes'
+import type { Mailbox } from '@/lib/mailboxTypes'
 import { cn } from '@/lib/utils'
 
-// One mailbox is one send-from address. The rows sit UNDER the provider card header, so
-// the provider logo is never repeated per row — it is already above (SPEC-int-mailboxes.md
-// AC 8, IH-29). "Exactly one is primary" is a property of the SET: the badge sits on the
-// one primary row, and every other row instead offers "Send from this" to move it. The
-// promote and disconnect mutations return the WHOLE list and write it straight to the
-// cache, so the badge never shows two primaries or none between responses.
-
-/**
- * A mailbox row mirrors its parent connection's status, so it can show its own trouble
- * without a second fetch. Status carries a WORD and an ICON, never a colour alone, so the
- * row works for a rep who cannot tell amber from green (rules/design-system.md → Color).
- * The icon is decorative (`aria-hidden`); the word is the accessible signal. Colours read
- * the status tokens, never a Tailwind palette colour.
- */
 const STATUS_STYLE: Record<
   ConnectionStatus,
   { label: string; className: string; Icon: typeof Check }
@@ -47,22 +43,11 @@ const STATUS_STYLE: Record<
 interface RowProps {
   mailbox: Mailbox
   orgId: string
-  /**
-   * The intent to open this mailbox's settings. The DRAWER that opens from it is IH-30;
-   * this row only hands the intent up, so the toolbar's Settings button is wired to a
-   * real deep-link state (`?mailbox=<id>`) rather than a dead control.
-   */
   onOpenSettings: (mailboxId: string) => void
-  /**
-   * Re-run consent for this mailbox's provider. The row hands the intent up because a
-   * consent popup MUST open synchronously inside the click, before any await — logic the
-   * provider card and tab already own (IH-24). Reconnect is shown only when the row needs
-   * it, so its very presence is the signal.
-   */
   onReconnect: (mailbox: Mailbox) => void
 }
 
-/** One send-from address: its name and address, its status, the primary marker, and the toolbar. */
+/** One mailbox owns its status, primary choice, verification, test, settings, and disconnect. */
 export function Settings_Integrations_MailboxRow({
   mailbox,
   orgId,
@@ -70,8 +55,11 @@ export function Settings_Integrations_MailboxRow({
   onReconnect,
 }: RowProps) {
   const setPrimary = useSetPrimaryMailbox()
+  const test = useTestIntegration()
   const status = STATUS_STYLE[mailbox.status]
   const StatusIcon = status.Icon
+  const testResult = test.data?.result ?? null
+  const lastValidatedAt = testResult?.connection?.lastValidatedAt ?? mailbox.lastValidatedAt
 
   function promote(): void {
     setPrimary.mutate(
@@ -81,77 +69,156 @@ export function Settings_Integrations_MailboxRow({
           toast.error(
             error instanceof ApiError
               ? error.message
-              : 'Could not set the sending mailbox. Check your connection and try again.',
+              : 'Could not set the primary mailbox. Check your connection and try again.',
           ),
       },
     )
   }
 
+  function runTest(): void {
+    test.mutate(
+      { orgId, connectionId: mailbox.connectionId },
+      {
+        onError: (error) =>
+          toast.error(
+            error instanceof ApiError
+              ? error.message
+              : 'Could not test the mailbox. Check your connection and try again.',
+          ),
+      },
+    )
+  }
+
+  const repairTooltip =
+    mailbox.status === 'limited'
+      ? `Fix permissions for ${mailbox.emailAddress}`
+      : `Reconnect ${mailbox.emailAddress}`
+
   return (
-    <div className="flex items-center gap-3 rounded-md border border-border bg-card px-3 py-2">
-      {/* Name and address. When the rep has named the mailbox, the name leads and the
-          address is the muted second line; otherwise the address stands alone. */}
-      <div className="min-w-0 flex-1">
-        {mailbox.displayName ? (
-          <>
-            <div className="truncate text-sm font-medium text-foreground">
-              {mailbox.displayName}
-            </div>
-            <div className="truncate text-xs text-muted-foreground">{mailbox.emailAddress}</div>
-          </>
-        ) : (
-          <div className="truncate text-sm text-foreground">{mailbox.emailAddress}</div>
-        )}
+    <article
+      aria-label={`Mailbox ${mailbox.emailAddress}`}
+      className="rounded-md border border-border bg-card px-3 py-2"
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+        <div className="min-w-0 flex-1">
+          {mailbox.displayName ? (
+            <>
+              <div className="truncate text-sm font-medium text-foreground">
+                {mailbox.displayName}
+              </div>
+              <div className="truncate text-xs text-muted-foreground">{mailbox.emailAddress}</div>
+            </>
+          ) : (
+            <div className="truncate text-sm text-foreground">{mailbox.emailAddress}</div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto sm:flex-nowrap">
+          <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
+            <span className={cn('flex items-center gap-1 text-xs font-medium', status.className)}>
+              <StatusIcon size={14} aria-hidden />
+              {status.label}
+            </span>
+            {lastValidatedAt && (
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {verifiedAgo(lastValidatedAt)}
+              </span>
+            )}
+          </div>
+
+          {mailbox.isPrimary ? (
+            <Badge variant="secondary">Primary</Badge>
+          ) : (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={setPrimary.isPending}
+              onClick={promote}
+            >
+              {setPrimary.isPending ? 'Setting…' : 'Make primary'}
+            </Button>
+          )}
+
+          <div className="flex shrink-0 items-center gap-1">
+            <IconButton
+              tooltip={`Open settings for ${mailbox.emailAddress}`}
+              onClick={() => onOpenSettings(mailbox.id)}
+            >
+              <Settings size={16} aria-hidden />
+            </IconButton>
+            <IconButton
+              tooltip={`Test ${mailbox.emailAddress}`}
+              disabled={test.isPending}
+              onClick={runTest}
+            >
+              <FlaskConical size={16} aria-hidden />
+            </IconButton>
+            {mailbox.status !== 'connected' && (
+              <IconButton tooltip={repairTooltip} onClick={() => onReconnect(mailbox)}>
+                <RefreshCw size={16} aria-hidden />
+              </IconButton>
+            )}
+            <DisconnectButton mailbox={mailbox} orgId={orgId} />
+          </div>
+        </div>
       </div>
 
-      {/* Status word + icon, coloured from the status token. */}
-      <span
-        className={cn('flex shrink-0 items-center gap-1 text-xs font-medium', status.className)}
-      >
-        <StatusIcon size={14} aria-hidden />
-        {status.label}
-      </span>
-
-      {/* The primary marker is a property of the SET: the one primary row shows the badge,
-          every other row offers to move it here. */}
-      {mailbox.isPrimary ? (
-        <Badge variant="secondary" className="shrink-0">
-          Primary
-        </Badge>
-      ) : (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={setPrimary.isPending}
-          onClick={promote}
-          className="shrink-0"
-        >
-          {setPrimary.isPending ? 'Setting…' : 'Send from this'}
-        </Button>
+      {mailbox.status !== 'connected' && mailbox.statusDetail && (
+        <p className="mt-2 text-sm text-muted-foreground">{mailbox.statusDetail}</p>
       )}
+      {mailbox.status !== 'connected' && <RecoveryBlock mailbox={mailbox} />}
+      {testResult && <MailboxTestResult result={testResult} />}
+    </article>
+  )
+}
 
-      {/* The management toolbar: icon buttons with tooltips, right-aligned. Reconnect is
-          present ONLY when this mailbox needs it, so its presence is itself the signal. */}
-      <div className="flex shrink-0 items-center gap-0.5">
-        <IconButton tooltip="Mailbox settings" onClick={() => onOpenSettings(mailbox.id)}>
-          <Settings size={16} aria-hidden />
-        </IconButton>
-        {mailbox.status === 'error' && (
-          <IconButton tooltip="Reconnect" onClick={() => onReconnect(mailbox)}>
-            <RefreshCw size={16} aria-hidden />
-          </IconButton>
-        )}
-        <DisconnectButton mailbox={mailbox} orgId={orgId} />
-      </div>
+function RecoveryBlock({ mailbox }: { mailbox: Mailbox }) {
+  const recovery = recoveryFor(mailbox.errorCode)
+  return (
+    <div className="mt-2 rounded-md border border-border bg-muted/60 p-3">
+      <p className="text-sm font-medium text-foreground">{recovery.title}</p>
+      <ul className="mt-1 space-y-1">
+        {recovery.fixes.map((fix) => (
+          <li key={fix} className="text-sm text-muted-foreground">
+            {fix}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
 
-/**
- * Disconnect: a NEUTRAL icon that takes a destructive tint on hover only — never a filled
- * destructive button. The `AlertDialog` is the real guard, and it names the address and the
- * loss, because the glyph gives no warning (SPEC-int-mailboxes.md AC 9).
- */
+/** A per-capability verdict rendered inside only the mailbox that was tested. */
+function MailboxTestResult({ result }: { result: TestConnectionResult }) {
+  return (
+    <div className="mt-2 rounded-md border border-border bg-muted/60 p-3" role="status">
+      <p className="text-sm font-medium text-foreground">Test result</p>
+      <ul className="mt-1 space-y-1">
+        {result.capabilities.map((capability) => (
+          <li
+            key={capability.capability}
+            className="flex items-start gap-1.5 text-sm text-muted-foreground"
+          >
+            {capability.ok ? (
+              <Check size={16} aria-hidden className="mt-0.5 shrink-0 text-status-success" />
+            ) : (
+              <TriangleAlert
+                size={16}
+                aria-hidden
+                className="mt-0.5 shrink-0 text-status-attention"
+              />
+            )}
+            <span>
+              {capability.label}
+              {!capability.ok && capability.reason ? ` — ${capability.reason}` : ''}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function DisconnectButton({ mailbox, orgId }: { mailbox: Mailbox; orgId: string }) {
   const disconnect = useDisconnectMailbox()
   const [open, setOpen] = useState(false)
@@ -162,7 +229,7 @@ function DisconnectButton({ mailbox, orgId }: { mailbox: Mailbox; orgId: string 
       {
         onSuccess: () => {
           setOpen(false)
-          toast.success(`Maincar can no longer send from ${mailbox.emailAddress}.`)
+          toast.success(`Disconnected ${mailbox.emailAddress}.`)
         },
         onError: (error) =>
           toast.error(
@@ -177,7 +244,7 @@ function DisconnectButton({ mailbox, orgId }: { mailbox: Mailbox; orgId: string 
   return (
     <>
       <IconButton
-        tooltip="Disconnect"
+        tooltip={`Disconnect ${mailbox.emailAddress}`}
         className="hover:text-destructive"
         onClick={() => setOpen(true)}
       >
@@ -188,7 +255,7 @@ function DisconnectButton({ mailbox, orgId }: { mailbox: Mailbox; orgId: string 
           <AlertDialogHeader>
             <AlertDialogTitle>Disconnect {mailbox.emailAddress}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Maincar can no longer send from this address.
+              Maincar can no longer read or send from this address.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -197,8 +264,6 @@ function DisconnectButton({ mailbox, orgId }: { mailbox: Mailbox; orgId: string 
               variant="destructive"
               disabled={disconnect.isPending}
               onClick={(event) => {
-                // Hold the dialog open until the server answers, so a refused disconnect
-                // reports its reason instead of vanishing.
                 event.preventDefault()
                 confirm()
               }}
@@ -219,10 +284,6 @@ interface ListProps {
   onReconnect: (mailbox: Mailbox) => void
 }
 
-/**
- * The mailbox list under a provider card header. An empty list renders an INVITATION to
- * act, not an explanation of emptiness (rules/copy.md) — never a bare empty list.
- */
 export function Settings_Integrations_MailboxList({
   mailboxes,
   orgId,
@@ -250,4 +311,15 @@ export function Settings_Integrations_MailboxList({
       ))}
     </div>
   )
+}
+
+/** Relative verification age. This is not a clock time and needs no timezone label. */
+function verifiedAgo(iso: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+  if (seconds < 60) return 'Verified just now'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `Verified ${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `Verified ${hours}h ago`
+  return `Verified ${Math.round(hours / 24)}d ago`
 }

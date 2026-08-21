@@ -418,9 +418,10 @@ type SaveConnectionDb = Pick<PrismaClient, 'oAuthConnection' | '$transaction'>
 /**
  * Store a completed consent and upsert its mailbox, returning the token-free row.
  *
- * The write is an upsert on the natural key `(orgId, userId, provider)` — which
- * carries the tenant boundary — so a re-consent UPDATES the one row rather than
- * leaving a second behind (AC 8), on both the connect and the fix path. The status,
+ * The write is an upsert on the natural key
+ * `(orgId, userId, provider, providerAccountId)` — which carries the tenant boundary
+ * and the provider's stable identity — so a re-consent UPDATES that account while a
+ * second account from the same provider gets its own row. The status,
  * errorCode, statusDetail and the GRANTED scopes are all written every time, so a
  * later success cannot leave a stale `partial_access` from an earlier attempt, and a
  * repair that fully succeeds clears the amber it was repairing (AC 5, the same-shape
@@ -455,7 +456,9 @@ export async function saveConnection(
   }
 
   const row = await db.oAuthConnection.upsert({
-    where: { orgId_userId_provider: { orgId, userId, provider } },
+    where: {
+      orgId_userId_provider_providerAccountId: { orgId, userId, provider, providerAccountId },
+    },
     create: { orgId, userId, provider, ...writable },
     update: writable,
   })

@@ -11,12 +11,12 @@
 // name is rejected with its own named message; and no response body ever carries a
 // token. The ATOMIC flag move and its concurrency guarantee live in mailAccounts.ts
 // and are proven against real Postgres (mailAccounts.integration.test.ts,
-// mailboxes.integration.test.ts) — here setPrimaryMailbox/deleteMailbox are stubbed so
-// the unit suite never touches the database.
+// mailboxes.integration.test.ts) — here setPrimaryMailbox/disconnectConnection are
+// stubbed so the unit suite never touches the database.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
-const { prismaMock, verifyTokenMock, setPrimaryMailboxMock, deleteMailboxMock } = vi.hoisted(() => ({
+const { prismaMock, verifyTokenMock, setPrimaryMailboxMock, disconnectConnectionMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
@@ -31,11 +31,11 @@ const { prismaMock, verifyTokenMock, setPrimaryMailboxMock, deleteMailboxMock } 
     },
   },
   verifyTokenMock: vi.fn(),
-  // The atomic clear-and-set and the delete-and-promote are stubbed: this suite tests
+  // The atomic clear-and-set and the grant-delete-and-promote are stubbed: this suite tests
   // the route (auth, scoping, 404 mapping, response), not the transaction, which is
   // proven against real Postgres.
   setPrimaryMailboxMock: vi.fn(),
-  deleteMailboxMock: vi.fn(),
+  disconnectConnectionMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
@@ -46,7 +46,11 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
 }))
 vi.mock('../../lib/mail/mailAccounts.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/mail/mailAccounts.js')>()
-  return { ...actual, setPrimaryMailbox: setPrimaryMailboxMock, deleteMailbox: deleteMailboxMock }
+  return { ...actual, setPrimaryMailbox: setPrimaryMailboxMock }
+})
+vi.mock('../../lib/mail/oauthConnections.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/mail/oauthConnections.js')>()
+  return { ...actual, disconnectConnection: disconnectConnectionMock }
 })
 
 import { DISPLAY_NAME_TOO_LONG } from '../mailboxes.js'
@@ -102,7 +106,12 @@ function boxRow(overrides: Record<string, unknown> = {}) {
     isPrimary: true,
     connectionId: 'conn-1',
     createdAt: NOW,
-    connection: { status: 'connected', statusDetail: null },
+    connection: {
+      status: 'connected',
+      statusDetail: null,
+      errorCode: null,
+      lastValidatedAt: NOW,
+    },
     // Not in the select in production; here to prove serializeMailbox never leaks it.
     refreshToken: SECRET,
     ...overrides,
@@ -154,6 +163,8 @@ describe('GET /api/mailboxes/orgs/:orgId', () => {
       isPrimary: true,
       status: 'connected', // mirrors the parent connection
       statusDetail: '',
+      errorCode: null,
+      lastValidatedAt: NOW.toISOString(),
       connectionId: 'conn-1',
     })
     expect(box.connectedAt).toBe(NOW.toISOString())
@@ -293,26 +304,26 @@ describe('POST /api/mailboxes/orgs/:orgId/:mailboxId/primary', () => {
 // DELETE — disconnect
 // ============================================================
 describe('DELETE /api/mailboxes/orgs/:orgId/:mailboxId', () => {
-  it('deletes the mailbox and returns the remaining list', async () => {
-    deleteMailboxMock.mockResolvedValue([{ id: 'box-2' }]) // truthy = removed
+  it('deletes the mailbox grant and returns the remaining list', async () => {
+    prismaMock.mailAccount.findFirst.mockResolvedValue(boxRow())
+    disconnectConnectionMock.mockResolvedValue({ provider: 'google' })
     prismaMock.mailAccount.findMany.mockResolvedValue([boxRow({ id: 'box-2', isPrimary: true })])
 
     const res = await request(app).delete(`${URL_A}/box-1`).set('Authorization', AUTH)
 
     expect(res.status).toBe(200)
-    expect(deleteMailboxMock).toHaveBeenCalledWith('box-1', ORG_A, 'user-a')
+    expect(disconnectConnectionMock).toHaveBeenCalledWith('conn-1', ORG_A, 'user-a')
     expect(res.body.mailboxes).toHaveLength(1)
     // Never a bare-id delete.
     expect(prismaMock.mailAccount.delete).not.toHaveBeenCalled()
   })
 
-  it('404s a mailbox id that is not this rep’s — deleteMailbox returns null', async () => {
-    deleteMailboxMock.mockResolvedValue(null)
-
+  it('404s a mailbox id that is not this rep’s before deleting a grant', async () => {
     const res = await request(app).delete(`${URL_A}/box-foreign`).set('Authorization', AUTH)
 
     expect(res.status).toBe(404)
     expect(res.body).toEqual({ error: 'Mailbox not found' })
+    expect(disconnectConnectionMock).not.toHaveBeenCalled()
   })
 
   it('answers 404 for a non-member without deleting anything', async () => {
@@ -321,6 +332,6 @@ describe('DELETE /api/mailboxes/orgs/:orgId/:mailboxId', () => {
     const res = await request(app).delete(`${URL_A}/box-1`).set('Authorization', AUTH)
 
     expect(res.status).toBe(404)
-    expect(deleteMailboxMock).not.toHaveBeenCalled()
+    expect(disconnectConnectionMock).not.toHaveBeenCalled()
   })
 })

@@ -8,8 +8,8 @@
 // authorize URL carries the signed state and the requested scopes and never
 // redirects; an unknown provider is 404 via isProvider(); a `fix` asks for only the
 // missing scope and sets login_hint; another rep's connectionId is 404; the list
-// returns one card per provider with one connection null; and no response body ever
-// carries a token or an authorization code.
+// groups every connection under its provider; and no response body ever carries a
+// token or an authorization code.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
@@ -92,7 +92,7 @@ import { microsoftOAuth } from '../../../dependencies/microsoftOAuth.js'
 import { OAuthProviderError } from '../../../dependencies/oauthTypes.js'
 import { WEB_ORIGIN } from '../../config.js'
 import { TokenRevokedError } from '../../lib/mail/oauthConnections.js'
-import { signState } from '../../lib/oauthState.js'
+import { signState, verifyState } from '../../lib/oauthState.js'
 
 import app from '../../app.js'
 
@@ -247,6 +247,31 @@ describe('POST /api/integrations/orgs/:orgId/:provider/authorize', () => {
     )
   })
 
+  it('targets an existing connection when reconnecting it with the full scope set', async () => {
+    prismaMock.oAuthConnection.findFirst.mockResolvedValue({
+      id: 'conn-google',
+      emailAddress: 'rep@acme.com',
+      scopes: [G_READ],
+    })
+
+    const res = await request(app)
+      .post(`${URL_A}/google/authorize`)
+      .set('Authorization', AUTH)
+      .send({ mode: 'connect', connectionId: 'conn-google' })
+
+    expect(res.status).toBe(200)
+    const url = new URL(res.body.url as string)
+    expect(url.searchParams.get('login_hint')).toBe('rep@acme.com')
+    for (const scope of [G_READ, G_SEND, G_CAL, G_ID]) {
+      expect(url.searchParams.get('scope')).toContain(scope)
+    }
+    const verified = verifyState(url.searchParams.get('state') ?? '')
+    expect(verified).toMatchObject({
+      ok: true,
+      payload: { connectionId: 'conn-google', mode: 'connect' },
+    })
+  })
+
   it("404s a fix for another rep's connectionId (the scoped lookup finds nothing)", async () => {
     prismaMock.oAuthConnection.findFirst.mockResolvedValue(null)
 
@@ -313,8 +338,15 @@ describe('POST /api/integrations/orgs/:orgId/:provider/authorize', () => {
 // GET list
 // ============================================================
 describe('GET /api/integrations/orgs/:orgId', () => {
-  it('returns one card per provider, with a connection null where nothing is connected', async () => {
-    prismaMock.oAuthConnection.findMany.mockResolvedValue([connectionRow()])
+  it('returns one card per provider with every connection grouped under its provider', async () => {
+    prismaMock.oAuthConnection.findMany.mockResolvedValue([
+      connectionRow(),
+      connectionRow({
+        id: 'conn-google-2',
+        providerAccountId: 'sub-456',
+        emailAddress: 'second@acme.com',
+      }),
+    ])
 
     const res = await request(app).get(URL_A).set('Authorization', AUTH)
 
@@ -328,10 +360,15 @@ describe('GET /api/integrations/orgs/:orgId', () => {
     expect(google.providerShortName).toBe('Google')
     expect(google.requiredPermissions).toContain('Send email as you')
     expect(google.connection.emailAddress).toBe('rep@acme.com')
+    expect(google.connections.map((connection: { emailAddress: string }) => connection.emailAddress)).toEqual([
+      'rep@acme.com',
+      'second@acme.com',
+    ])
 
     expect(microsoft.providerLabel).toBe('Microsoft 365')
     expect(microsoft.providerShortName).toBe('Microsoft')
     expect(microsoft.connection).toBeNull()
+    expect(microsoft.connections).toEqual([])
   })
 
   it('scopes the connection query to this rep in the path org', async () => {
@@ -356,6 +393,8 @@ describe('GET /api/integrations/orgs/:orgId', () => {
     const google = res.body.integrations.find((c: { provider: string }) => c.provider === 'google')
     expect(Object.keys(google.connection)).not.toContain('refreshToken')
     expect(Object.keys(google.connection)).not.toContain('accessToken')
+    expect(Object.keys(google.connections[0])).not.toContain('refreshToken')
+    expect(Object.keys(google.connections[0])).not.toContain('accessToken')
   })
 
   it('401s an unauthenticated caller', async () => {
@@ -881,6 +920,31 @@ describe('GET /api/integrations/:provider/callback', () => {
     await request(app).get(CB('google')).query({ code: 'the-code', state: state({ orgId: 'org-b', userId: 'user-b' }) })
 
     expect(saveConnectionMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org-b', userId: 'user-b' }))
+  })
+
+  it('rejects a targeted reconnect that signs in to a different provider account', async () => {
+    vi.spyOn(googleOAuth, 'exchangeCode').mockResolvedValue(grant())
+    vi.spyOn(googleOAuth, 'fetchIdentity').mockResolvedValue({
+      providerAccountId: 'sub-other',
+      emailAddress: 'other@acme.com',
+    })
+    prismaMock.oAuthConnection.findFirst.mockResolvedValue({ providerAccountId: 'sub-1' })
+
+    const res = await request(app)
+      .get(CB('google'))
+      .query({ code: 'the-code', state: state({ mode: 'connect', connectionId: 'conn-google' }) })
+
+    expect(postedMessage(res.text)).toMatchObject({
+      status: 'error',
+      errorCode: 'account_mismatch',
+      ok: false,
+    })
+    expect(markConnectionErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: 'conn-google' }),
+      'account_mismatch',
+      expect.any(String),
+    )
+    expect(saveConnectionMock).not.toHaveBeenCalled()
   })
 
   it('stamps the repaired row on a FAILED fix so it cannot keep reading as before', async () => {

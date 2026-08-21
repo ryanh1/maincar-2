@@ -9,8 +9,8 @@ import type { GetIntegrationsResponse } from '@/lib/integrationTypes'
  *
  * The client never owns the provider list, the labels, or the permission copy — the
  * server sends `integrations` with one entry per provider, each carrying its own
- * `providerLabel`, `requiredPermissions`, and `connection` (`null` when nothing is
- * connected). The card reads that array straight through.
+ * `providerLabel`, `requiredPermissions`, and every provider-scoped connection.
+ * The card reads that array straight through.
  */
 export function useGetIntegrations(orgId: string | null | undefined) {
   return useQuery({

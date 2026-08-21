@@ -32,10 +32,12 @@ click asks for **only** that one.
 6. **Google without a refresh token is `error` / `missing_refresh_token`**, never
    `connected`. A grant that cannot outlive its first hour is not a connection.
 7. `mode: 'fix'` requests **only the missing scopes** (Google incremental
-   authorization) with `login_hint` set to the existing address, so the rep is not
-   made to re-approve what they already allowed.
-8. Re-consent for an address that already has a row **updates that row**. It never
-   leaves a second one behind, on any path.
+   authorization). A targeted `mode: 'connect'` requests the full scope set. Both
+   carry the existing connection id and set `login_hint` to that mailbox.
+8. Re-consent for a stable provider identity **updates that row**. A different
+   identity from the same provider creates a second connection. A targeted
+   reconnect that authenticates as a different identity fails with
+   `account_mismatch` rather than reassigning the mailbox.
 9. Completing consent upserts exactly one `MailAccount` per address, and this
    happens inside `saveConnection` so no route can forget it. The first mailbox a
    rep connects becomes `isPrimary`.
@@ -103,9 +105,10 @@ GET  /api/integrations/:provider/callback?code&state    ← UNAUTHENTICATED
 ```
 
 `IntegrationCard` is `{ provider, providerLabel, requiredPermissions: string[],
-connection: SerializedConnection | null }`. A provider with nothing connected has
-`connection: null` and the card renders "Not connected" without the client owning
-the provider list.
+connections: SerializedConnection[], connection: SerializedConnection | null }`.
+`connections` contains every account for that provider, oldest first. The singular
+`connection` remains the oldest row for backward compatibility. A provider with
+nothing connected has an empty array and `connection: null`.
 
 ## Scopes requested
 
@@ -159,12 +162,16 @@ Provider HTTP is mocked at `server/src/dependencies/`. No test reaches Google.
 - A `state` older than 10 minutes fails with `state_invalid`.
 - `mode: 'fix'` on a connection missing one scope requests exactly that one scope,
   and sets `login_hint`.
+- A targeted `mode: 'connect'` requests every scope, carries the connection id,
+  and sets `login_hint`.
 - A callback granting every scope writes `connected` with `errorCode` null.
 - A callback granting two of three writes `limited` / `partial_access`, and
   `statusDetail` names the missing capability in plain words.
 - **Google returning no refresh token writes `error` / `missing_refresh_token`.**
 - A second consent for the same address updates the row; `oAuthConnection.count()`
   stays at 1 and `mailAccount.count()` stays at 1.
+- Two stable identities from the same provider create two connections; a targeted
+  reconnect signed in as another identity fails with `account_mismatch`.
 - The first mailbox connected is `isPrimary`; the second is not.
 - A Microsoft `AADSTS65001` response maps to `admin_approval_required`.
 - An unmapped provider error maps to `unknown` and is logged.

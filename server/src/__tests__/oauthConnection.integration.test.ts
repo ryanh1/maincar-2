@@ -8,7 +8,7 @@
 // one-to-one binding between a grant and its mailbox, and the three cascades
 // that stop a deleted org, user, or grant leaving orphans behind.
 // Run it with `npm run test:integration`, with Docker up.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest'
 
 import { disconnectConnection } from '../lib/mail/oauthConnections.js'
 import type { PrismaClient } from '../generated/prisma/client.js'
@@ -51,7 +51,7 @@ describe('OAuthConnection + MailAccount (integration, real Postgres)', () => {
     expect(conn.updatedAt).toBeInstanceOf(Date)
   })
 
-  it('allows only one grant per (org, user, provider)', async () => {
+  it('allows multiple grants per provider but only one per provider identity', async () => {
     const org = await seedOrgWithAdmin(prisma)
     const data = {
       orgId: org.orgId,
@@ -63,9 +63,14 @@ describe('OAuthConnection + MailAccount (integration, real Postgres)', () => {
     }
     await prisma.oAuthConnection.create({ data })
 
+    const secondGoogle = await prisma.oAuthConnection.create({
+      data: { ...data, providerAccountId: 'sub_b', emailAddress: 'other@example.com' },
+    })
+    expect(secondGoogle.provider).toBe('google')
+
     await expect(
       prisma.oAuthConnection.create({
-        data: { ...data, providerAccountId: 'sub_b', emailAddress: 'other@example.com' },
+        data: { ...data, emailAddress: 'renamed@example.com' },
       }),
     ).rejects.toThrow()
 
@@ -162,9 +167,10 @@ describe('OAuthConnection + MailAccount (integration, real Postgres)', () => {
   })
 
   it('has the indexes the schema declares', async () => {
+    const testSchema = inject('testSchema')
     const rows = await prisma.$queryRaw<Array<{ indexname: string; indexdef: string }>>`
       SELECT indexname, indexdef FROM pg_indexes
-      WHERE tablename IN ('OAuthConnection', 'MailAccount') AND schemaname = current_schema()
+      WHERE tablename IN ('OAuthConnection', 'MailAccount') AND schemaname = ${testSchema}
     `
     // Look each index up by name, then prove its column list — Postgres leaves
     // non-reserved identifiers like `provider` unquoted, so quotes are optional.
@@ -175,8 +181,10 @@ describe('OAuthConnection + MailAccount (integration, real Postgres)', () => {
       return def!.replace(/"/g, '')
     }
 
-    expect(columns('OAuthConnection_orgId_userId_provider_key')).toContain('(orgId, userId, provider)')
-    expect(columns('OAuthConnection_orgId_userId_provider_key')).toMatch(/UNIQUE/)
+    expect(columns('OAuthConnection_orgId_userId_provider_providerAccountId_key')).toContain(
+      '(orgId, userId, provider, providerAccountId)',
+    )
+    expect(columns('OAuthConnection_orgId_userId_provider_providerAccountId_key')).toMatch(/UNIQUE/)
     expect(columns('OAuthConnection_orgId_userId_idx')).toContain('(orgId, userId)')
     expect(columns('MailAccount_connectionId_key')).toContain('(connectionId)')
     expect(columns('MailAccount_connectionId_key')).toMatch(/UNIQUE/)

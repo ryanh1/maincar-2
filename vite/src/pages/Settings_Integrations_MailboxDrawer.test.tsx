@@ -32,6 +32,8 @@ const primaryMailbox: Mailbox = {
   isPrimary: true,
   status: 'connected',
   statusDetail: '',
+  errorCode: null,
+  lastValidatedAt: null,
   connectionId: 'conn-1',
   connectedAt: '2026-06-24T22:00:00Z',
 }
@@ -45,6 +47,8 @@ const secondMailbox: Mailbox = {
   isPrimary: false,
   status: 'connected',
   statusDetail: '',
+  errorCode: null,
+  lastValidatedAt: null,
   connectionId: 'conn-1',
   connectedAt: '2026-06-24T23:00:00Z',
 }
@@ -144,12 +148,12 @@ describe('Settings_Integrations_MailboxDrawer', () => {
   it('shows the Primary badge for the primary mailbox, and no promote button', () => {
     renderDrawer(['/settings?mailbox=mailbox-1'])
     expect(screen.getByText('Primary')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Send from this/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Make primary/i })).not.toBeInTheDocument()
   })
 
-  it('offers "Send from this" on a non-primary mailbox, and promotes on click', () => {
+  it('offers "Make primary" on a non-primary mailbox, and promotes on click', () => {
     renderDrawer(['/settings?mailbox=mailbox-2'])
-    fireEvent.click(screen.getByRole('button', { name: /Send from this/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Make primary/i }))
     expect(mockSetPrimary).toHaveBeenCalledWith(
       { orgId: mockOrgId, mailboxId: 'mailbox-2' },
       expect.any(Object),
@@ -167,9 +171,12 @@ describe('Settings_Integrations_MailboxDrawer', () => {
     it('opens a confirm dialog naming the address', () => {
       renderDrawer(['/settings?mailbox=mailbox-1'])
       fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
-      expect(
-        screen.getByRole('heading', { name: 'Disconnect user@gmail.com?' }),
-      ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Disconnect user@gmail.com?' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Maincar can no longer read or send from this address.'),
+    ).toBeInTheDocument()
     })
 
     it('does not disconnect until confirmed', () => {

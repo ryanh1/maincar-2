@@ -41,6 +41,7 @@ export const INTEGRATION_ERROR_CODES = [
   'state_invalid',
   'token_exchange_failed',
   'identity_fetch_failed',
+  'account_mismatch',
   'token_unreadable',
   'provider_unreachable',
   'redirect_uri_mismatch',
@@ -88,6 +89,12 @@ export interface IntegrationCard {
   providerShortName: string
   /** The plain-words permissions Maincar asks for, shown on the card. */
   requiredPermissions: string[]
+  /** Every token-free connection for this provider, oldest first. */
+  connections: IntegrationConnection[]
+  /**
+   * Compatibility field for clients released before multiple connections. New code
+   * reads `connections`; this remains the oldest connection or null.
+   */
   connection: IntegrationConnection | null
 }
 
@@ -211,6 +218,10 @@ export const ERROR_CODE_RECOVERY: Record<IntegrationErrorCode, ErrorCodeRecovery
     title: 'Try connecting again',
     fixes: ['Click Reconnect to try again.', 'If it keeps failing, contact support.'],
   },
+  account_mismatch: {
+    title: 'Reconnect the same mailbox',
+    fixes: ['Click Reconnect and sign in to the mailbox shown on this row.'],
+  },
   token_unreadable: {
     title: 'Reconnect to restore access',
     fixes: ['Click Reconnect to grant access again.'],
@@ -281,8 +292,8 @@ export function preConnectNotesFor(provider: Provider): string[] {
 
 /** What the connection is for, per provider — shown under the title on every card. */
 export const CARD_SUBTITLE: Record<Provider, string> = {
-  google: 'Read and send from Gmail mailboxes.',
-  microsoft: 'Read and send from Outlook mailboxes.',
+  google: 'Read and send from Google Workspace',
+  microsoft: 'Read and send from Microsoft 365',
 }
 
 // --- The OAuth popup message -------------------------------------------------

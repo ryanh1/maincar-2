@@ -10,7 +10,7 @@
  * `Provider` is imported from integrationTypes rather than re-declared, so the two
  * views of "which providers Maincar integrates" cannot drift.
  */
-import type { ConnectionStatus, Provider } from '@/lib/integrationTypes'
+import type { ConnectionStatus, IntegrationErrorCode, Provider } from '@/lib/integrationTypes'
 
 /**
  * One send-from address. Mirrors the server `Mailbox`, with `connectedAt` an ISO string
@@ -27,6 +27,8 @@ export interface Mailbox {
   /** Mirrors the parent connection, so a row can show its own trouble. */
   status: ConnectionStatus
   statusDetail: string
+  errorCode: IntegrationErrorCode | null
+  lastValidatedAt: string | null
   connectionId: string
   connectedAt: string
 }

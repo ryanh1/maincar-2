@@ -524,8 +524,10 @@ model OAuthConnection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // One grant per provider per rep. Reconnecting updates rather than duplicates.
-  @@unique([orgId, userId, provider])
+  // One grant per provider identity per rep. A rep may connect multiple Google or
+  // Microsoft accounts; reconnecting the same stable provider identity updates its
+  // row instead of creating a duplicate.
+  @@unique([orgId, userId, provider, providerAccountId])
   @@index([orgId, userId])
 }
 

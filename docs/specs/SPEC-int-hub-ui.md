@@ -5,8 +5,8 @@
 
 ## Objective
 
-A rep sees one card per provider whose colour tells the truth. **Green only when
-every permission is there.**
+A rep sees one card per provider and one sub-card per connected mailbox. Each
+mailbox owns its status and actions. **Green only when every permission is there.**
 
 **Success looks like:** a rep who granted reading but refused sending sees an amber
 card that says which one is missing and a button that asks for only that one.
@@ -18,39 +18,41 @@ card that says which one is missing and a button that asks for only that one.
    already are.
 2. One card per provider, driven entirely by the server's `integrations` array.
    The client does not own the provider list, the labels, or the permission copy.
-3. Status is exactly three words and never colour alone — the icon and the word
-   carry it too:
+3. Provider cards carry provider identity and connection creation only. They do
+   not show a provider-level account, Connected state, verification time, Test, or
+   Disconnect. Those all belong to the mailbox sub-card.
+4. Mailbox status is never colour alone — the icon and the word carry it too:
    - **Connected** (green, check) — every permission granted
    - **Limited — missing permission** (amber, triangle) — a permission is missing
    - **Reconnect needed** (red, alert) — the grant is revoked or unreadable
-4. A connected card shows the address and **"Verified 2m ago"** from
+5. A connected mailbox sub-card shows the address and **"Verified 2m ago"** from
    `lastValidatedAt`. With no `lastValidatedAt`, it shows no timestamp rather than
    a fake one.
-5. Any card that is not fully healthy renders a **recovery block**: a title and
+6. Any mailbox that is not fully healthy renders a **recovery block**: a title and
    concrete steps, keyed from `errorCode` through `ERROR_CODE_RECOVERY`. An
    unknown code falls back to the `unknown` entry and still renders a block.
    **No error line ships without a next action.**
-6. A not-connected card carries a collapsed **"Before you connect"** disclosure
+7. A not-connected provider card carries a collapsed **"Before you connect"** disclosure
    naming the two failures that look like bugs when they hit a rep cold: Google's
    unverified-app warning, and Microsoft's admin approval requirement.
-7. Consent runs in a **popup**, so the rep does not lose the page. The window is
+8. Consent runs in a **popup**, so the rep does not lose the page. The window is
    opened **synchronously inside the click** and its URL set after the server
    answers — opening it after an `await` is what pop-up blockers exist to stop.
-8. The page listens for the popup's `postMessage` and **also** polls for the window
+9. The page listens for the popup's `postMessage` and **also** polls for the window
    being closed by hand, so a spinner can never outlive the attempt.
-9. A `message` event is trusted only from the app's own origin.
-10. **One primary action per card.** Not connected → **Connect**. Limited → **Fix
-    permissions**. Error → **Reconnect**. Connected → **Test**. Everything else on
-    the card is secondary.
-11. Disconnect sits behind an `AlertDialog` naming the address, and says what stops
+10. A `message` event is trusted only from the app's own origin.
+11. A provider with no account shows **Connect**; one with accounts shows
+    **Connect another**. Each mailbox sub-card has compact **Settings**, **Test**,
+    optional **Fix permissions/Reconnect**, and **Disconnect** icon actions.
+12. Disconnect sits behind an `AlertDialog` naming the address, and says what stops
     working.
-12. A Test result renders per capability, so a rep sees which permission failed and
-    why — never a bare "Test failed".
-13. Loading renders a skeleton, not a spinner on an empty page. An error renders the
+13. A Test result renders inside the tested mailbox sub-card, per capability, so a
+    rep sees which permission failed and why — never a bare "Test failed".
+14. Loading renders a skeleton, not a spinner on an empty page. An error renders the
     server's message with a retry.
-14. Every string obeys [rules/copy.md](../../.claude/rules/copy.md): one sentence,
+15. Every string obeys [rules/copy.md](../../.claude/rules/copy.md): one sentence,
     says what to do, "organization" never "workspace".
-15. Walked in a browser in **both themes** before this is called done.
+16. Walked in a browser in **both themes** before this is called done.
 
 ## Tech stack
 
@@ -96,12 +98,13 @@ Naming follows the house `Parent_Child.tsx` convention already used by
 | Tab | `Integrations` |
 | Intro | `Connect the account you send email from.` |
 | Not connected | `Not connected` |
-| Empty-card body | `Connect to send email as you and to see meetings on your records.` |
+| Google description | `Read and send from Google Workspace` |
+| Microsoft description | `Read and send from Microsoft 365` |
 | Disclosure | `Before you connect` |
 | Google note | `Google warns that this app is not verified. Choose Advanced, then continue.` |
 | Google note | `If you see "Access blocked", your Google Workspace admin must allow Maincar first.` |
 | Microsoft note | `If you see "Need admin approval", your Microsoft 365 admin must approve Maincar first.` |
-| Disconnect dialog | `Disconnect {provider}?` / `Maincar stops reading {address}. Connect it again any time.` |
+| Disconnect dialog | `Disconnect {address}?` / `Maincar can no longer read or send from this address.` |
 | Popup blocked | `Allow pop-ups for this site, then click Connect again.` |
 
 One sentence each. No second line under a heading that repeats it.
@@ -141,14 +144,16 @@ const STATUS_STYLE = {
 The API is mocked at `jsonFetch`. Component tests sit beside the component
 ([rules/testing.md](../../.claude/rules/testing.md)).
 
-- A provider with `connection: null` renders "Not connected" and one **Connect**.
-- A `connected` connection renders green, the address, and "Verified …".
-- **A `limited` connection renders amber, names the missing permission, and its
-  primary button reads "Fix permissions".** The single most important test here.
-- An `error` connection renders red with **Reconnect**.
+- A provider with no connections renders "Not connected" and one **Connect**.
+- Google and Microsoft cards render only mailboxes whose provider matches.
+- A `connected` mailbox renders green, the address, and "Verified …" inside its row.
+- **A `limited` mailbox renders amber, names the missing permission, and offers
+  Fix permissions on that row.** The single most important test here.
+- An `error` mailbox renders red with **Reconnect**.
 - Every `errorCode` in `ERROR_CODE_RECOVERY` renders its title and its fixes.
 - **An unrecognised `errorCode` still renders a recovery block**, from `unknown`.
-- A Test returning one failed capability lists all three with the failure named.
+- A Test returning one failed capability lists all three with the failure named
+  inside only the tested mailbox.
 - "Before you connect" is collapsed by default and expands on click.
 - Disconnect does nothing until the dialog is confirmed.
 - A blocked popup shows the pop-ups toast and no spinner is left running.
@@ -158,9 +163,9 @@ The API is mocked at `jsonFetch`. Component tests sit beside the component
 
 ## Boundaries
 
-**Always** — open the popup inside the click; verify the message origin; render one
-primary action per card; pair every error with a recovery block; carry status in a
-word and an icon, not only a colour; walk it in both themes.
+**Always** — open the popup inside the click; verify the message origin; scope every
+status and account action to a mailbox row; pair every error with a recovery block;
+carry status in a word and an icon, not only a colour; walk it in both themes.
 **Ask first** — adding a provider card the server does not return; showing a
 permission the rep was never asked to grant; a full-page redirect instead of the
 popup.
@@ -170,7 +175,7 @@ provider list in the client; show an error with no next action.
 
 ## Success criteria
 
-- [ ] All 15 acceptance criteria hold.
+- [ ] All 16 acceptance criteria hold.
 - [ ] A rep connects Google in a real browser, refuses one permission, sees amber,
       clicks Fix permissions, and lands green.
 - [ ] Walked in both themes.

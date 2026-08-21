@@ -44,6 +44,7 @@ function card(provider: 'google' | 'microsoft', label: string, shortName: string
     providerLabel: label,
     providerShortName: shortName,
     requiredPermissions: ['Read your email', 'Send email as you'],
+    connections: [],
     connection: null,
   }
 }

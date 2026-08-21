@@ -18,28 +18,30 @@ vi.mock('@/lib/api', async () => {
 })
 
 function googleCard(connected: boolean): IntegrationCard {
+  const connection = connected
+    ? {
+        id: 'conn-1',
+        provider: 'google',
+        providerAccountId: 'acct-1',
+        emailAddress: 'rep@acme.com',
+        scopes: [],
+        status: 'connected' as const,
+        errorCode: null,
+        statusDetail: null,
+        lastValidatedAt: '2026-08-20T12:00:00.000Z',
+        lastRefreshAt: null,
+        expiresAt: null,
+        createdAt: '2026-08-20T12:00:00.000Z',
+        updatedAt: '2026-08-20T12:00:00.000Z',
+      }
+    : null
   return {
     provider: 'google',
     providerLabel: 'Google Workspace',
     providerShortName: 'Google',
     requiredPermissions: ['Read email', 'Send email', 'See your calendar'],
-    connection: connected
-      ? {
-          id: 'conn-1',
-          provider: 'google',
-          providerAccountId: 'acct-1',
-          emailAddress: 'rep@acme.com',
-          scopes: [],
-          status: 'connected',
-          errorCode: null,
-          statusDetail: null,
-          lastValidatedAt: '2026-08-20T12:00:00.000Z',
-          lastRefreshAt: null,
-          expiresAt: null,
-          createdAt: '2026-08-20T12:00:00.000Z',
-          updatedAt: '2026-08-20T12:00:00.000Z',
-        }
-      : null,
+    connections: connection ? [connection] : [],
+    connection,
   }
 }
 

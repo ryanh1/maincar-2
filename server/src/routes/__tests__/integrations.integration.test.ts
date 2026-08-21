@@ -93,6 +93,26 @@ describe('OAuth callback write path (integration, real Postgres)', () => {
     expect(await prisma.mailAccount.count({ where: { orgId: org.orgId } })).toBe(1)
   })
 
+  it('a stable provider identity keeps one mailbox when its address changes', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+
+    const first = await saveConnection(
+      grant({ orgId: org.orgId, userId: org.adminUserId, emailAddress: 'before@acme.com' }),
+      prisma,
+    )
+    const second = await saveConnection(
+      grant({ orgId: org.orgId, userId: org.adminUserId, emailAddress: 'after@acme.com' }),
+      prisma,
+    )
+
+    expect(second.id).toBe(first.id)
+    expect(await prisma.oAuthConnection.count({ where: { orgId: org.orgId } })).toBe(1)
+    expect(await prisma.mailAccount.count({ where: { orgId: org.orgId } })).toBe(1)
+    expect(
+      await prisma.mailAccount.findFirstOrThrow({ where: { orgId: org.orgId } }),
+    ).toMatchObject({ connectionId: first.id, emailAddress: 'after@acme.com' })
+  })
+
   it('the first mailbox a rep connects is primary; the second is not', async () => {
     const org = await seedOrgWithAdmin(prisma)
 
@@ -116,6 +136,40 @@ describe('OAuth callback write path (integration, real Postgres)', () => {
     const second = await prisma.mailAccount.findFirstOrThrow({ where: { orgId: org.orgId, emailAddress: 'second@acme.com' } })
     expect(first.isPrimary).toBe(true)
     expect(second.isPrimary).toBe(false)
+  })
+
+  it('stores multiple accounts for the same provider and keeps one primary', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+
+    await saveConnection(
+      grant({
+        orgId: org.orgId,
+        userId: org.adminUserId,
+        providerAccountId: 'google-a',
+        emailAddress: 'a@acme.com',
+      }),
+      prisma,
+    )
+    await saveConnection(
+      grant({
+        orgId: org.orgId,
+        userId: org.adminUserId,
+        providerAccountId: 'google-b',
+        emailAddress: 'b@acme.com',
+      }),
+      prisma,
+    )
+
+    expect(
+      await prisma.oAuthConnection.count({
+        where: { orgId: org.orgId, userId: org.adminUserId, provider: 'google' },
+      }),
+    ).toBe(2)
+    expect(
+      await prisma.mailAccount.count({
+        where: { orgId: org.orgId, userId: org.adminUserId, isPrimary: true },
+      }),
+    ).toBe(1)
   })
 
   it('scopes every write to the org it was handed — a save for org B leaves org A empty', async () => {

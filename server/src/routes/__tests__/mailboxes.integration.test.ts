@@ -159,6 +159,9 @@ describe('mailbox routes (integration, real Postgres, real routes)', () => {
       providerAccountId: 'sub_d1',
       emailAddress: 'd1@example.com',
     })
+    const firstConnectionId = (
+      await prisma.mailAccount.findUniqueOrThrow({ where: { id: firstId } })
+    ).connectionId
     const secondId = await connectMailbox(org, {
       provider: 'microsoft',
       providerAccountId: 'oid_d2',
@@ -175,6 +178,9 @@ describe('mailbox routes (integration, real Postgres, real routes)', () => {
     expect(res.body.mailboxes[0].id).toBe(secondId)
     expect(res.body.mailboxes[0].isPrimary).toBe(true)
     expect(await primaryCount(org.orgId, org.adminUserId)).toBe(1)
+    expect(
+      await prisma.oAuthConnection.findUnique({ where: { id: firstConnectionId } }),
+    ).toBeNull()
   })
 
   it('a mailbox id from another org is 404 over the route, and untouched', async () => {
