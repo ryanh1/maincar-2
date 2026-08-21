@@ -1,10 +1,36 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import type { EmailDraft } from '@/lib/emailTypes'
 import { ComposerCard } from './ComposerCard'
 import { ComposerContext, type ComposerContextValue } from './composerContext'
+
+/**
+ * The card renders the real `RichTextEditor`, and ProseMirror measures the
+ * document with `Range.getClientRects` whenever it maps a selection back to the
+ * DOM. jsdom implements neither, and without them the editor throws on the first
+ * click instead of failing a real assertion. The same stubs, for the same
+ * reason, as `RichTextEditor.test.tsx` — kept local to each file rather than in
+ * `src/test/setup.ts`, because a global stub is a global lie about what jsdom
+ * can do.
+ *
+ * The editor is deliberately NOT mocked here. What this file has to prove is
+ * that the card wires the real one correctly — that a save response cannot reach
+ * it, and that what leaves on a PATCH is what the rep actually sees — and a stub
+ * that echoes whatever it is handed proves none of that.
+ */
+beforeAll(() => {
+  if (typeof Range !== 'undefined') {
+    Range.prototype.getClientRects = () =>
+      Object.assign([] as unknown as DOMRect[], { item: () => null }) as unknown as DOMRectList
+    Range.prototype.getBoundingClientRect = () => new DOMRect()
+  }
+  if (typeof Element !== 'undefined' && !Element.prototype.getClientRects) {
+    Element.prototype.getClientRects = () =>
+      Object.assign([] as unknown as DOMRect[], { item: () => null }) as unknown as DOMRectList
+  }
+})
 
 /** Matches the constant in ComposerCard.tsx, which is deliberately not exported. */
 const AUTOSAVE_DELAY_MS = 1200
@@ -80,8 +106,9 @@ function subjectField() {
   return screen.getByLabelText('Re')
 }
 
+/** The editable region, as a screen reader finds it. */
 function bodyField() {
-  return screen.getByLabelText('Message')
+  return screen.getByRole('textbox', { name: 'Message' })
 }
 
 /**
@@ -90,6 +117,29 @@ function bodyField() {
  */
 function type(field: HTMLElement, value: string) {
   fireEvent.change(field, { target: { value } })
+}
+
+/**
+ * Write into the body the way a rep does, without `userEvent`.
+ *
+ * ProseMirror owns its DOM, so there is no `value` to set — it watches for
+ * mutations and reads the document back out of them. Mutating the editable
+ * element and firing `input` is exactly the sequence a keystroke or a paste
+ * produces, and it is the only one that survives the fake clock these autosave
+ * tests run on: `userEvent` deadlocks against it, and reaching past the
+ * component for the editor instance would test something no rep can do.
+ *
+ * `html`, not text, because a paste is the interesting case — see the tests that
+ * hand it a heading and a `style` attribute.
+ */
+async function typeBody(html: string) {
+  const body = bodyField()
+  body.innerHTML = html
+  fireEvent.input(body)
+  // ProseMirror reads the mutation back and reports it upward a tick later, so
+  // the awaited `act` is what lets the card's state — and with it the debounce
+  // timer — exist before a test starts moving the clock.
+  await act(async () => {})
 }
 
 async function advance(ms: number) {
@@ -161,10 +211,10 @@ describe('ComposerCard', () => {
     vi.useFakeTimers()
     const { saveDraft } = renderCard()
 
-    type(bodyField(), 'H')
-    type(bodyField(), 'He')
-    type(bodyField(), 'Hel')
-    type(bodyField(), 'Hello')
+    await typeBody('H')
+    await typeBody('He')
+    await typeBody('Hel')
+    await typeBody('Hello')
 
     await advance(AUTOSAVE_DELAY_MS - 1)
     expect(saveDraft).not.toHaveBeenCalled()
@@ -173,7 +223,9 @@ describe('ComposerCard', () => {
     expect(saveDraft).toHaveBeenCalledTimes(1)
     // Only the key that changed. The route writes exactly what it is given, so
     // sending the subject too would overwrite one the rep never touched.
-    expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: 'Hello' })
+    // HTML, not the raw keystrokes: the body is a rich-text document now, and
+    // the editor's own paragraph is what is stored.
+    expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: '<p>Hello</p>' })
 
     // And nothing more once it has settled.
     await advance(AUTOSAVE_DELAY_MS * 2)
@@ -185,23 +237,23 @@ describe('ComposerCard', () => {
     const { saveDraft } = renderCard()
 
     type(subjectField(), 'Quote')
-    type(bodyField(), 'Numbers attached.')
+    await typeBody('Numbers attached.')
     await advance(AUTOSAVE_DELAY_MS)
 
     expect(saveDraft).toHaveBeenCalledWith('draft-1', {
       subject: 'Quote',
-      bodyHtml: 'Numbers attached.',
+      bodyHtml: '<p>Numbers attached.</p>',
     })
   })
 
   it('flushes the pending save before it collapses to a chip', async () => {
     const { saveDraft, setMinimized } = renderCard()
 
-    type(bodyField(), 'Half a sentence')
+    await typeBody('Half a sentence')
     fireEvent.click(screen.getByRole('button', { name: 'Minimize' }))
 
     await waitFor(() => expect(setMinimized).toHaveBeenCalledWith('draft-1', true))
-    expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: 'Half a sentence' })
+    expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: '<p>Half a sentence</p>' })
     // Order matters: collapsing first would unmount the card and take the text
     // with it.
     expect(saveDraft.mock.invocationCallOrder[0]).toBeLessThan(
@@ -212,11 +264,11 @@ describe('ComposerCard', () => {
   it('closes with a save and never a delete', async () => {
     const { saveDraft, closeCard, discardDraft } = renderCard()
 
-    type(bodyField(), 'Keep this')
+    await typeBody('Keep this')
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
 
     await waitFor(() => expect(closeCard).toHaveBeenCalledWith('draft-1'))
-    expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: 'Keep this' })
+    expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: '<p>Keep this</p>' })
     expect(saveDraft.mock.invocationCallOrder[0]).toBeLessThan(
       closeCard.mock.invocationCallOrder[0],
     )
@@ -242,21 +294,21 @@ describe('ComposerCard', () => {
     const user = userEvent.setup()
     const { saveDraft, discardDraft } = renderCard()
 
-    type(bodyField(), 'Never mind')
+    await typeBody('Never mind')
     await user.click(screen.getByRole('button', { name: 'Discard draft' }))
     await user.click(await screen.findByRole('button', { name: 'Discard' }))
 
     await waitFor(() => expect(discardDraft).toHaveBeenCalledWith('draft-1'))
     // A failed DELETE resyncs the dock from the server, so the row that comes
     // back has to hold what the rep actually typed.
-    expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: 'Never mind' })
+    expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: '<p>Never mind</p>' })
   })
 
-  it('never re-reads its own saved value, so the caret cannot be moved by a save', () => {
+  it('never re-reads its own saved value, so the caret cannot be moved by a save', async () => {
     const { rerenderWith } = renderCard()
 
     type(subjectField(), 'What the rep typed')
-    type(bodyField(), 'A sentence still being written')
+    await typeBody('A sentence still being written')
 
     // The save comes back and the dock's copy of the draft updates. The card
     // must ignore it completely: re-rendering the body here is what drops the
@@ -266,17 +318,100 @@ describe('ComposerCard', () => {
     )
 
     expect(subjectField()).toHaveValue('What the rep typed')
-    expect(bodyField()).toHaveValue('A sentence still being written')
+    // The editor has no `value` to read: what it holds is a document, so this
+    // asserts on the text ProseMirror is actually showing.
+    expect(bodyField()).toHaveTextContent('A sentence still being written')
+    expect(bodyField()).not.toHaveTextContent('An older, shorter sentence')
+  })
+
+  it('opens a draft written as plain text before the editor landed', () => {
+    // Every draft saved through EC-8's textarea is a bare string with no tags in
+    // it. TipTap parses it as the text of one paragraph, so the rep sees their
+    // sentence and not an empty card.
+    renderCard(makeDraft({ bodyHtml: 'Numbers attached, call me back.' }))
+
+    expect(bodyField()).toHaveTextContent('Numbers attached, call me back.')
+  })
+
+  it('saves the bold and the list the rep applied, not their plain text', async () => {
+    vi.useFakeTimers()
+    const { saveDraft } = renderCard()
+
+    await typeBody('<p>A <strong>bold</strong> word</p><ul><li>One</li><li>Two</li></ul>')
+    await advance(AUTOSAVE_DELAY_MS)
+
+    const [, patch] = saveDraft.mock.calls[0] as [string, { bodyHtml: string }]
+    expect(patch.bodyHtml).toContain('<strong>bold</strong>')
+    expect(patch.bodyHtml).toContain('<ul>')
+    expect(patch.bodyHtml).toContain('<li>')
+    expect(patch.bodyHtml).toContain('Two')
+  })
+
+  it('sends what the rep sees, with only the markup the server keeps', async () => {
+    vi.useFakeTimers()
+    const { saveDraft } = renderCard()
+
+    // What a paste out of a web page or a word processor arrives as. The rep
+    // never sees the heading, the inline style, or the class — the editor's
+    // schema drops all three as the paste lands — so the save must not carry
+    // them either. That is the disagreement MAI-78 named: the server rewriting
+    // a body the card would go on showing in its original form.
+    await typeBody(
+      '<h1 class="Title" style="color:red">Quote</h1>' +
+        '<p style="margin:0">A <strong>bold</strong> word</p>' +
+        '<script>alert(1)</script>',
+    )
+    await advance(AUTOSAVE_DELAY_MS)
+
+    const [, patch] = saveDraft.mock.calls[0] as [string, { bodyHtml: string }]
+    expect(patch.bodyHtml).not.toContain('<h1')
+    expect(patch.bodyHtml).not.toContain('style=')
+    expect(patch.bodyHtml).not.toContain('class=')
+    expect(patch.bodyHtml).not.toContain('<script')
+    // The rep's words survive. Losing a sentence because it was pasted out of a
+    // heading would be its own bug.
+    expect(patch.bodyHtml).toContain('Quote')
+    expect(patch.bodyHtml).toContain('<strong>bold</strong>')
+    // And the editor on screen agrees with the string that was sent, which is
+    // the whole point: no reload needed to find out what was really stored.
+    expect(bodyField()).toHaveTextContent('Quote')
+    expect(bodyField().querySelector('h1')).toBeNull()
+  })
+
+  it('links the selection through the URL dialog and saves the anchor', async () => {
+    const user = userEvent.setup()
+    const { saveDraft } = renderCard(makeDraft({ bodyHtml: '<p>Acme</p>' }))
+
+    bodyField().focus()
+    await user.keyboard('{Control>}a{/Control}')
+    await user.click(screen.getByRole('button', { name: 'Add link' }))
+
+    // No scheme typed, `https` stored — the rule lives in `linkUrl.ts`; what is
+    // proven here is that the card wired the editor's request to the dialog at
+    // all.
+    await user.type(await screen.findByLabelText('Web address'), 'acme.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    // The X flushes on the way out, so no clock is needed to see the save.
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+
+    await waitFor(() => expect(saveDraft).toHaveBeenCalled())
+    const [, patch] = saveDraft.mock.calls[0] as [string, { bodyHtml: string }]
+    expect(patch.bodyHtml).toContain('href="https://acme.com"')
+    expect(patch.bodyHtml).toContain('rel="noopener noreferrer"')
+    expect(patch.bodyHtml).toContain('Acme')
   })
 
   it('flushes on the way out when the dock squeezes the card into a chip', async () => {
     const { saveDraft, unmount } = renderCard()
 
-    type(bodyField(), 'Squeezed mid-sentence')
+    await typeBody('Squeezed mid-sentence')
     unmount()
 
     await waitFor(() =>
-      expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: 'Squeezed mid-sentence' }),
+      expect(saveDraft).toHaveBeenCalledWith('draft-1', {
+        bodyHtml: '<p>Squeezed mid-sentence</p>',
+      }),
     )
   })
 
@@ -387,14 +522,14 @@ describe('ComposerCard recipients', () => {
     addRecipient('Cc', 'bob@acme.test')
     addRecipient('Bcc', 'legal@acme.test')
     type(subjectField(), 'Quote')
-    type(bodyField(), 'Numbers attached.')
+    await typeBody('Numbers attached.')
 
     await advance(AUTOSAVE_DELAY_MS)
 
     expect(saveDraft).toHaveBeenCalledTimes(1)
     expect(saveDraft).toHaveBeenCalledWith('draft-1', {
       subject: 'Quote',
-      bodyHtml: 'Numbers attached.',
+      bodyHtml: '<p>Numbers attached.</p>',
       toAddrs: ['ann@acme.test'],
       ccAddrs: ['bob@acme.test'],
       bccAddrs: ['legal@acme.test'],
@@ -468,7 +603,13 @@ describe('ComposerCard recipients', () => {
       const row = recipientBox(label).closest('div.shrink-0')
       expect(row).not.toBeNull()
     }
-    expect(bodyField()).toHaveClass('min-h-0', 'flex-1')
+    // The editor's own wrapper is what gives up the height, so the assertion
+    // sits on it and not on the editable region inside it. The scroller is the
+    // part that keeps a long email inside the card instead of pushing the
+    // footer off the bottom.
+    const scroller = bodyField().closest('.overflow-y-auto')
+    expect(scroller).toHaveClass('min-h-0', 'flex-1')
+    expect(scroller!.parentElement).toHaveClass('min-h-0', 'flex-1')
     expect(screen.getByRole('article', { name: 'New message' })).toHaveClass('h-[26rem]')
   })
 })

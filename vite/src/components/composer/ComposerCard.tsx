@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Minus, Trash2, X } from 'lucide-react'
 
+import { RichTextEditor, type LinkRequest } from '@/components/editor/RichTextEditor'
+import { RichTextEditorUrlDialog } from '@/components/editor/RichTextEditor_UrlDialog'
+import { sanitizeStoredHtml } from '@/components/editor/sanitizeStoredHtml'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,7 +17,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import type { EmailDraft, EmailDraftPatch, RecipientChip } from '@/lib/emailTypes'
 import { useComposer } from './composerContext'
 import { draftTitle } from './draftTitle'
@@ -83,9 +85,10 @@ interface ComposerCardProps {
  * would blow away the chip a rep added while the request was in flight.
  * No unit test catches a moving caret — type for 30 seconds in a browser.
  *
- * The body is a plain `textarea` for all of Phase 1 and becomes the rich editor
- * in `composer-body`. It is an honest interim: it works, it just does not do
- * bold.
+ * The body is `RichTextEditor` — bold, italic, two list types, and links. It is
+ * seeded from `bodySeed`, captured on mount, and reports back through
+ * `onChange`; there is no `value` prop to wire the other way, which is how the
+ * caret rule is enforced rather than merely written down.
  */
 export function ComposerCard({ draft }: ComposerCardProps) {
   const { saveDraft, closeCard, setMinimized, discardDraft } = useComposer()
@@ -95,7 +98,17 @@ export function ComposerCard({ draft }: ComposerCardProps) {
   // a later `draft` prop carrying the server's copy of this same text cannot
   // reach the input the rep is typing in.
   const [subject, setSubject] = useState(draft.subject ?? '')
-  const [body, setBody] = useState(draft.bodyHtml ?? '')
+  // Two pieces of state for the body, and they are not the same thing.
+  // `bodySeed` is what the editor OPENED with and never changes again — it is
+  // handed to `initialHtml`, which the editor reads once (RichTextEditor → the
+  // caret rule). `body` is what the rep has typed since, reported up through
+  // `onChange`. Feeding `body` back in as `initialHtml` would be the controlled
+  // rich-text editor the whole module exists to avoid.
+  const [bodySeed] = useState(() => draft.bodyHtml ?? '')
+  const [body, setBody] = useState(bodySeed)
+  // The open link request, or null. The editor raises it; the dialog collects a
+  // URL and calls back into the selection the rep actually had.
+  const [linkRequest, setLinkRequest] = useState<LinkRequest | null>(null)
   const [toChips, setToChips] = useState(() => chipsFrom(draft.toAddrs))
   const [ccChips, setCcChips] = useState(() => chipsFrom(draft.ccAddrs))
   const [bccChips, setBccChips] = useState(() => chipsFrom(draft.bccAddrs))
@@ -123,7 +136,15 @@ export function ComposerCard({ draft }: ComposerCardProps) {
   const flush = useCallback(async () => {
     const patch: EmailDraftPatch = {}
     if (subject !== savedRef.current.subject) patch.subject = subject
-    if (body !== savedRef.current.body) patch.bodyHtml = body
+
+    // Sanitised on the way out, against the same allow-list the server enforces
+    // (SPEC-composer-body.md → Acceptance criteria, 7). The editor's schema
+    // already refuses everything off that list, so this normally changes
+    // nothing — it is here because the client's copy is never the one that is
+    // trusted, and because sending what the server would rewrite is how the
+    // card and the database end up disagreeing (MAI-78).
+    const bodyHtml = sanitizeStoredHtml(body)
+    if (bodyHtml !== savedRef.current.body) patch.bodyHtml = bodyHtml
 
     const toAddrs = addressesOf(toChips)
     const ccAddrs = addressesOf(ccChips)
@@ -138,7 +159,7 @@ export function ComposerCard({ draft }: ComposerCardProps) {
 
     // Marked saved BEFORE the await, so a `−` pressed while this request is in
     // flight does not send the same keys a second time.
-    savedRef.current = { subject, body, toAddrs, ccAddrs, bccAddrs }
+    savedRef.current = { subject, body: bodyHtml, toAddrs, ccAddrs, bccAddrs }
     await saveDraft(draftId, patch)
   }, [subject, body, toChips, ccChips, bccChips, draftId, saveDraft])
 
@@ -274,18 +295,23 @@ export function ComposerCard({ draft }: ComposerCardProps) {
         />
       </div>
 
-      <Textarea
-        aria-label="Message"
+      {/*
+        The body. `initialHtml` is the seed captured on mount and never the live
+        `body`, so nothing here can re-render the editor from a save response.
+        The card is a fixed 26rem, so this is the one part of it that gives up
+        height — the rows above are all `shrink-0` — and a long email scrolls
+        inside the editor rather than pushing the footer off the bottom.
+      */}
+      <RichTextEditor
+        label="Message"
         placeholder="Write a message"
-        value={body}
-        onChange={(event) => setBody(event.target.value)}
-        // `field-sizing-fixed` overrides the primitive's grow-with-content
-        // behaviour: the card is a fixed 26rem, so the body scrolls inside it
-        // instead of pushing the footer off the bottom. The recipient rows are
-        // `shrink-0`, so this is the one part of the card that gives up height
-        // when a To field wraps onto a second line.
-        className="field-sizing-fixed min-h-0 flex-1 rounded-none border-0 bg-transparent px-3 py-2 text-sm shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
+        initialHtml={bodySeed}
+        onChange={setBody}
+        onRequestLink={setLinkRequest}
+        className="min-h-0 flex-1"
       />
+
+      <RichTextEditorUrlDialog request={linkRequest} onClose={() => setLinkRequest(null)} />
 
       <footer className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
         <Button type="button" size="sm" disabled>
