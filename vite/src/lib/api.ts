@@ -22,12 +22,15 @@ export class ApiError extends Error {
    * 5xx, where the human-facing `message` stays generic.
    */
   readonly code?: string
+  /** The parsed JSON response, when the server supplied one. */
+  readonly body?: unknown
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, body?: unknown) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.body = body
   }
 }
 
@@ -82,14 +85,18 @@ export async function jsonFetch<T>(input: RequestInfo, init?: RequestInit): Prom
 
     let userMessage = 'Something went wrong. Please try again.'
     let code: string | undefined
+    let body: unknown
     try {
-      const parsed = JSON.parse(text)
-      if (res.status >= 400 && res.status < 500) userMessage = parsed?.error ?? userMessage
-      if (typeof parsed?.status === 'string') code = parsed.status
+      const parsed: { error?: unknown; status?: unknown } = JSON.parse(text)
+      body = parsed
+      if (res.status >= 400 && res.status < 500 && typeof parsed.error === 'string') {
+        userMessage = parsed.error
+      }
+      if (typeof parsed.status === 'string') code = parsed.status
     } catch {
       /* not JSON */
     }
-    throw new ApiError(userMessage, res.status, code)
+    throw new ApiError(userMessage, res.status, code, body)
   }
 
   if (res.status === 204) {

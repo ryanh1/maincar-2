@@ -1,13 +1,40 @@
 import { useState } from 'react'
+import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useGetNumbers } from '@/hooks/phoneNumbers'
+import type { PhoneNumber } from '@/hooks/phoneNumbers'
+import { useSetUrlParams, useUrlInt, useUrlString } from '@/hooks/urlState'
+import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
 
 import { Settings_PhoneNumbers_BuyDialog } from './Settings_PhoneNumbers_BuyDialog'
 import { Settings_PhoneNumbers_OrgTable } from './Settings_PhoneNumbers_OrgTable'
 import { Settings_PhoneNumbers_Row } from './Settings_PhoneNumbers_Row'
+
+const PAGE_SIZE = 25
+
+type SortColumn = 'e164' | 'status' | 'createdAt'
+
+// The server intentionally returns every number the caller owns, unpaginated —
+// GET /api/orgs/:orgId/phone-numbers feeds the caller-ID radio picker, which
+// has to show all of them at once, so paging that route would hide a number
+// the rep owns. Search, sort, and paging below all run over the full list the
+// hook already fetched, rather than asking the server for a page of it.
+const COLUMNS: { label: string; sort: SortColumn | null; className?: string }[] = [
+  { label: 'Number', sort: 'e164' },
+  { label: 'Status', sort: 'status', className: 'w-40' },
+  { label: 'Bought on', sort: 'createdAt', className: 'w-32' },
+  { label: 'Caller ID', sort: null, className: 'w-48' },
+]
+
+function compareNumbers(a: PhoneNumber, b: PhoneNumber, column: SortColumn): number {
+  if (column === 'e164') return a.e164.localeCompare(b.e164)
+  if (column === 'status') return a.status.localeCompare(b.status)
+  return a.createdAt.localeCompare(b.createdAt)
+}
 
 /**
  * Settings → Phone numbers: the numbers this organization owns, and the caller ID
@@ -20,19 +47,54 @@ import { Settings_PhoneNumbers_Row } from './Settings_PhoneNumbers_Row'
  *
  * Each row also carries the one action that stops the org paying for a number:
  * releasing it. That lives in Settings_PhoneNumbers_Row, behind a confirm.
+ *
+ * Search, sort, and page all live in the query string, so a reload or a pasted
+ * link restores the same view — the same pattern Calls uses, but run over the
+ * already-fetched list rather than against the server (see the note on
+ * `COLUMNS` above for why).
  */
 export function Settings_PhoneNumbersTab() {
-  const { org, isAdmin } = useAuth()
+  const { org, user, isAdmin } = useAuth()
   const orgId = org?.id ?? null
 
   const numbersQuery = useGetNumbers(orgId)
 
   const [buyOpen, setBuyOpen] = useState(false)
 
+  const setUrlParams = useSetUrlParams()
+  const [search] = useUrlString('q', '')
+  const [sort] = useUrlString('sort', 'createdAt')
+  const [dir] = useUrlString('dir', 'desc')
+  const [page, setPage] = useUrlInt('page', 1)
+
   if (!org || !orgId) return null
 
   const data = numbersQuery.data
   const numbers = data?.numbers ?? []
+
+  const sortColumn: SortColumn = ['e164', 'status', 'createdAt'].includes(sort)
+    ? (sort as SortColumn)
+    : 'createdAt'
+  const sortDir = dir === 'asc' ? 'asc' : 'desc'
+  const hasSearch = search.trim() !== ''
+
+  const filtered = hasSearch
+    ? numbers.filter((number) => number.e164.includes(search.trim()))
+    : numbers
+  const sorted = [...filtered].sort((a, b) =>
+    sortDir === 'asc' ? compareNumbers(a, b, sortColumn) : compareNumbers(b, a, sortColumn),
+  )
+  const total = sorted.length
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const pageRows = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+
+  function clickHeader(column: SortColumn | null): void {
+    if (!column) return
+    const nextDir = column === sortColumn && sortDir === 'asc' ? 'desc' : 'asc'
+    // A new sort sends the reader back to page 1: page 4 of the old order is not
+    // a place they asked to be.
+    setUrlParams({ sort: column, dir: nextDir, page: null })
+  }
 
   return (
     <section className="flex flex-col gap-6">
@@ -44,6 +106,32 @@ export function Settings_PhoneNumbersTab() {
           </Button>
         )}
       </div>
+
+      {numbers.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-56 flex-1">
+            <Search
+              size={16}
+              aria-hidden
+              className="absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              className="h-8 pl-8"
+              placeholder="Search by number"
+              aria-label="Search phone numbers"
+              value={search}
+              onChange={(event) => setUrlParams({ q: event.target.value, page: null })}
+            />
+          </div>
+
+          {hasSearch && (
+            <Button variant="ghost" size="sm" onClick={() => setUrlParams({ q: null, page: null })}>
+              <X size={16} aria-hidden />
+              Clear
+            </Button>
+          )}
+        </div>
+      )}
 
       {numbersQuery.isPending && (
         <div className="flex flex-col gap-2">
@@ -77,36 +165,91 @@ export function Settings_PhoneNumbersTab() {
             <caption className="sr-only">Phone numbers owned by {org.name}</caption>
             <thead>
               <tr className="border-b border-border bg-muted/60">
-                <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">
-                  Number
-                </th>
-                <th scope="col" className="w-40 px-3 py-2 text-left text-xs font-medium text-muted-foreground">
-                  Status
-                </th>
-                <th scope="col" className="w-48 px-3 py-2 text-left text-xs font-medium text-muted-foreground">
-                  Caller ID
-                </th>
+                {COLUMNS.map((column) => (
+                  <th
+                    key={column.label}
+                    scope="col"
+                    className={cn(
+                      'px-3 py-2 text-left text-xs font-medium text-muted-foreground',
+                      column.className,
+                    )}
+                  >
+                    {column.sort ? (
+                      <button
+                        type="button"
+                        className="inline-flex cursor-pointer items-center gap-1 hover:text-foreground"
+                        onClick={() => clickHeader(column.sort)}
+                        aria-label={`Sort by ${column.label}`}
+                      >
+                        {column.label}
+                        {sortColumn === column.sort &&
+                          (sortDir === 'asc' ? (
+                            <ArrowUp size={14} aria-hidden />
+                          ) : (
+                            <ArrowDown size={14} aria-hidden />
+                          ))}
+                      </button>
+                    ) : (
+                      column.label
+                    )}
+                  </th>
+                ))}
                 <th scope="col" className="w-12 px-2 py-2">
                   <span className="sr-only">Actions</span>
                 </th>
               </tr>
             </thead>
             <tbody role="radiogroup" aria-label="Outbound caller ID">
-              {numbers.map((number) => (
+              {pageRows.map((number) => (
                 <Settings_PhoneNumbers_Row
                   key={number.id}
                   number={number}
                   orgId={orgId}
-                  // Counted here rather than in the row, because it is a fact
-                  // about the whole list: whether releasing THIS number would
-                  // leave the rep with a caller ID to fall back on.
+                  timeZone={user?.timeZone}
+                  // Counted over the FULL list, never the current page — whether
+                  // releasing THIS number would leave the rep with a caller ID to
+                  // fall back on is a fact about every number they own, not just
+                  // the ones on screen.
                   hasOtherActiveNumber={numbers.some(
                     (other) => other.id !== number.id && other.status === 'active',
                   )}
                 />
               ))}
+              {pageRows.length === 0 && (
+                <tr>
+                  <td colSpan={COLUMNS.length + 1} className="px-3 py-6 text-center text-sm">
+                    No number matches this search. Clear the search to see them all.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs tabular-nums text-muted-foreground">
+            Page {page} of {lastPage}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={page <= 1}
+              onClick={() => setPage(page - 1)}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={page >= lastPage}
+              onClick={() => setPage(page + 1)}
+            >
+              Next
+            </Button>
+          </div>
         </div>
       )}
 

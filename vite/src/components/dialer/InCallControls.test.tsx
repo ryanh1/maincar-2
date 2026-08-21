@@ -29,7 +29,12 @@ vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 0, muteCall: muteCallMock })
+  useDialerMock.mockReturnValue({
+    phase: 'in-progress',
+    elapsedSeconds: 0,
+    canControlAudio: true,
+    muteCall: muteCallMock,
+  })
   useEndCallMock.mockReturnValue({ mutate: mutateMock, isPending: false })
 })
 
@@ -39,22 +44,42 @@ function renderControls(props: Partial<Parameters<typeof InCallControls>[0]> = {
 
 describe('InCallControls', () => {
   it('renders the elapsed time from context as mm:ss', () => {
-    useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 75, muteCall: muteCallMock })
+    useDialerMock.mockReturnValue({
+      phase: 'in-progress',
+      elapsedSeconds: 75,
+      canControlAudio: true,
+      muteCall: muteCallMock,
+    })
     renderControls()
 
     expect(screen.getByLabelText('Call duration')).toHaveTextContent('01:15')
   })
 
   it('shows status text derived from the phase', () => {
-    useDialerMock.mockReturnValue({ phase: 'ringing', elapsedSeconds: 0, muteCall: muteCallMock })
+    useDialerMock.mockReturnValue({
+      phase: 'ringing',
+      elapsedSeconds: 0,
+      canControlAudio: true,
+      muteCall: muteCallMock,
+    })
     const { rerender } = renderControls()
     expect(screen.getByText('Ringing')).toBeInTheDocument()
 
-    useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 0, muteCall: muteCallMock })
+    useDialerMock.mockReturnValue({
+      phase: 'in-progress',
+      elapsedSeconds: 0,
+      canControlAudio: true,
+      muteCall: muteCallMock,
+    })
     rerender(withProviders(<InCallControls orgId="org-1" callId="call-1" />))
     expect(screen.getByText('Connected')).toBeInTheDocument()
 
-    useDialerMock.mockReturnValue({ phase: 'completed', elapsedSeconds: 0, muteCall: muteCallMock })
+    useDialerMock.mockReturnValue({
+      phase: 'completed',
+      elapsedSeconds: 0,
+      canControlAudio: true,
+      muteCall: muteCallMock,
+    })
     rerender(withProviders(<InCallControls orgId="org-1" callId="call-1" />))
     expect(screen.getByText('Call ended')).toBeInTheDocument()
   })
@@ -132,6 +157,19 @@ describe('InCallControls', () => {
     renderControls()
 
     expect(screen.queryByRole('button', { name: 'Hold the call' })).not.toBeInTheDocument()
+  })
+
+  it('hides mute when this tab recovered a call without a Voice SDK connection', () => {
+    useDialerMock.mockReturnValue({
+      phase: 'in-progress',
+      elapsedSeconds: 0,
+      canControlAudio: false,
+      muteCall: muteCallMock,
+    })
+    renderControls()
+
+    expect(screen.queryByRole('button', { name: 'Mute the call' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'End the call' })).toBeInTheDocument()
   })
 
   it('gives every icon-only control a verb-and-object accessible name', () => {

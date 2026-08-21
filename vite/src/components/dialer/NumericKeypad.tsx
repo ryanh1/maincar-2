@@ -23,7 +23,7 @@ import {
   sanitizeEntry,
 } from '@/lib/dialPad'
 import { useAuth } from '@/providers/useAuth'
-import { useCreateCall } from '@/hooks/dialer'
+import { isAdoptableInFlightCallError, useCreateCall } from '@/hooks/dialer'
 import { useGetNumbers } from '@/hooks/phoneNumbers'
 import { clearGreenRoomCheckInStore, useGreenRoomDecision } from '@/hooks/devices'
 import { useDialer } from '@/components/dialer/dialerContext'
@@ -132,8 +132,12 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
       createCall.mutate(
         { orgId: org.id, toE164, recordingConsent },
         {
-          onError: (err) =>
-            toast.error(err instanceof ApiError ? err.message : 'Could not place the call. Try again.'),
+          onError: (err) => {
+            // A 409 with a live Call is a recovered session, not an actionable
+            // failure. useCreateCall has expanded the dialer with that call.
+            if (isAdoptableInFlightCallError(err)) return
+            toast.error(err instanceof ApiError ? err.message : 'Could not place the call. Try again.')
+          },
         },
       )
     },
