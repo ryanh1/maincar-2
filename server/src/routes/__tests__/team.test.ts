@@ -2,7 +2,7 @@
 //
 // The org-isolation block at the bottom proves that a caller from Org A cannot
 // reach Org B, and that an unauthenticated caller is rejected.
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
@@ -91,6 +91,44 @@ function membershipRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function invitationRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'inv-1',
+    token: 'tok-1',
+    email: 'new@orga.com',
+    orgId: 'org-a',
+    roles: ['basic'],
+    status: 'PENDING',
+    expiresAt: NOW,
+    createdAt: NOW,
+    ...overrides,
+  }
+}
+
+/**
+ * Pins `new Date()` so an expiry assertion can name an exact instant.
+ *
+ * Only Date is faked. Faking setTimeout too would stall supertest's own timers
+ * and hang the request.
+ */
+function freezeClock(iso: string): void {
+  vi.useFakeTimers({ toFake: ['Date'], now: new Date(iso) })
+}
+
+/** The `expiresAt` the route handed to `invitation.create`. */
+function createdExpiry(): Date {
+  const call = prismaMock.invitation.create.mock.lastCall![0] as { data: { expiresAt: Date } }
+  return call.data.expiresAt
+}
+
+/** The `expiresAt` the route handed to `invitation.updateMany`. */
+function updatedExpiry(): Date {
+  const call = prismaMock.invitation.updateMany.mock.lastCall![0] as {
+    data: { expiresAt: Date }
+  }
+  return call.data.expiresAt
+}
+
 /** Signs the caller in. `membership` is what they hold in the org they ask about. */
 function authAs(membership: ReturnType<typeof membershipRow> | null = membershipRow()): void {
   verifyTokenMock.mockResolvedValue({ uid: 'uid-a', email: 'a@orga.com' })
@@ -103,6 +141,10 @@ function authAs(membership: ReturnType<typeof membershipRow> | null = membership
 beforeEach(() => {
   vi.clearAllMocks()
   authAs()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('GET /api/team/profile', () => {
@@ -390,6 +432,70 @@ describe('POST /api/team/orgs/:orgId/invitations', () => {
       expect.objectContaining({ data: expect.objectContaining({ roles: ['admin', 'basic'] }) }),
     )
   })
+
+  // An invite dies at the end of a DAY on the inviter's clock, not 14 × 24 hours
+  // after the button was pressed. Created 09:12 on March 1 in New York (EST), it
+  // expires at the last millisecond of March 15 — by which time US DST has begun,
+  // so the answer is 03:59:59.999Z and not 04:59:59.999Z. The exact-hours version
+  // of this line would say 2026-03-15T14:12:00.000Z.
+  it("expires at the end of the inviter's day, in the inviter's timezone", async () => {
+    freezeClock('2026-03-01T14:12:00Z')
+    prismaMock.user.findUnique.mockResolvedValue(userRow({ timeZone: 'America/New_York' }))
+    prismaMock.membership.findFirst
+      .mockResolvedValueOnce(membershipRow())
+      .mockResolvedValueOnce(null)
+    prismaMock.invitation.findFirst.mockResolvedValue(null)
+    prismaMock.invitation.create.mockResolvedValue(invitationRow())
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations')
+      .set('Authorization', AUTH)
+      .send({ email: 'new@orga.com' })
+
+    expect(res.status).toBe(201)
+    expect(createdExpiry().toISOString()).toBe('2026-03-16T03:59:59.999Z')
+  })
+
+  // The zone is nullable, and CLAUDE.md forbids letting that fall through to
+  // whatever zone the server host happens to run in. UTC, chosen out loud.
+  it('falls back to end of day UTC when the inviter has no timezone', async () => {
+    freezeClock('2026-08-21T09:12:00Z')
+    prismaMock.user.findUnique.mockResolvedValue(userRow({ timeZone: null }))
+    prismaMock.membership.findFirst
+      .mockResolvedValueOnce(membershipRow())
+      .mockResolvedValueOnce(null)
+    prismaMock.invitation.findFirst.mockResolvedValue(null)
+    prismaMock.invitation.create.mockResolvedValue(invitationRow())
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations')
+      .set('Authorization', AUTH)
+      .send({ email: 'new@orga.com' })
+
+    expect(res.status).toBe(201)
+    expect(createdExpiry().toISOString()).toBe('2026-09-04T23:59:59.999Z')
+  })
+
+  // The client renders the expiry as a bare date, so it needs the zone that date
+  // was cut in. Resolved on the server, so the client never guesses a fallback.
+  it('names the zone the expiry is anchored in', async () => {
+    prismaMock.user.findUnique.mockResolvedValue(userRow({ timeZone: 'Asia/Kolkata' }))
+    prismaMock.membership.findFirst
+      .mockResolvedValueOnce(membershipRow())
+      .mockResolvedValueOnce(null)
+    prismaMock.invitation.findFirst.mockResolvedValue(null)
+    prismaMock.invitation.create.mockResolvedValue(
+      invitationRow({ invitedByUser: { timeZone: 'Asia/Kolkata' } }),
+    )
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations')
+      .set('Authorization', AUTH)
+      .send({ email: 'new@orga.com' })
+
+    expect(res.status).toBe(201)
+    expect(res.body.invitation.expiresAtTimeZone).toBe('Asia/Kolkata')
+  })
 })
 
 describe('POST /api/team/orgs/:orgId/invitations/:id/regenerate', () => {
@@ -441,6 +547,49 @@ describe('POST /api/team/orgs/:orgId/invitations/:id/regenerate', () => {
 
     expect(res.status).toBe(403)
     expect(prismaMock.invitation.updateMany).not.toHaveBeenCalled()
+  })
+
+  // A regenerated link runs to the end of a day on the ORIGINAL inviter's clock,
+  // not the clock of whichever admin pressed the button. One invite, one zone,
+  // for its whole life — which is what lets every admin read the same date off it.
+  // Kolkata is +05:30, so the answer lands on the half hour.
+  it("re-anchors the expiry to the original inviter's timezone", async () => {
+    freezeClock('2026-08-21T03:42:00Z')
+    prismaMock.membership.findFirst.mockResolvedValue(membershipRow())
+    prismaMock.invitation.findFirst.mockResolvedValue({
+      invitedByUser: { timeZone: 'Asia/Kolkata' },
+    })
+    prismaMock.invitation.updateMany.mockResolvedValue({ count: 1 })
+    prismaMock.invitation.findUniqueOrThrow.mockResolvedValue(
+      invitationRow({ token: 'tok-fresh', invitedByUser: { timeZone: 'Asia/Kolkata' } }),
+    )
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations/inv-1/regenerate')
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(updatedExpiry().toISOString()).toBe('2026-09-04T18:29:59.999Z')
+    expect(res.body.invitation.expiresAtTimeZone).toBe('Asia/Kolkata')
+  })
+
+  // The zone lookup is a convenience, not a gate: the `updateMany` still decides
+  // whether the invite exists in this org. A row without a stored zone regenerates
+  // to end of day UTC rather than failing.
+  it('regenerates to end of day UTC when the inviter has no timezone', async () => {
+    freezeClock('2026-08-21T09:12:00Z')
+    prismaMock.membership.findFirst.mockResolvedValue(membershipRow())
+    prismaMock.invitation.findFirst.mockResolvedValue({ invitedByUser: null })
+    prismaMock.invitation.updateMany.mockResolvedValue({ count: 1 })
+    prismaMock.invitation.findUniqueOrThrow.mockResolvedValue(invitationRow({ token: 'tok-fresh' }))
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations/inv-1/regenerate')
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(updatedExpiry().toISOString()).toBe('2026-09-04T23:59:59.999Z')
+    expect(res.body.invitation.expiresAtTimeZone).toBe('UTC')
   })
 })
 

@@ -13,6 +13,7 @@ import { WEB_ORIGIN } from '../config.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { logger } from '../../dependencies/logger.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
+import { endOfDayAfterDays, resolveTimeZone } from '../lib/datetime.js'
 import { requireMembership } from '../lib/membership.js'
 import { seedOrgInTx } from '../crm/seedOrg.js'
 import { assignableRolesSchema, type OrgRole, type UserRole } from '../lib/roles.js'
@@ -22,6 +23,9 @@ const router = Router()
 
 // 14 days, not 7: an invite sent on the Friday before a week off is still live
 // when the person comes back.
+//
+// Fourteen CALENDAR days, counted in the inviter's zone — not fourteen 24-hour
+// blocks. See `inviteExpiresAt` below.
 const INVITE_EXPIRY_DAYS = 14
 
 // --- Mappers: database row → API shape ---
@@ -282,13 +286,39 @@ function mintInviteToken(): string {
   return crypto.randomBytes(32).toString('base64url')
 }
 
-function mapInvitationToApi(invitation: Invitation) {
+/**
+ * When an invite created (or regenerated) now runs out: the last millisecond of
+ * the day, `INVITE_EXPIRY_DAYS` calendar days from today, on the INVITER's clock.
+ *
+ * ONE function, called by both the create and the regenerate route, so the two
+ * cannot drift apart. The zone is always the original inviter's, never the
+ * regenerating admin's: the expiry belongs to the invitation, and keeping a
+ * single zone attached to the row is what lets every admin — and the mapper
+ * below — render the same expiry DATE for it.
+ */
+function inviteExpiresAt(inviterTimeZone: string | null | undefined): Date {
+  return endOfDayAfterDays(new Date(), INVITE_EXPIRY_DAYS, inviterTimeZone)
+}
+
+/** A row plus the inviter's zone, which is the zone its expiry is anchored in. */
+type InvitationWithInviter = Invitation & { invitedByUser?: { timeZone: string | null } | null }
+
+/** Ask for the inviter's zone alongside the row, for `expiresAtTimeZone`. */
+const withInviterZone = { invitedByUser: { select: { timeZone: true } } } as const
+
+function mapInvitationToApi(invitation: InvitationWithInviter) {
   return {
     id: invitation.id,
     email: invitation.email,
     roles: invitation.roles as OrgRole[],
     status: invitation.status,
     expiresAt: invitation.expiresAt.toISOString(),
+    // The zone the expiry was anchored in, already resolved to a real IANA name
+    // so the client never has to guess a fallback. The expiry is the last
+    // millisecond of a day on the INVITER's clock, and that day is only
+    // identifiable alongside the zone whose midnight bounds it — read in another
+    // zone the same instant falls on the day before or after.
+    expiresAtTimeZone: resolveTimeZone(invitation.invitedByUser?.timeZone),
     inviteUrl: buildInviteUrl(invitation.token),
     createdAt: invitation.createdAt.toISOString(),
   }
@@ -368,15 +398,24 @@ router.post(
     }
 
     // --- Execute query ---
+    // The expiry is anchored to the end of the inviter's day, so their own zone
+    // is read here. `req.user` deliberately carries no timezone, so it comes off
+    // the row (middleware/auth.ts explains why that object stays minimal).
+    const inviter = await prisma.user.findUnique({
+      where: { id: authReq.user!.id },
+      select: { timeZone: true },
+    })
+
     const invitation = await prisma.invitation.create({
       data: {
         token: mintInviteToken(),
         email,
         orgId,
         roles,
-        expiresAt: new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
+        expiresAt: inviteExpiresAt(inviter?.timeZone),
         invitedByUserId: authReq.user!.id,
       },
+      include: withInviterZone,
     })
 
     logger.info({ orgId, userId: authReq.user!.id, invitationId: invitation.id }, 'created an invite')
@@ -407,6 +446,7 @@ router.get(
     const invitations = await prisma.invitation.findMany({
       where: { orgId, status: 'PENDING' },
       orderBy: { createdAt: 'desc' },
+      include: withInviterZone,
     })
 
     res.json({
@@ -436,18 +476,31 @@ router.post(
     // Scoped by orgId, so an admin of one org cannot regenerate another org's
     // invite by guessing its id. An already-accepted or revoked invite is not a
     // candidate — those are finished, and reviving one would resurrect a link.
+    // The fresh expiry is anchored in the ORIGINAL inviter's zone, so the invite
+    // keeps one clock for its whole life however many admins press this button.
+    // This read authorizes nothing — the `updateMany` below is still the only
+    // gate, and a miss here just means the expiry falls back to UTC rather than
+    // failing the request.
+    const existing = await prisma.invitation.findFirst({
+      where: { id: invitationId, orgId, status: 'PENDING' },
+      select: withInviterZone,
+    })
+
     const result = await prisma.invitation.updateMany({
       where: { id: invitationId, orgId, status: 'PENDING' },
       data: {
         token: mintInviteToken(),
-        expiresAt: new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
+        expiresAt: inviteExpiresAt(existing?.invitedByUser?.timeZone),
       },
     })
     if (result.count === 0) {
       return void res.status(404).json({ error: 'Invitation not found' })
     }
 
-    const invitation = await prisma.invitation.findUniqueOrThrow({ where: { id: invitationId } })
+    const invitation = await prisma.invitation.findUniqueOrThrow({
+      where: { id: invitationId },
+      include: withInviterZone,
+    })
 
     logger.info({ orgId, userId: authReq.user!.id, invitationId }, 'regenerated an invite link')
 

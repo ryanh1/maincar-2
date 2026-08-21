@@ -15,7 +15,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useGetInvitations, useRegenerateInvitation, useRevokeInvitation } from '@/hooks/orgs'
 import { ApiError } from '@/lib/api'
-import { formatDateTime } from '@/lib/datetime'
+import { formatDate } from '@/lib/datetime'
 import { getRoleLabel } from '@/lib/roles'
 
 /** How long the copied checkmark stays up, per the design system. */
@@ -24,11 +24,17 @@ const COPIED_MS = 1500
 interface Props {
   orgId: string
   enabled: boolean
+  /**
+   * The viewing admin's zone. Not read here any more: the only time this row
+   * shows is the expiry, and that renders in the INVITER's zone — see the render
+   * below. Kept on the props so the parent screen keeps passing one thing to all
+   * of its sections.
+   */
   timeZone: string | null | undefined
 }
 
 /** Invites that have been created but not yet accepted. Admin-only on the server. */
-export function Settings_Members_PendingInvites({ orgId, enabled, timeZone }: Props) {
+export function Settings_Members_PendingInvites({ orgId, enabled }: Props) {
   const invitationsQuery = useGetInvitations(orgId, enabled)
   const revokeInvitation = useRevokeInvitation()
   const regenerateInvitation = useRegenerateInvitation()
@@ -87,9 +93,20 @@ export function Settings_Members_PendingInvites({ orgId, enabled, timeZone }: Pr
           >
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{invitation.email}</p>
+              {/* A date, with no time and no zone label (CLAUDE.md → Dates &
+                  Times carves date-only values out of the zone-label rule). The
+                  exact minute an invite dies is not a thing anyone acts on.
+
+                  The zone passed is the INVITER's, not the viewer's. The stored
+                  instant is the last millisecond of a day on the inviter's clock,
+                  so reading it in a viewer's zone lands on the day before or
+                  after for anyone far enough away — two admins would see two
+                  different dates for the same invite, and neither would match the
+                  date the inviter set. Rendering in the anchor zone gives every
+                  reader the one date that was actually chosen. */}
               <p className="truncate text-xs text-muted-foreground">
                 {invitation.roles.map(getRoleLabel).join(', ')} &middot; expires{' '}
-                {formatDateTime(invitation.expiresAt, timeZone)}
+                {formatDate(invitation.expiresAt, invitation.expiresAtTimeZone)}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">

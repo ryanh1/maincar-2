@@ -92,6 +92,7 @@ const INVITATION = {
   roles: ['basic'],
   status: 'PENDING',
   expiresAt: '2026-09-03T16:00:00.000Z',
+  expiresAtTimeZone: 'America/New_York',
   inviteUrl: 'http://localhost:5183/join/tok-1',
   createdAt: '',
 }
@@ -180,8 +181,11 @@ describe('the member list', () => {
     })
 
     expect(screen.getByLabelText('Search members')).toHaveValue('pha')
-    // The role filter chip carries its count back from the URL.
-    expect(screen.getByRole('button', { name: /Role/ })).toHaveTextContent('1')
+    // The role filter carries its count back from the URL — as plain text, not a
+    // chip: a chip inside a button takes the button's hover and press states.
+    const filter = screen.getByRole('button', { name: /Filter by role/ })
+    expect(filter).toHaveTextContent('1')
+    expect(filter.querySelector('[data-slot="badge"]')).toBeNull()
   })
 
   it('a header click sorts, and a second click flips the direction', async () => {
@@ -217,7 +221,7 @@ describe('role changes', () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_MembersTab />)
 
-    await user.click(screen.getByRole('button', { name: 'Change the role of al@acme.com' }))
+    await user.click(screen.getByRole('button', { name: /Change the role of al@acme\.com/ }))
     await user.click(await screen.findByRole('menuitemcheckbox', { name: /Basic/ }))
     // The menu commits on close, so the write carries BOTH roles, not the last click.
     await user.keyboard('{Escape}')
@@ -245,7 +249,7 @@ describe('role changes', () => {
 
     // Demote: tick Basic, untick Admin. The list says two admins remain, so the
     // UI lets the click through — and the server is the one that says no.
-    await user.click(screen.getByRole('button', { name: 'Change the role of al@acme.com' }))
+    await user.click(screen.getByRole('button', { name: /Change the role of al@acme\.com/ }))
     await user.click(await screen.findByRole('menuitemcheckbox', { name: /Basic/ }))
     await user.click(await screen.findByRole('menuitemcheckbox', { name: /Admin/ }))
     await user.keyboard('{Escape}')
@@ -264,13 +268,37 @@ describe('role changes', () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_MembersTab />)
 
-    await user.click(screen.getByRole('button', { name: 'Change the role of al@acme.com' }))
+    await user.click(screen.getByRole('button', { name: /Change the role of al@acme\.com/ }))
 
     const adminItem = await screen.findByRole('menuitemcheckbox', { name: /Admin/ })
     expect(adminItem).toHaveAttribute('aria-disabled', 'true')
     expect(within(adminItem).getByText('Promote someone else to admin first.')).toBeInTheDocument()
   })
 
+  // The trigger used to hold a <Badge> per role INSIDE the button, so the chips
+  // took the button's hover and press states and a second one wrapped out of the
+  // fixed-height box. It is one control now: a truncating summary.
+  it('reads as one control, not a row of chips, when a member holds every role', async () => {
+    useGetMembersMock.mockReturnValue(
+      listState({ data: membersResponse({ members: [member({ roles: ['admin', 'basic'] })] }) }),
+    )
+    renderWithProviders(<Settings_MembersTab />)
+
+    const trigger = screen.getByRole('button', { name: /Change the role of al@acme\.com/ })
+
+    // No chip inside the interactive control.
+    expect(trigger.querySelector('[data-slot="badge"]')).toBeNull()
+    // A fixed width and a truncating label, so two roles cannot spill the box.
+    expect(trigger).toHaveClass('w-40')
+    expect(trigger.querySelector('.truncate')).not.toBeNull()
+    // Nothing wraps: the old bug was a `flex-wrap` span inside a fixed-height button.
+    expect(trigger.querySelector('.flex-wrap')).toBeNull()
+    // The full value stays reachable even when the text is clipped.
+    expect(trigger).toHaveAttribute('title', 'Admin, Basic')
+    expect(trigger).toHaveAccessibleName('Change the role of al@acme.com. Admin, Basic.')
+  })
+
+  // Chips are right for the owner row: nothing there is interactive.
   it("will not edit the owner's row, and says why", async () => {
     useGetMembersMock.mockReturnValue(
       listState({ data: membersResponse({ members: [member({ roles: ['owner'] })] }) }),
@@ -278,7 +306,7 @@ describe('role changes', () => {
     renderWithProviders(<Settings_MembersTab />)
 
     expect(
-      screen.queryByRole('button', { name: 'Change the role of al@acme.com' }),
+      screen.queryByRole('button', { name: /Change the role of al@acme\.com/ }),
     ).not.toBeInTheDocument()
     expect(screen.getByText('Owner')).toBeInTheDocument()
   })
@@ -291,7 +319,7 @@ describe('role changes', () => {
     expect(screen.getByText('Al Pha')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Create invite' })).not.toBeInTheDocument()
     expect(
-      screen.queryByRole('button', { name: 'Change the role of al@acme.com' }),
+      screen.queryByRole('button', { name: /Change the role of al@acme\.com/ }),
     ).not.toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: 'Actions for al@acme.com' }),
@@ -369,6 +397,58 @@ describe('invitations', () => {
     )
   })
 
+  // A membership can hold more than one role, so an invite must be able to grant
+  // more than one. A single-value select could not say it.
+  it('creates an invite carrying more than one role', async () => {
+    const user = userEvent.setup()
+    createInvitationMock.mockResolvedValue({ invitation: INVITATION })
+    renderWithProviders(<Settings_MembersTab />)
+
+    await user.type(screen.getByLabelText('Email'), 'new@acme.com')
+    await user.click(screen.getByRole('button', { name: /^Roles\./ }))
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: /Admin/ }))
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByRole('button', { name: 'Create invite' }))
+
+    await waitFor(() =>
+      expect(createInvitationMock).toHaveBeenCalledWith({
+        orgId: 'org-a',
+        email: 'new@acme.com',
+        roles: ['admin', 'basic'],
+      }),
+    )
+  })
+
+  // Refused, not defaulted. An invite with no role would land someone in the org
+  // with no access — the server says the same thing.
+  it('refuses an invite with no role rather than picking one', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_MembersTab />)
+
+    await user.type(screen.getByLabelText('Email'), 'new@acme.com')
+    await user.click(screen.getByRole('button', { name: /^Roles\./ }))
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: /Basic/ }))
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByRole('button', { name: 'Create invite' }))
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith('Pick at least one role.'))
+    expect(createInvitationMock).not.toHaveBeenCalled()
+  })
+
+  // The invite picker and the member list picker are the SAME control.
+  it('offers the invite the same roles the member list does, and never owner', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_MembersTab />)
+
+    await user.click(screen.getByRole('button', { name: /^Roles\./ }))
+
+    const items = await screen.findAllByRole('menuitemcheckbox')
+    expect(items).toHaveLength(2)
+    expect(items[0]).toHaveTextContent(/^Admin/)
+    expect(items[1]).toHaveTextContent(/^Basic/)
+    expect(screen.queryByRole('menuitemcheckbox', { name: /Owner/ })).not.toBeInTheDocument()
+  })
+
   // No mail is sent yet, so the UI must not claim one was.
   it('says the admin has to send the link, rather than claiming an email went out', () => {
     renderWithProviders(<Settings_MembersTab />)
@@ -413,11 +493,13 @@ describe('invitations', () => {
     expect(toastSuccessMock).toHaveBeenCalledWith('New link created. The old link no longer works.')
   })
 
-  // Every time-of-day carries its zone label (CLAUDE.md → Dates & Times), and the
-  // zone is the VIEWING user's, not the browser's.
-  it("shows the expiry in the viewing user's timezone, with the zone named", () => {
+  // An expiry is a DATE: no time of day, no zone label (CLAUDE.md → Dates &
+  // Times → date-only values). The date is read in the INVITER's zone, not the
+  // viewer's, so two admins in different places read the same date — the one the
+  // inviter actually chose.
+  it('shows the expiry as a date, in the zone it was anchored in', () => {
     renderWithProviders(<Settings_MembersTab />)
 
-    expect(screen.getByText(/expires Sep 3, 2026, 12:00 PM EDT/)).toBeInTheDocument()
+    expect(screen.getByText(/expires Sep 3, 2026$/)).toBeInTheDocument()
   })
 })

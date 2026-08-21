@@ -41,6 +41,11 @@ export function formatDateTime(value: string | Date, timeZone: string | null | u
  * Only for a value that is genuinely a calendar date. A timestamp shortened to
  * its date is still a timestamp, and dropping the zone from one silently shifts
  * it by a day for readers on the other side of midnight.
+ *
+ * A timestamp that was ANCHORED to a wall clock — an invite expiring at the last
+ * millisecond of a day on its inviter's clock — is the one exception, and only
+ * when `timeZone` is the zone it was anchored in rather than the viewer's. That
+ * pins the same calendar date for every reader, which is the point.
  */
 export function formatDate(value: string | Date, timeZone: string | null | undefined): string {
   const date = typeof value === 'string' ? new Date(value) : value

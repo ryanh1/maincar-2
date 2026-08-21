@@ -99,6 +99,14 @@ export interface Invitation {
   roles: MembershipRole[]
   status: string
   expiresAt: string
+  /**
+   * The IANA zone `expiresAt` is anchored in — the inviter's.
+   *
+   * An invite dies at the last millisecond of a day on the inviter's clock, and
+   * that day only has a name alongside the zone whose midnight bounds it. Always
+   * a real zone: the server resolves the fallback so the client never guesses.
+   */
+  expiresAtTimeZone: string
   inviteUrl: string
   createdAt: string
 }
