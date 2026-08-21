@@ -26,10 +26,13 @@ actionable.** A rep reads this between live calls.
 - **Prefer the role noun over a pronoun** — "the admin", "the rep", "the caller".
 - **Errors do not apologize and are never vague.** They say what happened and the fix.
 - **An empty state is an invitation to act**, not an explanation of emptiness.
+- **The tenant is an "organization".** The schema and the API say `org` / `orgId`;
+  every screen says "organization". Never "workspace" — that word comes from
+  `lita` and `loadwire` and means nothing here.
 
 | Instead of | Write |
 |---|---|
-| "A workspace is your company's home in Maincar. Your contacts, calls, and settings all live inside it. Most people name it after their company." | "Name it after your company." |
+| "An organization is your company's home in Maincar. Your contacts, calls, and settings all live inside it. Most people name it after their company." | "Name it after your company." |
 | "Sign in to Maincar" / "Welcome back." | "Sign in" (drop the subtitle) |
 | "A number of your own is the line every outbound call goes out on." | "You need a number to call out." |
 | "This invite link cannot be used. It may have expired, been revoked, or already been accepted." | "This invite is no longer valid. Ask the admin for a new one." |

@@ -28,7 +28,7 @@ dense grid. shadcn/ui page templates for surface and border treatment. Airtable 
   | `text-xs` | 12px | Table column headers, meta, timestamps, helper text |
   | `text-sm` | 14px | **Default.** Body, every control, every table cell, `<h2>` section headings |
   | `text-base` | 16px | Page title in `PageHeader`, empty-state headline |
-  | `text-xl` | 20px | Auth screens only (sign-in, sign-up, join, create workspace) |
+  | `text-xl` | 20px | Auth screens only (sign-in, sign-up, join, create organization) |
   `text-lg`, `text-2xl`, and larger are **forbidden**.
 - **Weights: 400 body, 500 controls and labels, 600 headings.** Never 700+.
 - **Numbers align.** Any column of numbers, duration, count, or money gets
@@ -105,7 +105,7 @@ Build from these. If none fits, **stop and ask** before inventing one.
 | Divider | `Separator` | `components/ui/separator.tsx` |
 | Copy to clipboard | `CopyButton` | `components/ui/copy-button.tsx` |
 | Paging | `Pagination` | `components/ui/pagination.tsx` |
-| Person / workspace tile | `Avatar` / `WorkspaceAvatar` | `components/Avatar.tsx` |
+| Person / org tile | `Avatar` / `OrgAvatar` | `components/Avatar.tsx` |
 | Nothing here yet | `EmptyState` | `components/EmptyState.tsx` |
 | Sign-in style screens | `AuthCard` | `components/AuthCard.tsx` |
 | Sidebar row | `navLinkClass` | `components/navLinkClass.ts` |
