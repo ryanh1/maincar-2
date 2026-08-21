@@ -11,6 +11,7 @@ import invitationsRouter from './routes/invitations.js'
 import membersRouter from './routes/members.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
 import teamRouter from './routes/team.js'
+import twilioVoiceRouter from './routes/twilioVoice.js'
 
 // The app is assembled here and started in index.ts. Keeping them apart is what
 // lets supertest import the app without binding a port.
@@ -57,6 +58,13 @@ app.use('/api/email', emailRouter)
 app.use('/api/orgs/:orgId/phone-numbers', phoneNumbersRouter)
 app.use('/api/orgs/:orgId/calls', callsRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
+
+// Twilio's voice webhook. Mounted at /api/twilio (the router owns /voice, and the
+// status callback /voice/status lands here later). Deliberately NOT org-scoped
+// and NOT behind requireAuth: the caller is Twilio, authenticated by its request
+// signature inside the router, not by an ID token. It parses its own urlencoded
+// bodies, since the app is otherwise JSON-only.
+app.use('/api/twilio', twilioVoiceRouter)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Not found: ${req.method} ${req.originalUrl}` })

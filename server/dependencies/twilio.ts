@@ -268,6 +268,57 @@ export async function initiateOutboundCall(request: OutboundCallRequest): Promis
   return { sid: call.sid, status: call.status }
 }
 
+// --- Voice webhook (Twilio → us) -------------------------------------------
+
+/**
+ * Is this request really from Twilio?
+ *
+ * Twilio signs every webhook: it hashes the full request URL plus the sorted
+ * POST params with our auth token and sends the result as `X-Twilio-Signature`.
+ * `validateRequest` recomputes that hash and compares it in constant time, so a
+ * forged request — one that guessed a CallSid to move a call along, say — cannot
+ * pass without the token, which only Twilio and this server hold.
+ *
+ * Lives here, beside the SDK, for the same reason the rest of this module does:
+ * the route never imports the SDK, and a test can mock THIS function to exercise
+ * the handler without minting a real signature. Returns a plain boolean — the
+ * route owns the 403, as it owns every other HTTP decision.
+ *
+ * A missing token or a missing signature is a hard `false`, never a skipped
+ * check: an unconfigured server must refuse Twilio webhooks, not wave them
+ * through unverified.
+ */
+export function verifyTwilioSignature(args: {
+  signature: string | undefined
+  url: string
+  params: Record<string, string>
+}): boolean {
+  if (!TWILIO_AUTH_TOKEN || !args.signature) return false
+  return twilio.validateRequest(TWILIO_AUTH_TOKEN, args.signature, args.url, args.params)
+}
+
+/**
+ * TwiML that dials one E.164 number: `<Response><Dial>+1…</Dial></Response>`.
+ *
+ * Built through the SDK's `VoiceResponse`, not string-concatenated, so the XML
+ * is escaped and well-formed by construction. The number is passed straight
+ * through — the route has already validated it as the Call row's `toE164`.
+ */
+export function buildDialTwiml(toE164: string): string {
+  const response = new twilio.twiml.VoiceResponse()
+  response.dial(toE164)
+  return response.toString()
+}
+
+/**
+ * An empty `<Response/>`: valid TwiML that tells Twilio to do nothing and hang
+ * up. The outbound handler returns it for a Direction it does not dial, so an
+ * unexpected request still gets well-formed TwiML rather than an error page.
+ */
+export function buildEmptyTwiml(): string {
+  return new twilio.twiml.VoiceResponse().toString()
+}
+
 /** What Twilio echoed back when it accepted the hang-up. */
 export interface HungUpCall {
   /** The `CA…` SID of the call that was ended. */
