@@ -20,7 +20,7 @@ import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
-import type { EmailDraft } from '../generated/prisma/client.js'
+import type { EmailDraft, Prisma } from '../generated/prisma/client.js'
 
 const router = Router()
 
@@ -75,6 +75,19 @@ export const draftInputSchema = z.object({
   // re-render the editor from the response and move the caret mid-sentence.
   // Sanitising happens in composer-body, on its own ticket.
   bodyHtml: z.string().nullable().optional(),
+})
+
+/**
+ * What a PATCH may set: everything POST accepts, plus the two dock-state flags.
+ *
+ * They are two flags and not one because they answer different questions.
+ * `isMinimized` is "this card is collapsed to a chip"; `isOpen` is "this card is
+ * in the dock at all". Closing a card is a SAVE — `isOpen: false` — and the
+ * draft is kept. Only DELETE throws one away.
+ */
+export const draftPatchSchema = draftInputSchema.extend({
+  isOpen: z.boolean().optional(),
+  isMinimized: z.boolean().optional(),
 })
 
 // --- Mappers: database row → API shape ---
@@ -200,6 +213,118 @@ router.post(
 
     // --- Return response ---
     res.status(201).json({ draft: mapDraftToApi(draft) })
+  }),
+)
+
+// ============================================================
+// PATCH /api/email/orgs/:orgId/drafts/:draftId — autosave
+// ============================================================
+// Writes ONLY the keys the body carries. `{ isMinimized: true }` must leave
+// `bodyHtml` alone: the card sends the field it changed, not a whole draft, and
+// a handler that defaulted the absent keys would blank a half-written email
+// every time the rep collapsed the card.
+//
+// The write path is deliberately dumb. It stores what it is given and returns
+// the stored row, and it never rewrites, reformats, or re-indents `bodyHtml` —
+// the editor re-renders from this response, and a reformatted body would move
+// the caret mid-sentence.
+router.patch(
+  '/orgs/:orgId/drafts/:draftId',
+  wrapRoute('PATCH /api/email/orgs/:orgId/drafts/:draftId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const draftId = String(req.params.draftId)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = draftPatchSchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // --- Build filters ---
+    // Key by key, and only the keys that are actually present. Spreading
+    // `parsed.data` would be the same thing today, but one added field with a
+    // default would quietly turn every autosave into a full overwrite.
+    const body = parsed.data
+    const data: Prisma.EmailDraftUpdateManyMutationInput = {}
+    if ('mailAccountId' in body) data.mailAccountId = body.mailAccountId
+    if ('recordId' in body) data.recordId = body.recordId
+    if ('toAddrs' in body) data.toAddrs = body.toAddrs
+    if ('ccAddrs' in body) data.ccAddrs = body.ccAddrs
+    if ('bccAddrs' in body) data.bccAddrs = body.bccAddrs
+    if ('subject' in body) data.subject = body.subject
+    if ('bodyHtml' in body) data.bodyHtml = body.bodyHtml
+    if ('isOpen' in body) data.isOpen = body.isOpen
+    if ('isMinimized' in body) data.isMinimized = body.isMinimized
+
+    // An empty patch is refused rather than run. `@updatedAt` would fire on a
+    // write that changed nothing, and `updatedAt` is what orders the dock left
+    // to right — a no-op save would shuffle the rep's cards.
+    if (Object.keys(data).length === 0) {
+      return void res.status(400).json({ error: 'Name a field to save.' })
+    }
+
+    // --- Execute query ---
+    // updateMany filtered on all three keys, never `update({ where: { id } })`:
+    // the where clause IS the boundary, so another org's draft and another
+    // member's draft both come back as count 0 even if the gate above were
+    // bypassed. Count 0 is a 404, never a 403 — a 403 would confirm the draft
+    // exists and tell the caller they had guessed a real id.
+    const result = await prisma.emailDraft.updateMany({
+      where: { id: draftId, orgId, userId },
+      data,
+    })
+    if (result.count === 0) {
+      return void res.status(404).json({ error: 'Draft not found' })
+    }
+
+    // Read the row back, through the same three keys, because updateMany
+    // returns a count and the client needs the stored draft.
+    const draft = await prisma.emailDraft.findFirst({ where: { id: draftId, orgId, userId } })
+    if (!draft) {
+      return void res.status(404).json({ error: 'Draft not found' })
+    }
+
+    // --- Return response ---
+    res.json({ draft: mapDraftToApi(draft) })
+  }),
+)
+
+// ============================================================
+// DELETE /api/email/orgs/:orgId/drafts/:draftId — discard
+// ============================================================
+// The only thing in the module that destroys a draft. Closing a card is a PATCH
+// with `isOpen: false`; this is the trash can, behind an AlertDialog on the
+// client (SPEC-composer-dock.md → API).
+router.delete(
+  '/orgs/:orgId/drafts/:draftId',
+  wrapRoute('DELETE /api/email/orgs/:orgId/drafts/:draftId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const draftId = String(req.params.draftId)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    // deleteMany with both tenant keys, for the same reason PATCH uses
+    // updateMany. Another member's draft deletes nothing and answers 404.
+    const result = await prisma.emailDraft.deleteMany({ where: { id: draftId, orgId, userId } })
+    if (result.count === 0) {
+      return void res.status(404).json({ error: 'Draft not found' })
+    }
+
+    // --- Return response ---
+    // The id comes back so the client can drop exactly that card, without
+    // having to trust the request it just sent.
+    res.json({ draft: { id: draftId } })
   }),
 )
 

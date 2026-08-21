@@ -1,5 +1,5 @@
-// Route tests for /api/email/orgs/:orgId/drafts — the read and create halves of
-// draft CRUD (MAI-72).
+// Route tests for /api/email/orgs/:orgId/drafts — draft CRUD: the read and
+// create halves (MAI-72) and the autosave and discard halves (MAI-74).
 //
 // What these exist to protect:
 //   - a draft is org-scoped AND private to its author, so BOTH keys are in the
@@ -9,6 +9,10 @@
 //   - the 12-open cap, refused with a message the rep can act on
 //   - addresses are validated for SHAPE only — "ann@" is what a rep who is
 //     still typing has, and autosave fires mid-word
+//   - a PATCH writes ONLY the keys it was handed, so collapsing a card cannot
+//     blank the half-written body
+//   - another member's draft, and another org's draft, are a 404 and never a
+//     403 — a 403 confirms the id names a real row
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
@@ -18,7 +22,14 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
-    emailDraft: { findMany: vi.fn(), count: vi.fn(), create: vi.fn() },
+    emailDraft: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      count: vi.fn(),
+      create: vi.fn(),
+      updateMany: vi.fn(),
+      deleteMany: vi.fn(),
+    },
   },
   verifyTokenMock: vi.fn(),
 }))
@@ -40,6 +51,9 @@ const ORG_A = 'org-a'
 const ORG_B = 'org-b'
 const URL_A = `/api/email/orgs/${ORG_A}/drafts`
 const URL_B = `/api/email/orgs/${ORG_B}/drafts`
+const DRAFT_ID = 'draft-1'
+const ONE_A = `${URL_A}/${DRAFT_ID}`
+const ONE_B = `${URL_B}/${DRAFT_ID}`
 
 function userRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -110,6 +124,10 @@ beforeEach(() => {
   prismaMock.emailDraft.create.mockImplementation(
     async ({ data }: { data: Record<string, unknown> }) => draftRow(data),
   )
+  // The row exists and belongs to the caller unless a test says otherwise.
+  prismaMock.emailDraft.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.emailDraft.deleteMany.mockResolvedValue({ count: 1 })
+  prismaMock.emailDraft.findFirst.mockResolvedValue(draftRow())
 })
 
 describe('GET /api/email/orgs/:orgId/drafts', () => {
@@ -377,5 +395,243 @@ describe('org isolation and privacy', () => {
     await request(app).get(URL_B).set('Authorization', AUTH)
 
     expect(prismaMock.emailDraft.findMany.mock.calls[0][0].where.orgId).toBe(ORG_B)
+  })
+})
+
+describe('PATCH /api/email/orgs/:orgId/drafts/:draftId', () => {
+  it('returns the stored draft, keyed', async () => {
+    prismaMock.emailDraft.findFirst.mockResolvedValue(draftRow({ subject: 'Re: Quote' }))
+
+    const res = await request(app)
+      .patch(ONE_A)
+      .set('Authorization', AUTH)
+      .send({ subject: 'Re: Quote' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.draft).toMatchObject({ id: DRAFT_ID, subject: 'Re: Quote' })
+    expect(res.body.draft).not.toHaveProperty('orgId')
+    expect(res.body.draft).not.toHaveProperty('userId')
+  })
+
+  it('writes ONLY the keys the body carries — collapsing a card cannot blank the body', async () => {
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ isMinimized: true })
+
+    const args = prismaMock.emailDraft.updateMany.mock.calls[0][0]
+    expect(args.data).toEqual({ isMinimized: true })
+    // The half-written email is the whole point of the feature. None of these
+    // may appear in the update just because the body left them out.
+    expect(args.data).not.toHaveProperty('bodyHtml')
+    expect(args.data).not.toHaveProperty('subject')
+    expect(args.data).not.toHaveProperty('toAddrs')
+  })
+
+  it('writes an explicit null, because clearing a subject is a real edit', async () => {
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ subject: null })
+
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].data).toEqual({ subject: null })
+  })
+
+  it('closes a card as a SAVE, never a delete', async () => {
+    prismaMock.emailDraft.findFirst.mockResolvedValue(draftRow({ isOpen: false }))
+
+    const res = await request(app).patch(ONE_A).set('Authorization', AUTH).send({ isOpen: false })
+
+    expect(res.status).toBe(200)
+    expect(res.body.draft.isOpen).toBe(false)
+    expect(prismaMock.emailDraft.deleteMany).not.toHaveBeenCalled()
+  })
+
+  it('stores bodyHtml byte for byte, without reformatting it', async () => {
+    const body = '<div>Hi Ann,</div><div><br></div><div>  spaced   &amp; &lt;kept&gt;</div>'
+    prismaMock.emailDraft.findFirst.mockResolvedValue(draftRow({ bodyHtml: body }))
+
+    const res = await request(app).patch(ONE_A).set('Authorization', AUTH).send({ bodyHtml: body })
+
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].data.bodyHtml).toBe(body)
+    expect(res.body.draft.bodyHtml).toBe(body)
+  })
+
+  it('updates through all three keys, never by id alone', async () => {
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ subject: 'Hi' })
+
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].where).toEqual({
+      id: DRAFT_ID,
+      orgId: ORG_A,
+      userId: 'user-a',
+    })
+    // updateMany, because `update({ where: { id } })` would ignore both.
+    expect(prismaMock.emailDraft.updateMany).toHaveBeenCalled()
+  })
+
+  it('refuses an empty patch, which would bump updatedAt and reshuffle the dock', async () => {
+    const res = await request(app).patch(ONE_A).set('Authorization', AUTH).send({})
+
+    expect(res.status).toBe(400)
+    expect(prismaMock.emailDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('validates addresses the same way POST does', async () => {
+    const res = await request(app)
+      .patch(ONE_A)
+      .set('Authorization', AUTH)
+      .send({ toAddrs: [`${'a'.repeat(312)}@acme.com`] })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('320')
+    expect(prismaMock.emailDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('still accepts "ann@" mid-word', async () => {
+    const res = await request(app)
+      .patch(ONE_A)
+      .set('Authorization', AUTH)
+      .send({ toAddrs: ['ann@'] })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].data.toAddrs).toEqual(['ann@'])
+  })
+
+  it('rejects an unauthenticated PATCH', async () => {
+    const res = await request(app).patch(ONE_A).send({ subject: 'Hi' })
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.emailDraft.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('DELETE /api/email/orgs/:orgId/drafts/:draftId', () => {
+  it('removes the row and hands back the deleted id', async () => {
+    const res = await request(app).delete(ONE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.draft).toEqual({ id: DRAFT_ID })
+  })
+
+  it('deletes through all three keys, never by id alone', async () => {
+    await request(app).delete(ONE_A).set('Authorization', AUTH)
+
+    expect(prismaMock.emailDraft.deleteMany.mock.calls[0][0].where).toEqual({
+      id: DRAFT_ID,
+      orgId: ORG_A,
+      userId: 'user-a',
+    })
+  })
+
+  it('rejects an unauthenticated DELETE', async () => {
+    const res = await request(app).delete(ONE_A)
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.emailDraft.deleteMany).not.toHaveBeenCalled()
+  })
+})
+
+// The security tests that matter most in this issue. A draft is private to its
+// author, so the answer for someone else's draft must be identical to the
+// answer for an id that does not exist. A 403 would confirm the row is real.
+describe('a draft is private to its author — 404, never 403', () => {
+  /** Signs in a DIFFERENT rep who is a real, active member of the same org. */
+  function authAsSecondMemberOfOrgA(): void {
+    authAs(membershipRow({ id: 'mem-b', userId: 'user-b' }))
+    prismaMock.user.findUnique.mockResolvedValue(
+      userRow({ id: 'user-b', firebaseUid: 'uid-b', email: 'b@orga.com' }),
+    )
+  }
+
+  it('PATCH: a second member of the SAME org gets a 404', async () => {
+    // Same org, real membership, real draft id — and still nothing to write,
+    // because `userId` is in the where clause too.
+    authAsSecondMemberOfOrgA()
+    prismaMock.emailDraft.updateMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app).patch(ONE_A).set('Authorization', AUTH).send({ subject: 'Mine' })
+
+    expect(res.status).toBe(404)
+    expect(res.status).not.toBe(403)
+    expect(res.body.error).toBe('Draft not found')
+    // The author's id, not the caller's, is what the row carries — so the
+    // caller's own id in the where clause is what makes this miss.
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].where).toEqual({
+      id: DRAFT_ID,
+      orgId: ORG_A,
+      userId: 'user-b',
+    })
+  })
+
+  it('DELETE: a second member of the SAME org gets a 404', async () => {
+    authAsSecondMemberOfOrgA()
+    prismaMock.emailDraft.deleteMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app).delete(ONE_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.status).not.toBe(403)
+    expect(res.body.error).toBe('Draft not found')
+    expect(prismaMock.emailDraft.deleteMany.mock.calls[0][0].where).toEqual({
+      id: DRAFT_ID,
+      orgId: ORG_A,
+      userId: 'user-b',
+    })
+  })
+
+  it('PATCH: a valid draft id under a DIFFERENT org is a 404', async () => {
+    // The caller really is a member of ORG_B, so the gate lets them through.
+    // The draft belongs to ORG_A, so the where clause finds nothing.
+    authAs(
+      membershipRow({
+        orgId: ORG_B,
+        org: { id: ORG_B, name: 'Org B', logo: null, enabled: true, createdAt: NOW, updatedAt: NOW },
+      }),
+    )
+    prismaMock.emailDraft.updateMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app).patch(ONE_B).set('Authorization', AUTH).send({ subject: 'Hi' })
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].where.orgId).toBe(ORG_B)
+  })
+
+  it('DELETE: a valid draft id under a DIFFERENT org is a 404', async () => {
+    authAs(
+      membershipRow({
+        orgId: ORG_B,
+        org: { id: ORG_B, name: 'Org B', logo: null, enabled: true, createdAt: NOW, updatedAt: NOW },
+      }),
+    )
+    prismaMock.emailDraft.deleteMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app).delete(ONE_B).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.emailDraft.deleteMany.mock.calls[0][0].where.orgId).toBe(ORG_B)
+  })
+
+  it('PATCH: a non-member never reaches the draft at all', async () => {
+    authAs(null)
+
+    const res = await request(app).patch(ONE_B).set('Authorization', AUTH).send({ subject: 'Hi' })
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.emailDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('DELETE: a non-member never reaches the draft at all', async () => {
+    authAs(null)
+
+    const res = await request(app).delete(ONE_B).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.emailDraft.deleteMany).not.toHaveBeenCalled()
+  })
+
+  it('an id that does not exist is the same 404, so the two cannot be told apart', async () => {
+    prismaMock.emailDraft.updateMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app)
+      .patch(`${URL_A}/no-such-draft`)
+      .set('Authorization', AUTH)
+      .send({ subject: 'Hi' })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Draft not found')
   })
 })
