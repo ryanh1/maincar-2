@@ -15,7 +15,7 @@ import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { isAdmin, type UserRole } from '../lib/roles.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
-import type { Org, User } from '../generated/prisma/client.js'
+import type { Membership, Org, User } from '../generated/prisma/client.js'
 
 const router = Router()
 
@@ -34,7 +34,7 @@ function mapUserToApi(user: User) {
     imageUrl: user.imageUrl,
     roles: user.roles as UserRole[],
     enabled: user.enabled,
-    orgId: user.orgId,
+    currentOrgId: user.currentOrgId,
     timeZone: user.timeZone,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),
@@ -45,10 +45,70 @@ function mapOrgToApi(org: Org) {
   return {
     id: org.id,
     name: org.name,
+    logo: org.logo,
     enabled: org.enabled,
     createdAt: org.createdAt.toISOString(),
     updatedAt: org.updatedAt.toISOString(),
   }
+}
+
+/**
+ * One org the caller belongs to, plus the roles they hold IN that org. This is
+ * what the org switcher lists, and what every permission check reads: "admin" is
+ * per-org now, so a user can run one org and be a basic member of another.
+ */
+function mapMembershipToApi(membership: Membership & { org: Org }) {
+  return {
+    orgId: membership.orgId,
+    org: mapOrgToApi(membership.org),
+    roles: membership.roles as UserRole[],
+  }
+}
+
+type ResolvedActiveOrg =
+  | { status: 'ok'; org: Org | null; memberships: (Membership & { org: Org })[]; switchedTo: string | null }
+  | { status: 'no_enabled_org'; memberships: (Membership & { org: Org })[] }
+
+/**
+ * Picks the org a session acts in.
+ *
+ * `currentOrgId` is only a preference, so it is never trusted on its own: it
+ * counts only when the caller still has a membership in that org AND the org is
+ * enabled. Otherwise we fall through to their next enabled org and report the
+ * switch, so the caller's stored preference can be repaired.
+ *
+ * A user whose every org is disabled gets `no_enabled_org` — the caller turns
+ * that into the same 403 a disabled account has always produced.
+ */
+async function resolveActiveOrg(user: User): Promise<ResolvedActiveOrg> {
+  const memberships = await prisma.membership.findMany({
+    where: { userId: user.id },
+    include: { org: true },
+    orderBy: { createdAt: 'asc' },
+  })
+
+  // A user with no memberships at all is not disabled, they simply have no org
+  // yet. That is a real state (an invite not yet accepted), not an error.
+  if (memberships.length === 0) {
+    return { status: 'ok', org: null, memberships, switchedTo: null }
+  }
+
+  const usable = memberships.filter((m) => m.org.enabled)
+  if (usable.length === 0) {
+    return { status: 'no_enabled_org', memberships }
+  }
+
+  const current = usable.find((m) => m.orgId === user.currentOrgId)
+  if (current) {
+    return { status: 'ok', org: current.org, memberships, switchedTo: null }
+  }
+
+  const fallback = usable[0]
+  logger.info(
+    { userId: user.id, from: user.currentOrgId, to: fallback.orgId },
+    'current org is unusable, falling back to another membership',
+  )
+  return { status: 'ok', org: fallback.org, memberships, switchedTo: fallback.orgId }
 }
 
 // ============================================================
@@ -106,31 +166,57 @@ router.get(
         })
       }
 
-      // First sign-in. A new Org and its first admin are created together, in one
-      // transaction — a User without an Org, or an Org with no way in, is a state
-      // nothing else in the app knows how to handle.
+      // First sign-in. A new Org and its first admin membership are created together,
+      // in one transaction. The User is also set to have this org as their currentOrgId.
       user = await prisma.$transaction(async (tx) => {
         const org = await tx.org.create({ data: {} })
-        return tx.user.create({
+        const newUser = await tx.user.create({
           data: {
             firebaseUid,
             email,
+            currentOrgId: org.id,
+          },
+        })
+        // Create the admin membership
+        await tx.membership.create({
+          data: {
+            userId: newUser.id,
             orgId: org.id,
-            // The person who creates the org runs it.
             roles: ['admin'],
           },
         })
+        return newUser
       })
-      logger.info({ userId: user.id, orgId: user.orgId }, 'provisioned a new org and admin')
+      logger.info({ userId: user.id, currentOrgId: user.currentOrgId }, 'provisioned a new org and admin')
     }
 
-    const org = await prisma.org.findUniqueOrThrow({ where: { id: user.orgId } })
-
-    if (!user.enabled || !org.enabled) {
+    if (!user.enabled) {
       return void res.status(403).json({ error: 'This account is disabled' })
     }
 
-    return void res.json({ user: mapUserToApi(user), org: mapOrgToApi(org) })
+    // --- Resolve the active org ---
+    // A user can belong to several orgs now, so the active one is whichever
+    // `currentOrgId` points at — as long as that org is still enabled. A disabled
+    // org is never handed back as active, and `resolveActiveOrg` falls through to
+    // another enabled membership rather than locking a multi-org user out.
+    const resolved = await resolveActiveOrg(user)
+    if (resolved.status === 'no_enabled_org') {
+      // Every org this user belongs to is disabled. Same answer as before
+      // multi-org: signing out and back in will not help.
+      return void res.status(403).json({ error: 'This account is disabled' })
+    }
+    if (resolved.switchedTo) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { currentOrgId: resolved.switchedTo },
+      })
+    }
+
+    return void res.json({
+      user: mapUserToApi(user),
+      org: resolved.org ? mapOrgToApi(resolved.org) : null,
+      memberships: resolved.memberships.map(mapMembershipToApi),
+    })
   }),
 )
 
@@ -165,20 +251,31 @@ router.patch(
       data: profile,
     })
 
-    // The org name is an admin-only field. A non-admin who sends it is ignored
-    // rather than rejected — they may simply be on an older client.
-    if (orgName !== undefined && isAdmin(authUser.roles)) {
-      await prisma.org.update({
-        // updateMany-style scoping is unnecessary here: orgId comes from the
-        // verified token, never from the request body.
-        where: { id: authUser.orgId },
-        data: { name: orgName },
+    // The org name is an admin-only field, and "admin" is per-org now: the gate is
+    // the caller's Membership in the org they are acting in, never a global role.
+    // A non-admin who sends it is ignored rather than rejected — they may simply
+    // be on an older client.
+    if (orgName !== undefined && user.currentOrgId) {
+      const membership = await prisma.membership.findFirst({
+        where: { userId: authUser.id, orgId: user.currentOrgId },
       })
+      if (isAdmin((membership?.roles ?? []) as UserRole[])) {
+        // Scoped by orgId as well as id, so a stale currentOrgId can never write
+        // an org the caller has no membership in (CLAUDE.md → Org Isolation).
+        await prisma.org.updateMany({
+          where: { id: user.currentOrgId },
+          data: { name: orgName },
+        })
+      }
     }
 
-    const org = await prisma.org.findUniqueOrThrow({ where: { id: user.orgId } })
+    const resolved = await resolveActiveOrg(user)
 
-    return void res.json({ user: mapUserToApi(user), org: mapOrgToApi(org) })
+    return void res.json({
+      user: mapUserToApi(user),
+      org: resolved.status === 'ok' && resolved.org ? mapOrgToApi(resolved.org) : null,
+      memberships: resolved.memberships.map(mapMembershipToApi),
+    })
   }),
 )
 

@@ -7,7 +7,14 @@ import request from 'supertest'
 const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
-    org: { create: vi.fn(), update: vi.fn(), findUniqueOrThrow: vi.fn() },
+    org: {
+      create: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn(),
+      findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
+    },
+    membership: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
     $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
@@ -33,10 +40,10 @@ function userRow(overrides: Record<string, unknown> = {}) {
     lastName: 'Pha',
     title: null,
     imageUrl: null,
-    roles: ['admin'],
+    roles: ['basic'],
     enabled: true,
     timeZone: null,
-    orgId: 'org-a',
+    currentOrgId: 'org-a',
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -47,6 +54,7 @@ function orgRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'org-a',
     name: 'Org A',
+    logo: null,
     enabled: true,
     createdAt: NOW,
     updatedAt: NOW,
@@ -54,16 +62,42 @@ function orgRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
-/** Makes the token verify and the user lookup succeed. Returns the auth header. */
-function authAs(user = userRow()): string {
+/**
+ * One membership joining a user to an org. Roles are PER-ORG now, so this — not
+ * `user.roles` — is what decides whether the caller is an admin of this org.
+ */
+function membershipRow(overrides: Record<string, unknown> = {}) {
+  const org = (overrides.org as ReturnType<typeof orgRow>) ?? orgRow()
+  return {
+    id: 'mem-a',
+    userId: 'user-a',
+    orgId: org.id,
+    roles: ['admin'],
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+    org,
+  }
+}
+
+/**
+ * Makes the token verify, the user lookup succeed, and the caller belong to the
+ * given orgs. Returns the auth header.
+ */
+function authAs(user = userRow(), memberships = [membershipRow()]): string {
   verifyTokenMock.mockResolvedValue({ uid: user.firebaseUid, email: user.email })
-  prismaMock.user.findUnique.mockResolvedValue({ ...user, org: { enabled: true } })
+  prismaMock.user.findUnique.mockResolvedValue(user)
+  prismaMock.membership.findMany.mockResolvedValue(memberships)
+  prismaMock.membership.findFirst.mockResolvedValue(memberships[0] ?? null)
   return 'Bearer fake-token'
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   prismaMock.org.findUniqueOrThrow.mockResolvedValue(orgRow())
+  prismaMock.org.findUnique.mockResolvedValue(orgRow())
+  prismaMock.membership.findMany.mockResolvedValue([membershipRow()])
+  prismaMock.membership.findFirst.mockResolvedValue(membershipRow())
 })
 
 describe('GET /api/health', () => {
@@ -106,16 +140,27 @@ describe('GET /api/auth/me', () => {
     verifyTokenMock.mockResolvedValue({ uid: 'uid-new', email: 'new@orgb.com' })
     // Neither the uid lookup nor the email collision check finds anything.
     prismaMock.user.findUnique.mockResolvedValue(null)
-    const provisioned = userRow({ id: 'user-new', firebaseUid: 'uid-new', email: 'new@orgb.com' })
+    const provisioned = userRow({
+      id: 'user-new',
+      firebaseUid: 'uid-new',
+      email: 'new@orgb.com',
+      currentOrgId: 'org-new',
+    })
     prismaMock.$transaction.mockResolvedValue(provisioned)
+    prismaMock.membership.findMany.mockResolvedValue([
+      membershipRow({ userId: 'user-new', org: orgRow({ id: 'org-new' }), roles: ['admin'] }),
+    ])
 
     const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer fake-token')
 
     expect(res.status).toBe(200)
     expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
     expect(res.body.user.email).toBe('new@orgb.com')
-    // The person who creates the org runs it.
-    expect(res.body.user.roles).toContain('admin')
+    // The person who creates the org runs it — as a role on the MEMBERSHIP now,
+    // because "admin" means admin of one org, not of the platform.
+    expect(res.body.memberships).toHaveLength(1)
+    expect(res.body.memberships[0].roles).toContain('admin')
+    expect(res.body.org.id).toBe('org-new')
   })
 
   // A Firebase account deleted and recreated with the same address (a reset
@@ -147,13 +192,42 @@ describe('GET /api/auth/me', () => {
     expect(res.status).toBe(403)
   })
 
-  it('403s when the org is disabled, even though the user is fine', async () => {
-    authAs()
-    prismaMock.org.findUniqueOrThrow.mockResolvedValue(orgRow({ enabled: false }))
+  it('403s when every org the user belongs to is disabled', async () => {
+    authAs(userRow(), [membershipRow({ org: orgRow({ enabled: false }) })])
 
     const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer fake-token')
 
     expect(res.status).toBe(403)
+  })
+
+  // The multi-org half of the rule above: one bad org must not lock a user out of
+  // the others. The disabled org is simply never handed back as the active one.
+  it('falls back to an enabled org instead of locking out a multi-org user', async () => {
+    authAs(userRow({ currentOrgId: 'org-off' }), [
+      membershipRow({ id: 'mem-off', orgId: 'org-off', org: orgRow({ id: 'org-off', enabled: false }) }),
+      membershipRow({ id: 'mem-on', orgId: 'org-on', org: orgRow({ id: 'org-on' }), roles: ['basic'] }),
+    ])
+    prismaMock.user.update.mockResolvedValue(userRow({ currentOrgId: 'org-on' }))
+
+    const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer fake-token')
+
+    expect(res.status).toBe(200)
+    expect(res.body.org.id).toBe('org-on')
+    // The stale preference is repaired, so the next request does not re-resolve.
+    expect(prismaMock.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-a' },
+      data: { currentOrgId: 'org-on' },
+    })
+  })
+
+  it('returns a null org for a user who belongs to none yet', async () => {
+    authAs(userRow({ currentOrgId: null }), [])
+
+    const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer fake-token')
+
+    expect(res.status).toBe(200)
+    expect(res.body.org).toBeNull()
+    expect(res.body.memberships).toEqual([])
   })
 
   it('500s without leaking the underlying message when the database throws', async () => {
@@ -213,8 +287,8 @@ describe('PATCH /api/auth/me', () => {
     expect(prismaMock.user.update).not.toHaveBeenCalled()
   })
 
-  it('lets an admin rename the org', async () => {
-    const auth = authAs(userRow({ roles: ['admin'] }))
+  it('lets an admin of the active org rename it', async () => {
+    const auth = authAs(userRow(), [membershipRow({ roles: ['admin'] })])
     prismaMock.user.update.mockResolvedValue(userRow())
 
     const res = await request(app)
@@ -223,15 +297,17 @@ describe('PATCH /api/auth/me', () => {
       .send({ orgName: 'Renamed Org' })
 
     expect(res.status).toBe(200)
-    expect(prismaMock.org.update).toHaveBeenCalledWith({
+    expect(prismaMock.org.updateMany).toHaveBeenCalledWith({
       where: { id: 'org-a' },
       data: { name: 'Renamed Org' },
     })
   })
 
-  it('ignores orgName from a non-admin instead of renaming the org', async () => {
-    const auth = authAs(userRow({ roles: ['basic'] }))
-    prismaMock.user.update.mockResolvedValue(userRow({ roles: ['basic'] }))
+  // The gate is the caller's role IN THIS ORG. A user who is an admin somewhere
+  // else is still a basic member here, and must not be able to rename it.
+  it('ignores orgName from a non-admin of the active org', async () => {
+    const auth = authAs(userRow(), [membershipRow({ roles: ['basic'] })])
+    prismaMock.user.update.mockResolvedValue(userRow())
 
     const res = await request(app)
       .patch('/api/auth/me')
@@ -239,7 +315,7 @@ describe('PATCH /api/auth/me', () => {
       .send({ orgName: 'Hostile Rename' })
 
     expect(res.status).toBe(200)
-    expect(prismaMock.org.update).not.toHaveBeenCalled()
+    expect(prismaMock.org.updateMany).not.toHaveBeenCalled()
   })
 })
 

@@ -10,9 +10,16 @@ export interface User {
   lastName: string | null
   imageUrl: string | null
   title: string | null
+  /**
+   * Global platform roles. NOT the roles that decide what this user may do inside
+   * an org — those are per-org and live on `Membership.roles`, because a user can
+   * run one org and be a plain member of another. Read `useAuth().isAdmin`, which
+   * resolves the active org's membership, rather than reading this.
+   */
   roles: UserRole[]
   enabled: boolean
-  orgId: string
+  /** The org the session is acting in. Null when the user belongs to none yet. */
+  currentOrgId: string | null
   /**
    * IANA timezone (e.g. "America/New_York"), captured during onboarding. Every
    * time-of-day shown to this user is rendered in it (CLAUDE.md → Dates & Times).
@@ -26,12 +33,22 @@ export interface User {
 export interface Org {
   id: string
   name: string | null
+  logo: string | null
   enabled: boolean
   createdAt: string
   updatedAt: string
 }
 
+/** One org the user belongs to, plus the roles they hold in THAT org. */
+export interface Membership {
+  orgId: string
+  org: Org
+  roles: UserRole[]
+}
+
 export interface MeResponse {
   user: User
-  org: Org
+  /** Null when the user belongs to no enabled org yet. */
+  org: Org | null
+  memberships: Membership[]
 }

@@ -43,9 +43,9 @@ export function wrapRoute(name: string, handler: RouteHandler, opts: { quiet?: b
   return async (req: Request, res: Response): Promise<void> => {
     const authReq = req as unknown as AuthenticatedRequest
     const userId = authReq.user?.id ?? 'anon'
-    const orgId = authReq.user?.orgId ?? 'none'
+    const currentOrgId = authReq.user?.currentOrgId ?? 'none'
     const requestId = req.id
-    const fields = { route: name, requestId, userId, orgId }
+    const fields = { route: name, requestId, userId, currentOrgId }
 
     if (opts.quiet) logger.debug(fields, `${name} called`)
     else logger.info(fields, `${name} called`)

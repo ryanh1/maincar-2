@@ -37,9 +37,15 @@ export interface SeededOrg {
   adminUserId: string
   adminEmail: string
   adminFirebaseUid: string
+  adminMembershipId: string
 }
 
-/** Seeds an Org plus its first admin — the minimum an authenticated route needs. */
+/**
+ * Seeds an Org plus its first admin — the minimum an authenticated route needs.
+ *
+ * Multi-org: the user is joined to the org through a Membership, and the org is
+ * set as their `currentOrgId`. The per-org role lives on the Membership.
+ */
 export async function seedOrgWithAdmin(
   prisma: PrismaClient,
   opts: { orgName?: string } = {},
@@ -50,13 +56,16 @@ export async function seedOrgWithAdmin(
   const org = await prisma.org.create({ data: { name: orgName } })
   const admin = await prisma.user.create({
     data: {
-      orgId: org.id,
       firebaseUid: `fb_${suffix}`,
       email: `admin_${suffix}@example.com`,
       firstName: 'Avery',
       lastName: 'Admin',
       roles: ['admin'],
+      currentOrgId: org.id,
     },
+  })
+  const membership = await prisma.membership.create({
+    data: { userId: admin.id, orgId: org.id, roles: ['admin'] },
   })
 
   return {
@@ -65,5 +74,34 @@ export async function seedOrgWithAdmin(
     adminUserId: admin.id,
     adminEmail: admin.email,
     adminFirebaseUid: admin.firebaseUid,
+    adminMembershipId: membership.id,
+  }
+}
+
+/** Adds an existing-style member user to an org with the given per-org roles. */
+export async function seedMember(
+  prisma: PrismaClient,
+  orgId: string,
+  opts: { roles?: string[] } = {},
+): Promise<{ userId: string; email: string; firebaseUid: string; membershipId: string }> {
+  const suffix = uid()
+  const user = await prisma.user.create({
+    data: {
+      firebaseUid: `fb_member_${suffix}`,
+      email: `member_${suffix}@example.com`,
+      firstName: 'Morgan',
+      lastName: 'Member',
+      currentOrgId: orgId,
+    },
+  })
+  const membership = await prisma.membership.create({
+    data: { userId: user.id, orgId, roles: opts.roles ?? ['basic'] },
+  })
+
+  return {
+    userId: user.id,
+    email: user.email,
+    firebaseUid: user.firebaseUid,
+    membershipId: membership.id,
   }
 }

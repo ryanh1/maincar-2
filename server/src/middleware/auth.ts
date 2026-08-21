@@ -13,7 +13,7 @@ export interface AuthUser {
   lastName: string | null
   roles: UserRole[]
   enabled: boolean
-  orgId: string
+  currentOrgId: string | null
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -31,8 +31,8 @@ function bearerToken(req: Request): string | null {
  * Verifies the Firebase ID token and attaches the matching `User` row to the
  * request. Every authenticated route mounts this ahead of `wrapRoute`.
  *
- * `req.user.orgId` is the tenant boundary: every org-scoped query filters on it,
- * reads and writes alike (CLAUDE.md → Org Isolation & Security).
+ * With multi-org support, users can belong to multiple orgs. The currentOrgId
+ * is their active org for UI context; org-scoped routes verify membership independently.
  *
  * The 401 responses stay deliberately vague. Telling a caller whether the token
  * was invalid or the account merely unknown is information they have not earned.
@@ -59,20 +59,18 @@ export async function requireAuth(
 
   const user = await prisma.user.findUnique({
     where: { firebaseUid },
-    include: { org: { select: { enabled: true } } },
   })
 
   if (!user) {
     // The token is valid but no row exists yet. GET /api/auth/me provisions the
-    // Org and User on first call, so it deliberately does NOT use this middleware.
+    // User on first call, so it deliberately does NOT use this middleware.
     res.status(401).json({ error: 'Not signed in' })
     return
   }
 
-  // A disabled user or a disabled org is 403, not 401: the caller IS who they say
-  // they are, and signing out and back in will not help.
-  if (!user.enabled || !user.org.enabled) {
-    logger.warn({ userId: user.id, orgId: user.orgId }, 'blocked a disabled account')
+  // A disabled user is 403, not 401: the caller IS who they say they are.
+  if (!user.enabled) {
+    logger.warn({ userId: user.id }, 'blocked a disabled account')
     res.status(403).json({ error: 'This account is disabled' })
     return
   }
@@ -85,7 +83,7 @@ export async function requireAuth(
     lastName: user.lastName,
     roles: user.roles as UserRole[],
     enabled: user.enabled,
-    orgId: user.orgId,
+    currentOrgId: user.currentOrgId,
   }
 
   next()

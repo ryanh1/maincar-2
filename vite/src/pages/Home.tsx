@@ -4,7 +4,12 @@ import { getRoleLabel } from '@/lib/roles'
 import { useAuth } from '@/providers/useAuth'
 
 export function Home() {
-  const { user, org } = useAuth()
+  const { user, org, memberships } = useAuth()
+
+  // The role that matters is the one held IN THE ACTIVE ORG, not `user.roles`
+  // (those are global platform roles). Showing the global set here would tell an
+  // admin of this org that they are "Basic".
+  const activeRoles = memberships.find((m) => m.orgId === org?.id)?.roles ?? []
 
   return (
     <div className="mx-auto w-full max-w-3xl">
@@ -30,7 +35,7 @@ export function Home() {
           <dd>{user?.email}</dd>
 
           <dt className="text-muted-foreground">Role</dt>
-          <dd>{user?.roles.map(getRoleLabel).join(', ')}</dd>
+          <dd>{activeRoles.length > 0 ? activeRoles.map(getRoleLabel).join(', ') : 'No org yet'}</dd>
 
           <dt className="text-muted-foreground">Time zone</dt>
           <dd>{user?.timeZone ?? 'Not set yet'}</dd>

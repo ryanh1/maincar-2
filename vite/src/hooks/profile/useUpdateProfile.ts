@@ -18,7 +18,7 @@ export function useUpdateProfile() {
     onSuccess: (data) => {
       // The store is the source of truth for the signed-in user, so push the new
       // profile straight into it rather than waiting for a refetch.
-      setMe({ user: data.user, org: data.org })
+      setMe({ user: data.user, org: data.org, memberships: data.memberships })
       void queryClient.invalidateQueries({ queryKey: queryKeys.auth.all })
     },
   })

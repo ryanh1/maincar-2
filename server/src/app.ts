@@ -5,6 +5,7 @@ import { logger } from '../dependencies/logger.js'
 import { WEB_ORIGIN } from './config.js'
 import { requestId } from './middleware/requestId.js'
 import authRouter from './routes/auth.js'
+import teamRouter from './routes/team.js'
 
 // The app is assembled here and started in index.ts. Keeping them apart is what
 // lets supertest import the app without binding a port.
@@ -33,6 +34,7 @@ app.get('/api/health', (_req, res) => {
 })
 
 app.use('/api/auth', authRouter)
+app.use('/api/team', teamRouter)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Not found: ${req.method} ${req.originalUrl}` })

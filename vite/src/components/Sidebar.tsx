@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
 import { Button } from '@/components/ui/button'
+import { OrgSwitcher } from '@/components/OrgSwitcher'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
 
@@ -33,6 +34,10 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       >
         <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
           <span className="display font-bold tracking-tight text-white">{APP_NAME}</span>
+        </div>
+
+        <div className="border-b border-sidebar-border p-3">
+          <OrgSwitcher />
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 p-3">

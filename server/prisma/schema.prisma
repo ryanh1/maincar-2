@@ -24,11 +24,13 @@ datasource db {
 model Org {
   id        String   @id @default(cuid())
   name      String?
+  logo      String?
   enabled   Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users User[]
+  memberships Membership[]
+  invitations Invitation[]
 }
 
 model User {
@@ -44,24 +46,79 @@ model User {
   title     String?
   imageUrl  String?
 
-  // Allowed values: "basic", "admin", "superadmin". A String[] rather than an
-  // enum, per rule 2 above. The TypeScript union lives in vite/src/lib/roles.ts
-  // and server/src/lib/roles.ts.
-  roles String[] @default(["basic"])
-
   // false blocks sign-in without deleting anything.
   enabled Boolean @default(true)
+
+  // Global platform roles: basic, admin, superadmin. Per-org roles live in Membership.
+  roles String[] @default(["basic"])
 
   // IANA timezone, e.g. "America/New_York". Captured at onboarding, defaulted
   // from the browser. Every time-of-day shown to this user renders in it
   // (CLAUDE.md → Dates & Times).
   timeZone String?
 
+  // The org this user currently has selected (for UI context; not used for auth).
+  // Nullable — the user may not have any org yet (edge case after account creation).
+  currentOrgId String?
+
+  memberships         Membership[]
+  invitationsSent     Invitation[]           @relation("InvitationSender")
+  invitationsAccepted Invitation[]           @relation("InvitationAcceptor")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([currentOrgId])
+}
+
+// Join table: users can belong to multiple orgs, each with their own role set.
+model Membership {
+  id String @id @default(cuid())
+
+  userId String
+  orgId  String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org  Org  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Allowed values: "basic", "admin". Per-org role set (different from global roles).
+  // A String[] rather than an enum, per rule 2 in the schema header.
+  roles String[] @default(["basic"])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, orgId])
+  @@index([orgId])
+}
+
+// Member invitations to orgs.
+model Invitation {
+  id    String @id @default(cuid())
+  token String @unique
+
+  email String
   orgId String
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Allowed values: "PENDING", "ACCEPTED", "EXPIRED", "REVOKED"
+  status String @default("PENDING")
+
+  // Roles this invite grants (basic, admin, etc.)
+  roles String[] @default(["basic"])
+
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  acceptedByUserId String?
+  acceptedByUser   User?   @relation("InvitationAcceptor", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+
+  invitedByUserId String?
+  invitedByUser   User?   @relation("InvitationSender", fields: [invitedByUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([orgId])
+  @@index([email])
+  @@index([status])
 }

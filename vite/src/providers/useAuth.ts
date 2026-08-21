@@ -6,7 +6,7 @@ import { API_URL } from '@/config'
 import { getFirebaseAuth } from '@/dependencies/firebase'
 import { isAdmin as rolesIsAdmin, isSuperadmin as rolesIsSuperadmin } from '@/lib/roles'
 import { useAuthStore } from '@/store/authStore'
-import type { MeResponse, Org, User } from '@/providers/authTypes'
+import type { Membership, MeResponse, Org, User } from '@/providers/authTypes'
 
 /**
  * Kept apart from `AuthProvider.tsx` on purpose: a module that exports both a
@@ -19,9 +19,12 @@ import type { MeResponse, Org, User } from '@/providers/authTypes'
 export interface AuthContextType {
   user: User | null
   org: Org | null
+  /** Every org the user belongs to, with their roles in each. */
+  memberships: Membership[]
   firebaseUser: FirebaseUser | null
   isLoading: boolean
   isAuthenticated: boolean
+  /** Admin OF THE ACTIVE ORG. A user can be an admin here and a member elsewhere. */
   isAdmin: boolean
   isSuperadmin: boolean
   needsOnboarding: boolean
@@ -40,12 +43,16 @@ export function useAuth(): AuthContextType {
   const firebaseUser = useAuthStore((s) => s.firebaseUser)
   const user = useAuthStore((s) => s.user)
   const org = useAuthStore((s) => s.org)
+  const memberships = useAuthStore((s) => s.memberships)
   const isLoading = useAuthStore((s) => s.authLoading)
   const setAuthLoading = useAuthStore((s) => s.setAuthLoading)
   const setMe = useAuthStore((s) => s.setMe)
 
-  const roles = user?.roles ?? []
-  const isAdmin = rolesIsAdmin(roles)
+  // "Admin" is per-org: the gate is the caller's membership in the org the session
+  // is acting in, NOT `user.roles` (those are global platform roles). Reading the
+  // wrong one would show org settings to a member who only runs a different org.
+  const activeRoles = memberships.find((m) => m.orgId === org?.id)?.roles ?? []
+  const isAdmin = rolesIsAdmin(activeRoles)
 
   // The onboarding gate. Limited to what a fresh signup cannot have:
   //   1. Profile (first name, last name) — everyone.
@@ -64,7 +71,7 @@ export function useAuth(): AuthContextType {
       })
       if (!res.ok) throw new Error('Failed to refresh user')
       const data = (await res.json()) as MeResponse
-      setMe({ user: data.user, org: data.org })
+      setMe({ user: data.user, org: data.org, memberships: data.memberships })
     } finally {
       setAuthLoading(false)
     }
@@ -72,7 +79,7 @@ export function useAuth(): AuthContextType {
 
   const signOut = async (): Promise<void> => {
     await firebaseSignOut(auth)
-    setMe({ user: null, org: null })
+    setMe({ user: null, org: null, memberships: [] })
     // The cache is cleared HERE and nowhere else, so a second account can never
     // read the first one's data (CLAUDE.md → Cache Management).
     queryClient.clear()
@@ -81,11 +88,12 @@ export function useAuth(): AuthContextType {
   return {
     user,
     org,
+    memberships,
     firebaseUser,
     isLoading,
     isAuthenticated: !!firebaseUser,
     isAdmin,
-    isSuperadmin: rolesIsSuperadmin(roles),
+    isSuperadmin: rolesIsSuperadmin(user?.roles ?? []),
     needsOnboarding,
     refresh,
     signOut,

@@ -11,4 +11,13 @@ export const queryKeys = {
     all: ['auth'] as const,
     me: () => ['auth', 'me'] as const,
   },
+  orgs: {
+    all: ['orgs'] as const,
+    list: () => ['orgs', 'list'] as const,
+    detail: (orgId: string) => ['orgs', 'detail', orgId] as const,
+    // Members and invitations are keyed BY ORG, so switching orgs reads a
+    // different cache entry instead of showing the previous org's people.
+    members: (orgId: string) => ['orgs', 'members', orgId] as const,
+    invitations: (orgId: string) => ['orgs', 'invitations', orgId] as const,
+  },
 } as const

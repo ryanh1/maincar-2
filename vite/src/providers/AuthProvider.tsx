@@ -24,7 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setFirebaseUser(fbUser)
-      setMe({ user: null, org: null })
+      setMe({ user: null, org: null, memberships: [] })
       setAuthLoading(true)
 
       try {
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           if (res.ok) {
             const data = (await res.json()) as MeResponse
-            if (!cancelled) setMe({ user: data.user, org: data.org })
+            if (!cancelled) setMe({ user: data.user, org: data.org, memberships: data.memberships })
             break
           }
 
@@ -66,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             await firebaseSignOut(auth).catch(() => {})
             if (!cancelled) {
               setFirebaseUser(null)
-              setMe({ user: null, org: null })
+              setMe({ user: null, org: null, memberships: [] })
             }
             break
           }

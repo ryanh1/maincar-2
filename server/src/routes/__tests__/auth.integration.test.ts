@@ -7,9 +7,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import type { PrismaClient } from '../../generated/prisma/client.js'
-import { createTestPrisma, seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
+import { createTestPrisma, seedMember, seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
 
-describe('Org and User schema (integration, real Postgres)', () => {
+describe('Org, User and Membership schema (integration, real Postgres)', () => {
   let prisma: PrismaClient
 
   beforeAll(() => {
@@ -20,13 +20,17 @@ describe('Org and User schema (integration, real Postgres)', () => {
     await prisma.$disconnect()
   })
 
-  it('creates an org with its first admin', async () => {
+  it('creates an org with its first admin, joined by a membership', async () => {
     const seeded = await seedOrgWithAdmin(prisma)
 
     const user = await prisma.user.findUniqueOrThrow({ where: { id: seeded.adminUserId } })
-    expect(user.orgId).toBe(seeded.orgId)
-    expect(user.roles).toContain('admin')
+    expect(user.currentOrgId).toBe(seeded.orgId)
     expect(user.enabled).toBe(true)
+
+    const membership = await prisma.membership.findUniqueOrThrow({
+      where: { userId_orgId: { userId: seeded.adminUserId, orgId: seeded.orgId } },
+    })
+    expect(membership.roles).toContain('admin')
   })
 
   // Rule 1 of the schema house rules: every model carries both timestamps.
@@ -35,8 +39,11 @@ describe('Org and User schema (integration, real Postgres)', () => {
 
     const user = await prisma.user.findUniqueOrThrow({ where: { id: seeded.adminUserId } })
     const org = await prisma.org.findUniqueOrThrow({ where: { id: seeded.orgId } })
+    const membership = await prisma.membership.findUniqueOrThrow({
+      where: { id: seeded.adminMembershipId },
+    })
 
-    for (const row of [user, org]) {
+    for (const row of [user, org, membership]) {
       expect(row.createdAt).toBeInstanceOf(Date)
       expect(row.updatedAt).toBeInstanceOf(Date)
     }
@@ -56,19 +63,43 @@ describe('Org and User schema (integration, real Postgres)', () => {
     expect(after.createdAt.getTime()).toBe(before.createdAt.getTime())
   })
 
-  it('defaults a new user to the basic role', async () => {
+  it('defaults a new membership to the basic role', async () => {
     const seeded = await seedOrgWithAdmin(prisma)
+    const member = await seedMember(prisma, seeded.orgId)
 
-    const member = await prisma.user.create({
-      data: {
-        orgId: seeded.orgId,
-        firebaseUid: `fb_member_${Date.now()}`,
-        email: `member_${Date.now()}@example.com`,
-      },
+    const membership = await prisma.membership.findUniqueOrThrow({
+      where: { id: member.membershipId },
+    })
+    expect(membership.roles).toEqual(['basic'])
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: member.userId } })
+    expect(user.timeZone).toBeNull()
+  })
+
+  // The whole point of MAI-10: one user, several orgs.
+  it('lets one user belong to more than one org', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+
+    await prisma.membership.create({
+      data: { userId: orgA.adminUserId, orgId: orgB.orgId, roles: ['basic'] },
     })
 
-    expect(member.roles).toEqual(['basic'])
-    expect(member.timeZone).toBeNull()
+    const memberships = await prisma.membership.findMany({
+      where: { userId: orgA.adminUserId },
+    })
+    expect(memberships).toHaveLength(2)
+    expect(memberships.map((m) => m.orgId).sort()).toEqual([orgA.orgId, orgB.orgId].sort())
+  })
+
+  it('refuses two memberships for the same user and org', async () => {
+    const seeded = await seedOrgWithAdmin(prisma)
+
+    await expect(
+      prisma.membership.create({
+        data: { userId: seeded.adminUserId, orgId: seeded.orgId, roles: ['basic'] },
+      }),
+    ).rejects.toThrow()
   })
 
   it('refuses two users with the same firebaseUid', async () => {
@@ -77,7 +108,6 @@ describe('Org and User schema (integration, real Postgres)', () => {
     await expect(
       prisma.user.create({
         data: {
-          orgId: seeded.orgId,
           firebaseUid: seeded.adminFirebaseUid,
           email: `other_${Date.now()}@example.com`,
         },
@@ -91,7 +121,6 @@ describe('Org and User schema (integration, real Postgres)', () => {
     await expect(
       prisma.user.create({
         data: {
-          orgId: seeded.orgId,
           firebaseUid: `fb_other_${Date.now()}`,
           email: seeded.adminEmail,
         },
@@ -99,14 +128,20 @@ describe('Org and User schema (integration, real Postgres)', () => {
     ).rejects.toThrow()
   })
 
-  // onDelete: Cascade — deleting an org must not leave orphaned users behind,
-  // because every org-scoped query filters on an orgId that no longer exists.
-  it('deletes an org’s users along with the org', async () => {
+  // onDelete: Cascade — deleting an org must not leave orphaned memberships
+  // behind, because every org-scoped query filters on an orgId that is gone.
+  // The USER survives: they may still belong to other orgs.
+  it('deletes an org’s memberships along with the org, and keeps the user', async () => {
     const seeded = await seedOrgWithAdmin(prisma)
 
     await prisma.org.delete({ where: { id: seeded.orgId } })
 
-    const orphan = await prisma.user.findUnique({ where: { id: seeded.adminUserId } })
-    expect(orphan).toBeNull()
+    const orphanMembership = await prisma.membership.findUnique({
+      where: { id: seeded.adminMembershipId },
+    })
+    expect(orphanMembership).toBeNull()
+
+    const user = await prisma.user.findUnique({ where: { id: seeded.adminUserId } })
+    expect(user).not.toBeNull()
   })
 })
