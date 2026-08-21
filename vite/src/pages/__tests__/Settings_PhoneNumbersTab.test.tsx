@@ -8,7 +8,7 @@
 //   - the empty state invites the buy rather than explaining emptiness
 //   - the buy dialog searches through the hook and lists results with a price
 //   - buying confirms the monthly cost first, then sends the chosen number's e164
-//   - picking a caller ID sends that number's id
+//   - picking the number to call from sends that number's id
 //   - loading and error both have honest states
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
@@ -132,7 +132,7 @@ describe('the numbers list', () => {
   it('shows a mapped status label, never the raw enum', () => {
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
-    expect(screen.getByText('Active caller ID')).toBeInTheDocument()
+    expect(screen.getByText('Active')).toBeInTheDocument()
     expect(screen.getByText('Ready')).toBeInTheDocument()
     expect(screen.getByText('Provisioning…')).toBeInTheDocument()
     // The raw enum values never reach the screen.
@@ -154,22 +154,22 @@ describe('the numbers list', () => {
     expect(screen.getAllByText('Aug 1, 2026').length).toBeGreaterThan(0)
   })
 
-  it('lets a dialable number be made the caller ID, and disables the rest', () => {
+  it('lets a dialable number be made the one to call from, and disables the rest', () => {
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
     // The active number's radio is checked and disabled — it is already the one.
-    expect(screen.getByRole('radio', { name: 'Set +12025550111 as caller ID' })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Call from +12025550111' })).toBeDisabled()
     // A dialable, not-yet-active number can be picked.
-    expect(screen.getByRole('radio', { name: 'Set +12025550122 as caller ID' })).toBeEnabled()
+    expect(screen.getByRole('radio', { name: 'Call from +12025550122' })).toBeEnabled()
     // A provisioning number cannot be picked yet.
-    expect(screen.getByRole('radio', { name: 'Set +12025550133 as caller ID' })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Call from +12025550133' })).toBeDisabled()
   })
 
-  it('sends the chosen number id when a caller ID is picked', async () => {
+  it('sends the chosen number id when a new number to call from is picked', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
-    await user.click(screen.getByRole('radio', { name: 'Set +12025550122 as caller ID' }))
+    await user.click(screen.getByRole('radio', { name: 'Call from +12025550122' }))
 
     expect(setActiveMutateMock).toHaveBeenCalledWith(
       { orgId: 'org-a', id: 'num-ready' },
@@ -309,15 +309,15 @@ describe('releasing a number', () => {
     )
   })
 
-  // Releasing the caller ID is blocked while another dialable number exists —
+  // Releasing the active call-from number is blocked while another dialable number exists —
   // the menu item names the first step rather than just refusing.
-  it('blocks releasing the active caller ID while another number can take over', async () => {
+  it('blocks releasing the active call-from number while another number can take over', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
     await user.click(screen.getByRole('button', { name: 'Show actions for +12025550111' }))
 
-    expect(screen.getByRole('menuitem', { name: 'Set another caller ID first' })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: 'Choose another number to call from first' })).toHaveAttribute(
       'aria-disabled',
       'true',
     )
@@ -369,7 +369,7 @@ describe('releasing a number', () => {
 
   it('surfaces the server’s refusal as a toast', async () => {
     releaseMutateMock.mockImplementation((_vars, { onError }) => {
-      onError({ message: 'Make a different number your caller ID first, then release this one.' })
+      onError({ message: 'Choose a different number to call from first, then release this one.' })
     })
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)

@@ -74,7 +74,7 @@ export function Settings_PhoneNumbers_AssignDialog({ orgId, number, open, onOpen
           <DialogTitle>{isReassign ? 'Reassign' : 'Assign'} {number.e164}</DialogTitle>
           <DialogDescription>
             {isReassign
-              ? `Currently held by ${memberOrEmail(number.assignedUser)}. Picking a new member takes it from them and clears their caller ID.`
+              ? `Currently held by ${memberOrEmail(number.assignedUser)}. Picking a new member takes it from them and clears the number they call from.`
               : 'Nobody holds this number yet.'}
           </DialogDescription>
         </DialogHeader>

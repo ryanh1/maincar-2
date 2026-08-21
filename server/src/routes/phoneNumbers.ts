@@ -202,7 +202,7 @@ const ACTIVE_STATUS = 'active'
 const NOT_FOUND_ERROR = 'Phone number not found'
 
 const DEACTIVATE_ERROR =
-  'To stop calling from this number, make a different one active instead. Switching this one off would leave you with no caller ID and no way to place a call.'
+  'To stop calling from this number, make a different one active instead. Switching this one off would leave you with no number to call from and no way to place a call.'
 
 // --- Release ---
 
@@ -222,7 +222,7 @@ const RELEASE_IN_FLIGHT_ERROR =
 // dialable number — is allowed through, and the confirm dialog states the
 // consequence instead (vite/src/pages/Settings_PhoneNumbers_Row.tsx).
 const RELEASE_ACTIVE_CALLER_ID_ERROR =
-  'Make a different number your caller ID first, then release this one.'
+  'Choose a different number to call from first, then release this one.'
 
 // Thrown inside the transaction so a failed check rolls the writes back with it.
 // Classes rather than sentinel strings because two of them carry a value the
