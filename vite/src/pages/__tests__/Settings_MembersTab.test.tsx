@@ -322,7 +322,7 @@ describe('role changes', () => {
       screen.queryByRole('button', { name: /Change the role of al@acme\.com/ }),
     ).not.toBeInTheDocument()
     expect(
-      screen.queryByRole('button', { name: 'Actions for al@acme.com' }),
+      screen.queryByRole('button', { name: 'Show actions for al@acme.com' }),
     ).not.toBeInTheDocument()
   })
 })
@@ -332,7 +332,7 @@ describe('removing a member', () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_MembersTab />)
 
-    await user.click(screen.getByRole('button', { name: 'Actions for al@acme.com' }))
+    await user.click(screen.getByRole('button', { name: 'Show actions for al@acme.com' }))
     await user.click(await screen.findByRole('menuitem', { name: /Remove from organization/ }))
 
     // The dialog spells out the specific consequence, not "Are you sure?".
@@ -358,7 +358,7 @@ describe('removing a member', () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_MembersTab />)
 
-    await user.click(screen.getByRole('button', { name: 'Actions for al@acme.com' }))
+    await user.click(screen.getByRole('button', { name: 'Show actions for al@acme.com' }))
     await user.click(await screen.findByRole('menuitem', { name: /Remove from organization/ }))
     await user.click(await screen.findByRole('button', { name: 'Cancel' }))
 
@@ -372,7 +372,7 @@ describe('removing a member', () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_MembersTab />)
 
-    await user.click(screen.getByRole('button', { name: 'Actions for al@acme.com' }))
+    await user.click(screen.getByRole('button', { name: 'Show actions for al@acme.com' }))
 
     const item = await screen.findByRole('menuitem', { name: /Promote another admin first/ })
     expect(item).toHaveAttribute('aria-disabled', 'true')
@@ -482,7 +482,7 @@ describe('invitations', () => {
     regenerateInvitationMock.mockResolvedValue({ invitation: INVITATION })
     renderWithProviders(<Settings_MembersTab />)
 
-    await user.click(screen.getByRole('button', { name: /Create a new link for new@acme.com/ }))
+    await user.click(screen.getByRole('button', { name: /Create a new invite link for new@acme.com/ }))
 
     await waitFor(() =>
       expect(regenerateInvitationMock).toHaveBeenCalledWith({

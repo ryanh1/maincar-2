@@ -38,3 +38,33 @@ actionable.** A rep reads this between live calls.
 | "This invite link cannot be used. It may have expired, been revoked, or already been accepted." | "This invite is no longer valid. Ask the admin for a new one." |
 | "Are you sure you want to delete this record?" | "Delete this company? This cannot be undone." |
 | "An error occurred while saving." | "Could not save. Check your connection and try again." |
+
+## Icon-button tooltips
+
+Every icon-only button carries a tooltip and a matching accessible name. That
+they are both required, and which component supplies them, is a design rule —
+[design-system.md](design-system.md) → **Icon-only buttons**. This is what they
+say.
+
+- **Name the action AND its object, as a verb phrase.** "Refresh the member
+  list", never "Refresh". A lone verb is the failure this rule exists for: a
+  person looking at a circular arrow already knows a verb is involved, and
+  "Refresh" tells them nothing they did not have. If the button acts on one row,
+  the object is that row — "Revoke the invite for sam@acme.com".
+- **The tooltip and the accessible name are the same string.** Two audiences,
+  one promise. `IconButton` takes one `tooltip` prop and feeds both, so this is
+  the default rather than a thing to check.
+- **Sentence case. No trailing period.** It is a fragment, not a sentence.
+- **A destructive icon button names the consequence, not just the verb.** The
+  glyph gives no warning, so the words carry it. "Create a new invite link for
+  sam@acme.com and cancel the old one" — not "Regenerate", which sounds free,
+  and not "Create a new link", which hides that the current link dies.
+
+| Instead of | Write |
+|---|---|
+| "Refresh" | "Refresh the member list" |
+| "Regenerate" | "Create a new invite link for sam@acme.com and cancel the old one" |
+| "Delete" | "Delete the recording for this call" |
+| "More" / "Actions" | "Show actions for sam@acme.com" |
+| "Menu" | "Open the navigation menu" |
+| "Toggle" | "Show password" |

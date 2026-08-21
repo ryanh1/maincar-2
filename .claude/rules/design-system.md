@@ -68,10 +68,27 @@ dense grid. shadcn/ui page templates for surface and border treatment. Airtable 
   (4/8/12/16/24/32/48/64px). `p-5`, `py-7`, `gap-9` are forbidden.
 - **One control height: `h-8` (32px).** Buttons, inputs, selects, date pickers,
   toolbar controls, search boxes. No exceptions.
-- **Table row height: 32px.** Table header row: 32px.
+- **Table row height: 32px for a row of plain text.** The header row is always
+  32px, because it never holds a control.
+  A row whose cell holds a control **cannot** also be 32px: `h-8` is 32px, so the
+  control alone fills the row and the cell padding has nowhere to go. **That row
+  is 40px** — the `h-8` control with 4px above and below (`py-1`), still on the
+  4px rhythm. Never shrink the control to make the row: `h-8` has no exceptions,
+  and the row gives way instead.
+  Members and Calls sit at `py-2` (48px) today. Both are hand-rolled tables that
+  predate the shared `DataTable` still listed as not-built-yet below; 40px lands
+  when that component does.
 - **Icons are 16px** inside controls and rows (`size={16}`), 14px inside a chip.
 - **Widths:** auth card `max-w-sm` · single-column form `max-w-md` · settings pane
-  `max-w-2xl` · table pages are full width.
+  `max-w-5xl` · table pages are full width.
+  The settings pane is the carve-out, and it is deliberate. It was `max-w-2xl`
+  (672px) until commit `f987b51`; a settings pane holds tables, and **Tables and
+  grids** below requires those to match Loadwire's at minimum, which five columns
+  cannot do in 672px. That gap is what "the members table is too scrunched"
+  meant. `max-w-5xl` (1024px) is Loadwire's shell.
+  Widening the shell does not widen the fields inside it. A settings pane that
+  holds only a form still constrains that form itself — Profile and Organization
+  each wrap their inputs in `max-w-sm` inside the wider shell.
 - **Page padding: `p-6`.** Section gap: `gap-6`. Field gap inside a form: `gap-3`.
 
 ### Radius, borders, shadow
@@ -101,7 +118,8 @@ Build from these. If none fits, **stop and ask** before inventing one.
 | Modal | `Dialog` | `components/ui/dialog.tsx` |
 | Destructive confirm | `AlertDialog` — **never** `window.confirm` | `components/ui/alert-dialog.tsx` |
 | Transient feedback | `toast` (sonner) | `components/ui/toaster.tsx` |
-| Hover hint | `Tooltip` | `components/ui/tooltip.tsx` |
+| Icon-only button | `IconButton` — `tooltip` is required | `components/ui/icon-button.tsx` |
+| Hover hint | `Tooltip` — provider is mounted once, in `App.tsx` | `components/ui/tooltip.tsx` |
 | Divider | `Separator` | `components/ui/separator.tsx` |
 | Copy to clipboard | `CopyButton` | `components/ui/copy-button.tsx` |
 | Paging | `Pagination` | `components/ui/pagination.tsx` |
@@ -119,6 +137,50 @@ licence to invent a local version.
 
 Add missing shadcn primitives with the shadcn generator, then re-point them at our
 tokens. Never hand-roll a primitive shadcn already has.
+
+### Icon-only buttons
+
+A button whose only content is a glyph owes its reader **two** things, and they
+are not the same thing:
+
+- a **tooltip**, for the sighted person who does not recognise the icon, and
+- an **accessible name**, because a tooltip never reaches a screen reader.
+
+Neither substitutes for the other. `aria-label` on its own leaves a sighted
+reader guessing — the complaint that produced this rule was "I don't know what
+the refresh button does" — and a tooltip on its own leaves a screen reader
+announcing "button".
+
+- **Use `IconButton`** (`components/ui/icon-button.tsx`). Its `tooltip` prop is
+  required and feeds both the tooltip and the `aria-label`, so the two cannot
+  drift and a missing one is a build error rather than a thing you remembered.
+  Hand-wire `Tooltip` only where the control takes no `buttonVariants` at all —
+  the eye toggle inside `PasswordInput` is the only current example — and then
+  supply both by hand, from one string.
+- **The provider is mounted once, in `App.tsx`.** Never mount a local
+  `TooltipProvider`. Tests go through `renderWithProviders` (`test/utils.tsx`),
+  which mounts one to match the app; a test using bare `render` wraps its own,
+  because Radix throws when a tooltip has no provider above it.
+- **A disabled `<button>` swallows hover**, so its tooltip never opens. The
+  trigger has to be a wrapping `<span>`. `IconButton` does that for you.
+- **The words are a copy rule**, not a design one: [copy.md](copy.md) →
+  **Icon-button tooltips**.
+
+**What a tooltip is never for:**
+
+- **The only place a rule or a consequence is stated.** A tooltip is invisible
+  until pointed at, absent on touch, and gone the moment the pointer moves.
+  Anything a person needs in order to act correctly also lives somewhere they
+  cannot miss — on the screen, in the confirm dialog, or in the toast that
+  follows.
+- **The reason a control is disabled**, when that reason is the thing worth
+  saying. Say the reason where it can be read: as a line under the control, in
+  the row, or in the menu item's own label — `Settings_Members_MemberRow`
+  relabels its item "Transfer ownership first" rather than greying it silently.
+  A blocker does not get to hide behind a hover.
+- **A substitute for a visible label on a primary action.** The one primary
+  button on a screen or dialog carries words. If an action matters enough to be
+  primary, it is not an icon.
 
 ### Control behavior
 

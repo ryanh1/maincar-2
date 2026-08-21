@@ -4,6 +4,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ProtectedLayout } from '@/components/ProtectedLayout'
 import { RouteErrorPage } from '@/components/RouteErrorPage'
 import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { AuthProvider } from '@/providers/AuthProvider'
 
 import { SignIn } from '@/pages/auth/SignIn'
@@ -44,12 +45,18 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <div className="flex h-dvh min-h-dvh flex-col">
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <RouterProvider router={router} />
+        {/* One TooltipProvider for the whole app. Every icon-only button owes a
+            tooltip (.claude/rules/design-system.md), so mounting the provider
+            per screen meant the same four lines of boilerplate at every call
+            site, and a forgotten one throws at runtime rather than at build. */}
+        <TooltipProvider>
+          <div className="flex h-dvh min-h-dvh flex-col">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <RouterProvider router={router} />
+            </div>
+            <Toaster />
           </div>
-          <Toaster />
-        </div>
+        </TooltipProvider>
       </AuthProvider>
     </ErrorBoundary>
   )

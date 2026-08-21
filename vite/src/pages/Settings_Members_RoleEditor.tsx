@@ -3,12 +3,7 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { RoleMultiSelect, type AssignableRole } from '@/components/ui/RoleMultiSelect'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useUpdateMemberRoles } from '@/hooks/orgs'
 import type { OrgMember } from '@/hooks/orgs'
 import { ApiError } from '@/lib/api'
@@ -56,27 +51,24 @@ export function Settings_Members_RoleEditor({
   if (!canEdit) {
     // Chips are right here: nothing in this cell is interactive, so they cannot
     // pick up a control's hover or press state.
-    // The provider is local because the app mounts none at the root. Radix allows
-    // nesting, so adding one here cannot fight a future global provider.
+    // The provider comes from App.tsx, at the root.
     return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex h-8 flex-wrap items-center gap-1">
-              {roles.map((role) => (
-                <Badge key={role} variant="secondary">
-                  {getRoleLabel(role)}
-                </Badge>
-              ))}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>
-            {memberIsOwner
-              ? "The owner's role changes by transferring ownership."
-              : 'Only an admin can change roles.'}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex h-8 flex-wrap items-center gap-1">
+            {roles.map((role) => (
+              <Badge key={role} variant="secondary">
+                {getRoleLabel(role)}
+              </Badge>
+            ))}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {memberIsOwner
+            ? "The owner's role changes by transferring ownership."
+            : 'Only an admin can change roles.'}
+        </TooltipContent>
+      </Tooltip>
     )
   }
 

@@ -10,6 +10,7 @@ import { DialerDock } from '@/components/dialer/DialerDock'
 import { DialerProvider } from '@/components/dialer/DialerProvider'
 import { PageLoader } from '@/components/PageLoader'
 import { Sidebar } from '@/components/Sidebar'
+import { IconButton } from '@/components/ui/icon-button'
 import { useAuth } from '@/providers/useAuth'
 
 // The auth gate plus the app chrome. Every signed-in route nests under this.
@@ -60,9 +61,13 @@ export function ProtectedLayout() {
       <ComposerProvider>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <header className="flex h-14 shrink-0 items-center border-b border-border bg-background/85 px-4 backdrop-blur lg:hidden">
-            <button type="button" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
-              <Menu size={20} />
-            </button>
+            <IconButton
+              tooltip="Open the navigation menu"
+              tooltipSide="bottom"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Menu size={20} aria-hidden />
+            </IconButton>
             <span className="display ml-3 font-bold tracking-tight">{APP_NAME}</span>
           </header>
 

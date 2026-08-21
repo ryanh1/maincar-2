@@ -6,6 +6,7 @@
 //     for an admin reading the list from another zone
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
 
@@ -63,5 +64,40 @@ describe('the expiry on a pending invite', () => {
     render({ ...INVITATION, expiresAtTimeZone: 'Asia/Tokyo' })
 
     expect(screen.getByText(/expires Sep 5, 2026$/)).toBeInTheDocument()
+  })
+})
+
+// The complaint that produced the tooltip rule was aimed at this exact button:
+// "I don't know what the refresh button does." A circular arrow beside an email
+// address reads as "reload" and is not — it mints a link and kills the old one.
+describe('the icon buttons on a pending invite', () => {
+  it('says what the circular arrow does, in words, on hover and to a screen reader', async () => {
+    const user = userEvent.setup()
+    render()
+
+    const regenerate = screen.getByRole('button', {
+      name: 'Create a new invite link for new@acme.com and cancel the old one',
+    })
+
+    await user.hover(regenerate)
+    expect(
+      (
+        await screen.findAllByText(
+          'Create a new invite link for new@acme.com and cancel the old one',
+        )
+      ).length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('names the invite the bin empties, not just "Delete"', async () => {
+    const user = userEvent.setup()
+    render()
+
+    const revoke = screen.getByRole('button', { name: 'Revoke the invite for new@acme.com' })
+
+    await user.hover(revoke)
+    expect((await screen.findAllByText('Revoke the invite for new@acme.com')).length).toBeGreaterThan(
+      0,
+    )
   })
 })

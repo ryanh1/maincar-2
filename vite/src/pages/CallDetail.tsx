@@ -5,12 +5,6 @@ import { Link, useParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { toast } from 'sonner'
 import { useGetCallDetail } from '@/hooks/dialer'
 import type { CallDetail as CallDetailShape, TranscriptStatus } from '@/hooks/dialer'
@@ -98,22 +92,16 @@ function CallDetailBody({
       <TranscriptSection status={call.transcriptStatus} transcript={call.transcript} />
       <RecordingSection recordingUrl={call.recordingUrl} number={call.toE164} />
 
-      <div>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {/* A disabled button ignores pointer events, so the tooltip needs a
-                  wrapper to hover over — otherwise the honest reason never shows. */}
-              <span className="inline-block">
-                <Button variant="destructive" size="sm" disabled aria-label="Delete call">
-                  <Trash2 size={16} aria-hidden />
-                  Delete call
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>{DELETE_UNAVAILABLE}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+      {/* The reason this is dead is the whole message, so it is on the screen,
+          not behind a hover. A tooltip is invisible until pointed at and absent
+          on touch (.claude/rules/design-system.md → Icon-only buttons), and the
+          design system already asks a disabled control for "an honest line". */}
+      <div className="flex flex-col items-start gap-2">
+        <Button variant="destructive" size="sm" disabled>
+          <Trash2 size={16} aria-hidden />
+          Delete call
+        </Button>
+        <p className="text-xs text-muted-foreground">{DELETE_UNAVAILABLE}</p>
       </div>
     </div>
   )

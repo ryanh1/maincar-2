@@ -5,7 +5,7 @@ import { APP_NAME } from '@/config'
 import { useComposerOptional } from '@/components/composer/composerContext'
 import { useIsDesktop } from '@/components/composer/desktopOnly'
 import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { OrgSwitcher } from '@/components/OrgSwitcher'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
@@ -53,23 +53,21 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
         {composer && isDesktop && (
           <div className="p-3 pb-0">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="w-full justify-start"
-                    onClick={() => void composer.openComposer()}
-                  >
-                    <Pencil size={16} />
-                    Compose
-                  </Button>
-                </TooltipTrigger>
-                {/* The provider is local because the app mounts none at the root. */}
-                <TooltipContent side="right">Press c to compose.</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => void composer.openComposer()}
+                >
+                  <Pencil size={16} />
+                  Compose
+                </Button>
+              </TooltipTrigger>
+              {/* The provider comes from App.tsx, at the root. */}
+              <TooltipContent side="right">Press c to compose.</TooltipContent>
+            </Tooltip>
           </div>
         )}
 

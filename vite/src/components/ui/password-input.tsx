@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Check, Eye, EyeOff } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PASSWORD_MIN_LENGTH, PASSWORD_RULE } from '@/lib/passwordPolicy'
 import { cn } from '@/lib/utils'
 
@@ -13,7 +14,12 @@ import { cn } from '@/lib/utils'
  * It stays in the tab order — reaching it is one Tab from the field and one more
  * Tab leaves it, which is what "keyboard reachable, no trap" means — and its
  * accessible name changes with state so a screen reader announces which way the
- * next press goes.
+ * next press goes. The tooltip carries the same words for the sighted reader,
+ * who has only an eye glyph to go on.
+ *
+ * Hand-wired rather than an `IconButton`: this toggle sits inside the field and
+ * has no button chrome of its own, so it takes no `buttonVariants`. The rule it
+ * still owes — a tooltip and a matching accessible name — is met here by hand.
  *
  * `showRequirement` states the rule BEFORE the person submits. The rule itself
  * lives in `lib/passwordPolicy` and matches what Firebase enforces.
@@ -33,6 +39,9 @@ function PasswordInput({
 }: PasswordInputProps) {
   const [visible, setVisible] = React.useState(false)
 
+  // One string for the tooltip and the accessible name, so the two audiences
+  // are told the same thing.
+  const label = visible ? 'Hide password' : 'Show password'
   const password = typeof value === 'string' ? value : ''
   const met = password.length >= PASSWORD_MIN_LENGTH
   const ruleId = id ? `${id}-rule` : undefined
@@ -56,22 +65,31 @@ function PasswordInput({
           aria-describedby={describedByIds || undefined}
           {...props}
         />
-        <button
-          type="button"
-          onClick={() => setVisible((v) => !v)}
-          disabled={disabled}
-          aria-label={visible ? 'Hide password' : 'Show password'}
-          aria-pressed={visible}
-          aria-controls={id}
-          className={cn(
-            'absolute inset-y-0 right-0 flex items-center rounded-r-md px-3 text-muted-foreground transition-colors',
-            'hover:text-foreground',
-            'focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
-            'disabled:cursor-not-allowed disabled:opacity-50',
-          )}
-        >
-          {visible ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setVisible((v) => !v)}
+              disabled={disabled}
+              aria-label={label}
+              aria-pressed={visible}
+              aria-controls={id}
+              className={cn(
+                'absolute inset-y-0 right-0 flex items-center rounded-r-md px-3 text-muted-foreground transition-colors',
+                'hover:text-foreground',
+                'focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              {visible ? (
+                <EyeOff size={16} aria-hidden="true" />
+              ) : (
+                <Eye size={16} aria-hidden="true" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
       </div>
 
       {showRequirement && (

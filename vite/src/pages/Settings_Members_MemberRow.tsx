@@ -12,13 +12,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { IconButton } from '@/components/ui/icon-button'
 import { memberDisplayName, useRemoveMember } from '@/hooks/orgs'
 import type { OrgMember } from '@/hooks/orgs'
 import { ApiError } from '@/lib/api'
@@ -110,13 +110,9 @@ export function Settings_Members_MemberRow({
         {viewerIsAdmin && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Actions for ${member.email}`}
-              >
+              <IconButton tooltip={`Show actions for ${member.email}`}>
                 <MoreHorizontal size={16} aria-hidden />
-              </Button>
+              </IconButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem

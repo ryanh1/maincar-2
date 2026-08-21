@@ -1,11 +1,18 @@
+import type * as React from 'react'
 import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render as rtlRender, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { PasswordInput } from '@/components/ui/password-input'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { PASSWORD_MIN_LENGTH, PASSWORD_RULE } from '@/lib/passwordPolicy'
 
+/**
+ * The TooltipProvider stands in for the one App.tsx mounts at the root. The eye
+ * toggle owes a tooltip like every other icon-only control, and Radix throws
+ * without a provider above it.
+ */
 function Harness({ showRequirement = false }: { showRequirement?: boolean }) {
   const [value, setValue] = useState('')
   return (
@@ -20,6 +27,10 @@ function Harness({ showRequirement = false }: { showRequirement?: boolean }) {
       <button type="submit">Submit</button>
     </form>
   )
+}
+
+function render(ui: React.ReactElement) {
+  return rtlRender(<TooltipProvider>{ui}</TooltipProvider>)
 }
 
 describe('PasswordInput', () => {

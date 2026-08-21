@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { useGetInvitations, useRegenerateInvitation, useRevokeInvitation } from '@/hooks/orgs'
 import { ApiError } from '@/lib/api'
 import { formatDate } from '@/lib/datetime'
@@ -118,23 +119,23 @@ export function Settings_Members_PendingInvites({ orgId, enabled }: Props) {
                 {copiedId === invitation.id ? <Check size={16} /> : <Copy size={16} />}
                 Copy link
               </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
+              {/* A circular-arrow glyph on its own reads as "reload the list".
+                  It does not: it mints a fresh link and kills the current one.
+                  The tooltip names the action AND that consequence, because
+                  there is no confirm step in front of this one. */}
+              <IconButton
                 disabled={regenerateInvitation.isPending}
-                aria-label={`Create a new link for ${invitation.email}`}
+                tooltip={`Create a new invite link for ${invitation.email} and cancel the old one`}
                 onClick={() => void regenerate(invitation.id)}
               >
-                <RefreshCw size={16} />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Revoke the invite for ${invitation.email}`}
+                <RefreshCw size={16} aria-hidden />
+              </IconButton>
+              <IconButton
+                tooltip={`Revoke the invite for ${invitation.email}`}
                 onClick={() => setRevoking({ id: invitation.id, email: invitation.email })}
               >
-                <Trash2 size={16} />
-              </Button>
+                <Trash2 size={16} aria-hidden />
+              </IconButton>
             </div>
           </li>
         ))}
