@@ -6,7 +6,18 @@
  * view that MAI-40 builds next, both read these — so the mapping lives here, once,
  * rather than inline in either screen.
  */
-import type { CallStatus, TranscriptStatus } from '@/lib/callTypes'
+import type { CallDirection, CallStatus, TranscriptStatus } from '@/lib/callTypes'
+
+// Which way the call went, for the detail view. Mirrors the schema's
+// `Call.direction` values — a raw enum is never shown to a person.
+const CALL_DIRECTION_LABEL: Record<CallDirection, string> = {
+  outbound: 'Outbound',
+  inbound: 'Inbound',
+}
+
+export function getCallDirectionLabel(direction: string): string {
+  return CALL_DIRECTION_LABEL[direction as CallDirection] ?? direction
+}
 
 // The outcome a rep reads off the row. Mirrors the schema's `Call.status` values.
 const CALL_STATUS_LABEL: Record<CallStatus, string> = {
