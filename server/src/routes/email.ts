@@ -19,6 +19,7 @@ import { z } from 'zod'
 import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { sanitizeOptionalRichTextHtml } from '../lib/sanitizeHtml.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import type { EmailDraft, Prisma } from '../generated/prisma/client.js'
 
@@ -70,10 +71,11 @@ export const draftInputSchema = z.object({
     .max(998, 'A subject can be at most 998 characters.')
     .nullable()
     .optional(),
-  // No length rule beyond the 2 MB JSON limit app.ts already sets, and no
-  // sanitising: the write path is deliberately dumb. Reformatting the body would
-  // re-render the editor from the response and move the caret mid-sentence.
-  // Sanitising happens in composer-body, on its own ticket.
+  // No length rule beyond the 2 MB JSON limit app.ts already sets. Shape is all
+  // zod checks here — the SAFETY of the markup is not a validation question,
+  // because rejecting a draft that contains a `<script>` would refuse to save a
+  // rep's email rather than store it harmlessly. It is stripped instead, by
+  // `sanitizeOptionalRichTextHtml` on the way into the database (MAI-78).
   bodyHtml: z.string().nullable().optional(),
 })
 
@@ -204,7 +206,10 @@ router.post(
         ccAddrs: parsed.data.ccAddrs ?? [],
         bccAddrs: parsed.data.bccAddrs ?? [],
         subject: parsed.data.subject ?? null,
-        bodyHtml: parsed.data.bodyHtml ?? null,
+        // Through the allow-list before it is stored, for the same reason PATCH
+        // does it: a composer opened from a record can land with a body, and
+        // every write path that accepts HTML shares one sanitiser.
+        bodyHtml: sanitizeOptionalRichTextHtml(parsed.data.bodyHtml),
         // isOpen and isMinimized are left to their schema defaults: a card that
         // was just opened is open and expanded, and there is nothing else a
         // caller could sensibly ask for here.
@@ -224,10 +229,21 @@ router.post(
 // a handler that defaulted the absent keys would blank a half-written email
 // every time the rep collapsed the card.
 //
-// The write path is deliberately dumb. It stores what it is given and returns
-// the stored row, and it never rewrites, reformats, or re-indents `bodyHtml` —
-// the editor re-renders from this response, and a reformatted body would move
-// the caret mid-sentence.
+// The write path stores what it is given and returns the stored row. The ONE
+// thing it rewrites is `bodyHtml`, which goes through the allow-list in
+// `lib/sanitizeHtml.ts` before it is stored — a draft body is rendered again
+// later, in the composer and in the sent email, so unsanitised HTML in this
+// column is stored XSS. The client sanitises too; that is a convenience, and it
+// is not what makes this safe.
+//
+// It never reformats or re-indents beyond that, and the sanitiser is idempotent,
+// so a body that is already clean comes back byte for byte. The card owns its
+// own text while it is open and does not re-read this response
+// (vite/src/hooks/email/useUpdateEmailDraft.ts), so a sanitised body cannot jump
+// the rep's caret — but it does mean a rep who pasted something disallowed sees
+// their own version until they reload. Losing the paste silently would be worse
+// than losing it visibly, and EC-15 wires the editor that stops the mismatch
+// arising in the first place.
 router.patch(
   '/orgs/:orgId/drafts/:draftId',
   wrapRoute('PATCH /api/email/orgs/:orgId/drafts/:draftId', async (req, res) => {
@@ -258,7 +274,9 @@ router.patch(
     if ('ccAddrs' in body) data.ccAddrs = body.ccAddrs
     if ('bccAddrs' in body) data.bccAddrs = body.bccAddrs
     if ('subject' in body) data.subject = body.subject
-    if ('bodyHtml' in body) data.bodyHtml = body.bodyHtml
+    // The only key that is not stored verbatim. `sanitizeOptionalRichTextHtml`
+    // keeps null as null, so "clear the body" still clears it.
+    if ('bodyHtml' in body) data.bodyHtml = sanitizeOptionalRichTextHtml(body.bodyHtml)
     if ('isOpen' in body) data.isOpen = body.isOpen
     if ('isMinimized' in body) data.isMinimized = body.isMinimized
 
