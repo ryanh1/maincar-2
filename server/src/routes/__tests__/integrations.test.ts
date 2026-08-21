@@ -773,8 +773,15 @@ describe('GET /api/integrations/:provider/callback', () => {
   it('verifies the state BEFORE anything else — a tampered state is state_invalid and writes nothing', async () => {
     const exchange = vi.spyOn(googleOAuth, 'exchangeCode')
     const good = state()
-    // Flip the last character of the signature segment.
-    const tampered = good.slice(0, -1) + (good.at(-1) === 'A' ? 'B' : 'A')
+    // Tamper the signature by flipping a byte of the DECODED signature, not a
+    // base64url character. The final char of a 43-char (32-byte) HMAC segment
+    // encodes only 4 significant bits, so ~7% of last-char flips decode to the
+    // same bytes and still verify — a genuine ~1-in-15 flake. Flipping a decoded
+    // byte cannot alias.
+    const [payload, sig] = good.split('.')
+    const sigBytes = Buffer.from(sig, 'base64url')
+    sigBytes[0] ^= 0xff
+    const tampered = `${payload}.${sigBytes.toString('base64url')}`
 
     const res = await request(app).get(CB('google')).query({ code: 'the-code', state: tampered })
 
