@@ -34,12 +34,18 @@ import { APP_NAME, OAUTH_STATE_SECRET, WEB_ORIGIN } from '../config.js'
 import prisma from '../db.js'
 import { OAuthProviderError } from '../../dependencies/oauthTypes.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
+import { testConnection, type CapabilityResult } from '../lib/mail/connectionTest.js'
+import { getMailProvider } from '../lib/mail/getMailProvider.js'
 import { mapProviderError, type IntegrationErrorCode } from '../lib/mail/integrationErrors.js'
 import {
   CONNECTION_PUBLIC_SELECT,
+  getConnection,
   markConnectionError,
+  refreshConnection,
   saveConnection,
   serializeConnection,
+  TokenRevokedError,
+  TokenUnreadableError,
   type SerializedConnection,
 } from '../lib/mail/oauthConnections.js'
 import { isProvider, oauthClientFor, PROVIDERS } from '../lib/mail/oauthProviders.js'
@@ -220,6 +226,165 @@ router.get(
     })
 
     res.json({ integrations })
+  }),
+)
+
+// ============================================================
+// POST /api/integrations/orgs/:orgId/:connectionId/test — the Test button
+// ============================================================
+// Runs the per-capability probes (int-health, IH-18) against a live mailbox and
+// returns a verdict PER capability, never a single boolean — the rep learns WHICH
+// permission is broken. It is a REPAIR of the record, not just a read: whatever the
+// probes find is written back to the row (status, errorCode, statusDetail), and
+// `lastValidatedAt` is stamped ONLY on a clean pass, so a failed Test never makes the
+// broken connection look like the freshest one.
+//
+// A broken integration is an EXPECTED state, so it is 200 with `ok: false`, never a
+// 500 — testConnection catches every probe failure into a CapabilityResult and never
+// throws for a provider problem.
+
+/** The overall verdict written back to the row, derived from the per-capability results. */
+interface AggregateVerdict {
+  ok: boolean
+  status: 'connected' | 'limited' | 'error'
+  errorCode: IntegrationErrorCode | null
+  statusDetail: string
+}
+
+/**
+ * Fold the per-capability results into the connection's written-back status.
+ *
+ * All green → `connected`. Otherwise the connection is unhealthy: if the ONLY thing
+ * wrong is a withheld scope it is `limited` / `partial_access` (amber, a deliberate
+ * choice the rep can repair), but a capability that failed for any harder reason —
+ * a revoked token, an unreachable provider — makes it `error` with that code, because
+ * that is a break the rep did not choose. `statusDetail` joins the failing reasons so
+ * the card names every broken thing, not just the first.
+ */
+function aggregateVerdict(capabilities: CapabilityResult[]): AggregateVerdict {
+  const failing = capabilities.filter((c) => !c.ok)
+  if (failing.length === 0) {
+    return { ok: true, status: 'connected', errorCode: null, statusDetail: '' }
+  }
+
+  const statusDetail = failing.map((c) => c.reason).join(' ')
+  // A harder failure than a merely-withheld scope makes the whole connection `error`.
+  const hard = failing.find((c) => c.errorCode !== null && c.errorCode !== 'partial_access')
+  if (hard) {
+    return { ok: false, status: 'error', errorCode: hard.errorCode, statusDetail }
+  }
+  return { ok: false, status: 'limited', errorCode: 'partial_access', statusDetail }
+}
+
+router.post(
+  '/:connectionId/test',
+  wrapRoute('POST /api/integrations/orgs/:orgId/:connectionId/test', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const connectionId = String(req.params.connectionId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+    const userId = authReq.user!.id
+
+    // --- Verify the connection is this rep's, in this org ---
+    // Scoped to (id, orgId, userId): a mailbox belongs to a rep, so another rep's
+    // connection — in this org or any other — is simply not found, and the answer is
+    // 404, never a 403 that would confirm the id names a real row.
+    const connection = await prisma.oAuthConnection.findFirst({
+      where: { id: connectionId, orgId, userId },
+      select: { id: true, scopes: true },
+    })
+    if (!connection) {
+      return void res.status(404).json({ error: 'Connection not found' })
+    }
+
+    // The sendable mailbox for this grant. saveConnection always upserts one, so this
+    // is present for any connection a consent completed; a missing one is treated the
+    // same as a missing connection.
+    const mailbox = await prisma.mailAccount.findFirst({
+      where: { connectionId, orgId },
+      select: { id: true },
+    })
+    if (!mailbox) {
+      return void res.status(404).json({ error: 'Connection not found' })
+    }
+
+    // --- Probe every capability, then write the verdict back ---
+    const provider = await getMailProvider(mailbox.id, orgId)
+    const capabilities = await testConnection(provider, connection.scopes)
+    const verdict = aggregateVerdict(capabilities)
+
+    // The verdict is written BACK to the row, scoped to (id, orgId, userId). A
+    // successful Test refreshes `lastValidatedAt`; a failed one leaves it untouched
+    // (undefined = no change), so the freshest "Verified" stamp is never the broken one.
+    await prisma.oAuthConnection.updateMany({
+      where: { id: connectionId, orgId, userId },
+      data: {
+        status: verdict.status,
+        errorCode: verdict.errorCode,
+        statusDetail: verdict.statusDetail,
+        lastValidatedAt: verdict.ok ? new Date() : undefined,
+      },
+    })
+
+    // --- Return response ---
+    // The token-free connection is re-read so the card shows the just-written status.
+    const updated = await getConnection(connectionId, orgId)
+    res.json({
+      result: {
+        ok: verdict.ok,
+        detail: verdict.statusDetail,
+        errorCode: verdict.errorCode,
+        capabilities,
+        connection: updated,
+      },
+    })
+  }),
+)
+
+// ============================================================
+// POST /api/integrations/orgs/:orgId/:connectionId/refresh — the Refresh button
+// ============================================================
+// Forces a token refresh with NO consent screen, re-reads the scopes the provider
+// still grants, and re-evaluates the amber state — so a scope an admin granted after
+// the last consent moves the connection from `limited` back to `connected`. The whole
+// re-read/re-evaluate/write-back is refreshConnection (oauthConnections.ts), the sole
+// decryptor; this route only proves ownership and reports the new status.
+router.post(
+  '/:connectionId/refresh',
+  wrapRoute('POST /api/integrations/orgs/:orgId/:connectionId/refresh', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const connectionId = String(req.params.connectionId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+    const userId = authReq.user!.id
+
+    // --- Force the refresh and report the new status ---
+    // refreshConnection scopes its lookup to (id, orgId, userId), so another rep's id
+    // is not found and returns null → 404. A revoked or unreadable grant throws AFTER
+    // stamping the row `error`; that is an expected state, so we report the stamped
+    // connection rather than 500.
+    try {
+      const connection = await refreshConnection(connectionId, orgId, userId)
+      if (!connection) {
+        return void res.status(404).json({ error: 'Connection not found' })
+      }
+      res.json({ connection })
+    } catch (err) {
+      if (err instanceof TokenRevokedError || err instanceof TokenUnreadableError) {
+        const connection = await getConnection(connectionId, orgId)
+        if (!connection) {
+          return void res.status(404).json({ error: 'Connection not found' })
+        }
+        return void res.json({ connection })
+      }
+      throw err
+    }
   }),
 )
 

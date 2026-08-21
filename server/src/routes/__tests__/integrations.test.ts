@@ -15,19 +15,29 @@ import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock, saveConnectionMock, markConnectionErrorMock } = vi.hoisted(() => ({
+const {
+  prismaMock,
+  verifyTokenMock,
+  saveConnectionMock,
+  markConnectionErrorMock,
+  getConnectionMock,
+  refreshConnectionMock,
+  testConnectionMock,
+  getMailProviderMock,
+} = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
     oAuthConnection: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
+      updateMany: vi.fn(),
       // Present only so a test can prove nothing ever calls them.
       update: vi.fn(),
-      updateMany: vi.fn(),
       delete: vi.fn(),
       deleteMany: vi.fn(),
     },
+    mailAccount: { findFirst: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
   // The callback's two writers are stubbed so the unit suite never touches Postgres;
@@ -35,6 +45,17 @@ const { prismaMock, verifyTokenMock, saveConnectionMock, markConnectionErrorMock
   // exercised against a live schema in integrations.integration.test.ts.
   saveConnectionMock: vi.fn(),
   markConnectionErrorMock: vi.fn(),
+  // getConnection re-reads the token-free row; refreshConnection is the forced
+  // refresh + re-evaluate. Both stubbed so the Test/refresh routes never reach the
+  // database, the decryptor, or a provider — their real behavior lives in the
+  // oauthConnections unit + integration suites.
+  getConnectionMock: vi.fn(),
+  refreshConnectionMock: vi.fn(),
+  // The per-capability probes and the seam factory, stubbed: this suite tests the
+  // ROUTE (auth, org-scoping, aggregation, write-back, response), not the probes,
+  // which are proven in connectionTest.test.ts against a fake provider.
+  testConnectionMock: vi.fn(),
+  getMailProviderMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
@@ -43,17 +64,28 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   setFirebaseUserDisabled: vi.fn(),
   deleteFirebaseUser: vi.fn(),
 }))
-// Keep everything the authorize/list routes use (serializeConnection, the select),
-// but stub the two writers the callback calls so no unit test reaches the database.
+// Keep everything the authorize/list routes use (serializeConnection, the select,
+// the real TokenRevokedError/TokenUnreadableError classes the refresh route matches
+// with instanceof), but stub the writers and readers the routes call so no unit test
+// reaches the database, the token decryptor, or a provider.
 vi.mock('../../lib/mail/oauthConnections.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/mail/oauthConnections.js')>()
-  return { ...actual, saveConnection: saveConnectionMock, markConnectionError: markConnectionErrorMock }
+  return {
+    ...actual,
+    saveConnection: saveConnectionMock,
+    markConnectionError: markConnectionErrorMock,
+    getConnection: getConnectionMock,
+    refreshConnection: refreshConnectionMock,
+  }
 })
+vi.mock('../../lib/mail/connectionTest.js', () => ({ testConnection: testConnectionMock }))
+vi.mock('../../lib/mail/getMailProvider.js', () => ({ getMailProvider: getMailProviderMock }))
 
 import { googleOAuth } from '../../../dependencies/googleOAuth.js'
 import { microsoftOAuth } from '../../../dependencies/microsoftOAuth.js'
 import { OAuthProviderError } from '../../../dependencies/oauthTypes.js'
 import { WEB_ORIGIN } from '../../config.js'
+import { TokenRevokedError } from '../../lib/mail/oauthConnections.js'
 import { signState } from '../../lib/oauthState.js'
 
 import app from '../../app.js'
@@ -138,6 +170,8 @@ beforeEach(() => {
   authAs()
   prismaMock.oAuthConnection.findFirst.mockResolvedValue(null)
   prismaMock.oAuthConnection.findMany.mockResolvedValue([])
+  prismaMock.oAuthConnection.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.mailAccount.findFirst.mockResolvedValue(null)
 })
 
 // ============================================================
@@ -327,6 +361,204 @@ describe('GET /api/integrations/orgs/:orgId', () => {
 
     expect(res.status).toBe(404)
     expect(prismaMock.oAuthConnection.findMany).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// POST /:connectionId/test — the Test button
+// ============================================================
+// testConnection and getMailProvider are mocked (see the module mocks up top), so
+// these tests prove the ROUTE: it proves ownership, folds the per-capability results
+// into the written-back status, sets lastValidatedAt ONLY on a clean pass, answers
+// 200-with-ok-false for a broken integration (never 500), and never leaks a token.
+// The probes themselves are proven against a fake provider in connectionTest.test.ts.
+
+/** A CapabilityResult as testConnection returns one. */
+type Cap = { capability: string; label: string; ok: boolean; reason: string; errorCode: string | null }
+const okCap = (capability: string, label: string): Cap => ({ capability, label, ok: true, reason: '', errorCode: null })
+const failCap = (capability: string, label: string, errorCode: string, reason: string): Cap => ({
+  capability,
+  label,
+  ok: false,
+  reason,
+  errorCode,
+})
+
+const CAP_READ = okCap('read_email', 'Read your email')
+const CAP_SEND = okCap('send_email', 'Send email as you')
+const CAP_CAL = okCap('calendar', 'See and add calendar events')
+
+const TEST_URL = `${URL_A}/conn-google/test`
+
+/** Arrange a testable connection: this rep's row, its mailbox, and the given verdict. */
+function arrangeTest(capabilities: Cap[], connectionOverrides: Record<string, unknown> = {}) {
+  prismaMock.oAuthConnection.findFirst.mockResolvedValue({ id: 'conn-google', scopes: [G_READ, G_SEND, G_CAL, G_ID] })
+  prismaMock.mailAccount.findFirst.mockResolvedValue({ id: 'mail-1' })
+  getMailProviderMock.mockResolvedValue({ provider: 'google' })
+  testConnectionMock.mockResolvedValue(capabilities)
+  getConnectionMock.mockResolvedValue(serializedConn(connectionOverrides))
+}
+
+describe('POST /api/integrations/orgs/:orgId/:connectionId/test', () => {
+  it('all green: returns ok, writes connected, and STAMPS lastValidatedAt', async () => {
+    arrangeTest([CAP_READ, CAP_SEND, CAP_CAL])
+
+    const res = await request(app).post(TEST_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.result.ok).toBe(true)
+    expect(res.body.result.errorCode).toBeNull()
+    expect(res.body.result.capabilities).toHaveLength(3)
+
+    const write = prismaMock.oAuthConnection.updateMany.mock.calls[0][0]
+    expect(write.where).toEqual({ id: 'conn-google', orgId: ORG_A, userId: 'user-a' })
+    expect(write.data.status).toBe('connected')
+    expect(write.data.errorCode).toBeNull()
+    // Verified is a fact with a timestamp: a clean pass refreshes it.
+    expect(write.data.lastValidatedAt).toBeInstanceOf(Date)
+  })
+
+  it('one withheld scope: read+calendar stay green, send reads red, connection goes limited', async () => {
+    const send = failCap('send_email', 'Send email as you', 'partial_access', 'Permission to send email as you was not granted.')
+    arrangeTest([CAP_READ, send, CAP_CAL], { status: 'limited', errorCode: 'partial_access' })
+
+    const res = await request(app).post(TEST_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.result.ok).toBe(false)
+    const caps = res.body.result.capabilities as Cap[]
+    expect(caps.find((c) => c.capability === 'read_email')!.ok).toBe(true)
+    expect(caps.find((c) => c.capability === 'calendar')!.ok).toBe(true)
+    expect(caps.find((c) => c.capability === 'send_email')!.ok).toBe(false)
+
+    const write = prismaMock.oAuthConnection.updateMany.mock.calls[0][0]
+    expect(write.data.status).toBe('limited')
+    expect(write.data.errorCode).toBe('partial_access')
+    // A failed Test must NOT refresh the "Verified" stamp.
+    expect(write.data.lastValidatedAt).toBeUndefined()
+  })
+
+  it('a revoked token is a 200 with ok:false and token_revoked on the row — never a 500', async () => {
+    const dead = (capability: string, label: string) =>
+      failCap(capability, label, 'token_revoked', 'The mailbox rejected the saved access.')
+    arrangeTest(
+      [dead('read_email', 'Read your email'), dead('send_email', 'Send email as you'), dead('calendar', 'See and add calendar events')],
+      { status: 'error', errorCode: 'token_revoked' },
+    )
+
+    const res = await request(app).post(TEST_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.result.ok).toBe(false)
+    expect(res.body.result.errorCode).toBe('token_revoked')
+
+    const write = prismaMock.oAuthConnection.updateMany.mock.calls[0][0]
+    expect(write.data.status).toBe('error')
+    expect(write.data.errorCode).toBe('token_revoked')
+    expect(write.data.lastValidatedAt).toBeUndefined()
+  })
+
+  it("404s another rep's connectionId, and never probes it", async () => {
+    prismaMock.oAuthConnection.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).post(TEST_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Connection not found' })
+    expect(testConnectionMock).not.toHaveBeenCalled()
+    // The lookup carried the full tenant boundary: org AND rep.
+    expect(prismaMock.oAuthConnection.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'conn-google', orgId: ORG_A, userId: 'user-a' }, select: expect.anything() }),
+    )
+  })
+
+  it('carries no token in the response body', async () => {
+    arrangeTest([CAP_READ, CAP_SEND, CAP_CAL])
+
+    const res = await request(app).post(TEST_URL).set('Authorization', AUTH)
+
+    const body = JSON.stringify(res.body)
+    expect(body).not.toContain('refreshToken')
+    expect(body).not.toContain('accessToken')
+  })
+
+  it('401s an unauthenticated caller', async () => {
+    const res = await request(app).post(TEST_URL)
+    expect(res.status).toBe(401)
+  })
+
+  it('404s an org the caller does not belong to — never a 403 — before probing', async () => {
+    authAs(null)
+    const res = await request(app).post(TEST_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.oAuthConnection.findFirst).not.toHaveBeenCalled()
+    expect(testConnectionMock).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// POST /:connectionId/refresh — the Refresh button
+// ============================================================
+// refreshConnection (the forced refresh + re-evaluate) is mocked here; its real
+// limited→connected behavior is proven in oauthConnections.test.ts. These tests prove
+// the route: ownership, the token-free reply, another rep's id → 404, and that a
+// revoked grant reports the stamped status rather than 500ing.
+
+const REFRESH_URL = `${URL_A}/conn-google/refresh`
+
+describe('POST /api/integrations/orgs/:orgId/:connectionId/refresh', () => {
+  it('forces the refresh scoped to (connectionId, org, rep) and returns the new status', async () => {
+    refreshConnectionMock.mockResolvedValue(serializedConn({ status: 'connected' }))
+
+    const res = await request(app).post(REFRESH_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.connection.status).toBe('connected')
+    expect(refreshConnectionMock).toHaveBeenCalledWith('conn-google', ORG_A, 'user-a')
+  })
+
+  it("404s another rep's connectionId (the scoped refresh finds nothing)", async () => {
+    refreshConnectionMock.mockResolvedValue(null)
+
+    const res = await request(app).post(REFRESH_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Connection not found' })
+  })
+
+  it('a revoked grant reports the stamped status (200), never a 500', async () => {
+    refreshConnectionMock.mockRejectedValue(new TokenRevokedError())
+    getConnectionMock.mockResolvedValue(serializedConn({ status: 'error', errorCode: 'token_revoked' }))
+
+    const res = await request(app).post(REFRESH_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.connection.status).toBe('error')
+    expect(res.body.connection.errorCode).toBe('token_revoked')
+  })
+
+  it('carries no token in the response body', async () => {
+    refreshConnectionMock.mockResolvedValue(serializedConn({ status: 'connected' }))
+
+    const res = await request(app).post(REFRESH_URL).set('Authorization', AUTH)
+
+    const body = JSON.stringify(res.body)
+    expect(body).not.toContain('refreshToken')
+    expect(body).not.toContain('accessToken')
+  })
+
+  it('401s an unauthenticated caller', async () => {
+    const res = await request(app).post(REFRESH_URL)
+    expect(res.status).toBe(401)
+  })
+
+  it('404s an org the caller does not belong to — never a 403', async () => {
+    authAs(null)
+    const res = await request(app).post(REFRESH_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(refreshConnectionMock).not.toHaveBeenCalled()
   })
 })
 

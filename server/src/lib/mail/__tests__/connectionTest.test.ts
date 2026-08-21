@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { testConnection } from '../connectionTest.js'
 import type { MailProvider } from '../MailProvider.js'
 import { MailAuthError } from '../mailErrors.js'
+import { TokenRevokedError, TokenUnreadableError } from '../oauthConnections.js'
 import { REQUIRED_SCOPES, type Provider } from '../../oauthScopes.js'
 
 /** Every scope Google grants a fully-connected mailbox. */
@@ -149,6 +150,28 @@ describe('testConnection — per-capability probes', () => {
     // Still read-only, even on the failure path.
     expect(provider.sendEmail).not.toHaveBeenCalled()
     expect(provider.createEvent).not.toHaveBeenCalled()
+  })
+
+  it("a probe whose own token refresh cannot be refreshed reads token_revoked, not unknown", async () => {
+    // withFreshAccessToken throws this when the refresh token itself is revoked — the
+    // "token cannot be refreshed" case. classify must not bury it under `unknown`.
+    const revoked = async () => {
+      throw new TokenRevokedError()
+    }
+    const byCap = byCapability(await testConnection(fakeProvider('google', revoked), GOOGLE_ALL_SCOPES))
+
+    expect(byCap.read_email.errorCode).toBe('token_revoked')
+    expect(byCap.calendar.errorCode).toBe('token_revoked')
+  })
+
+  it('a probe whose stored credentials will not decrypt reads token_unreadable', async () => {
+    const unreadable = async () => {
+      throw new TokenUnreadableError()
+    }
+    const byCap = byCapability(await testConnection(fakeProvider('google', unreadable), GOOGLE_ALL_SCOPES))
+
+    expect(byCap.read_email.ok).toBe(false)
+    expect(byCap.read_email.errorCode).toBe('token_unreadable')
   })
 
   it('a provider that hangs past 10s reads provider_unreachable', async () => {

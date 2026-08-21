@@ -21,6 +21,7 @@
 
 import type { MailProvider } from './MailProvider.js'
 import { MailAuthError, RateLimitedError } from './mailErrors.js'
+import { TokenRevokedError, TokenUnreadableError } from './oauthConnections.js'
 import type { IntegrationErrorCode } from './integrationErrors.js'
 import {
   REQUIRED_SCOPES,
@@ -156,6 +157,12 @@ function classify(err: unknown): IntegrationErrorCode {
   if (err instanceof ProbeTimeoutError) return 'provider_unreachable'
   // A 401 that survived a fresh token means the grant itself is dead, not a blip.
   if (err instanceof MailAuthError) return 'token_revoked'
+  // A probe's own token refresh can fail terminally: the refresh token was revoked
+  // (the "token cannot be refreshed" case), or the stored ciphertext will not decrypt.
+  // Both are dead grants, not transient — surface the same code the refresh path stamps
+  // rather than burying them under `unknown`.
+  if (err instanceof TokenRevokedError) return 'token_revoked'
+  if (err instanceof TokenUnreadableError) return 'token_unreadable'
   // Rate limiting is transient — the same "try again later" the rep gets for a
   // network failure, so it shares the code rather than inventing a new one.
   if (err instanceof RateLimitedError) return 'provider_unreachable'
@@ -169,6 +176,8 @@ function reasonForFailure(code: IntegrationErrorCode, consequence: string): stri
       return `The provider did not respond, so Maincar could not confirm it can ${consequence}. Try again shortly.`
     case 'token_revoked':
       return `The mailbox rejected the saved access, so Maincar can no longer ${consequence}. Reconnect to restore it.`
+    case 'token_unreadable':
+      return `Maincar could not read the saved mailbox credentials, so it can no longer ${consequence}. Reconnect to restore it.`
     default:
       return `The provider returned an unexpected error, so Maincar could not confirm it can ${consequence}.`
   }

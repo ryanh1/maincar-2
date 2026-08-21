@@ -71,6 +71,10 @@ export async function oauthTokenRefresher({
     // Under refresh-token rotation the provider mints a new one; pass it through so
     // oauthConnections re-encrypts and stores it. Absent → keep the stored token.
     refreshToken: grant.refreshToken ?? undefined,
+    // What the provider reports it STILL grants. The forced refresh (refreshConnection)
+    // re-evaluates the amber state from this, so an admin granting a scope after the
+    // fact is caught without a fresh consent. The lazy refresh ignores it.
+    grantedScopes: grant.grantedScopes,
   }
 }
 

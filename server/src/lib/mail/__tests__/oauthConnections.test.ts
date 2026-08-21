@@ -36,12 +36,20 @@ import {
   TokenRevokedError,
   TokenUnreadableError,
   getConnection,
+  refreshConnection,
   registerTokenRefresher,
   serializeConnection,
   withFreshAccessToken,
   type RefreshedGrant,
   type TokenRefresher,
 } from '../oauthConnections.js'
+
+// The four Google scope params, verbatim from oauthScopes.ts.
+const G_READ = 'https://www.googleapis.com/auth/gmail.readonly'
+const G_SEND = 'https://www.googleapis.com/auth/gmail.send'
+const G_CAL = 'https://www.googleapis.com/auth/calendar.events'
+const G_ID = 'https://www.googleapis.com/auth/userinfo.email'
+const G_ALL = [G_READ, G_SEND, G_CAL, G_ID]
 
 const NOW = Date.now()
 const PROVIDER = 'google'
@@ -301,5 +309,65 @@ describe('getConnection', () => {
   it('returns null for a connection id from another org, without throwing', async () => {
     prismaMock.oAuthConnection.findFirst.mockResolvedValue(null)
     await expect(getConnection(CONN_ID, 'org-somebody-else')).resolves.toBeNull()
+  })
+})
+
+describe('refreshConnection — forced refresh + re-evaluate', () => {
+  it('re-reads the granted scopes and moves limited → connected once the admin grants the missing scope', async () => {
+    // The row is limited: only send was granted at consent time.
+    prismaMock.oAuthConnection.findFirst
+      .mockResolvedValueOnce(connectionRow({ scopes: [G_SEND], status: 'limited', errorCode: 'partial_access' }))
+      // getConnection re-reads the just-written row.
+      .mockResolvedValueOnce(connectionRow({ scopes: G_ALL, status: 'connected', errorCode: null }))
+    // The provider now reports ALL scopes granted — an admin approved the rest.
+    registerTokenRefresher(async () => grant({ grantedScopes: G_ALL }))
+
+    const result = await refreshConnection(CONN_ID, ORG_ID, USER_ID)
+
+    expect(result?.status).toBe('connected')
+    const write = prismaMock.oAuthConnection.updateMany.mock.calls[0][0]
+    expect(write.where).toEqual({ id: CONN_ID, orgId: ORG_ID })
+    expect(write.data.status).toBe('connected')
+    expect(write.data.errorCode).toBeNull()
+    expect(write.data.scopes).toEqual(G_ALL)
+    // The fresh access token was written ENCRYPTED, never in plaintext.
+    expect(write.data.accessToken).not.toContain(NEW_ACCESS_PLAINTEXT)
+    expect(write.data.lastRefreshAt).toBeInstanceOf(Date)
+  })
+
+  it('keeps the stored scopes when the refresh response omits `scope`, re-affirming status', async () => {
+    prismaMock.oAuthConnection.findFirst
+      .mockResolvedValueOnce(connectionRow({ scopes: G_ALL }))
+      .mockResolvedValueOnce(connectionRow({ scopes: G_ALL }))
+    registerTokenRefresher(async () => grant()) // no grantedScopes on the grant
+
+    await refreshConnection(CONN_ID, ORG_ID, USER_ID)
+
+    const write = prismaMock.oAuthConnection.updateMany.mock.calls[0][0]
+    expect(write.data.scopes).toEqual(G_ALL)
+    expect(write.data.status).toBe('connected')
+  })
+
+  it('stamps error/token_revoked and throws TokenRevokedError when the refresh is invalid_grant', async () => {
+    prismaMock.oAuthConnection.findFirst.mockResolvedValueOnce(connectionRow())
+    registerTokenRefresher(async () => {
+      throw new InvalidGrantError()
+    })
+
+    await expect(refreshConnection(CONN_ID, ORG_ID, USER_ID)).rejects.toBeInstanceOf(TokenRevokedError)
+
+    const write = prismaMock.oAuthConnection.updateMany.mock.calls[0][0]
+    expect(write.data.status).toBe('error')
+    expect(write.data.errorCode).toBe('token_revoked')
+  })
+
+  it("returns null for another rep's connection id, and never reaches the provider", async () => {
+    prismaMock.oAuthConnection.findFirst.mockResolvedValueOnce(null)
+    const refresher = vi.fn<TokenRefresher>(async () => grant())
+    registerTokenRefresher(refresher)
+
+    await expect(refreshConnection(CONN_ID, ORG_ID, 'someone-else')).resolves.toBeNull()
+    expect(refresher).not.toHaveBeenCalled()
+    expect(prismaMock.oAuthConnection.updateMany).not.toHaveBeenCalled()
   })
 })

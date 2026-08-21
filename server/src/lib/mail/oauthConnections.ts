@@ -35,6 +35,13 @@ export interface RefreshedGrant {
   // refresh and invalidate the old one. When present it is written back; when
   // absent the stored refresh token is kept.
   refreshToken?: string
+  // The scopes the provider reports it STILL grants, read back from the token
+  // response's `scope` field. Present so the forced refresh below (refreshConnection)
+  // can re-evaluate the amber state and catch an admin granting a scope after the
+  // fact. The lazy refresh (withFreshAccessToken) ignores it — whether a grant is
+  // `limited` is a scope question it deliberately leaves alone. Optional because a
+  // provider may omit `scope` on a plain refresh, in which case the stored scopes stand.
+  grantedScopes?: string[]
 }
 
 export interface TokenRefreshInput {
@@ -247,22 +254,9 @@ async function doRefreshIfNeeded(connectionId: string): Promise<string> {
     return decryptOrMarkUnreadable(row, row.accessToken, aad)
   }
 
-  // A refresh is due. Decrypt the refresh token first — its failure is the
-  // canonical `token_unreadable` case.
-  const refreshToken = await decryptOrMarkUnreadable(row, row.refreshToken, aad)
-
-  let grant: RefreshedGrant
-  try {
-    grant = await requireRefresher()({ provider: row.provider, refreshToken, connectionId: row.id })
-  } catch (err) {
-    if (isInvalidGrant(err)) {
-      await markError(row, 'token_revoked', 'Access was revoked; reconnect the mailbox.')
-      throw new TokenRevokedError()
-    }
-    // Transient/provider errors are not a revocation — leave the row untouched and
-    // let the caller (or int-health) classify a live failure.
-    throw err
-  }
+  // A refresh is due. The decrypt, the provider round-trip, and the revoked-grant
+  // stamping are shared with the forced refresh below (refreshConnection).
+  const grant = await refreshGrant(row, aad)
 
   // Write the new grant back, scoped to (id, orgId). A rotated refresh token is
   // re-encrypted and stored; status is left alone here, because whether a grant is
@@ -307,6 +301,84 @@ async function markError(row: OAuthConnection, errorCode: string, statusDetail: 
     data: { status: 'error', errorCode, statusDetail },
   })
   logger.warn({ connectionId: row.id, orgId: row.orgId, provider: row.provider, errorCode }, 'oauth connection marked error')
+}
+
+/**
+ * Decrypt the stored refresh token, trade it for a fresh grant through the registered
+ * refresher, and translate a revoked grant into a stamped {@link TokenRevokedError}.
+ *
+ * The single seam that touches the provider on a refresh, shared by the lazy path
+ * ({@link withFreshAccessToken}) and the forced path ({@link refreshConnection}), so
+ * the decrypt, the round-trip, and the revoked/unreadable stamping have ONE
+ * implementation. An undecryptable refresh token stamps `token_unreadable` and throws
+ * BEFORE the provider is reached; an `invalid_grant` stamps `token_revoked` and
+ * throws; any other (transient) error bubbles up untouched, so a blip is not mistaken
+ * for a revocation.
+ */
+async function refreshGrant(row: OAuthConnection, aad: string): Promise<RefreshedGrant> {
+  const refreshToken = await decryptOrMarkUnreadable(row, row.refreshToken, aad)
+  try {
+    return await requireRefresher()({ provider: row.provider, refreshToken, connectionId: row.id })
+  } catch (err) {
+    if (isInvalidGrant(err)) {
+      await markError(row, 'token_revoked', 'Access was revoked; reconnect the mailbox.')
+      throw new TokenRevokedError()
+    }
+    // Transient/provider errors are not a revocation — leave the row untouched and
+    // let the caller (or int-health) classify a live failure.
+    throw err
+  }
+}
+
+/**
+ * FORCE a token refresh, re-read the scopes the provider still grants, re-evaluate the
+ * amber state, and write it all back — returning the token-free row (or `null` when no
+ * connection with that id belongs to this rep in this org).
+ *
+ * This is the "Refresh" button (int-health, IH-19). Unlike {@link withFreshAccessToken}
+ * it refreshes unconditionally, because the whole point is to catch a scope an admin
+ * granted AFTER the last consent: the freshly-minted token response carries the
+ * up-to-date `scope`, so re-evaluating it can move a connection from `limited` back to
+ * `connected` with no second consent screen. When the provider omits `scope` on the
+ * refresh the stored scopes stand, so the status is simply re-affirmed.
+ *
+ * A revoked or unreadable grant throws (already stamped `error` by {@link refreshGrant}),
+ * exactly as the lazy path does; the route reports the stamped status rather than 500.
+ * The lookup is scoped to `(id, orgId, userId)` — a mailbox belongs to a rep — so
+ * another rep's id simply is not found and the answer is `null` → 404.
+ */
+export async function refreshConnection(
+  connectionId: string,
+  orgId: string,
+  userId: string,
+): Promise<SerializedConnection | null> {
+  const row = await prisma.oAuthConnection.findFirst({ where: { id: connectionId, orgId, userId } })
+  if (!row) return null
+
+  const aad = `${row.provider}:${row.userId}`
+  const grant = await refreshGrant(row, aad)
+
+  // Re-evaluate against what the provider says it STILL grants; fall back to the
+  // stored scopes when the refresh response omitted `scope`. The provider string on a
+  // stored row is always one saveConnection wrote, i.e. a Provider.
+  const grantedScopes = grant.grantedScopes ?? row.scopes
+  const evaluation = evaluateGrant(row.provider as Provider, grantedScopes)
+
+  const data: Prisma.OAuthConnectionUpdateManyMutationInput = {
+    accessToken: encryptToken(grant.accessToken, aad),
+    expiresAt: grant.expiresAt,
+    lastRefreshAt: new Date(),
+    scopes: grantedScopes,
+    status: evaluation.status,
+    errorCode: evaluation.errorCode,
+    statusDetail: evaluation.statusDetail,
+  }
+  if (grant.refreshToken) {
+    data.refreshToken = encryptToken(grant.refreshToken, aad)
+  }
+  await prisma.oAuthConnection.updateMany({ where: { id: row.id, orgId: row.orgId }, data })
+
+  return getConnection(connectionId, orgId)
 }
 
 // --- saveConnection: the ONE writer of a completed consent ------------------
