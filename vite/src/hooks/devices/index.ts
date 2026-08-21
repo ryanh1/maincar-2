@@ -2,5 +2,6 @@
 // (CLAUDE.md → Hooks Organization).
 export { useGetDevices } from './useGetDevices'
 export { useGreenRoomDecision } from './useGreenRoomDecision'
+export { clearGreenRoomCheckInStore } from './greenRoomCheckStore'
 export type { AudioDevice, UseGetDevicesResult } from './types'
 export type { GreenRoomCheck, GreenRoomCheckResult, GreenRoomReason, MicPermission, UseGreenRoomDecisionResult } from './types'
