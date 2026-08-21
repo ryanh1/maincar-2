@@ -15,7 +15,7 @@ import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import mailboxesRouter from './routes/mailboxes.js'
 import invitationsRouter from './routes/invitations.js'
-// import listsRouter from './routes/lists.js' // MAI-142 (T14) not yet complete
+import listsRouter from './routes/lists.js'
 import meetingsRouter from './routes/meetings.js'
 import membersRouter from './routes/members.js'
 import messagesRouter from './routes/messages.js'
@@ -133,7 +133,7 @@ app.use('/api/orgs/:orgId/notes', notesRouter)
 // thing on every row. Entries live under /lists/:id/entries — an entry is only
 // ever reachable through the list it is on, which is also where its tenant
 // boundary gets proven.
-// app.use('/api/orgs/:orgId/lists', listsRouter) // MAI-142 (T14) not yet complete
+app.use('/api/orgs/:orgId/lists', listsRouter)
 
 // The authenticated half of the Integration Hub. The org is in the path so
 // membership is re-proven per request. The OAuth callback is NOT here: it is
