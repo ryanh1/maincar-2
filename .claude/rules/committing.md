@@ -81,6 +81,7 @@ cause. If you use it:
 - **A feature commit carries its own tests**, committed together, never as a
   follow-up. [testing.md](testing.md) says where they live and what each kind
   must cover. That holds even when the files you touched do not load testing.md.
+
 ## The index is shared — commit by pathspec
 
 There is one git index for the whole clone, and more than one session stages into

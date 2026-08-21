@@ -109,7 +109,10 @@ workspace_tests "integration tests" server npm run test:integration --silent
 
 # --- Record the verdict for prepare-commit-msg ---------------------------------
 if [ ${#foreign[@]} -gt 0 ]; then
-  printf 'degraded: %s\n' "$(IFS=', '; echo "${foreign[*]}")" > "$STATUS_FILE"
+  # Comma-space separated. `IFS` only takes its first character for array
+  # expansion, so build the list explicitly rather than getting "a,b".
+  joined="$(printf '%s, ' "${foreign[@]}")"
+  printf 'degraded: %s\n' "${joined%, }" > "$STATUS_FILE"
   echo "pre-commit: tests green; ${#foreign[@]} check(s) red on other sessions' files."
 else
   echo "green" > "$STATUS_FILE"
