@@ -1,8 +1,26 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
-import type { EmailDraft } from '@/lib/emailTypes'
+import type { EmailDraft, EmailTemplate } from '@/lib/emailTypes'
+import { makeTestQueryClient, withProviders } from '@/test/utils'
+
+/**
+ * The card reads two things beyond its own props: which org the rep is in, and
+ * that org's templates. Both are stubbed. What this file has to prove is that
+ * the card puts a template into the right two fields and leaves the third
+ * alone, not that a query works, and a real one would make every test in here
+ * wait on a request it does not care about.
+ */
+const { useAuthMock, useGetEmailTemplatesMock, refetchMock } = vi.hoisted(() => ({
+  useAuthMock: vi.fn(),
+  useGetEmailTemplatesMock: vi.fn(),
+  refetchMock: vi.fn(),
+}))
+
+vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
+vi.mock('@/hooks/email', () => ({ useGetEmailTemplates: useGetEmailTemplatesMock }))
+
 import { ComposerCard } from './ComposerCard'
 import { ComposerContext, type ComposerContextValue } from './composerContext'
 
@@ -34,6 +52,44 @@ beforeAll(() => {
 
 /** Matches the constant in ComposerCard.tsx, which is deliberately not exported. */
 const AUTOSAVE_DELAY_MS = 1200
+
+function makeTemplate(overrides: Partial<EmailTemplate> = {}): EmailTemplate {
+  return {
+    id: 'tpl-1',
+    name: 'Discovery follow-up',
+    subject: 'Great speaking with you',
+    bodyHtml: '<p>Thanks for your time.</p>',
+    createdById: 'user-a',
+    fieldsJson: null,
+    createdAt: '2026-08-01T12:00:00.000Z',
+    updatedAt: '2026-08-01T12:00:00.000Z',
+    ...overrides,
+  }
+}
+
+/** `useGetEmailTemplates`, in whichever state a test needs it. */
+function templatesQuery(
+  state: { templates?: EmailTemplate[]; isPending?: boolean; isError?: boolean } = {},
+) {
+  const { templates = [], isPending = false, isError = false } = state
+  const settled = !isPending && !isError
+  return {
+    data: settled ? { templates, total: templates.length } : undefined,
+    isPending,
+    isError,
+    isSuccess: settled,
+    refetch: refetchMock,
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  useAuthMock.mockReturnValue({
+    org: { id: 'org-a', name: 'Acme Freight Co' },
+    user: { id: 'user-a' },
+  })
+  useGetEmailTemplatesMock.mockReturnValue(templatesQuery())
+})
 
 function makeDraft(overrides: Partial<EmailDraft> = {}): EmailDraft {
   return {
@@ -83,22 +139,24 @@ function renderCard(draft: EmailDraft = makeDraft()) {
     ...stubs,
   }
 
-  const view = render(
+  // One client, shared with `rerenderWith`, so a re-render stays a re-render and
+  // does not rebuild the provider tree under the card. The providers themselves
+  // are the ones `App.tsx` mounts: the footer's template button is an
+  // `IconButton`, and Radix throws when a tooltip has no provider above it.
+  const client = makeTestQueryClient()
+  const card = (next: EmailDraft) => (
     <ComposerContext.Provider value={value}>
-      <ComposerCard draft={draft} />
-    </ComposerContext.Provider>,
+      <ComposerCard draft={next} />
+    </ComposerContext.Provider>
   )
+
+  const view = render(withProviders(card(draft), { client }))
 
   return {
     ...stubs,
     unmount: view.unmount,
     /** Push a newer draft row at the card, the way a save response would. */
-    rerenderWith: (next: EmailDraft) =>
-      view.rerender(
-        <ComposerContext.Provider value={value}>
-          <ComposerCard draft={next} />
-        </ComposerContext.Provider>,
-      ),
+    rerenderWith: (next: EmailDraft) => view.rerender(withProviders(card(next), { client })),
   }
 }
 
@@ -611,5 +669,212 @@ describe('ComposerCard recipients', () => {
     expect(scroller).toHaveClass('min-h-0', 'flex-1')
     expect(scroller!.parentElement).toHaveClass('min-h-0', 'flex-1')
     expect(screen.getByRole('article', { name: 'New message' })).toHaveClass('h-[26rem]')
+  })
+})
+
+/**
+ * The footer's template menu.
+ *
+ * What these protect:
+ *   - the menu lists this org's templates, and says where to write one when
+ *     there are none
+ *   - picking one replaces the subject and the body and KEEPS the recipients,
+ *     which is the whole reason a rep reaches for it at this point
+ *   - a card with text in it asks before it throws that text away
+ *   - the insertion rides the ordinary autosave, with no special path
+ *   - and the caret rule still holds afterwards: a save response cannot reach
+ *     the newly mounted editor either
+ */
+const TEMPLATE_BUTTON = 'Insert a saved template into this email'
+
+function openTemplateMenu(user: ReturnType<typeof userEvent.setup>) {
+  return user.click(screen.getByRole('button', { name: TEMPLATE_BUTTON }))
+}
+
+describe('ComposerCard templates', () => {
+  it('lists the org templates in the order the route sorted them', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(
+      templatesQuery({
+        templates: [
+          makeTemplate({ id: 'tpl-a', name: 'Aged quote' }),
+          makeTemplate({ id: 'tpl-b', name: 'Discovery follow-up' }),
+          makeTemplate({ id: 'tpl-c', name: 'Rate confirmation' }),
+        ],
+      }),
+    )
+    renderCard()
+
+    await openTemplateMenu(user)
+
+    const items = await screen.findAllByRole('menuitem')
+    expect(items.map((item) => item.textContent)).toEqual([
+      'Aged quote',
+      'Discovery follow-up',
+      'Rate confirmation',
+    ])
+  })
+
+  it('replaces the subject and the body and leaves every recipient alone', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [makeTemplate()] }))
+    renderCard(
+      makeDraft({
+        toAddrs: ['ann@acme.test'],
+        ccAddrs: ['bob@acme.test'],
+        bccAddrs: ['legal@acme.test'],
+      }),
+    )
+
+    await openTemplateMenu(user)
+    await user.click(await screen.findByRole('menuitem', { name: 'Discovery follow-up' }))
+
+    expect(subjectField()).toHaveValue('Great speaking with you')
+    expect(bodyField()).toHaveTextContent('Thanks for your time.')
+    // The rep addressed the email first. A template that emptied the rows would
+    // undo the work they did before reaching for it.
+    expect(chipAddresses()).toEqual(['ann@acme.test', 'bob@acme.test', 'legal@acme.test'])
+  })
+
+  it('asks nothing when only the recipients are filled in', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [makeTemplate()] }))
+    renderCard(makeDraft({ toAddrs: ['ann@acme.test'] }))
+
+    await openTemplateMenu(user)
+    await user.click(await screen.findByRole('menuitem', { name: 'Discovery follow-up' }))
+
+    // Addressing an email and then picking a template is the ordinary order. A
+    // dialog here would appear on nearly every insertion.
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(subjectField()).toHaveValue('Great speaking with you')
+  })
+
+  it('asks before it replaces a subject the rep wrote, and Cancel changes nothing', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [makeTemplate()] }))
+    renderCard(makeDraft({ subject: 'Half a quote' }))
+
+    await openTemplateMenu(user)
+    await user.click(await screen.findByRole('menuitem', { name: 'Discovery follow-up' }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Replace what you have written?')
+    // The question names the template, and what survives it.
+    expect(dialog).toHaveTextContent('Discovery follow-up')
+    expect(dialog).toHaveTextContent('The recipients stay.')
+    expect(subjectField()).toHaveValue('Half a quote')
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(subjectField()).toHaveValue('Half a quote')
+  })
+
+  it('asks before it replaces a message the rep wrote, and replaces on confirmation', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [makeTemplate()] }))
+    renderCard()
+
+    await typeBody('<p>Half a sentence</p>')
+    await openTemplateMenu(user)
+    await user.click(await screen.findByRole('menuitem', { name: 'Discovery follow-up' }))
+
+    expect(await screen.findByRole('alertdialog')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Replace' }))
+
+    expect(bodyField()).toHaveTextContent('Thanks for your time.')
+    expect(bodyField()).not.toHaveTextContent('Half a sentence')
+  })
+
+  it('treats an untouched editor as empty, so an empty card inserts without a question', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [makeTemplate()] }))
+    renderCard()
+
+    // The editor reports `<p></p>` for a document nobody has typed in. That is
+    // markup, not writing, and a question about it would be noise.
+    await typeBody('<p></p>')
+    await openTemplateMenu(user)
+    await user.click(await screen.findByRole('menuitem', { name: 'Discovery follow-up' }))
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(bodyField()).toHaveTextContent('Thanks for your time.')
+  })
+
+  it('saves the inserted template through the ordinary autosave', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [makeTemplate()] }))
+    const { saveDraft } = renderCard()
+
+    await openTemplateMenu(user)
+    await user.click(await screen.findByRole('menuitem', { name: 'Discovery follow-up' }))
+
+    // No special path: the same 1200 ms debounce every keystroke rides, sending
+    // the two keys that changed and nothing else. Real timers, because the menu
+    // above needs them.
+    await waitFor(
+      () =>
+        expect(saveDraft).toHaveBeenCalledWith('draft-1', {
+          subject: 'Great speaking with you',
+          bodyHtml: '<p>Thanks for your time.</p>',
+        }),
+      { timeout: AUTOSAVE_DELAY_MS * 3 },
+    )
+  })
+
+  it('still ignores a save response after a template landed', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [makeTemplate()] }))
+    const { rerenderWith } = renderCard()
+
+    await openTemplateMenu(user)
+    await user.click(await screen.findByRole('menuitem', { name: 'Discovery follow-up' }))
+
+    // The remount that showed the template is the ONLY one. The dock's copy of
+    // the draft coming back must still not reach the editor, or the caret bug is
+    // back the moment a rep uses a template.
+    rerenderWith(makeDraft({ subject: 'The server copy', bodyHtml: '<p>An older body</p>' }))
+
+    expect(subjectField()).toHaveValue('Great speaking with you')
+    expect(bodyField()).toHaveTextContent('Thanks for your time.')
+    expect(bodyField()).not.toHaveTextContent('An older body')
+  })
+
+  it('points at Settings when there are no templates yet, never an empty menu', async () => {
+    const user = userEvent.setup()
+    renderCard()
+
+    await openTemplateMenu(user)
+
+    const row = await screen.findByRole('menuitem', {
+      name: 'Write your first template in Settings → Email templates.',
+    })
+    expect(row).toHaveAttribute('data-disabled')
+  })
+
+  it('says the list is still loading rather than claiming there is nothing', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ isPending: true }))
+    renderCard()
+
+    await openTemplateMenu(user)
+
+    expect(await screen.findByRole('menuitem', { name: 'Loading templates…' })).toHaveAttribute(
+      'data-disabled',
+    )
+  })
+
+  it('offers the retry when the list could not be loaded', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ isError: true }))
+    renderCard()
+
+    await openTemplateMenu(user)
+    await user.click(
+      await screen.findByRole('menuitem', { name: 'Could not load your templates. Try again.' }),
+    )
+
+    expect(refetchMock).toHaveBeenCalled()
   })
 })
