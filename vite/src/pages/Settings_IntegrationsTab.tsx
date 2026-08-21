@@ -10,10 +10,12 @@ import {
   useGetIntegrations,
 } from '@/hooks/integrations'
 import type { ConnectMode, IntegrationCard, Provider } from '@/hooks/integrations'
+import { useUrlString } from '@/hooks/urlState'
 import { ApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { useAuth } from '@/providers/useAuth'
 
+import { Settings_Integrations_MailboxDrawer } from './Settings_Integrations_MailboxDrawer'
 import { Settings_Integrations_ProviderCard } from './Settings_Integrations_ProviderCard'
 
 // A small, centred window is enough for a consent screen and keeps the rep's page in
@@ -46,12 +48,13 @@ function popupFeatures(): string {
  * to do. The card only hands the intent up through `onConnect`.
  */
 export function Settings_IntegrationsTab() {
-  const { org } = useAuth()
+  const { org, user } = useAuth()
   const orgId = org?.id ?? null
 
   const integrations = useGetIntegrations(orgId)
   const connect = useConnectIntegration()
   const queryClient = useQueryClient()
+  const [, setMailboxId] = useUrlString('mailbox')
 
   // Which provider's popup is open, so exactly that provider's card reads busy. `null`
   // when no consent is in flight.
@@ -193,10 +196,13 @@ export function Settings_IntegrationsTab() {
               orgId={orgId}
               onConnect={(mode) => void handleConnect(card, mode)}
               connectBusy={busyProvider === card.provider}
+              onMailboxOpenSettings={setMailboxId}
             />
           ))}
         </div>
       )}
+
+      <Settings_Integrations_MailboxDrawer orgId={orgId} timeZone={user?.timeZone} />
     </section>
   )
 }
