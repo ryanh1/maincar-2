@@ -29,7 +29,7 @@ export type CallStatus =
   | 'no-answer'
   | 'canceled'
 
-/** What the greenroom recorded before the call was placed. Null if never asked. */
+/** The rep's per-call recording choice, made before the call was placed. Null if never asked. */
 export type RecordingConsent = 'granted' | 'declined'
 
 /** Allowed values mirror the comments on `Call.transcriptStatus` in schema.prisma. */

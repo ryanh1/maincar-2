@@ -5,8 +5,10 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { BuyNumberBanner } from '@/components/BuyNumberBanner'
 import { GreenRoom } from '@/components/GreenRoom'
 import type { DeviceSelection } from '@/components/DeviceCheck'
@@ -20,12 +22,10 @@ import { useDialer } from '@/components/dialer/dialerContext'
 /** The phone layout, row by row: 1-9, then * 0 #. Twelve keys, no more. */
 const KEYPAD_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'] as const
 
+/** Ties the consent checkbox to its label. */
+const CONSENT_ID = 'dialer-recording-consent'
+
 export interface NumericKeypadProps {
-  /**
-   * Consent to place the call with. This keypad captures no consent of its own,
-   * so the safe default is `declined`: never record without an explicit yes.
-   */
-  recordingConsent?: RecordingConsent
   className?: string
 }
 
@@ -54,9 +54,21 @@ export interface NumericKeypadProps {
  * the other side of it: set when the gate opens it, left false when the
  * headphones button opens it on demand, so confirming an on-demand check closes
  * the dialog without dialing.
+ *
+ * ## Recording consent (MAI-192)
+ *
+ * Captured here, per call, by the checkbox above the Call button. It is state,
+ * not a prop: the spec allows recording only on an explicit opt-in for each
+ * call, so there is no default to inherit and nothing to persist. It starts at
+ * `declined` and returns there on every fresh keypad — the dock swaps this
+ * component out for the in-call controls once a call is up, so a granted tick
+ * can never outlive the call it was given for. The greenroom detour does not
+ * reset it: the choice is made before `dial()` runs, whether or not the gate
+ * opens.
  */
-export function NumericKeypad({ recordingConsent = 'declined', className }: NumericKeypadProps) {
+export function NumericKeypad({ className }: NumericKeypadProps) {
   const [value, setValue] = useState('')
+  const [recordingConsent, setRecordingConsent] = useState<RecordingConsent>('declined')
   const { org } = useAuth()
   const { dialing, sendDigits } = useDialer()
   const createCall = useCreateCall()
@@ -212,17 +224,37 @@ export function NumericKeypad({ recordingConsent = 'declined', className }: Nume
       {hasNoActiveNumber ? (
         <BuyNumberBanner />
       ) : (
-        <Button
-          type="button"
-          variant="success"
-          size="sm"
-          className="w-full"
-          disabled={callDisabled}
-          onClick={dial}
-        >
-          <Phone size={16} aria-hidden="true" />
-          Call
-        </Button>
+        <>
+          {/*
+            Consent rides with the Call button, not with the keypad grid: both are
+            hidden together when there is no line to call from, so a rep is never
+            offered a recording choice for a call they cannot place. It locks while
+            a call is in flight — the value the POST carried is already fixed, so a
+            togglable box would be a control that does nothing.
+          */}
+          <Label htmlFor={CONSENT_ID} className="cursor-pointer">
+            <Checkbox
+              id={CONSENT_ID}
+              checked={recordingConsent === 'granted'}
+              onCheckedChange={(checked) =>
+                setRecordingConsent(checked === true ? 'granted' : 'declined')
+              }
+              disabled={dialing || createCall.isPending}
+            />
+            Record this call
+          </Label>
+          <Button
+            type="button"
+            variant="success"
+            size="sm"
+            className="w-full"
+            disabled={callDisabled}
+            onClick={dial}
+          >
+            <Phone size={16} aria-hidden="true" />
+            Call
+          </Button>
+        </>
       )}
       <GreenRoom
         open={greenRoomOpen}
