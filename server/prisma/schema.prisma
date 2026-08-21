@@ -29,11 +29,13 @@ model Org {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships  Membership[]
-  invitations  Invitation[]
-  phoneNumbers PhoneNumber[]
-  calls        Call[]
-  emailDrafts  EmailDraft[]
+  memberships      Membership[]
+  invitations      Invitation[]
+  phoneNumbers     PhoneNumber[]
+  calls            Call[]
+  emailDrafts      EmailDraft[]
+  oauthConnections OAuthConnection[]
+  mailAccounts     MailAccount[]
 }
 
 model User {
@@ -65,11 +67,13 @@ model User {
   currentOrgId String?
 
   memberships         Membership[]
-  invitationsSent     Invitation[]  @relation("InvitationSender")
-  invitationsAccepted Invitation[]  @relation("InvitationAcceptor")
+  invitationsSent     Invitation[]      @relation("InvitationSender")
+  invitationsAccepted Invitation[]      @relation("InvitationAcceptor")
   phoneNumbers        PhoneNumber[]
   calls               Call[]
   emailDrafts         EmailDraft[]
+  oauthConnections    OAuthConnection[]
+  mailAccounts        MailAccount[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -287,4 +291,87 @@ model EmailDraft {
 
   // The dock's only query: this rep's drafts in this org, by last edit.
   @@index([orgId, userId, updatedAt])
+}
+
+// -----------------------------------------------------------------------------
+// Integration Hub — mail/calendar OAuth
+//
+// The two tables the whole Integration Hub sits on
+// (docs/specs/SPEC-int-schema.md § Data model). OAuthConnection holds the
+// encrypted grant and the honest status; MailAccount holds the mailbox that
+// grant reaches. Deleting the connection deletes the mailbox: without a token
+// there is nothing left to send from.
+// -----------------------------------------------------------------------------
+
+model OAuthConnection {
+  id     String @id @default(cuid())
+  org    Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId  String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  // google | microsoft. A String, never a Prisma enum (rules/database-and-prisma.md).
+  provider String
+
+  // The provider's own id for this identity. Google: sub. Microsoft: oid.
+  // Held so a re-consent under a changed email address still matches the row.
+  providerAccountId String
+  emailAddress      String
+
+  // Encrypted at rest, format v1.<iv>.<ciphertext>.<tag>. Never logged, never
+  // returned by any route, never in a response body — not even to the owner.
+  refreshToken String  @db.Text
+  accessToken  String? @db.Text
+  expiresAt    DateTime?
+
+  // What the provider ACTUALLY granted, not what was asked for. The difference
+  // between this and REQUIRED_SCOPES is the whole amber state.
+  scopes String[] @default([])
+
+  // connected | limited | error
+  status       String  @default("connected")
+  // Stable code the client maps to recovery steps. Null when healthy.
+  errorCode    String?
+  // One line naming what does not work. Empty when healthy.
+  statusDetail String?
+
+  // When a live provider call last proved this works. Null until the first Test.
+  lastValidatedAt DateTime?
+  lastRefreshAt   DateTime?
+
+  mailAccount MailAccount?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One grant per provider per rep. Reconnecting updates rather than duplicates.
+  @@unique([orgId, userId, provider])
+  @@index([orgId, userId])
+}
+
+model MailAccount {
+  id     String @id @default(cuid())
+  org    Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId  String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  // Deleting the grant deletes the mailbox: without a token there is nothing left
+  // to send from, and a mailbox that cannot send is not a mailbox.
+  connection   OAuthConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  connectionId String          @unique
+
+  provider     String // duplicated from the connection so a list needs no join
+  emailAddress String
+  displayName  String?
+
+  // Exactly one per (orgId, userId) is true. Moved atomically in mailAccounts.ts.
+  isPrimary Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One mailbox per address per org. Re-connecting updates rather than duplicates.
+  @@unique([orgId, emailAddress])
+  @@index([orgId, userId])
 }
