@@ -7,7 +7,12 @@ import { DEVICE_CHOICE_KEY } from '@/lib/deviceStorage'
 // vi.hoisted() makes the mock fns, vi.mock() swaps the module, and the component
 // is imported AFTER both so the mock is in place when its graph loads.
 const { useGetDevicesMock } = vi.hoisted(() => ({ useGetDevicesMock: vi.fn() }))
-vi.mock('@/hooks/devices', () => ({ useGetDevices: useGetDevicesMock }))
+// `useNetworkStatus` is left real — it only reads `navigator.onLine` and two
+// window events, and the network-status tests below flip that flag directly.
+vi.mock('@/hooks/devices', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/devices')>()
+  return { ...actual, useGetDevices: useGetDevicesMock }
+})
 
 import { DeviceCheck } from '@/components/DeviceCheck'
 
@@ -133,6 +138,40 @@ describe('DeviceCheck', () => {
     render(<DeviceCheck />)
 
     expect(screen.getByText('Microphone allowed.')).toBeInTheDocument()
+  })
+
+  describe('network status', () => {
+    afterEach(() => {
+      Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
+    })
+
+    it('says the rep is connected when the browser has a network', () => {
+      Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
+      render(<DeviceCheck />)
+
+      expect(screen.getByText('Connected.')).toBeInTheDocument()
+    })
+
+    it('names the problem when the browser has no network', () => {
+      Object.defineProperty(navigator, 'onLine', { configurable: true, value: false })
+      render(<DeviceCheck />)
+
+      expect(
+        screen.getByText('No internet connection. Check your network, then try again.'),
+      ).toBeInTheDocument()
+    })
+
+    it('updates when the browser goes offline mid-check', () => {
+      render(<DeviceCheck />)
+      expect(screen.getByText('Connected.')).toBeInTheDocument()
+
+      Object.defineProperty(navigator, 'onLine', { configurable: true, value: false })
+      fireEvent(window, new Event('offline'))
+
+      expect(
+        screen.getByText('No internet connection. Check your network, then try again.'),
+      ).toBeInTheDocument()
+    })
   })
 
   it('says it is checking while the read is in flight', () => {
@@ -314,10 +353,12 @@ describe('DeviceCheck', () => {
       await user.click(screen.getByRole('button', { name: 'Test' }))
 
       expect(await screen.findByText('Microphone: your voice registered.')).toBeInTheDocument()
-      expect(screen.getByRole('meter', { name: 'Microphone level' })).toHaveAttribute(
-        'aria-valuenow',
-        '100',
-      )
+      const meter = screen.getByRole('meter', { name: 'Microphone level' })
+      expect(meter).toHaveAttribute('aria-valuenow', '100')
+      // MAI-211: a bare percentage means nothing to a rep testing a mic — the
+      // bar itself is the whole signal now. The reading survives for a screen
+      // reader as `aria-valuetext`, just not rendered on screen.
+      expect(screen.queryByText('100%')).not.toBeInTheDocument()
     })
 
     // A device check that leaves the mic hot is worse than no check.

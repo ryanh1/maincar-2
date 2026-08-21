@@ -1,5 +1,14 @@
 import type { ComponentType } from 'react'
-import { Building2, FileText, Phone, Plug, User as UserIcon, Users, type LucideIcon } from 'lucide-react'
+import {
+  Building2,
+  FileText,
+  Headphones,
+  Phone,
+  Plug,
+  User as UserIcon,
+  Users,
+  type LucideIcon,
+} from 'lucide-react'
 
 import { Separator } from '@/components/ui/separator'
 import { useUrlString } from '@/hooks/urlState'
@@ -12,8 +21,16 @@ import { Settings_MembersTab } from './Settings_MembersTab'
 import { Settings_PhoneNumbersTab } from './Settings_PhoneNumbersTab'
 import { Settings_EmailTemplatesTab } from './Settings_EmailTemplatesTab'
 import { Settings_IntegrationsTab } from './Settings_IntegrationsTab'
+import { Settings_DevicesTab } from './Settings_DevicesTab'
 
-type TabId = 'profile' | 'organization' | 'members' | 'numbers' | 'email-templates' | 'integrations'
+type TabId =
+  | 'profile'
+  | 'organization'
+  | 'members'
+  | 'numbers'
+  | 'email-templates'
+  | 'integrations'
+  | 'devices'
 
 interface TabDef {
   id: TabId
@@ -27,6 +44,9 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { id: 'profile', label: 'Profile', icon: UserIcon },
+  // Not needsOrg: the mic/speaker check is a property of this browser, not
+  // the active organization, so it stays visible for a user with no org yet.
+  { id: 'devices', label: 'Devices', icon: Headphones },
   { id: 'organization', label: 'Organization', icon: Building2, needsOrg: true },
   { id: 'members', label: 'Members', icon: Users, needsOrg: true, adminOnly: true },
   { id: 'numbers', label: 'Phone numbers', icon: Phone, needsOrg: true },
@@ -40,6 +60,7 @@ const TABS: TabDef[] = [
 
 const TAB_CONTENT: Record<TabId, ComponentType> = {
   profile: Settings_ProfileTab,
+  devices: Settings_DevicesTab,
   organization: Settings_OrganizationTab,
   members: Settings_MembersTab,
   numbers: Settings_PhoneNumbersTab,

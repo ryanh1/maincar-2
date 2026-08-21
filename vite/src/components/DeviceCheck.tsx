@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { CircleAlert, CircleCheck, LoaderCircle, Mic, Volume2 } from 'lucide-react'
+import { CircleAlert, CircleCheck, LoaderCircle, Mic, Volume2, Wifi, WifiOff } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useGetDevices, type AudioDevice } from '@/hooks/devices'
+import { useGetDevices, useNetworkStatus, type AudioDevice } from '@/hooks/devices'
 import { readDeviceChoice, resolveDeviceId, saveDeviceChoice } from '@/lib/deviceStorage'
 import { cn } from '@/lib/utils'
 
@@ -91,6 +91,7 @@ export interface DeviceCheckProps {
  */
 export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) {
   const { microphones, speakers, isLoading, error, refetch } = useGetDevices()
+  const { online } = useNetworkStatus()
 
   // The rep's *preference*, which is not always the device in front of them.
   const [preferredMicrophoneId, setPreferredMicrophoneId] = useState<string | null>(
@@ -301,6 +302,7 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
       </h2>
 
       <PermissionStatus isLoading={isLoading} error={error} onRetry={refetch} />
+      <NetworkStatusLine online={online} />
 
       <div className="flex flex-col gap-3">
         <DevicePicker
@@ -450,6 +452,29 @@ function PermissionStatus({
   )
 }
 
+/**
+ * A rep who blames a dead microphone when the real problem is no network
+ * connection needs that ruled out first, not last. Colour is never the only
+ * signal — the words carry it too.
+ */
+function NetworkStatusLine({ online }: { online: boolean }) {
+  if (online) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-status-success">
+        <Wifi size={16} aria-hidden="true" className="shrink-0" />
+        Connected.
+      </p>
+    )
+  }
+
+  return (
+    <p className="flex items-center gap-2 text-sm text-status-failed">
+      <WifiOff size={16} aria-hidden="true" className="shrink-0" />
+      No internet connection. Check your network, then try again.
+    </p>
+  )
+}
+
 function DevicePicker({
   id,
   label,
@@ -492,25 +517,26 @@ function DevicePicker({
   )
 }
 
-/** The bar is a second signal, never the only one — the percentage reads too. */
+/**
+ * Visual only — a bare "42%" means nothing to a rep testing a microphone, so
+ * the bar itself is the whole signal. `aria-valuetext` still gives a screen
+ * reader an exact reading; only the sighted, rendered number is gone.
+ */
 function LevelMeter({ percent }: { percent: number }) {
   return (
-    <div className="flex items-center gap-2">
+    <div
+      role="meter"
+      aria-label="Microphone level"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      aria-valuetext={`${percent} percent`}
+      className="h-2 w-40 overflow-hidden rounded-md border border-border bg-muted"
+    >
       <div
-        role="meter"
-        aria-label="Microphone level"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent}
-        aria-valuetext={`${percent} percent`}
-        className="h-2 w-40 overflow-hidden rounded-md border border-border bg-muted"
-      >
-        <div
-          className="h-full bg-status-success transition-[width] duration-150 ease-out motion-reduce:transition-none"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-      <span className="text-xs tabular-nums text-muted-foreground">{percent}%</span>
+        className="h-full bg-status-success transition-[width] duration-150 ease-out motion-reduce:transition-none"
+        style={{ width: `${percent}%` }}
+      />
     </div>
   )
 }
