@@ -220,8 +220,17 @@ model Call {
   // True once recording actually started. Null before the call connects.
   recordingEnabled Boolean?
 
-  // Presigned S3 URL for the MP3, written by the upload job.
+  // The bare S3 object KEY for the MP3 (e.g.
+  // "maincar-call-recordings/{orgId}/{callId}.mp3"), written by the upload job.
+  // NOT a link a browser can open: the GET-one route presigns it at request time
+  // (see routes/calls.ts). Null until the recording has been uploaded.
   recordingUrl String?
+
+  // Allowed values: "pending", "stored", "failed". Tracks the async upload of the
+  // Twilio recording into S3 (jobs/uploadRecording.ts), separate from the call's
+  // own lifecycle `status` above: a call can complete cleanly while its recording
+  // upload is still pending or has failed, and those are not the same fact.
+  recordingStatus String @default("pending")
 
   // Allowed values: "pending", "done", "failed", "skipped-not-recorded".
   transcriptStatus String  @default("pending")

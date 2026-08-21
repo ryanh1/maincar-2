@@ -344,3 +344,63 @@ export async function hangUpCall(callSid: string): Promise<HungUpCall> {
 
   return { sid: call.sid, status: call.status }
 }
+
+// --- Call recordings (Twilio → S3) -----------------------------------------
+
+/** One recording's media, downloaded from Twilio as raw bytes. */
+export interface RecordingMedia {
+  /** The MP3 file contents. */
+  data: Buffer
+  /** The content type Twilio served, normally "audio/mpeg". */
+  contentType: string
+}
+
+/**
+ * Download one recording's MP3 from Twilio.
+ *
+ * Twilio serves recording MEDIA (as opposed to metadata) from a plain HTTPS URL
+ * under the account, not through a typed SDK method, so this fetches it directly
+ * with HTTP Basic auth — the account SID and auth token, exactly the credentials
+ * the SDK client is built from. That keeps every Twilio credential read inside
+ * this one module, as the rest of the file does.
+ *
+ * A non-2xx response is turned into an Error carrying Twilio's HTTP `status`, so
+ * the job above it can make the SAME transient-vs-permanent decision it makes for
+ * a Twilio REST error (see `twilioErrorStatus`): a 404 means the recording is
+ * gone and no retry brings it back, while a 5xx or 429 is worth one more try.
+ */
+export async function fetchRecordingMp3(recordingSid: string): Promise<RecordingMedia> {
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+    throw new Error(
+      'Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in .env ' +
+        '(see .env.example).',
+    )
+  }
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Recordings/${recordingSid}.mp3`
+  const auth = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64')
+
+  const response = await fetch(url, { headers: { Authorization: `Basic ${auth}` } })
+  if (!response.ok) {
+    // Shaped like a Twilio REST error (a numeric `status`) so twilioErrorStatus
+    // reads it and the caller's retry logic does not need a second code path.
+    throw Object.assign(new Error(`Twilio recording fetch failed (${response.status})`), {
+      status: response.status,
+    })
+  }
+
+  const body = Buffer.from(await response.arrayBuffer())
+  return { data: body, contentType: response.headers.get('content-type') ?? 'audio/mpeg' }
+}
+
+/**
+ * Delete a recording from Twilio.
+ *
+ * Called only AFTER the MP3 is safely in our own object store, so Twilio stops
+ * being a second copy (and a recurring storage line item) of media we now own.
+ * `remove()` is idempotent enough for our purpose: a recording already gone
+ * answers 404, which the caller treats as "nothing left to delete".
+ */
+export async function deleteRecording(recordingSid: string): Promise<void> {
+  await getTwilioClient().recordings(recordingSid).remove()
+}

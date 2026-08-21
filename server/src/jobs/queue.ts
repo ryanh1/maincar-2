@@ -20,7 +20,9 @@ import { DATABASE_URL } from '../config.js'
 
 export const JOB_PROVISION_NUMBER = 'provision-number'
 
-export const JOB_NAMES = [JOB_PROVISION_NUMBER] as const
+export const JOB_UPLOAD_RECORDING = 'upload-recording'
+
+export const JOB_NAMES = [JOB_PROVISION_NUMBER, JOB_UPLOAD_RECORDING] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
 
@@ -35,6 +37,10 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }
   // One retry, thirty seconds later. See jobs/provisionNumber.ts for why this
   // queue must not retry more than that: the work it does spends money.
   [JOB_PROVISION_NUMBER]: { retryLimit: 1, retryDelay: 30 },
+  // One retry, thirty seconds later — long enough for a Twilio or S3 blip to
+  // pass. See jobs/uploadRecording.ts: a second retry buys nothing a first does
+  // not, and the recording is safe on Twilio until the upload finally succeeds.
+  [JOB_UPLOAD_RECORDING]: { retryLimit: 1, retryDelay: 30 },
 }
 
 let boss: PgBoss | null = null

@@ -3,6 +3,7 @@ import { initErrorReporter } from '../dependencies/errorReporter.js'
 import app from './app.js'
 import { APP_NAME, PORT } from './config.js'
 import { registerProvisionNumberWorker } from './jobs/provisionNumber.js'
+import { registerUploadRecordingWorker } from './jobs/uploadRecording.js'
 import { startQueue, stopQueue } from './jobs/queue.js'
 
 initErrorReporter()
@@ -29,7 +30,11 @@ const server = app.listen(PORT, () => {
 async function startWorkers(): Promise<void> {
   await startQueue()
   await registerProvisionNumberWorker()
-  logger.info({ worker: 'provision-number' }, 'job queue workers started')
+  await registerUploadRecordingWorker()
+  logger.info(
+    { workers: ['provision-number', 'upload-recording'] },
+    'job queue workers started',
+  )
 }
 
 // Deliberately not fatal: the HTTP API still serves requests with the queue down,

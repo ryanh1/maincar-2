@@ -1,4 +1,4 @@
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 import {
@@ -19,6 +19,10 @@ import {
 // handed to a browser that may sit on the page a while before the person clicks
 // it, so the window is generous but still bounded.
 export const RECORDING_URL_TTL_SECONDS = 3600
+
+// The content type call recordings are stored (and later served) with. Twilio
+// hands us MP3, so this is the default the upload job writes.
+export const RECORDING_CONTENT_TYPE = 'audio/mpeg'
 
 let client: S3Client | null = null
 
@@ -68,4 +72,27 @@ export function getRecordingDownloadUrl(
 ): Promise<string> {
   const command = new GetObjectCommand({ Bucket: S3_BUCKET, Key: objectKey })
   return getSignedUrl(getS3Client(), command, { expiresIn: ttlSeconds })
+}
+
+/**
+ * Upload one recording's bytes to `objectKey` in the recordings bucket.
+ *
+ * `objectKey` is a bare path within the bucket — the same key that later gets
+ * handed to `getRecordingDownloadUrl` to sign — so the two agree by construction.
+ * The upload job builds the key as `maincar-call-recordings/{orgId}/{callId}.mp3`,
+ * which makes a re-run overwrite the same object rather than pile up copies, and
+ * that is exactly what keeps the job safe to retry.
+ */
+export async function putRecording(
+  objectKey: string,
+  body: Buffer,
+  contentType: string = RECORDING_CONTENT_TYPE,
+): Promise<void> {
+  const command = new PutObjectCommand({
+    Bucket: S3_BUCKET,
+    Key: objectKey,
+    Body: body,
+    ContentType: contentType,
+  })
+  await getS3Client().send(command)
 }
