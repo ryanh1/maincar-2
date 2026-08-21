@@ -17,7 +17,13 @@
 > - `MailProvider` gains `listMessagesSince`, `getMessage`, `listEventsSince`, and
 >   `createEvent`. **`sendEmail` is unchanged**, so nothing in `composer-send` moves.
 >
-> `composer-send` is blocked until `int-seam` ships `getMailProvider()`.
+> **LIVE (2026-08-21, IH-17 / MAI-111).** `getMailProvider(mailAccountId, orgId)`
+> now ships in `server/src/lib/mail/getMailProvider.ts`: it is the one switch on
+> provider in the repo, org-scopes the mailbox lookup, and returns a `MailProvider`
+> (Gmail or Graph) or throws `MailboxNotFoundError`. The contract `composer-send`
+> codes against is real — `composer-send` is unblocked.
+>
+> `composer-send` was blocked until `int-seam` shipped `getMailProvider()`.
 > Nothing else in the composer initiative depends on it.
 
 ## Objective
