@@ -4,7 +4,9 @@ import userEvent from '@testing-library/user-event'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { RichTextEditor, type LinkRequest } from './RichTextEditor'
-import { EDITOR_ALLOWED_TAGS, hasAllowedScheme } from './editorExtensions'
+import { EDITOR_ALLOWED_TAGS, hasAllowedScheme, isStorableHref } from './editorExtensions'
+import { normalizeLinkUrl } from './linkUrl'
+import { sanitizeStoredHtml } from './sanitizeStoredHtml'
 
 /**
  * ProseMirror measures the document with `Range.getClientRects` whenever it maps
@@ -478,6 +480,171 @@ describe('RichTextEditor', () => {
 
     it('allows a bare host, which the default protocol turns into https', () => {
       expect(hasAllowedScheme('acme.example/pricing')).toBe(true)
+    })
+  })
+
+  describe('isStorableHref', () => {
+    it.each(['https://acme.example', 'http://acme.example/x?q=1', 'mailto:ann@acme.example'])(
+      'allows %s',
+      (url) => expect(isStorableHref(url)).toBe(true),
+    )
+
+    /**
+     * The relative forms a real page is full of. `hasAllowedScheme` says yes to
+     * every one of them, because it is asked about strings something else is
+     * about to complete. Nothing completes a parsed `href`, so this one says no.
+     */
+    it.each(['./Cargo', '../Cargo', '/wiki/Ship', '#cite_note-1', '?action=edit', 'Cargo'])(
+      'refuses the relative href %s',
+      (url) => expect(isStorableHref(url)).toBe(false),
+    )
+
+    it.each(['javascript:alert(1)', 'data:text/html,x', 'ftp://acme.example/x'])(
+      'refuses %s, the same as hasAllowedScheme does',
+      (url) => expect(isStorableHref(url)).toBe(false),
+    )
+
+    it('is the stricter of the pair, never the looser', () => {
+      for (const url of ['https://acme.example', './Cargo', 'acme.example', 'javascript:alert(1)']) {
+        if (isStorableHref(url)) expect(hasAllowedScheme(url)).toBe(true)
+      }
+    })
+  })
+
+  /**
+   * MAI-90. A paragraph pasted out of a real web page carries relative hrefs.
+   * They used to be kept by the editor, look like working links, lose their
+   * `href` to `sanitizeStoredHtml` on the way to the server, and come back after
+   * a refresh as plain text — a link that died silently, one refresh later.
+   *
+   * The rule these tests hold: **every link the editor shows is still a link
+   * after a save and a reload.** A link the editor cannot keep that promise
+   * about must never be drawn as a link in the first place.
+   */
+  describe('a paste from a real page (MAI-90)', () => {
+    /**
+     * A cut-down Wikipedia paragraph, in the shape Wikipedia really serves it:
+     * `./Page` for an article, `/wiki/Page` for a root-relative one, `#cite…`
+     * for a footnote, and one genuinely absolute external link.
+     */
+    const PASTED_PAGE =
+      '<p>The word <a rel="mw:WikiLink" href="./Cargo" title="Cargo">cargo</a> covers goods ' +
+      'carried by <a rel="mw:WikiLink" href="/wiki/Ship" title="Ship">ship</a>, ' +
+      'see <a href="#cite_note-1">[1]</a> and ' +
+      '<a rel="nofollow" href="https://example.com/x">example</a>.</p>'
+
+    /** Every `<a>` in a fragment, as `[href | null, text]`. */
+    function anchorsIn(html: string): Array<[string | null, string]> {
+      const host = document.createElement('div')
+      host.innerHTML = html
+      return [...host.querySelectorAll('a')].map((a) => [a.getAttribute('href'), a.textContent ?? ''])
+    }
+
+    /** Seed an editor with `html` and return the HTML it reports back. */
+    async function roundTrip(html: string): Promise<string> {
+      const onChange = vi.fn()
+      const user = userEvent.setup()
+      const view = render(
+        <RichTextEditor label="Message" initialHtml={html} onChange={onChange} />,
+      )
+      // The editor only reports upward when the document changes, so nudge it.
+      bodyOf().focus()
+      await user.keyboard('{Control>}a{/Control}')
+      await user.click(screen.getByRole('button', { name: 'Bold' }))
+      await waitFor(() => expect(onChange).toHaveBeenCalled())
+      const reported = lastHtml(onChange)
+      view.unmount()
+      return reported
+    }
+
+    it('stores no anchor without an href', async () => {
+      // What `ComposerCard.flush` sends is the sanitised copy, so that is where
+      // the bug showed: the editor kept `href="./Cargo"`, the sanitiser's
+      // `^(?:https?|mailto):` dropped it, and `<a target rel>` with no href at
+      // all is what reached the database. A real Wikipedia paste stored 18 of 19
+      // anchors that way.
+      const stored = sanitizeStoredHtml(await roundTrip(PASTED_PAGE))
+
+      for (const [href] of anchorsIn(stored)) expect(href).not.toBeNull()
+    })
+
+    it('drops each relative link to plain text and keeps its words', async () => {
+      const html = await roundTrip(PASTED_PAGE)
+
+      expect(anchorsIn(html).map(([href]) => href)).toEqual(['https://example.com/x'])
+      // Losing the rep's sentence would be its own bug. Only the link goes.
+      for (const word of ['cargo', 'ship', '[1]', 'example']) {
+        expect(html).toContain(word)
+      }
+    })
+
+    it('keeps every link it drew through a save and a reload', async () => {
+      const afterPaste = await roundTrip(PASTED_PAGE)
+      // What `ComposerCard.flush` sends, and so what the server stores.
+      const stored = sanitizeStoredHtml(afterPaste)
+      const afterRefresh = await roundTrip(stored)
+
+      expect(anchorsIn(afterPaste)).toEqual(anchorsIn(afterRefresh))
+      expect(anchorsIn(afterRefresh)).toEqual([['https://example.com/x', 'example']])
+    })
+
+    /**
+     * The other half of the contract, and the reason the strict rule sits on the
+     * parse rule rather than on `isAllowedUri`: that hook also validates
+     * autolinking, and it is handed the TEXT a rep typed rather than the href
+     * linkify builds from it. Tightening it stops both of these from ever
+     * becoming links, which an email composer must not do.
+     */
+    it.each([
+      // `acme.com`, not the `acme.example` the rest of this file uses: linkify
+      // checks the TLD against the real IANA list before it will autolink a
+      // scheme-less string, and `.example` is not on it. A URL that carries its
+      // own scheme skips that check, which is why the third case can.
+      ['acme.com', 'https://acme.com'],
+      ['ann@acme.com', 'mailto:ann@acme.com'],
+      ['https://acme.example', 'https://acme.example'],
+    ])('still autolinks a typed %s to %s', async (typed, href) => {
+      const onChange = vi.fn()
+      const user = userEvent.setup()
+      render(<RichTextEditor label="Message" onChange={onChange} />)
+
+      bodyOf().focus()
+      await user.keyboard(`visit ${typed} today`)
+
+      await waitFor(() => expect(anchorsIn(lastHtml(onChange))).toEqual([[href, typed]]))
+    })
+
+    /**
+     * The typed path, end to end: what the dialog decides about `acme.example`
+     * is what the editor stores, and it is still there after a reload.
+     * `normalizeLinkUrl` is the real one, so a change to it that broke the
+     * default protocol turns this red as well as its own tests.
+     */
+    it('stores a link typed into the dialog as https and keeps it through a reload', async () => {
+      const decided = normalizeLinkUrl('acme.example/pricing')
+      expect(decided).toEqual({ ok: true, href: 'https://acme.example/pricing' })
+
+      const onChange = vi.fn()
+      const user = userEvent.setup()
+      const view = render(
+        <RichTextEditor
+          label="Message"
+          onChange={onChange}
+          onRequestLink={(request) =>
+            request.apply(decided.ok ? decided.href : '', 'Acme pricing')
+          }
+        />,
+      )
+      bodyOf().focus()
+      await user.keyboard('{Control>}k{/Control}')
+      await waitFor(() => expect(onChange).toHaveBeenCalled())
+      const typedIn = lastHtml(onChange)
+      view.unmount()
+
+      expect(anchorsIn(typedIn)).toEqual([['https://acme.example/pricing', 'Acme pricing']])
+
+      const afterRefresh = await roundTrip(sanitizeStoredHtml(typedIn))
+      expect(anchorsIn(afterRefresh)).toEqual([['https://acme.example/pricing', 'Acme pricing']])
     })
   })
 })
