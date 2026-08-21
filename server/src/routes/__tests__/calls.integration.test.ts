@@ -75,6 +75,41 @@ async function placeCall(
   }
 }
 
+/**
+ * The GET list route's query body, verbatim: count and page the org's calls
+ * against one where clause, ordered by the chosen column with a createdAt
+ * tie-break. Pure Prisma — no raw SQL — so it runs straight through the test
+ * client's schema adapter, unlike placeCall above.
+ */
+type ListSortField = 'createdAt' | 'toE164' | 'status' | 'durationS'
+
+async function listCalls(
+  prisma: PrismaClient,
+  args: {
+    orgId: string
+    page?: number
+    limit?: number
+    sort?: ListSortField
+    dir?: 'asc' | 'desc'
+    q?: string
+  },
+): Promise<{ calls: { id: string; toE164: string; status: string; durationS: number | null }[]; total: number }> {
+  const page = args.page ?? 1
+  const limit = args.limit ?? 25
+  const sort = args.sort ?? 'createdAt'
+  const dir = args.dir ?? 'desc'
+  const where = { orgId: args.orgId, ...(args.q ? { toE164: { contains: args.q } } : {}) }
+  const orderBy =
+    sort === 'createdAt'
+      ? [{ createdAt: dir }]
+      : [{ [sort]: dir }, { createdAt: 'desc' as const }]
+  const [total, calls] = await Promise.all([
+    prisma.call.count({ where }),
+    prisma.call.findMany({ where, orderBy, skip: (page - 1) * limit, take: limit }),
+  ])
+  return { calls, total }
+}
+
 function countCalls(prisma: PrismaClient, orgId: string, toE164: string): Promise<number> {
   return prisma.call.count({ where: { orgId, toE164 } })
 }
@@ -246,5 +281,138 @@ describe('outbound-call guard (integration, real Postgres)', () => {
     expect(results.filter((r) => r === 'created')).toHaveLength(1)
     expect(results.filter((r) => r === 'refused')).toHaveLength(1)
     expect(await countCalls(prisma, org.orgId, toE164)).toBe(1)
+  })
+})
+
+// The list route's query against real Postgres: that pagination slices the set,
+// that the toE164 search really narrows on a substring, that each sort column
+// orders as asked, and — the tenant boundary on the READ — that one org's calls
+// never appear in another's list.
+describe('call history list (integration, real Postgres)', () => {
+  let prisma: PrismaClient
+
+  beforeAll(() => {
+    prisma = createTestPrisma()
+  })
+
+  afterAll(async () => {
+    await prisma.$disconnect()
+  })
+
+  it('pages the org’s calls, and total counts the whole set', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    for (let i = 0; i < 3; i++) {
+      await seedCall(prisma, {
+        orgId: org.orgId,
+        userId: org.adminUserId,
+        toE164: `+1303555010${i}`,
+        status: 'completed',
+      })
+    }
+
+    const first = await listCalls(prisma, { orgId: org.orgId, page: 1, limit: 2 })
+    expect(first.total).toBe(3)
+    expect(first.calls).toHaveLength(2)
+
+    const second = await listCalls(prisma, { orgId: org.orgId, page: 2, limit: 2 })
+    expect(second.total).toBe(3)
+    expect(second.calls).toHaveLength(1)
+
+    // The two pages together cover the three rows with no overlap.
+    const ids = new Set([...first.calls, ...second.calls].map((c) => c.id))
+    expect(ids.size).toBe(3)
+  })
+
+  it('searches the destination number by a substring of digits', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    await seedCall(prisma, { orgId: org.orgId, userId: org.adminUserId, toE164: '+12012223333' })
+    await seedCall(prisma, { orgId: org.orgId, userId: org.adminUserId, toE164: '+14045556666' })
+
+    const hit = await listCalls(prisma, { orgId: org.orgId, q: '201' })
+    expect(hit.total).toBe(1)
+    expect(hit.calls[0].toE164).toBe('+12012223333')
+  })
+
+  it('sorts by destination number ascending and descending', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    await seedCall(prisma, { orgId: org.orgId, userId: org.adminUserId, toE164: '+13035550300' })
+    await seedCall(prisma, { orgId: org.orgId, userId: org.adminUserId, toE164: '+13035550100' })
+    await seedCall(prisma, { orgId: org.orgId, userId: org.adminUserId, toE164: '+13035550200' })
+
+    const asc = await listCalls(prisma, { orgId: org.orgId, sort: 'toE164', dir: 'asc' })
+    expect(asc.calls.map((c) => c.toE164)).toEqual([
+      '+13035550100',
+      '+13035550200',
+      '+13035550300',
+    ])
+
+    const desc = await listCalls(prisma, { orgId: org.orgId, sort: 'toE164', dir: 'desc' })
+    expect(desc.calls.map((c) => c.toE164)).toEqual([
+      '+13035550300',
+      '+13035550200',
+      '+13035550100',
+    ])
+  })
+
+  it('sorts by billed duration', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const short = await seedCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035559001',
+      status: 'completed',
+    })
+    const long = await seedCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035559002',
+      status: 'completed',
+    })
+    // seedCall does not set durationS; the value the sort turns on is written here.
+    await prisma.call.update({ where: { id: short.id }, data: { durationS: 5 } })
+    await prisma.call.update({ where: { id: long.id }, data: { durationS: 500 } })
+
+    const desc = await listCalls(prisma, { orgId: org.orgId, sort: 'durationS', dir: 'desc' })
+    expect(desc.calls.map((c) => c.durationS)).toEqual([500, 5])
+  })
+
+  it('sorts by status', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    await seedCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035558001',
+      status: 'failed',
+    })
+    await seedCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035558002',
+      status: 'completed',
+    })
+
+    const asc = await listCalls(prisma, { orgId: org.orgId, sort: 'status', dir: 'asc' })
+    expect(asc.calls.map((c) => c.status)).toEqual(['completed', 'failed'])
+  })
+
+  it('returns an empty page and a zero total for an org with no calls', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+
+    const result = await listCalls(prisma, { orgId: org.orgId })
+    expect(result.total).toBe(0)
+    expect(result.calls).toEqual([])
+  })
+
+  it('does not list another org’s calls', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+    await seedCall(prisma, { orgId: orgA.orgId, userId: orgA.adminUserId, toE164: '+13035557001' })
+    await seedCall(prisma, { orgId: orgB.orgId, userId: orgB.adminUserId, toE164: '+13035557002' })
+
+    const listA = await listCalls(prisma, { orgId: orgA.orgId })
+    expect(listA.total).toBe(1)
+    expect(listA.calls[0].toE164).toBe('+13035557001')
+    // Org B's call is absent from A's list — the boundary on the read.
+    expect(listA.calls.some((c) => c.toE164 === '+13035557002')).toBe(false)
   })
 })

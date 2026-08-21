@@ -47,6 +47,27 @@ function mapCallToApi(call: Call) {
   }
 }
 
+// The history-list shape. It carries everything mapCallToApi does, plus the three
+// fields a history table shows and sorts on — durationS and the two timestamps —
+// which the POST response has no reason to send back (the call has not run yet).
+// A separate mapper, not an extended shared one, so the POST contract test that
+// pins its exact key set does not have to loosen to admit fields it never sends.
+function mapCallToHistoryApi(call: Call) {
+  return {
+    id: call.id,
+    direction: call.direction,
+    status: call.status,
+    fromE164: call.fromE164,
+    toE164: call.toE164,
+    recordingConsent: call.recordingConsent,
+    twilioCallSid: call.twilioCallSid,
+    durationS: call.durationS,
+    startedAt: call.startedAt ? call.startedAt.toISOString() : null,
+    endedAt: call.endedAt ? call.endedAt.toISOString() : null,
+    createdAt: call.createdAt.toISOString(),
+  }
+}
+
 // --- Create input ---
 
 /**
@@ -72,6 +93,62 @@ const createCallSchema = z.object({
   recordingConsent: z.enum(['granted', 'declined'], {
     error: 'Send recordingConsent as "granted" or "declined".',
   }),
+})
+
+// --- List input ---
+
+export const LIST_DEFAULT_LIMIT = 25
+
+// 100, the standard ceiling: a history table is read a page at a time, and past a
+// hundred rows the payload is bandwidth nobody scrolls through. A caller asking
+// for more is capped rather than refused, so a too-large page still returns.
+export const LIST_MAX_LIMIT = 100
+
+// The columns a history list may sort on. Each token is the Prisma field name it
+// orders by, so the orderBy is built straight from the parsed value with no
+// second mapping to drift — and the enum is the allowlist that stops an arbitrary
+// column name reaching the query. `durationS` is the billed-seconds column the
+// spec calls "duration".
+const SORT_FIELDS = ['createdAt', 'toE164', 'status', 'durationS'] as const
+
+/**
+ * An untouched optional query param arrives as `""`. For search that means "no
+ * filter", not a value to match, so it collapses to undefined rather than
+ * filtering for calls whose number contains the empty string (which is all of
+ * them, but says the wrong thing).
+ */
+function blankToUndefined(value: unknown): unknown {
+  return typeof value === 'string' && value.trim() === '' ? undefined : value
+}
+
+// Query-string params, so every value coerces from a string. Bounds are clamped,
+// not rejected, and each field defaults, so a bare `GET …/calls` is valid and
+// returns page one.
+const listQuerySchema = z.object({
+  page: z.coerce.number().int().min(1, 'page starts at 1.').default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1, 'Ask for at least one row.')
+    .max(LIST_MAX_LIMIT, `Ask for at most ${LIST_MAX_LIMIT} rows at a time.`)
+    .default(LIST_DEFAULT_LIMIT),
+  sort: z
+    .enum(SORT_FIELDS, {
+      error: `Sort by one of: ${SORT_FIELDS.join(', ')}.`,
+    })
+    .default('createdAt'),
+  dir: z.enum(['asc', 'desc'], { error: 'Sort direction is asc or desc.' }).default('desc'),
+  // Matched against the destination number. Digits and a leading + only, so a
+  // partial like "201" or "+1201" narrows the list; anything else is refused
+  // rather than run as a fruitless LIKE.
+  q: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .trim()
+      .regex(/^\+?\d{1,15}$/, 'Search by digits of the number, like 201.')
+      .optional(),
+  ),
 })
 
 // The call states that mean "a call is already up". A second call to the same
@@ -100,6 +177,61 @@ class DoubleCall extends Error {
 }
 
 router.use(requireAuth)
+
+// ============================================================
+// GET /api/orgs/:orgId/calls — the org's call history
+// ============================================================
+// Paginated, sortable, and searchable by destination number. Scoped to the org
+// in the path and nothing narrower: the history is the org's shared record of who
+// it called, so any member reading it sees the same list (MAI-27). The count and
+// the page are read against the SAME where clause, so `total` and the rows can
+// never describe different filters.
+router.get(
+  '/',
+  wrapRoute('GET /api/orgs/:orgId/calls', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+
+    // --- Verify ownership ---
+    // Before any row is read: a non-member must not see this org's call history,
+    // and must not learn whether the org exists.
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = listQuerySchema.safeParse(req.query ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+    const { page, limit, sort, dir, q } = parsed.data
+
+    // --- Build filters ---
+    // orgId is the tenant boundary, always. q narrows to calls whose destination
+    // number contains the typed digits; absent, it adds nothing.
+    const where = { orgId, ...(q ? { toE164: { contains: q } } : {}) }
+
+    // --- Execute query ---
+    // Count and page in parallel against one where clause. The sort is the
+    // caller's chosen column with createdAt as a stable tie-break, so rows that
+    // share a status or duration keep a deterministic order across pages rather
+    // than shuffling between requests. When the sort already IS createdAt the
+    // tie-break would just repeat it, so it is dropped.
+    const orderBy =
+      sort === 'createdAt' ? [{ createdAt: dir }] : [{ [sort]: dir }, { createdAt: 'desc' as const }]
+    const [total, calls] = await Promise.all([
+      prisma.call.count({ where }),
+      prisma.call.findMany({
+        where,
+        orderBy,
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ])
+
+    // --- Return response ---
+    res.json({ calls: calls.map(mapCallToHistoryApi), total, page, limit })
+  }),
+)
 
 // ============================================================
 // POST /api/orgs/:orgId/calls — place an outbound call

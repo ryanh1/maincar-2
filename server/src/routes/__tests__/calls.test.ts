@@ -16,6 +16,8 @@ const { prismaMock, verifyTokenMock, initiateCallMock } = vi.hoisted(() => ({
     membership: { findFirst: vi.fn() },
     call: {
       findFirst: vi.fn(),
+      findMany: vi.fn(),
+      count: vi.fn(),
       create: vi.fn(),
       updateMany: vi.fn(),
       // Present only so a test can prove nothing ever calls them.
@@ -124,12 +126,198 @@ beforeEach(() => {
   // this to an empty result.
   prismaMock.$queryRaw.mockResolvedValue([{ id: 'num-1', e164: '+12025550123' }])
   prismaMock.call.findFirst.mockResolvedValue(null)
+  prismaMock.call.findMany.mockResolvedValue([callRow()])
+  prismaMock.call.count.mockResolvedValue(1)
   prismaMock.call.create.mockResolvedValue(callRow())
   prismaMock.call.updateMany.mockResolvedValue({ count: 1 })
   // Runs the callback against the same mock, so the assertions below see the
   // reads and writes the route makes INSIDE the transaction.
   prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock))
   initiateCallMock.mockResolvedValue({ sid: 'CA123', status: 'queued' })
+})
+
+// ============================================================
+// GET — list, paginate, sort, search
+// ============================================================
+describe('GET /api/orgs/:orgId/calls', () => {
+  it('returns the org’s calls with the pagination envelope', async () => {
+    prismaMock.call.findMany.mockResolvedValue([callRow({ id: 'c1' }), callRow({ id: 'c2' })])
+    prismaMock.call.count.mockResolvedValue(2)
+
+    const res = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.calls.map((c: { id: string }) => c.id)).toEqual(['c1', 'c2'])
+    expect(res.body.total).toBe(2)
+    expect(res.body.page).toBe(1)
+    expect(res.body.limit).toBe(25)
+  })
+
+  it('scopes both the count and the page to the org in the path', async () => {
+    await request(app).get(URL_A).set('Authorization', AUTH)
+
+    expect(prismaMock.call.count).toHaveBeenCalledWith({ where: { orgId: ORG_A } })
+    expect(prismaMock.call.findMany.mock.calls[0][0].where).toEqual({ orgId: ORG_A })
+  })
+
+  it('returns the history fields, including duration and the timestamps', async () => {
+    prismaMock.call.findMany.mockResolvedValue([
+      callRow({ durationS: 42, startedAt: NOW, endedAt: NOW }),
+    ])
+
+    const res = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    expect(Object.keys(res.body.calls[0]).sort()).toEqual([
+      'createdAt',
+      'direction',
+      'durationS',
+      'endedAt',
+      'fromE164',
+      'id',
+      'recordingConsent',
+      'startedAt',
+      'status',
+      'toE164',
+      'twilioCallSid',
+    ])
+    expect(res.body.calls[0].durationS).toBe(42)
+    expect(res.body.calls[0].startedAt).toBe(NOW.toISOString())
+  })
+
+  it('defaults to page 1, limit 25, newest first', async () => {
+    await request(app).get(URL_A).set('Authorization', AUTH)
+
+    const args = prismaMock.call.findMany.mock.calls[0][0]
+    expect(args.skip).toBe(0)
+    expect(args.take).toBe(25)
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }])
+  })
+
+  it('turns page and limit into skip and take', async () => {
+    await request(app).get(`${URL_A}?page=3&limit=10`).set('Authorization', AUTH)
+
+    const args = prismaMock.call.findMany.mock.calls[0][0]
+    expect(args.skip).toBe(20)
+    expect(args.take).toBe(10)
+    expect(prismaMock.call.count).toHaveBeenCalledWith({ where: { orgId: ORG_A } })
+  })
+
+  it('clamps limit to the 100 ceiling', async () => {
+    const res = await request(app).get(`${URL_A}?limit=500`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('at most 100')
+  })
+
+  it('400s a limit below 1 and a page below 1', async () => {
+    const low = await request(app).get(`${URL_A}?limit=0`).set('Authorization', AUTH)
+    expect(low.status).toBe(400)
+    const zeroPage = await request(app).get(`${URL_A}?page=0`).set('Authorization', AUTH)
+    expect(zeroPage.status).toBe(400)
+    expect(prismaMock.call.findMany).not.toHaveBeenCalled()
+  })
+
+  it('searches the destination number by the digits in q', async () => {
+    await request(app).get(`${URL_A}?q=201`).set('Authorization', AUTH)
+
+    expect(prismaMock.call.findMany.mock.calls[0][0].where).toEqual({
+      orgId: ORG_A,
+      toE164: { contains: '201' },
+    })
+    expect(prismaMock.call.count).toHaveBeenCalledWith({
+      where: { orgId: ORG_A, toE164: { contains: '201' } },
+    })
+  })
+
+  it('treats a blank q as no filter', async () => {
+    await request(app).get(`${URL_A}?q=`).set('Authorization', AUTH)
+
+    expect(prismaMock.call.findMany.mock.calls[0][0].where).toEqual({ orgId: ORG_A })
+  })
+
+  it('400s a q that is not phone-number digits', async () => {
+    const res = await request(app).get(`${URL_A}?q=abc`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+    expect(prismaMock.call.findMany).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['createdAt', 'asc'],
+    ['toE164', 'desc'],
+    ['status', 'asc'],
+    ['durationS', 'desc'],
+  ])('sorts by %s %s', async (sort, dir) => {
+    await request(app).get(`${URL_A}?sort=${sort}&dir=${dir}`).set('Authorization', AUTH)
+
+    const orderBy = prismaMock.call.findMany.mock.calls[0][0].orderBy
+    // createdAt is its own tie-break, so it orders by one key; the others carry a
+    // createdAt tie-break beneath the chosen column.
+    if (sort === 'createdAt') {
+      expect(orderBy).toEqual([{ createdAt: dir }])
+    } else {
+      expect(orderBy).toEqual([{ [sort]: dir }, { createdAt: 'desc' }])
+    }
+  })
+
+  it('400s an unknown sort column, and reads nothing', async () => {
+    const res = await request(app).get(`${URL_A}?sort=userId`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+    expect(prismaMock.call.findMany).not.toHaveBeenCalled()
+  })
+
+  it('400s an unknown sort direction', async () => {
+    const res = await request(app).get(`${URL_A}?dir=sideways`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+  })
+
+  it('returns an empty page and a zero total when the org has no calls', async () => {
+    prismaMock.call.findMany.mockResolvedValue([])
+    prismaMock.call.count.mockResolvedValue(0)
+
+    const res = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.calls).toEqual([])
+    expect(res.body.total).toBe(0)
+    expect(res.body.page).toBe(1)
+    expect(res.body.limit).toBe(25)
+  })
+})
+
+// ============================================================
+// GET — org isolation (mandatory — .claude/rules/testing.md)
+// ============================================================
+describe('GET /api/orgs/:orgId/calls — org isolation', () => {
+  it('401s without auth, and reads nothing', async () => {
+    const res = await request(app).get(URL_A)
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.call.findMany).not.toHaveBeenCalled()
+    expect(prismaMock.call.count).not.toHaveBeenCalled()
+  })
+
+  it('404s for an org the caller does not belong to, before it reads any call', async () => {
+    authAs(null)
+
+    const res = await request(app).get(`/api/orgs/${ORG_B}/calls`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Organization not found')
+    expect(prismaMock.call.findMany).not.toHaveBeenCalled()
+    expect(prismaMock.call.count).not.toHaveBeenCalled()
+  })
+
+  it('404s when the org is disabled, rather than admitting it exists', async () => {
+    authAs(membershipRow({ org: { id: ORG_A, name: 'Org A', enabled: false } }))
+
+    const res = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.call.findMany).not.toHaveBeenCalled()
+  })
 })
 
 // ============================================================
