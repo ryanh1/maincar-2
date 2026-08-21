@@ -15,6 +15,7 @@ import {
   activityFromCall,
   activityFromEmail,
   activityFromMeeting,
+  activityFromNote,
   activityFromSms,
   condense,
   formatDuration,
@@ -384,6 +385,68 @@ describe('activityFromMeeting', () => {
     expect(activityFromMeeting(meetingRow({ organizerPersonId: 'person-3' })).personId).toBe(
       'person-3',
     )
+  })
+})
+
+// The note builder (MAI-141 T13). A note is the one activity with no title, no
+// counterparty and no subject, so its own opening line is the summary.
+describe('activityFromNote', () => {
+  function noteRow(overrides: Partial<{ bodyText: string; authorUserId: string | null }> = {}) {
+    return {
+      id: 'note-1',
+      orgId: 'org-a',
+      bodyText: 'They want pricing by Friday.\nSend the deck first.',
+      authorUserId: 'user-a' as string | null,
+      createdAt: EARLIER,
+      ...overrides,
+    }
+  }
+
+  it('summarizes with the note’s opening line and previews the rest', () => {
+    const built = activityFromNote(noteRow())
+    expect(built.sourceType).toBe('note')
+    expect(built.sourceId).toBe('note-1')
+    expect(built.summary).toBe('Note: They want pricing by Friday.')
+    expect(built.preview).toBe('They want pricing by Friday. Send the deck first.')
+  })
+
+  it('still builds a row for a note whose body is a picture', () => {
+    // An empty summary would be refused by recordActivityInTx, so the fallback is
+    // what keeps an image-only note in the feed at all.
+    expect(activityFromNote(noteRow({ bodyText: '' })).summary).toBe('Note added')
+    expect(activityFromNote(noteRow({ bodyText: '   ' })).summary).toBe('Note added')
+  })
+
+  it('keeps the summary inside the column’s budget for a wall-of-text note', () => {
+    const built = activityFromNote(noteRow({ bodyText: 'z'.repeat(SUMMARY_MAX_LENGTH * 2) }))
+    expect(built.summary.length).toBeLessThanOrEqual(SUMMARY_MAX_LENGTH)
+    expect(built.preview!.length).toBeLessThanOrEqual(PREVIEW_MAX_LENGTH)
+  })
+
+  it('has no direction, and is placed when the note was written', () => {
+    const built = activityFromNote(noteRow())
+    expect(built.direction).toBeNull()
+    expect(built.occurredAt).toBe(EARLIER)
+  })
+
+  it('credits the author, and carries the at-most-one spine link it was handed', () => {
+    const built = activityFromNote(noteRow(), {
+      companyId: 'co-1',
+      personId: 'person-1',
+      dealId: null,
+    })
+    expect(built.createdByUserId).toBe('user-a')
+    expect(built.companyId).toBe('co-1')
+    expect(built.personId).toBe('person-1')
+    expect(built.dealId).toBeNull()
+  })
+
+  it('defaults every spine link to null when the caller passes none', () => {
+    const built = activityFromNote(noteRow({ authorUserId: null }))
+    expect(built.createdByUserId).toBeNull()
+    expect(built.companyId).toBeNull()
+    expect(built.personId).toBeNull()
+    expect(built.dealId).toBeNull()
   })
 })
 

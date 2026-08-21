@@ -401,6 +401,59 @@ export function activityFromMeeting(
   }
 }
 
+/**
+ * The feed row for a note (MAI-141 T13).
+ *
+ * A note has no title, no counterparty, and no subject line, so its OWN OPENING
+ * LINE is the only thing that identifies it. That is what the summary carries —
+ * prefixed "Note:", so the feed scans the same way whatever the activity type —
+ * with the fuller text underneath as the preview. "Note added" is the fallback for
+ * a note whose body is a picture or an empty document, which is a real note and
+ * must still appear.
+ *
+ * `bodyText`, never `bodyJson`: the feed renders text, and handing it a TipTap
+ * document would put markup in a line that must not render any. The two are kept
+ * in step by `flattenTipTapText` (server/src/crm/taskNote.ts).
+ *
+ * `direction` is null — a note is not sent or received.
+ *
+ * The spine links are PASSED IN rather than read off the row, because a Note has
+ * no personId/companyId/dealId columns: it links to MANY records through
+ * RecordLink, which is the whole point of the model. `rollUpSpineLinks` in
+ * taskNote.ts is what picks the at-most-one of each that a feed row can hold.
+ *
+ * NOTE ON TASKS: there is deliberately no `activityFromTask`. `sourceType` is the
+ * list of things that HAPPENED (spec §6), and a task is a thing that has NOT —
+ * putting future work in a history feed would make "what happened on this account"
+ * answer a different question than it claims to.
+ */
+export function activityFromNote(
+  note: {
+    id: string
+    orgId: string
+    bodyText: string
+    authorUserId: string | null
+    createdAt: Date
+  },
+  links: { companyId?: string | null; personId?: string | null; dealId?: string | null } = {},
+): NewActivityEntry {
+  const firstLine = condense(note.bodyText.split('\n')[0], SUMMARY_MAX_LENGTH - 'Note: '.length)
+
+  return {
+    orgId: note.orgId,
+    sourceType: 'note',
+    sourceId: note.id,
+    summary: firstLine ? `Note: ${firstLine}` : 'Note added',
+    preview: condense(note.bodyText, PREVIEW_MAX_LENGTH),
+    direction: null,
+    occurredAt: note.createdAt,
+    createdByUserId: note.authorUserId,
+    companyId: links.companyId ?? null,
+    personId: links.personId ?? null,
+    dealId: links.dealId ?? null,
+  }
+}
+
 // --- Mapper: database row → API shape -----------------------------------------
 
 /**

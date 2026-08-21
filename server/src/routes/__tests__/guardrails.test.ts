@@ -843,7 +843,13 @@ runMatrix('invitation hygiene', [
 // where clause. `updateMany`/`deleteMany` can, and their `count` is what turns a
 // miss into a 404 instead of a silent success.
 describe('structural', () => {
-  const ORG_SCOPED_MODELS = ['membership', 'invitation', 'phoneNumber', 'call', 'emailDraft', 'emailTemplate']
+  // `task` and `note` join the list with MAI-141 (T13): they are the first CRM
+  // work objects with a full CRUD router, so they are the first that a careless
+  // `prisma.task.update({ where: { id } })` could write across a tenant boundary.
+  const ORG_SCOPED_MODELS = [
+    'membership', 'invitation', 'phoneNumber', 'call', 'emailDraft', 'emailTemplate',
+    'task', 'note',
+  ]
   const routesDir = path.resolve(import.meta.dirname, '..')
 
   it('G-STRUCT — no route writes an org-scoped model with update() or delete() by id', () => {

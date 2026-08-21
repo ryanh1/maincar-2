@@ -101,6 +101,12 @@ model Org {
   // its feed rows away — the same onDelete: Cascade the rest of the CRM spine
   // already uses.
   activityEntries ActivityEntry[]
+
+  // Work objects (MAI-141 T13). Back-relations so a deleted org cascades its
+  // tasks and notes away — the same onDelete: Cascade the rest of the CRM spine
+  // already uses. Their links ride on RecordLink, which already cascades above.
+  tasks Task[]
+  notes Note[]
 }
 
 model User {
@@ -150,6 +156,12 @@ model User {
   // SetNull on that side, so deleting a user never destroys the org's record of
   // what happened (MAI-140 T12).
   activityEntries ActivityEntry[]
+
+  // Work assigned to and written by this rep (MAI-141 T13). SetNull on both
+  // sides: deleting a user must not delete the org's tasks or its notes. An
+  // unassigned task and an authorless note are both real states.
+  tasksAssigned Task[] @relation("TaskAssignee")
+  notesAuthored Note[] @relation("NoteAuthor")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1127,16 +1139,30 @@ model RecordLink {
   toObject String
   toId     String
 
-  // Note/task link seam (spec §5.4). Plain nullable columns for now; the Note and
-  // Task models and their @relation back-references land in T13 (MAI-141).
+  // Note/task link seam (spec §5.4), filled in by MAI-141 T13. This is THE way a
+  // note or a task attaches to anything — there is deliberately no parallel
+  // NoteLink/TaskLink table, because a second edge table is a second place for
+  // "what is this attached to" to disagree with itself.
+  //
+  // The columns are redundant with (fromObject, fromId) on purpose, and the
+  // redundancy is the point: fromObject/fromId is the GENERIC edge every custom
+  // reference uses and cannot be a foreign key, while noteId/taskId ARE foreign
+  // keys, so deleting a note takes its links with it (Cascade) instead of leaving
+  // edges pointing at nothing. Writers set both halves; readers may use either.
   noteId String?
+  note   Note?   @relation("NoteLinks", fields: [noteId], references: [id], onDelete: Cascade)
   taskId String?
+  task   Task?   @relation("TaskLinks", fields: [taskId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([orgId, fromObject, fromId])
   @@index([orgId, toObject, toId])
+  // "What is this note/task attached to" — the read a record page and a task card
+  // both make, scoped by tenant.
+  @@index([orgId, noteId])
+  @@index([orgId, taskId])
 }
 
 // -----------------------------------------------------------------------------
@@ -1811,7 +1837,6 @@ model ActivityEntry {
   // a webhook delivered twice updates this row instead of appending a duplicate.
   // Both key columns are NOT NULL, which is what makes the constraint bite.
   @@unique([orgId, sourceType, sourceId])
-
   // The account-page feeds. Each one is (tenant, scope, time) so the read is an
   // index range scan in exactly the order it is returned — no sort, no join, no
   // union. These three ARE the acceptance criterion.
@@ -1822,4 +1847,132 @@ model ActivityEntry {
   @@index([orgId, createdByUserId, occurredAt])
   // The unscoped org feed — "what happened today" with no account chosen.
   @@index([orgId, occurredAt])
+}
+
+// -----------------------------------------------------------------------------
+// Work — Task and Note (MAI-141 T13) — spec §6, impacts §J.
+//
+// The two halves of "what a rep still has to do" and "what a rep remembers".
+// Both are FIRST-CLASS objects with their own tables, not attributes hung off a
+// Person: a task belongs to the person doing it as much as to the record it is
+// about, and a note routinely belongs to several records at once.
+//
+// THEIR LINKS RIDE ON RecordLink, and that is the whole design decision here.
+// T7 added nullable `noteId`/`taskId` to RecordLink as exactly this seam. A note
+// attached to a company, two people, and a deal is FOUR RecordLink rows — one
+// generic edge table, so "what is attached to this record" stays ONE query no
+// matter what kind of thing is attached. A dedicated NoteLink/TaskLink table
+// would have been a second answer to that question, and two answers to a
+// question about attachment is how a record page starts missing things.
+//
+// Neither model carries personId/companyId/dealId columns. That is not an
+// oversight: a note links to MANY records (the T13 acceptance criterion), and a
+// nullable triple of columns can hold exactly one of each, so it would quietly
+// cap the thing the ticket exists to make possible.
+// -----------------------------------------------------------------------------
+
+model Task {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  title String
+  body  String?
+
+  // Allowed values: "call", "email", "todo". A String, not a Prisma enum — this
+  // list gains values (sms, linkedin, …) and a Postgres enum needs an ALTER TYPE
+  // dance to gain one (.claude/rules/database-and-prisma.md → No Enums). The
+  // type-safe half is TASK_TYPES in server/src/crm/taskNote.ts.
+  type       String @default("todo")
+  // Allowed values: "low", "med", "high".
+  priority   String @default("med")
+  // Allowed values: "hard" (an appointment — a time someone else is holding) or
+  // "soft" (a reminder — a time only this rep is holding). Two DIFFERENT promises,
+  // which is why this is not folded into `priority`: a low-priority appointment is
+  // still an appointment, and moving it costs somebody else their afternoon.
+  commitment String @default("soft")
+
+  // Nullable + SetNull: an unassigned task is a real state (a queue nobody has
+  // picked up), and deleting a user must never delete the org's open work.
+  assigneeUserId String?
+  assignee       User?   @relation("TaskAssignee", fields: [assigneeUserId], references: [id], onDelete: SetNull)
+
+  // When it is due, and when to nudge. Two columns, because "remind me an hour
+  // before" is a different fact from "it is due at 4".
+  dueAt    DateTime?
+  remindAt DateTime?
+
+  // Two-way link to a calendar event, and where this task CAME FROM.
+  //
+  // `origin` is the T13 acceptance criterion: a task derived from a calendar
+  // event must stay distinguishable from one a rep typed, forever — a calendar
+  // re-sync may rewrite the first and must never touch the second. Allowed
+  // values: "manual", "calendar".
+  //
+  // `eventId` is a plain nullable String, NOT a foreign key to Meeting: the event
+  // a task was derived from may not be synced into Meeting at all (or may be
+  // deleted from the calendar later), and a task that vanishes because its event
+  // did would lose work a rep still has to do. Task and Meeting stay
+  // distinct-but-linked objects (spec §6, impacts 7b.13).
+  eventId String?
+  origin  String  @default("manual")
+
+  // Done is a pair, not a flag: `isDone` is what a list filters on and `doneAt` is
+  // when it happened, which is what a "completed this week" view reads. Setting
+  // one without the other is the bug this comment exists to prevent — the route is
+  // the one place that writes them, and it writes them together.
+  isDone Boolean   @default(false)
+  doneAt DateTime?
+
+  // Soft delete into the 30-day trash (spec §5.13). deletedById is who binned it,
+  // kept as a plain String rather than a relation so it survives that user being
+  // deleted — the audit answer must outlive the account.
+  deletedAt   DateTime?
+  deletedById String?
+
+  links RecordLink[] @relation("TaskLinks")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  // "My open work" — the query behind every task list a rep opens.
+  @@index([orgId, assigneeUserId, isDone])
+  // "What is due" — the org-wide due-date sweep and the reminder job.
+  @@index([orgId, dueAt])
+  // Calendar reconciliation: find the task derived from THIS event, and find every
+  // calendar-derived task in one scan without touching the hand-made ones.
+  @@index([orgId, origin, eventId])
+}
+
+model Note {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // The TipTap document — the note as it is edited and rendered. JSONB, because
+  // rich text is a tree and flattening it to a string to store it would throw away
+  // the formatting the rep applied.
+  bodyJson Json
+  // The same document flattened to plain text, for search and for the feed line.
+  // DERIVED, never supplied: server/src/crm/taskNote.ts flattens bodyJson and the
+  // route writes both together, so the searchable text and the rendered document
+  // cannot describe different notes (CLAUDE.md → AI drafting, same rule).
+  bodyText String
+
+  // Nullable + SetNull, for the same reason Task.assigneeUserId is: deleting the
+  // rep who wrote it must not delete the org's memory of what was said.
+  authorUserId String?
+  author       User?   @relation("NoteAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  deletedAt DateTime?
+
+  links RecordLink[] @relation("NoteLinks")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  // "Notes I wrote", newest first.
+  @@index([orgId, authorUserId, createdAt])
 }

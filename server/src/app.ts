@@ -18,10 +18,12 @@ import invitationsRouter from './routes/invitations.js'
 import meetingsRouter from './routes/meetings.js'
 import membersRouter from './routes/members.js'
 import messagesRouter from './routes/messages.js'
+import notesRouter from './routes/notes.js'
 import objectsRouter from './routes/objects.js'
 import peopleRouter from './routes/people.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
 import recordsRouter from './routes/records.js'
+import tasksRouter from './routes/tasks.js'
 import teamRouter from './routes/team.js'
 import twilioVoiceRouter from './routes/twilioVoice.js'
 
@@ -110,6 +112,18 @@ app.use('/api/orgs/:orgId/attributes', attributesRouter)
 // Rows of custom (record-backed) objects (MAI-135 T7). Every valuesJson write goes
 // through the one validator; filtering hits the native GIN index via containment.
 app.use('/api/orgs/:orgId/records', recordsRouter)
+
+// Work objects (MAI-141 T13) — the two things a rep creates by hand. FULL CRUD,
+// unlike the read-only activity routes above, and the difference is deliberate: an
+// email or a meeting is a record of something that happened elsewhere, so writing
+// one here would be inventing history, while a task and a note ARE created here.
+//
+// Both attach to records through the EXISTING RecordLink seam (spec §5.4), never
+// through columns of their own — which is what lets one note belong to a company,
+// two people, and a deal at once. Only NOTES write an ActivityEntry row: the feed
+// is the list of things that HAPPENED, and a task is a thing that has not.
+app.use('/api/orgs/:orgId/tasks', tasksRouter)
+app.use('/api/orgs/:orgId/notes', notesRouter)
 
 // The authenticated half of the Integration Hub. The org is in the path so
 // membership is re-proven per request. The OAuth callback is NOT here: it is
