@@ -10,6 +10,11 @@
 process.env.DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5440/maincar2_unit_never_used'
 
+// A fixed 32-byte (base64) key so config.ts boots and tokenCrypto round-trips
+// deterministically. Set here rather than read from .env so the suite never
+// depends on a developer's local secrets.
+process.env.TOKEN_ENC_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+
 // Keep log output out of the test report, and make it deterministic.
 process.env.LOG_LEVEL = 'silent'
 process.env.NODE_ENV = 'test'

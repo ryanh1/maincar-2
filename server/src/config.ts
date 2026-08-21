@@ -45,6 +45,28 @@ export const DATABASE_URL = required('DATABASE_URL')
 // connection pooler in front of Postgres.
 export const DIRECT_DATABASE_URL = process.env.DIRECT_DATABASE_URL
 
+// --- Token encryption (OAuth refresh tokens) ---
+// The master key for AES-256-GCM at-rest encryption of OAuth grants, consumed
+// ONLY by server/src/lib/tokenCrypto.ts. It is supplied as base64 for 32 raw
+// bytes (an AES-256 key): `openssl rand -base64 32`. This is the single place the
+// key is read — no fallback, `required()` fails fast at startup with a named
+// error rather than a stack trace at first decrypt. A missing or wrong-length key
+// takes the process down here, on purpose. Rotation stays additive: a `v2`
+// ciphertext format would introduce a second key beside this one, never a
+// migration of stored rows, so this remains one required value.
+export const TOKEN_ENC_KEY: Buffer = decodeTokenEncKey(required('TOKEN_ENC_KEY'))
+
+function decodeTokenEncKey(raw: string): Buffer {
+  const key = Buffer.from(raw, 'base64')
+  if (key.length !== 32) {
+    throw new Error(
+      `TOKEN_ENC_KEY must decode to 32 bytes for AES-256; got ${key.length}. ` +
+        'Generate one with: openssl rand -base64 32',
+    )
+  }
+  return key
+}
+
 // --- Firebase Admin ---
 // Verifies the ID token on every authenticated request. In local dev the emulator
 // host is set instead, and the SDK picks it up automatically.
