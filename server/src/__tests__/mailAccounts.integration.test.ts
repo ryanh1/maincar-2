@@ -13,7 +13,7 @@
 // Docker up.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { setPrimaryMailbox, upsertMailAccount } from '../lib/mail/mailAccounts.js'
+import { deleteMailbox, setPrimaryMailbox, upsertMailAccount } from '../lib/mail/mailAccounts.js'
 import type { PrismaClient } from '../generated/prisma/client.js'
 import { createTestPrisma, seedOrgWithAdmin } from '../test/integration/testPrisma.js'
 
@@ -151,6 +151,76 @@ describe('mailAccounts (integration, real Postgres)', () => {
       true,
     )
     expect(await primaryCount(orgA.orgId, orgA.adminUserId)).toBe(1)
+  })
+
+  it('deleting the primary promotes the most recently connected remaining mailbox', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const firstId = await connectMailbox(org, {
+      provider: 'google',
+      providerAccountId: 'sub_del_first',
+      emailAddress: 'del-first@example.com',
+    })
+    const secondId = await connectMailbox(org, {
+      provider: 'microsoft',
+      providerAccountId: 'oid_del_second',
+      emailAddress: 'del-second@example.com',
+    })
+    // The first is primary (first-connect). Delete it; the newest remaining (second)
+    // must inherit the flag so the rep is never left able to receive but not send.
+    const remaining = await deleteMailbox(firstId, org.orgId, org.adminUserId, prisma)
+
+    expect(remaining!.map((b) => b.id)).toEqual([secondId])
+    expect(remaining!.filter((b) => b.isPrimary).map((b) => b.id)).toEqual([secondId])
+    expect(await primaryCount(org.orgId, org.adminUserId)).toBe(1)
+  })
+
+  it('deleting a NON-primary mailbox leaves the existing primary untouched', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const firstId = await connectMailbox(org, {
+      provider: 'google',
+      providerAccountId: 'sub_keep_first',
+      emailAddress: 'keep-first@example.com',
+    })
+    const secondId = await connectMailbox(org, {
+      provider: 'microsoft',
+      providerAccountId: 'oid_keep_second',
+      emailAddress: 'keep-second@example.com',
+    })
+    // first is primary; deleting the second (non-primary) must not move the flag.
+    await deleteMailbox(secondId, org.orgId, org.adminUserId, prisma)
+
+    expect((await prisma.mailAccount.findUniqueOrThrow({ where: { id: firstId } })).isPrimary).toBe(true)
+    expect(await primaryCount(org.orgId, org.adminUserId)).toBe(1)
+  })
+
+  it('deleting the only mailbox leaves none, and no error', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const onlyId = await connectMailbox(org, {
+      provider: 'google',
+      providerAccountId: 'sub_only',
+      emailAddress: 'only@example.com',
+    })
+
+    const remaining = await deleteMailbox(onlyId, org.orgId, org.adminUserId, prisma)
+
+    expect(remaining).toEqual([])
+    expect(await prisma.mailAccount.count({ where: { orgId: org.orgId, userId: org.adminUserId } })).toBe(0)
+  })
+
+  it('returns null for a delete of a mailbox that is not this rep’s, changing nothing', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+    const boxAId = await connectMailbox(orgA, {
+      provider: 'google',
+      providerAccountId: 'sub_del_orga',
+      emailAddress: 'owner-del@example.com',
+    })
+
+    const result = await deleteMailbox(boxAId, orgB.orgId, orgB.adminUserId, prisma)
+
+    expect(result).toBeNull()
+    // Org A's mailbox survives, still primary.
+    expect((await prisma.mailAccount.findUniqueOrThrow({ where: { id: boxAId } })).isPrimary).toBe(true)
   })
 
   it('two concurrent switches leave exactly one primary — never two, never zero', async () => {

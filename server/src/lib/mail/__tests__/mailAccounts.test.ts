@@ -23,6 +23,7 @@ const { prismaMock, mailAccount } = vi.hoisted(() => {
     count: vi.fn(),
     create: vi.fn(),
     updateMany: vi.fn(),
+    deleteMany: vi.fn(),
   }
   return {
     mailAccount,
@@ -45,7 +46,7 @@ import {
   MailboxNotFoundError,
   RateLimitedError,
 } from '../mailErrors.js'
-import { setPrimaryMailbox, upsertMailAccount } from '../mailAccounts.js'
+import { deleteMailbox, setPrimaryMailbox, upsertMailAccount } from '../mailAccounts.js'
 
 const ORG_ID = 'org-a'
 const USER_ID = 'user-a'
@@ -178,6 +179,81 @@ describe('setPrimaryMailbox', () => {
     const result = await setPrimaryMailbox('box-other-org', ORG_ID, USER_ID)
 
     expect(result).toBeNull()
+    expect(mailAccount.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('deleteMailbox', () => {
+  beforeEach(() => {
+    mailAccount.deleteMany.mockResolvedValue({ count: 1 })
+  })
+
+  it('deletes the target scoped to (id, orgId, userId), inside one transaction', async () => {
+    mailAccount.findFirst
+      .mockResolvedValueOnce({ isPrimary: false }) // the target lookup
+    mailAccount.findMany.mockResolvedValue([mailboxRow({ id: 'box-1', isPrimary: true })])
+
+    await deleteMailbox('box-2', ORG_ID, USER_ID)
+
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(mailAccount.deleteMany).toHaveBeenCalledTimes(1)
+    expect(mailAccount.deleteMany.mock.calls[0][0].where).toEqual({
+      id: 'box-2',
+      orgId: ORG_ID,
+      userId: USER_ID,
+    })
+  })
+
+  it('does NOT promote when the removed mailbox was not the primary', async () => {
+    mailAccount.findFirst.mockResolvedValueOnce({ isPrimary: false })
+    mailAccount.findMany.mockResolvedValue([mailboxRow({ id: 'box-1', isPrimary: true })])
+
+    await deleteMailbox('box-2', ORG_ID, USER_ID)
+
+    // No clear-and-set: the rep's existing primary stays put.
+    expect(mailAccount.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('promotes the newest remaining mailbox when the primary is removed', async () => {
+    // target is primary; then the "newest remaining" lookup returns box-1.
+    mailAccount.findFirst
+      .mockResolvedValueOnce({ isPrimary: true })
+      .mockResolvedValueOnce({ id: 'box-1' })
+    mailAccount.findMany.mockResolvedValue([mailboxRow({ id: 'box-1', isPrimary: true })])
+
+    await deleteMailbox('box-2', ORG_ID, USER_ID)
+
+    // Clears the set, then sets the newest remaining, scoped to (id, orgId, userId).
+    expect(mailAccount.updateMany).toHaveBeenCalledTimes(2)
+    expect(mailAccount.updateMany.mock.calls[0][0]).toEqual({
+      where: { orgId: ORG_ID, userId: USER_ID },
+      data: { isPrimary: false },
+    })
+    expect(mailAccount.updateMany.mock.calls[1][0]).toEqual({
+      where: { id: 'box-1', orgId: ORG_ID, userId: USER_ID },
+      data: { isPrimary: true },
+    })
+  })
+
+  it('leaves nothing to promote when the deleted mailbox was the only one', async () => {
+    mailAccount.findFirst
+      .mockResolvedValueOnce({ isPrimary: true }) // target is the only, primary mailbox
+      .mockResolvedValueOnce(null) // nothing remains
+    mailAccount.findMany.mockResolvedValue([])
+
+    const result = await deleteMailbox('box-1', ORG_ID, USER_ID)
+
+    expect(result).toEqual([])
+    expect(mailAccount.updateMany).not.toHaveBeenCalled() // no promote, and no error
+  })
+
+  it('returns null and writes nothing for a mailbox id that is not this rep’s', async () => {
+    mailAccount.findFirst.mockResolvedValueOnce(null)
+
+    const result = await deleteMailbox('box-other', ORG_ID, USER_ID)
+
+    expect(result).toBeNull()
+    expect(mailAccount.deleteMany).not.toHaveBeenCalled()
     expect(mailAccount.updateMany).not.toHaveBeenCalled()
   })
 })

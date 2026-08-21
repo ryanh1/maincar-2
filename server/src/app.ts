@@ -13,6 +13,7 @@ import emailRouter from './routes/email.js'
 import emailsRouter from './routes/emails.js'
 import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
+import mailboxesRouter from './routes/mailboxes.js'
 import invitationsRouter from './routes/invitations.js'
 import meetingsRouter from './routes/meetings.js'
 import membersRouter from './routes/members.js'
@@ -121,6 +122,10 @@ app.use('/api/integrations/orgs/:orgId', integrationsRouter)
 // whose consent it is (see the route's own header). Its /:provider/callback path never
 // collides with the /orgs/:orgId router above, whose third segment is literally "orgs".
 app.use('/api/integrations', integrationsCallbackRouter)
+
+// The rep's mailboxes: list, rename, promote to primary, disconnect. Org in the path,
+// so membership is re-proven per request; every action is scoped to (orgId, userId).
+app.use('/api/mailboxes/orgs/:orgId', mailboxesRouter)
 
 // Twilio's voice webhook. Mounted at /api/twilio (the router owns /voice, and the
 // status callback /voice/status lands here later). Deliberately NOT org-scoped

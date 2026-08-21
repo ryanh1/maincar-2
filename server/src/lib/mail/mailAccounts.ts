@@ -120,3 +120,58 @@ export async function setPrimaryMailbox(
     return tx.mailAccount.findMany({ where: { orgId, userId }, orderBy: { createdAt: 'asc' } })
   })
 }
+
+/**
+ * Delete mailbox `id` from this rep's set and, WHEN it was the primary, promote the
+ * most-recently-connected mailbox that remains — both inside one transaction. Returns
+ * the remaining set (oldest first) on success, or `null` when no mailbox with that id
+ * belongs to this rep: a foreign or stale id deletes nothing and returns null, so the
+ * route answers 404 without a leaky error.
+ *
+ * Two invariants ride on the single transaction:
+ *   - A rep is NEVER left with mailboxes and no primary. Deleting the primary and
+ *     promoting a replacement in two separate statements would leave a window with
+ *     zero primaries, and the composer, reading in it, shows "no mailbox connected"
+ *     though the rep has several. The delete and the promote commit together.
+ *   - The rep's CHOICE of primary survives the delete of a non-primary. The promote
+ *     runs ONLY when the row removed was the primary; removing any other mailbox
+ *     leaves the existing primary exactly where the rep put it (AC 5 promotes on the
+ *     removal of the primary, not on every removal).
+ */
+export async function deleteMailbox(
+  id: string,
+  orgId: string,
+  userId: string,
+  db: Db = prisma,
+): Promise<MailAccount[] | null> {
+  return db.$transaction(async (tx) => {
+    // Confirm the target is this rep's before deleting, so a foreign id changes
+    // nothing and the promote below never runs against another rep's set.
+    const target = await tx.mailAccount.findFirst({
+      where: { id, orgId, userId },
+      select: { isPrimary: true },
+    })
+    if (!target) return null
+
+    await tx.mailAccount.deleteMany({ where: { id, orgId, userId } })
+
+    // Only the removal of the PRIMARY needs a replacement. The newest remaining
+    // mailbox is promoted; clearing first keeps the set from ever holding two.
+    if (target.isPrimary) {
+      const remaining = await tx.mailAccount.findFirst({
+        where: { orgId, userId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      })
+      if (remaining) {
+        await tx.mailAccount.updateMany({ where: { orgId, userId }, data: { isPrimary: false } })
+        await tx.mailAccount.updateMany({
+          where: { id: remaining.id, orgId, userId },
+          data: { isPrimary: true },
+        })
+      }
+    }
+
+    return tx.mailAccount.findMany({ where: { orgId, userId }, orderBy: { createdAt: 'asc' } })
+  })
+}
