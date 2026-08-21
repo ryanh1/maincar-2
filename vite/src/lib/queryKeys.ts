@@ -74,4 +74,13 @@ export const queryKeys = {
     list: (orgId: string) => ['integrations', orgId, 'list'] as const,
     health: (orgId: string) => ['integrations', orgId, 'health'] as const,
   },
+  mailboxes: {
+    // Keyed by org, like the integrations cards, because a rep's send-from addresses
+    // belong to one org and switching orgs must read a different cache entry rather
+    // than show the previous org's mailboxes. The org comes FIRST, before `list`, so
+    // `all(orgId)` is a prefix of the list — a rename can invalidate the whole domain
+    // in one call, the way `integrations.all` covers both cards and badge.
+    all: (orgId: string) => ['mailboxes', orgId] as const,
+    list: (orgId: string) => ['mailboxes', orgId, 'list'] as const,
+  },
 } as const
