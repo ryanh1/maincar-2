@@ -11,6 +11,7 @@ import emailRouter from './routes/email.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import invitationsRouter from './routes/invitations.js'
 import membersRouter from './routes/members.js'
+import peopleRouter from './routes/people.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
 import teamRouter from './routes/team.js'
 import twilioVoiceRouter from './routes/twilioVoice.js'
@@ -60,6 +61,7 @@ app.use('/api/email', emailRouter)
 app.use('/api/orgs/:orgId/phone-numbers', phoneNumbersRouter)
 app.use('/api/orgs/:orgId/calls', callsRouter)
 app.use('/api/orgs/:orgId/companies', companiesRouter)
+app.use('/api/orgs/:orgId/people', peopleRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
 
 // The authenticated half of the Integration Hub. The org is in the path so

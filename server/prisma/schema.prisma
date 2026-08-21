@@ -36,6 +36,13 @@ model Org {
   emailDrafts      EmailDraft[]
   oauthConnections OAuthConnection[]
   mailAccounts     MailAccount[]
+
+  // CRM spine (MAI-129 T1, MAI-130 T2). Back-relations so a deleted org cascades
+  // its CRM rows away — the same onDelete: Cascade the dialer models already use.
+  companies    Company[]
+  people       Person[]
+  personPhones PersonPhone[]
+  personEmails PersonEmail[]
 }
 
 model User {
@@ -398,18 +405,19 @@ model MailAccount {
 // "at least one of these nullable columns is non-null" is not a constraint Prisma
 // can express. Display name = name ?? domain ?? "Untitled company".
 //
-// NOTE ON RELATIONS: this ticket ONLY adds the Company model, so there is no
-// Prisma relation back to Org or User (that would require adding back-relation
-// fields to those protected models). orgId and ownerUserId are plain String
-// columns — the tenant boundary is enforced in the route with findFirst /
-// updateMany filtered on orgId, exactly as the house rules require, and the
-// @@unique([orgId, domain]) key works on the plain column. This mirrors the
-// bare-String precedent EmailDraft uses for not-yet-wired references. The Person /
-// Deal / Email / Meeting back-relations the full spec shows arrive with their own
-// tickets (T2, T3, T9, T11).
+// NOTE ON RELATIONS: T1 (MAI-129) landed Company with `orgId` as a plain String
+// and no relation, so a deleted org left its companies behind with no cascade. T2
+// (MAI-130) establishes the real relation to Org — `onDelete: Cascade`, matching
+// PhoneNumber/Call — now that we are adding the models that hang off Company. The
+// Person back-relation lands here too (Person.companyId → Company). ownerUserId
+// stays a plain String: wiring it to User would mean adding a back-relation to the
+// protected User model, and no cascade is needed for a nullable owner pointer
+// (the route already scopes writes by orgId). Deal / Email / Meeting back-relations
+// arrive with their own tickets (T3, T9, T11).
 model Company {
   id    String @id @default(cuid())
   orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   // The common name you actually call them ("Google"). Nullable — see the header.
   name String?
@@ -452,6 +460,10 @@ model Company {
   isArchived Boolean   @default(false)
   deletedAt  DateTime?
 
+  // The people who work here (Person.companyId → Company). SetNull on that side,
+  // so trashing/deleting a company does not delete its people.
+  people Person[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -459,4 +471,159 @@ model Company {
   @@index([orgId])
   @@index([orgId, parentCompanyId])
   @@index([orgId, ownerUserId])
+}
+
+// -----------------------------------------------------------------------------
+// CRM — Person + PersonPhone + PersonEmail (MAI-130, Phase 1 / T2). The person is
+// the thing we dial: the centre of the product. Its dialable values are ROWS, not
+// columns, because a dialer must know which numbers are dead (spec §5.5).
+//
+// Spec: docs/specs/SPEC-CRM-SCHEMA.md (§5.5 phones/emails as rows with status,
+// §5.11 DB-enforced vs app-enforced, §5.15 identity anchors). Plan: T2.
+//
+// Two invariants the database CANNOT express, enforced in routes/people.ts:
+//   1. Identity anchor — a person needs at least one of a name part, an email, a
+//      phone, or linkedinUrl. The rule spans nullable columns AND the child
+//      phone/email rows, so no Prisma constraint can state it.
+//   2. Primary invariant — at most one primary phone (and one primary email) per
+//      person; if the person has ≥1 phone, exactly one is primary. A boolean
+//      column cannot see its siblings, so add auto-sets the first primary and
+//      delete auto-promotes another.
+//
+// ownerUserId is a plain String for the same reason it is on Company: wiring it to
+// User would add a back-relation to the protected model, and a nullable owner
+// pointer needs no cascade.
+// -----------------------------------------------------------------------------
+model Person {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  firstName          String? // NULLABLE — see the identity-anchor rule (§5.15)
+  lastName           String? // nullable: not every name splits into two parts
+  preferredFirstName String? // nickname the dialer says, e.g. "Bob" for "Robert"
+  title              String?
+  linkedinUrl        String? // an identity anchor + enrichment/personalization key
+  // Display name = preferredFirstName ?? firstName (+ lastName), else an email, else "Unknown".
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  ownerUserId String?
+
+  timeZone String? // IANA, for "is it a decent hour to call"
+
+  // decision_maker | gatekeeper | champion | influencer | user | other
+  persona String?
+
+  // on_deck | on_hold | backburner | disqualified — a fixed system enum (§5.6a).
+  attentionStatus String    @default("on_deck")
+  attentionReason String?
+  callbackDate    DateTime?
+
+  source          String? // manual | import | enrichment | inbound_call | ...
+  lastContactedAt DateTime?
+
+  nameAudioUrl String? // clip of them saying their own name, played pre-ring — PHASE 2 fill
+
+  customJson Json @default("{}")
+
+  mergedIntoId String? // tombstone → survivor after a merge (5.3c)
+  deletedById  String? // who soft-deleted it (Trash + audit)
+  isArchived   Boolean   @default(false)
+  deletedAt    DateTime?
+
+  phones    PersonPhone[]
+  addresses PersonEmail[] // the person's own email addresses, each with a status
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([orgId, companyId])
+  @@index([orgId, ownerUserId])
+  @@index([orgId, attentionStatus])
+  @@index([orgId, callbackDate])
+}
+
+// -----------------------------------------------------------------------------
+// Dialable identity — one row per value, each with its own life story.
+// -----------------------------------------------------------------------------
+
+model PersonPhone {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  personId String
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  e164      String
+  extension String?
+  label     String  @default("other") // mobile | direct | work | main | home | other
+
+  // Deliverability status — decays, re-verifiable. reachable | unverified | dead.
+  status String  @default("unverified")
+  // never_valid | no_longer_in_service | wrong_person — the reason behind "dead".
+  reason String?
+
+  // DNC is SEPARATE from status: legal, permanent, deliberate. Never fold into status.
+  isDnc     Boolean @default(false)
+  dncReason String?
+
+  // mobile | landline | voip — Twilio Lookup. Blocks SMS to a landline; sorts dials.
+  lineType          String?
+  lineTypeCheckedAt DateTime?
+
+  source    String? // manual | import | enrichment | inbound_call | ai_call
+  isPrimary Boolean @default(false) // app-enforced: at most one true per person (§5.11)
+
+  // Dial-order signals — cheap rollups written by the dialer; bestTimeToCall is a
+  // nightly job (PHASE 2). Freshness is derived from lastDialedAt, not stored.
+  timesDialed     Int       @default(0)
+  lastDialedAt    DateTime?
+  timesConnected  Int       @default(0)
+  lastConnectedAt DateTime?
+  bestTimeToCall  String? // morning | afternoon | evening | any — blank until enough data
+
+  lastVerifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([personId, e164]) // re-adding the same number is idempotent
+  @@index([orgId])
+  @@index([orgId, e164])
+  @@index([orgId, status])
+}
+
+model PersonEmail {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  personId String
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  address String
+  label   String @default("work") // work | personal | other
+
+  // Same shape as PersonPhone. reachable | unverified | dead.
+  status String  @default("unverified")
+  reason String? // hard_bounce | never_valid | wrong_person
+
+  isDnc     Boolean @default(false) // e.g. unsubscribed — legal, separate from status
+  dncReason String?
+
+  source    String?
+  isPrimary Boolean @default(false) // app-enforced: at most one true per person (§5.11)
+
+  lastVerifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([personId, address]) // re-adding the same address is idempotent
+  @@index([orgId])
+  @@index([orgId, address])
 }
