@@ -387,12 +387,20 @@ model EmailDraft {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // The mailbox this will go out on. Null until composer-mailbox lands.
-  // Deliberately a bare String, not a relation: MailAccount does not exist yet.
+  // Nullable + SetNull, not Cascade, same as Email.mailAccountId: a rep
+  // disconnecting their mailbox must not delete a half-written email.
   mailAccountId String?
+  mailAccount   MailAccount? @relation(fields: [mailAccountId], references: [id], onDelete: SetNull)
 
   // The record the composer was opened from, so reopening lands back in context.
-  // Null until the CRM port lands. Also a bare String, for the same reason.
-  recordId String?
+  // Person / Company / Deal are three separate typed tables (SPEC-CRM-SCHEMA), so
+  // one column cannot be a foreign key into all three — the same reason RecordLink
+  // uses fromObject/fromId instead of a relation. recordObject names which table;
+  // recordId stays a bare String on purpose. Both null, or both set: the pairing
+  // and the target row's existence are enforced in server/src/routes/email.ts, not
+  // the database, because a single FK column cannot express a polymorphic target.
+  recordObject String? // person | company | deal
+  recordId     String?
 
   toAddrs  String[]
   ccAddrs  String[]
@@ -540,6 +548,11 @@ model MailAccount {
   // NULLABLE with onDelete: SetNull, so disconnecting a mailbox orphans its
   // messages rather than destroying the org's message history.
   emails Email[]
+
+  // The half-written emails queued to go out on this mailbox (MAI-188). Same
+  // SetNull reasoning as emails above: disconnecting a mailbox orphans a rep's
+  // drafts, never deletes them.
+  emailDrafts EmailDraft[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

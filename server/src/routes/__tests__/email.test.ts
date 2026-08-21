@@ -30,6 +30,12 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
       updateMany: vi.fn(),
       deleteMany: vi.fn(),
     },
+    // recordId carries no database FK (schema.prisma → EmailDraft), so the
+    // route checks existence itself, one of these three depending on
+    // recordObject.
+    person: { count: vi.fn() },
+    company: { count: vi.fn() },
+    deal: { count: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
 }))
@@ -94,6 +100,7 @@ function draftRow(overrides: Record<string, unknown> = {}) {
     orgId: ORG_A,
     userId: 'user-a',
     mailAccountId: null,
+    recordObject: null,
     recordId: null,
     toAddrs: [],
     ccAddrs: [],
@@ -128,6 +135,10 @@ beforeEach(() => {
   prismaMock.emailDraft.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.emailDraft.deleteMany.mockResolvedValue({ count: 1 })
   prismaMock.emailDraft.findFirst.mockResolvedValue(draftRow())
+  // The named record exists unless a test says otherwise.
+  prismaMock.person.count.mockResolvedValue(1)
+  prismaMock.company.count.mockResolvedValue(1)
+  prismaMock.deal.count.mockResolvedValue(1)
 })
 
 describe('GET /api/email/orgs/:orgId/drafts', () => {
@@ -193,6 +204,7 @@ describe('GET /api/email/orgs/:orgId/drafts', () => {
         'isMinimized',
         'isOpen',
         'mailAccountId',
+        'recordObject',
         'recordId',
         'subject',
         'toAddrs',
@@ -240,11 +252,16 @@ describe('POST /api/email/orgs/:orgId/drafts', () => {
     const res = await request(app)
       .post(URL_A)
       .set('Authorization', AUTH)
-      .send({ toAddrs: ['ann@acme.com'], recordId: 'rec-1' })
+      .send({ toAddrs: ['ann@acme.com'], recordObject: 'person', recordId: 'rec-1' })
 
     expect(res.status).toBe(201)
     expect(res.body.draft.toAddrs).toEqual(['ann@acme.com'])
+    expect(res.body.draft.recordObject).toBe('person')
     expect(res.body.draft.recordId).toBe('rec-1')
+    expect(prismaMock.person.count.mock.calls[0][0].where).toEqual({
+      id: 'rec-1',
+      orgId: ORG_A,
+    })
   })
 
   it(`refuses the ${MAX_OPEN_DRAFTS + 1}th open draft with a 409 and a message to act on`, async () => {
@@ -274,6 +291,99 @@ describe('POST /api/email/orgs/:orgId/drafts', () => {
       userId: 'user-a',
       isOpen: true,
     })
+  })
+})
+
+// recordId has no database foreign key (schema.prisma → EmailDraft): a single
+// column cannot reference Person, Company, and Deal at once, so recordObject
+// names which one and the route enforces what a FK constraint normally would.
+describe('recordObject / recordId pairing (MAI-188)', () => {
+  it('rejects recordId without recordObject', async () => {
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ recordId: 'rec-1' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/together/i)
+    expect(prismaMock.emailDraft.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects recordObject without recordId', async () => {
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ recordObject: 'person' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/together/i)
+  })
+
+  it('rejects a recordObject outside person | company | deal', async () => {
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ recordObject: 'record', recordId: 'rec-1' })
+
+    expect(res.status).toBe(400)
+    expect(prismaMock.emailDraft.create).not.toHaveBeenCalled()
+  })
+
+  it('checks the right table for each recordObject', async () => {
+    await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ recordObject: 'company', recordId: 'co-1' })
+
+    expect(prismaMock.company.count.mock.calls[0][0].where).toEqual({ id: 'co-1', orgId: ORG_A })
+    expect(prismaMock.person.count).not.toHaveBeenCalled()
+    expect(prismaMock.deal.count).not.toHaveBeenCalled()
+  })
+
+  it('refuses a recordId that does not exist in this org', async () => {
+    prismaMock.deal.count.mockResolvedValue(0)
+
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ recordObject: 'deal', recordId: 'deal-nope' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/could not be found/i)
+    expect(prismaMock.emailDraft.create).not.toHaveBeenCalled()
+  })
+
+  it('clears both fields together on PATCH', async () => {
+    const res = await request(app)
+      .patch(ONE_A)
+      .set('Authorization', AUTH)
+      .send({ recordObject: null, recordId: null })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].data).toEqual({
+      recordObject: null,
+      recordId: null,
+    })
+  })
+
+  it('rejects a PATCH that sets recordId but leaves recordObject unchanged', async () => {
+    const res = await request(app)
+      .patch(ONE_A)
+      .set('Authorization', AUTH)
+      .send({ recordId: 'rec-2' })
+
+    expect(res.status).toBe(400)
+    expect(prismaMock.emailDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('refuses a PATCH pointing at a record outside this org', async () => {
+    prismaMock.person.count.mockResolvedValue(0)
+
+    const res = await request(app)
+      .patch(ONE_A)
+      .set('Authorization', AUTH)
+      .send({ recordObject: 'person', recordId: 'someone-elses' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/could not be found/i)
+    expect(prismaMock.emailDraft.updateMany).not.toHaveBeenCalled()
   })
 })
 

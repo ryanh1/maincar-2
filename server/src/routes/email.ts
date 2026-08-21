@@ -64,6 +64,38 @@ const addressListSchema = z
   .array(addressSchema)
   .max(100, 'A draft can hold at most 100 addresses per field.')
 
+// The three typed CRM tables a draft's record can point to (MAI-188). A custom
+// object row (the generic `Record` table) is deliberately not one of them —
+// nothing today opens the composer from a custom-object page.
+export const RECORD_OBJECTS = ['person', 'company', 'deal'] as const
+export type RecordObject = (typeof RECORD_OBJECTS)[number]
+
+/**
+ * recordId has no real foreign key (see schema.prisma → EmailDraft): a single
+ * column cannot reference three separate typed tables. recordObject names
+ * which one, so both fields must move together — set together, or cleared
+ * together. A body that names one without the other, or disagrees on
+ * null-ness, is rejected here rather than left to write a dangling pointer.
+ */
+function checkRecordPairing(
+  data: { recordId?: string | null; recordObject?: RecordObject | null },
+  ctx: z.RefinementCtx,
+) {
+  const hasId = 'recordId' in data && data.recordId !== undefined
+  const hasObject = 'recordObject' in data && data.recordObject !== undefined
+  if (!hasId && !hasObject) return
+  if (hasId !== hasObject) {
+    ctx.addIssue({ code: 'custom', message: 'recordId and recordObject must be set together.' })
+    return
+  }
+  if ((data.recordId === null) !== (data.recordObject === null)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'recordId and recordObject must both be null or both be set.',
+    })
+  }
+}
+
 /**
  * The fields a caller may set on a draft.
  *
@@ -71,17 +103,14 @@ const addressListSchema = z
  * every later autosave is a PATCH against an id that already exists and no
  * keystroke can race a create.
  */
-export const draftInputSchema = z.object({
+const draftFieldsSchema = z.object({
   mailAccountId: z.string().trim().min(1).max(200).nullable().optional(),
+  recordObject: z.enum(RECORD_OBJECTS).nullable().optional(),
   recordId: z.string().trim().min(1).max(200).nullable().optional(),
   toAddrs: addressListSchema.optional(),
   ccAddrs: addressListSchema.optional(),
   bccAddrs: addressListSchema.optional(),
-  subject: z
-    .string()
-    .max(998, 'A subject can be at most 998 characters.')
-    .nullable()
-    .optional(),
+  subject: z.string().max(998, 'A subject can be at most 998 characters.').nullable().optional(),
   // No length rule beyond the 2 MB JSON limit app.ts already sets. Shape is all
   // zod checks here — the SAFETY of the markup is not a validation question,
   // because rejecting a draft that contains a `<script>` would refuse to save a
@@ -89,6 +118,8 @@ export const draftInputSchema = z.object({
   // `sanitizeOptionalRichTextHtml` on the way into the database (MAI-78).
   bodyHtml: z.string().nullable().optional(),
 })
+
+export const draftInputSchema = draftFieldsSchema.superRefine(checkRecordPairing)
 
 /**
  * What a PATCH may set: everything POST accepts, plus the two dock-state flags.
@@ -98,10 +129,27 @@ export const draftInputSchema = z.object({
  * in the dock at all". Closing a card is a SAVE — `isOpen: false` — and the
  * draft is kept. Only DELETE throws one away.
  */
-export const draftPatchSchema = draftInputSchema.extend({
-  isOpen: z.boolean().optional(),
-  isMinimized: z.boolean().optional(),
-})
+export const draftPatchSchema = draftFieldsSchema
+  .extend({
+    isOpen: z.boolean().optional(),
+    isMinimized: z.boolean().optional(),
+  })
+  .superRefine(checkRecordPairing)
+
+// recordId has no database foreign key (schema.prisma → EmailDraft): it cannot,
+// because recordObject picks one of three separate typed tables. This is the
+// referential-integrity check that would otherwise be a FK constraint — run at
+// write time instead, scoped to the caller's org like every other lookup here.
+async function recordExists(orgId: string, recordObject: RecordObject, recordId: string) {
+  switch (recordObject) {
+    case 'person':
+      return (await prisma.person.count({ where: { id: recordId, orgId } })) > 0
+    case 'company':
+      return (await prisma.company.count({ where: { id: recordId, orgId } })) > 0
+    case 'deal':
+      return (await prisma.deal.count({ where: { id: recordId, orgId } })) > 0
+  }
+}
 
 // --- Mappers: database row → API shape ---
 
@@ -112,6 +160,7 @@ function mapDraftToApi(draft: EmailDraft) {
   return {
     id: draft.id,
     mailAccountId: draft.mailAccountId,
+    recordObject: draft.recordObject,
     recordId: draft.recordId,
     toAddrs: draft.toAddrs,
     ccAddrs: draft.ccAddrs,
@@ -203,6 +252,15 @@ router.post(
       })
     }
 
+    // The pairing is already enforced by the schema; this confirms the target
+    // itself is real and in this org, since recordId carries no database FK.
+    if (parsed.data.recordObject && parsed.data.recordId) {
+      const exists = await recordExists(orgId, parsed.data.recordObject, parsed.data.recordId)
+      if (!exists) {
+        return void res.status(400).json({ error: 'That record could not be found.' })
+      }
+    }
+
     // --- Execute query ---
     // orgId and userId come from the verified caller and the path, never from
     // the body: a caller must not be able to write a draft into another org or
@@ -212,6 +270,7 @@ router.post(
         orgId,
         userId,
         mailAccountId: parsed.data.mailAccountId ?? null,
+        recordObject: parsed.data.recordObject ?? null,
         recordId: parsed.data.recordId ?? null,
         toAddrs: parsed.data.toAddrs ?? [],
         ccAddrs: parsed.data.ccAddrs ?? [],
@@ -278,8 +337,12 @@ router.patch(
     // `parsed.data` would be the same thing today, but one added field with a
     // default would quietly turn every autosave into a full overwrite.
     const body = parsed.data
-    const data: Prisma.EmailDraftUpdateManyMutationInput = {}
+    // The "Unchecked" variant, not the plain one: mailAccountId is now a real
+    // relation (MAI-188), and updateMany writes the FK scalar directly rather
+    // than a nested relation connect.
+    const data: Prisma.EmailDraftUncheckedUpdateManyInput = {}
     if ('mailAccountId' in body) data.mailAccountId = body.mailAccountId
+    if ('recordObject' in body) data.recordObject = body.recordObject
     if ('recordId' in body) data.recordId = body.recordId
     if ('toAddrs' in body) data.toAddrs = body.toAddrs
     if ('ccAddrs' in body) data.ccAddrs = body.ccAddrs
@@ -296,6 +359,15 @@ router.patch(
     // to right — a no-op save would shuffle the rep's cards.
     if (Object.keys(data).length === 0) {
       return void res.status(400).json({ error: 'Name a field to save.' })
+    }
+
+    // Same check as POST: confirm the target is real before writing a pointer
+    // to it, since recordId carries no database FK to enforce this.
+    if (body.recordObject && body.recordId) {
+      const exists = await recordExists(orgId, body.recordObject, body.recordId)
+      if (!exists) {
+        return void res.status(400).json({ error: 'That record could not be found.' })
+      }
     }
 
     // --- Execute query ---

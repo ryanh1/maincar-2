@@ -12,12 +12,22 @@
  * hook (SPEC-composer-recipients.md → Project structure).
  */
 
+/**
+ * The typed CRM tables a draft's `recordId` can point to. `recordId` has no
+ * database foreign key (server/prisma/schema.prisma → EmailDraft): a single
+ * column cannot reference all three, so `recordObject` names which one and the
+ * pair moves together — both null, or both set.
+ */
+export type RecordObject = 'person' | 'company' | 'deal'
+
 /** One draft, as the API returns it. Timestamps are ISO strings, never `Date`. */
 export interface EmailDraft {
   id: string
   /** The mailbox this will go out on. Null until composer-mailbox lands. */
   mailAccountId: string | null
-  /** The record the composer was opened from. Null until the CRM port lands. */
+  /** Which typed table `recordId` names. Null exactly when `recordId` is null. */
+  recordObject: RecordObject | null
+  /** The record the composer was opened from. Null until something sets it. */
   recordId: string | null
   toAddrs: string[]
   ccAddrs: string[]
@@ -42,6 +52,7 @@ export interface EmailDraft {
  */
 export interface EmailDraftInput {
   mailAccountId?: string | null
+  recordObject?: RecordObject | null
   recordId?: string | null
   toAddrs?: string[]
   ccAddrs?: string[]

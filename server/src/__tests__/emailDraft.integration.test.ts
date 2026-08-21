@@ -44,17 +44,33 @@ describe('EmailDraft (integration, real Postgres)', () => {
     expect(draft.updatedAt).toBeInstanceOf(Date)
   })
 
-  it('accepts a mailAccountId and a recordId that reference no table', async () => {
-    // Both are bare Strings on purpose — neither target table exists yet, and a
-    // foreign key would reject the id the composer already holds.
+  it('stores the body and addresses verbatim, with a real mailAccountId', async () => {
     const org = await seedOrgWithAdmin(prisma)
+    const conn = await prisma.oAuthConnection.create({
+      data: {
+        orgId: org.orgId,
+        userId: org.adminUserId,
+        provider: 'google',
+        providerAccountId: 'sub_draft',
+        emailAddress: org.adminEmail,
+        refreshToken: 'v1.a.b.c',
+      },
+    })
+    const mailbox = await prisma.mailAccount.create({
+      data: {
+        orgId: org.orgId,
+        userId: org.adminUserId,
+        connectionId: conn.id,
+        provider: 'google',
+        emailAddress: org.adminEmail,
+      },
+    })
 
     const draft = await prisma.emailDraft.create({
       data: {
         orgId: org.orgId,
         userId: org.adminUserId,
-        mailAccountId: 'mail_account_that_does_not_exist',
-        recordId: 'crm_record_that_does_not_exist',
+        mailAccountId: mailbox.id,
         toAddrs: ['ann@'],
         ccAddrs: ['cc@example.com'],
         bccAddrs: ['bcc@example.com'],
@@ -63,11 +79,75 @@ describe('EmailDraft (integration, real Postgres)', () => {
       },
     })
 
-    expect(draft.mailAccountId).toBe('mail_account_that_does_not_exist')
-    expect(draft.recordId).toBe('crm_record_that_does_not_exist')
+    expect(draft.mailAccountId).toBe(mailbox.id)
     // Stored verbatim: the write path never reformats the body.
     expect(draft.bodyHtml).toBe('<p>Half a sentence')
     expect(draft.toAddrs).toEqual(['ann@'])
+  })
+
+  it('rejects a mailAccountId that references no MailAccount row (MAI-188 — a real FK now)', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+
+    await expect(
+      prisma.emailDraft.create({
+        data: {
+          orgId: org.orgId,
+          userId: org.adminUserId,
+          mailAccountId: 'mail_account_that_does_not_exist',
+        },
+      }),
+    ).rejects.toThrow()
+  })
+
+  it('SetNulls mailAccountId when the mailbox is disconnected — the draft survives', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const conn = await prisma.oAuthConnection.create({
+      data: {
+        orgId: org.orgId,
+        userId: org.adminUserId,
+        provider: 'google',
+        providerAccountId: 'sub_setnull',
+        emailAddress: org.adminEmail,
+        refreshToken: 'v1.a.b.c',
+      },
+    })
+    const mailbox = await prisma.mailAccount.create({
+      data: {
+        orgId: org.orgId,
+        userId: org.adminUserId,
+        connectionId: conn.id,
+        provider: 'google',
+        emailAddress: org.adminEmail,
+      },
+    })
+    const draft = await prisma.emailDraft.create({
+      data: { orgId: org.orgId, userId: org.adminUserId, mailAccountId: mailbox.id },
+    })
+
+    await prisma.mailAccount.delete({ where: { id: mailbox.id } })
+
+    const reread = await prisma.emailDraft.findUnique({ where: { id: draft.id } })
+    expect(reread).not.toBeNull()
+    expect(reread!.mailAccountId).toBeNull()
+  })
+
+  it('accepts a recordObject/recordId pair that references no table', async () => {
+    // Still bare Strings on purpose (MAI-188): recordObject can name Person,
+    // Company, or Deal, and one column cannot be a foreign key into all three —
+    // the route enforces existence, not a database constraint.
+    const org = await seedOrgWithAdmin(prisma)
+
+    const draft = await prisma.emailDraft.create({
+      data: {
+        orgId: org.orgId,
+        userId: org.adminUserId,
+        recordObject: 'person',
+        recordId: 'crm_record_that_does_not_exist',
+      },
+    })
+
+    expect(draft.recordObject).toBe('person')
+    expect(draft.recordId).toBe('crm_record_that_does_not_exist')
   })
 
   it('has the composite index the dock query runs on', async () => {
