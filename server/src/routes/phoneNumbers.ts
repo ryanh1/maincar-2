@@ -25,6 +25,7 @@ import {
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { queueProvisionNumber } from '../jobs/provisionNumber.js'
 import type { PhoneNumber } from '../generated/prisma/client.js'
 
 // mergeParams, or :orgId from the mount path never reaches req.params here —
@@ -109,6 +110,53 @@ const searchBodySchema = z
     message: 'Area code search works for US and Canada numbers only.',
     path: ['areaCode'],
   })
+
+// --- Purchase input ---
+
+/**
+ * E.164, strictly: a leading `+`, a country code that cannot start with 0, and
+ * 7 to 15 digits in all — 15 is the standard's ceiling, and 7 is about the
+ * shortest any country issues.
+ *
+ * Strict because this check is the last thing standing between a typo and a
+ * purchase. Nothing is normalised on the way through — no stripping of spaces,
+ * dashes or brackets — because reshaping what someone typed can turn a typo
+ * into a DIFFERENT number that is perfectly valid, and then we buy that one and
+ * rent it every month. Anything not already in E.164 is refused, and the
+ * message says what E.164 looks like.
+ */
+const E164_PATTERN = /^\+[1-9]\d{6,14}$/
+
+const purchaseBodySchema = z.object({
+  e164: z
+    .string({ error: 'Pick a number to buy, and send it as e164.' })
+    .trim()
+    .regex(
+      E164_PATTERN,
+      'Enter the number in E.164 form — a plus, the country code, then digits, like +12025550123.',
+    ),
+})
+
+/**
+ * The statuses that mean "this org already holds this number".
+ *
+ * Every status except "failed". A "searching" row has a purchase in flight, an
+ * "active" one is bought and dialable, and a "releasing" one is still rented
+ * until Twilio says otherwise — buying any of them again rents a SECOND number
+ * at the same monthly price, and nothing downstream would notice.
+ *
+ * "failed" is deliberately absent: a failed row is a purchase that never
+ * happened, and someone clicking buy again is retrying precisely because of it.
+ * Treating it as ownership would strand them on a number they can see, do not
+ * have, and can never ask for again.
+ */
+const OWNED_STATUSES = ['searching', 'active', 'releasing']
+
+// Says "your organization", not "you", because the check is org-wide: the org
+// owns a number and merely assigns it to a member, so a colleague holding it
+// already counts. It names no colleague — the number is the org's, the person is
+// not this route's to disclose.
+const ALREADY_OWNED_ERROR = 'Your organization already has this number. Pick a different one.'
 
 // --- Activation input ---
 
@@ -260,6 +308,122 @@ router.post(
       total: numbers.length,
       priceUnit: price.currency,
     })
+  }),
+)
+
+// ============================================================
+// POST /api/orgs/:orgId/phone-numbers — buy one of them
+// ============================================================
+// This route does NOT call Twilio. It writes a "searching" row, hands the
+// purchase to the provisioning job, and answers straight away: buying a number
+// is seconds of Twilio round-trip, and someone who has just clicked "buy" should
+// get their row back and watch it turn active rather than hold a request open
+// waiting on a third party. src/jobs/provisionNumber.ts is the only thing in
+// this flow that spends money, and it is deliberately not here.
+router.post(
+  '/',
+  wrapRoute('POST /api/orgs/:orgId/phone-numbers', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    // First, exactly as in the sibling routes: a non-member must not be able to
+    // queue a purchase against this org, and must not be able to tell a 400 from
+    // a 404 and so map which orgs exist.
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = purchaseBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+    const { e164 } = parsed.data
+
+    // --- Verify ownership: of the number, this time ---
+    // Org-wide rather than per-user, because the org is what owns a number and a
+    // member is only who it is assigned to. Other orgs are NOT consulted: this
+    // app cannot read another tenant's rows without breaking the boundary that
+    // makes it multi-tenant, and it does not need to — Twilio will not sell the
+    // same number twice, and the job turns that refusal into a "failed" row.
+    // There is no unique index on `e164` to lean on, so this read is the check;
+    // two simultaneous buys of the same number can still both pass it, and the
+    // second one loses at Twilio rather than here.
+    const owned = await prisma.phoneNumber.findFirst({
+      where: { orgId, e164, status: { in: OWNED_STATUSES } },
+      select: { id: true },
+    })
+    if (owned) {
+      return void res.status(409).json({ error: ALREADY_OWNED_ERROR })
+    }
+
+    // --- Execute query ---
+    // The row FIRST, then the job — never the other way round. The job acts only
+    // on a row that is still "searching", so a job enqueued ahead of its row
+    // finds nothing to buy and settles as a no-op, and the purchase is lost with
+    // a 201 already sent.
+    //
+    // status and isActiveForOutbound are written out rather than left to the
+    // schema defaults: this response PROMISES both values, and a default that
+    // drifted would make the promise false without this file changing. orgId
+    // comes from the path and assignedUserId from the verified caller — neither
+    // is ever read off the body, whatever the body claims.
+    const created = await prisma.phoneNumber.create({
+      data: {
+        orgId,
+        assignedUserId: userId,
+        e164,
+        status: 'searching',
+        isActiveForOutbound: false,
+      },
+    })
+
+    try {
+      await queueProvisionNumber(created.id)
+    } catch (error) {
+      // This is NOT the hand-rolled try/catch the route rules forbid. Nothing is
+      // swallowed: the rethrow below leaves wrapRoute owning the log, the report
+      // and the 500. What this block does is undo a half-finished write.
+      //
+      // A "searching" row with no job behind it is the worst state to walk away
+      // from: the list screen spins on it forever, and the ownership check above
+      // would then refuse every retry of that number. "failed" is honest about
+      // what happened, is the same status the job writes when a purchase cannot
+      // be made, and is the one status a retry is let through. The row is kept
+      // rather than deleted so the attempt stays visible to anyone reading the
+      // table afterwards.
+      //
+      // Compare-and-set on `status: "searching"`, scoped by orgId, so it can
+      // only touch the row just written and only while nothing else has settled
+      // it.
+      try {
+        await prisma.phoneNumber.updateMany({
+          where: { id: created.id, orgId, status: 'searching' },
+          data: { status: 'failed' },
+        })
+      } catch (cleanupError) {
+        // The database is a likely reason the enqueue failed at all, so this
+        // failing too is expected rather than surprising. Log it, and let the
+        // ORIGINAL error be the one that reaches wrapRoute.
+        logger.error(
+          { orgId, userId, phoneNumberId: created.id, error: cleanupError },
+          'could not mark an unqueued phone number failed',
+        )
+      }
+      throw error
+    }
+
+    // Identifiers only. The number itself is not logged: it is a phone number,
+    // which is PII, and the row id is enough to find it.
+    logger.info({ orgId, userId, phoneNumberId: created.id }, 'queued a phone number purchase')
+
+    // --- Return response ---
+    // 201: the PhoneNumber record exists now, even though Twilio has not sold
+    // anything yet. It comes back through the same mapper the list route uses,
+    // so the row the client just created is shaped exactly like the rows it will
+    // poll — status "searching" until the job turns it active.
+    res.status(201).json({ number: mapPhoneNumberToApi(created) })
   }),
 )
 

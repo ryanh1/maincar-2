@@ -8,17 +8,27 @@ import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock, listNumbersMock, getPriceMock } = vi.hoisted(() => ({
-  prismaMock: {
-    user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
-    membership: { findFirst: vi.fn() },
-    phoneNumber: { findMany: vi.fn(), findFirst: vi.fn(), updateMany: vi.fn() },
-    $transaction: vi.fn(),
-  },
-  verifyTokenMock: vi.fn(),
-  listNumbersMock: vi.fn(),
-  getPriceMock: vi.fn(),
-}))
+const { prismaMock, verifyTokenMock, listNumbersMock, getPriceMock, queueProvisionMock } =
+  vi.hoisted(() => ({
+    prismaMock: {
+      user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
+      membership: { findFirst: vi.fn() },
+      phoneNumber: {
+        findMany: vi.fn(),
+        findFirst: vi.fn(),
+        create: vi.fn(),
+        updateMany: vi.fn(),
+        // Present only so a test can prove nothing ever calls them.
+        delete: vi.fn(),
+        deleteMany: vi.fn(),
+      },
+      $transaction: vi.fn(),
+    },
+    verifyTokenMock: vi.fn(),
+    listNumbersMock: vi.fn(),
+    getPriceMock: vi.fn(),
+    queueProvisionMock: vi.fn(),
+  }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
 vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
@@ -38,6 +48,13 @@ vi.mock('../../../dependencies/twilio.js', () => ({
     const status = (error as { status?: unknown } | null)?.status
     return typeof status === 'number' ? status : null
   },
+}))
+
+// The job module, not pg-boss. The buy route's contract with provisioning is one
+// function call, so mocking that function is the whole seam — and it is what
+// keeps the unit suite from ever reaching a queue, a database, or Twilio.
+vi.mock('../../jobs/provisionNumber.js', () => ({
+  queueProvisionNumber: queueProvisionMock,
 }))
 
 import app from '../../app.js'
@@ -114,8 +131,10 @@ beforeEach(() => {
   // Runs the callback against the same mock, so the assertions below see the
   // writes the route makes INSIDE the transaction.
   prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock))
+  prismaMock.phoneNumber.create.mockResolvedValue(numberRow())
   listNumbersMock.mockResolvedValue([])
   getPriceMock.mockResolvedValue({ amount: '1.15', currency: 'USD' })
+  queueProvisionMock.mockResolvedValue('job-1')
 })
 
 /** What the Twilio wrapper hands back for one number Twilio has for sale. */
@@ -530,6 +549,415 @@ describe('POST /api/orgs/:orgId/phone-numbers/search — org isolation', () => {
 })
 
 // ============================================================
+// POST /api/orgs/:orgId/phone-numbers — buy a number
+// ============================================================
+// The route itself never talks to Twilio: it writes a "searching" row and hands
+// the purchase to the job. Every test below is really about one of two things —
+// that a bad request never reaches the job (the job spends money), and that a
+// good one leaves a row and a job that agree with each other.
+const BUY_E164 = '+14155550123'
+
+/** The row the route writes: bought by nobody yet, so no SID and no caller ID. */
+function searchingRow(overrides: Record<string, unknown> = {}) {
+  return numberRow({
+    id: 'num-new',
+    e164: BUY_E164,
+    twilioSid: null,
+    status: 'searching',
+    isActiveForOutbound: false,
+    ...overrides,
+  })
+}
+
+describe('POST /api/orgs/:orgId/phone-numbers', () => {
+  beforeEach(() => {
+    // Nothing owned yet — the ownership lookup finds no row.
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+    prismaMock.phoneNumber.create.mockResolvedValue(searchingRow())
+  })
+
+  it('201s with the new number, keyed, searching and not yet a caller ID', async () => {
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(201)
+    expect(res.body.number).toEqual(
+      expect.objectContaining({
+        id: 'num-new',
+        e164: BUY_E164,
+        status: 'searching',
+        isActiveForOutbound: false,
+      }),
+    )
+  })
+
+  it('returns exactly the fields the list route returns, and no others', async () => {
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(Object.keys(res.body.number).sort()).toEqual([
+      'createdAt',
+      'e164',
+      'id',
+      'isActiveForOutbound',
+      'status',
+      'twilioSid',
+    ])
+    expect(res.body.number.twilioSid).toBeNull()
+  })
+
+  it('writes the row as searching, in the PATH org, assigned to the caller', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(prismaMock.phoneNumber.create).toHaveBeenCalledWith({
+      data: {
+        orgId: ORG_A,
+        assignedUserId: 'user-a',
+        e164: BUY_E164,
+        status: 'searching',
+        isActiveForOutbound: false,
+      },
+    })
+  })
+
+  // The body is caller-controlled. Anything in it that names a tenant or a
+  // member is ignored — those come from the path and the verified token.
+  it('ignores orgId, assignedUserId and status sent in the body', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({
+      e164: BUY_E164,
+      orgId: ORG_B,
+      assignedUserId: 'someone-else',
+      status: 'active',
+      isActiveForOutbound: true,
+      twilioSid: 'PN-forged',
+    })
+
+    expect(prismaMock.phoneNumber.create).toHaveBeenCalledWith({
+      data: {
+        orgId: ORG_A,
+        assignedUserId: 'user-a',
+        e164: BUY_E164,
+        status: 'searching',
+        isActiveForOutbound: false,
+      },
+    })
+  })
+
+  it('queues the provisioning job with the id of the row it just wrote', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(queueProvisionMock).toHaveBeenCalledTimes(1)
+    expect(queueProvisionMock).toHaveBeenCalledWith('num-new')
+  })
+
+  // Order, not just presence. The job acts only on a row that is already
+  // "searching", so a job enqueued ahead of its row would find nothing to buy
+  // and settle as a no-op — a purchase lost behind a 201.
+  it('writes the row BEFORE it queues the job', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(prismaMock.phoneNumber.create.mock.invocationCallOrder[0]!).toBeLessThan(
+      queueProvisionMock.mock.invocationCallOrder[0]!,
+    )
+  })
+
+  // The purchase belongs to the job. If this route ever reached Twilio it would
+  // hold the request open on a third party — and charge before the row existed.
+  it('never touches Twilio itself', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(listNumbersMock).not.toHaveBeenCalled()
+    expect(getPriceMock).not.toHaveBeenCalled()
+  })
+
+  it('trims surrounding whitespace rather than rejecting a pasted number', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: `  ${BUY_E164} ` })
+
+    expect(prismaMock.phoneNumber.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ e164: BUY_E164 }) }),
+    )
+  })
+})
+
+// ============================================================
+// POST / — invalid E.164
+// ============================================================
+// Everything here must stop before the job. A malformed number that reaches
+// Twilio is either a rejection this app could have predicted, or — worse, if it
+// happens to be well-formed and wrong — a real number bought by mistake.
+describe('POST /api/orgs/:orgId/phone-numbers — invalid e164', () => {
+  beforeEach(() => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+    prismaMock.phoneNumber.create.mockResolvedValue(searchingRow())
+  })
+
+  /** Every bad shape answers 400 and leaves no row and no job behind. */
+  async function expectRejected(body: Record<string, unknown>) {
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(body)
+
+    expect(res.status).toBe(400)
+    expect(prismaMock.phoneNumber.create).not.toHaveBeenCalled()
+    expect(queueProvisionMock).not.toHaveBeenCalled()
+    return res
+  }
+
+  it('400s an empty body, and writes and queues nothing', async () => {
+    const res = await expectRejected({})
+
+    expect(res.body.error).toBe('Pick a number to buy, and send it as e164.')
+  })
+
+  it('400s a number with no leading plus', async () => {
+    const res = await expectRejected({ e164: '14155550123' })
+
+    expect(res.body.error).toContain('E.164')
+  })
+
+  it('400s a number with spaces and dashes, instead of quietly reshaping it', async () => {
+    // Stripping the punctuation would be friendlier right up until it turned a
+    // typo into a different, perfectly valid number that then gets bought.
+    await expectRejected({ e164: '+1 (415) 555-0123' })
+  })
+
+  it('400s letters dressed up as a number', async () => {
+    await expectRejected({ e164: '+1415CALLME' })
+  })
+
+  it('400s a number too short to be dialable', async () => {
+    await expectRejected({ e164: '+1415' })
+  })
+
+  it('400s a number past E.164’s fifteen digits', async () => {
+    await expectRejected({ e164: '+1234567890123456' })
+  })
+
+  it('400s a country code starting with zero, which no country has', async () => {
+    await expectRejected({ e164: '+04155550123' })
+  })
+
+  it('400s a number sent as something other than a string', async () => {
+    await expectRejected({ e164: 14155550123 })
+  })
+
+  it('sends an error a person can act on, never a raw zod dump', async () => {
+    const res = await expectRejected({ e164: 'nope' })
+
+    expect(typeof res.body.error).toBe('string')
+    expect(res.body.error).not.toContain('ZodError')
+    expect(Object.keys(res.body)).toEqual(['error'])
+  })
+})
+
+// ============================================================
+// POST / — a number the org already has
+// ============================================================
+// "Owned" means a row for this e164 in this org whose status is not "failed".
+// Buying one twice rents a second number at the same monthly price forever.
+describe('POST /api/orgs/:orgId/phone-numbers — already owned', () => {
+  beforeEach(() => {
+    prismaMock.phoneNumber.create.mockResolvedValue(searchingRow())
+  })
+
+  it('409s when a purchase for the same number is already in flight', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(searchingRow({ id: 'num-existing' }))
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('Your organization already has this number. Pick a different one.')
+    expect(prismaMock.phoneNumber.create).not.toHaveBeenCalled()
+    expect(queueProvisionMock).not.toHaveBeenCalled()
+  })
+
+  // The org owns the number; a member is only who it is assigned to. So a
+  // colleague already holding it counts as owned — and the message says
+  // "your organization" without naming the colleague.
+  it('409s when a colleague in the same org already holds the number', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      searchingRow({ id: 'num-colleague', assignedUserId: 'user-colleague', status: 'active' }),
+    )
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).not.toContain('user-colleague')
+    expect(prismaMock.phoneNumber.create).not.toHaveBeenCalled()
+  })
+
+  // The where clause is the decision. "failed" is absent on purpose: a failed
+  // row is a purchase that never happened, and the person clicking buy again is
+  // retrying because of it — blocking would strand them on that number forever.
+  it('asks only about this org, this number, and the statuses that mean owned', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(prismaMock.phoneNumber.findFirst).toHaveBeenCalledWith({
+      where: { orgId: ORG_A, e164: BUY_E164, status: { in: ['searching', 'active', 'releasing'] } },
+      select: { id: true },
+    })
+  })
+
+  // The same query, read from the other side: a row left over from a purchase
+  // that failed does not match, so the retry goes through and buys.
+  it('lets a retry through when the only row for this number failed', async () => {
+    // The failed row is filtered out by the status clause, so the lookup that
+    // decides this returns nothing.
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.phoneNumber.create).toHaveBeenCalledTimes(1)
+    expect(queueProvisionMock).toHaveBeenCalledWith('num-new')
+    expect(
+      prismaMock.phoneNumber.findFirst.mock.calls[0]![0].where.status.in,
+    ).not.toContain('failed')
+  })
+
+  // Another org holding the number is invisible here on purpose: reading across
+  // tenants to answer this would break the boundary. Twilio refuses the second
+  // sale, and the job writes that refusal down as "failed".
+  it('does not consult other orgs — the lookup is scoped to the path org', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(prismaMock.phoneNumber.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ orgId: ORG_A }) }),
+    )
+  })
+})
+
+// ============================================================
+// POST / — the queue is down
+// ============================================================
+// The failure worth thinking hardest about. The row is written before the job is
+// queued, so an enqueue that throws leaves a "searching" row that nothing will
+// ever provision: the list screen spins on it forever, and the ownership check
+// above would refuse every retry of that number. It is marked "failed" instead —
+// honest, the same status the job writes on a purchase it cannot make, and the
+// one status a retry is let through.
+describe('POST /api/orgs/:orgId/phone-numbers — the queue is down', () => {
+  beforeEach(() => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+    prismaMock.phoneNumber.create.mockResolvedValue(searchingRow())
+    queueProvisionMock.mockRejectedValue(new Error('pg-boss is unreachable'))
+  })
+
+  it('500s with a non-leaky message rather than a 201 nothing will honour', async () => {
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(500)
+    expect(res.body).toEqual({ error: 'Internal server error' })
+    expect(res.body.error).not.toContain('pg-boss')
+  })
+
+  it('marks the orphaned row failed, compare-and-set on searching and the org', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith({
+      where: { id: 'num-new', orgId: ORG_A, status: 'searching' },
+      data: { status: 'failed' },
+    })
+  })
+
+  // The row is kept, not deleted: the attempt stays visible to anyone reading
+  // the table, and "failed" already means "safe to try again".
+  it('keeps the row rather than deleting it', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(prismaMock.phoneNumber.delete).not.toHaveBeenCalled()
+    expect(prismaMock.phoneNumber.deleteMany).not.toHaveBeenCalled()
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledTimes(1)
+  })
+
+  // The database is a likely reason the enqueue failed at all, so the cleanup
+  // failing too is expected. The original failure still has to reach the caller.
+  it('still 500s when the cleanup write fails as well', async () => {
+    prismaMock.phoneNumber.updateMany.mockRejectedValue(new Error('database is gone'))
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(500)
+    expect(res.body).toEqual({ error: 'Internal server error' })
+  })
+})
+
+// ============================================================
+// POST / — org isolation (mandatory — .claude/rules/testing.md)
+// ============================================================
+describe('POST /api/orgs/:orgId/phone-numbers — org isolation', () => {
+  beforeEach(() => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+    prismaMock.phoneNumber.create.mockResolvedValue(searchingRow())
+  })
+
+  it('401s without auth, and writes and queues nothing', async () => {
+    const res = await request(app).post(URL_A).send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.phoneNumber.create).not.toHaveBeenCalled()
+    expect(queueProvisionMock).not.toHaveBeenCalled()
+  })
+
+  it('404s for an org the caller does not belong to, before it reads or writes anything', async () => {
+    authAs(null)
+
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_B}/phone-numbers`)
+      .set('Authorization', AUTH)
+      .send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Organization not found')
+    expect(prismaMock.phoneNumber.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.phoneNumber.create).not.toHaveBeenCalled()
+    expect(queueProvisionMock).not.toHaveBeenCalled()
+  })
+
+  // Membership is checked before the body is parsed, so the two answers cannot
+  // be told apart and used to map which orgs exist.
+  it('404s a non-member even when the body is invalid, so 400 cannot map the orgs', async () => {
+    authAs(null)
+
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_B}/phone-numbers`)
+      .set('Authorization', AUTH)
+      .send({ e164: 'nonsense' })
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.phoneNumber.create).not.toHaveBeenCalled()
+  })
+
+  it('404s when the org is disabled, rather than admitting it exists', async () => {
+    authAs(membershipRow({ org: { id: ORG_A, name: 'Org A', enabled: false } }))
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.phoneNumber.create).not.toHaveBeenCalled()
+    expect(queueProvisionMock).not.toHaveBeenCalled()
+  })
+
+  it('buys into the org from the PATH, never the caller’s currentOrgId preference', async () => {
+    authAs(membershipRow({ orgId: ORG_B, org: { id: ORG_B, name: 'Org B', enabled: true } }))
+    prismaMock.phoneNumber.create.mockResolvedValue(searchingRow({ orgId: ORG_B }))
+
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_B}/phone-numbers`)
+      .set('Authorization', AUTH)
+      .send({ e164: BUY_E164 })
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.membership.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'user-a', orgId: ORG_B, isActive: true } }),
+    )
+    expect(prismaMock.phoneNumber.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ orgId: ORG_B }) }),
+    )
+  })
+})
+
+// ============================================================
 // PATCH /api/orgs/:orgId/phone-numbers/:id
 // ============================================================
 const PATCH_A = `${URL_A}/num-1`
@@ -797,5 +1225,443 @@ describe('PATCH /api/orgs/:orgId/phone-numbers/:id — org isolation', () => {
       .send({ isActiveForOutbound: 'nope' })
 
     expect(res.status).toBe(404)
+  })
+})
+
+// ============================================================
+// requireAuth — the gate ahead of ALL FOUR routes
+// ============================================================
+// The blocks above each prove their own route refuses a NON-MEMBER. That is
+// requireMembership. This block is the other gate: a caller who never got past
+// requireAuth at all. It is a different code path, in a different file, and the
+// per-route blocks only ever exercised one corner of it — the missing header.
+//
+// It runs every case against every route, because the gate is mounted once with
+// `router.use(requireAuth)` and a route added below it inherits the gate silently.
+// A route that ever slipped ahead of that line would fail here and nowhere else.
+const ROUTE_CALLS = [
+  {
+    name: 'GET /phone-numbers',
+    call: (auth: string | null) => {
+      const r = request(app).get(URL_A)
+      return auth === null ? r : r.set('Authorization', auth)
+    },
+  },
+  {
+    name: 'POST /phone-numbers/search',
+    call: (auth: string | null) => {
+      const r = request(app).post(SEARCH_A)
+      return (auth === null ? r : r.set('Authorization', auth)).send({ areaCode: '415' })
+    },
+  },
+  {
+    name: 'POST /phone-numbers',
+    call: (auth: string | null) => {
+      const r = request(app).post(URL_A)
+      return (auth === null ? r : r.set('Authorization', auth)).send({ e164: '+14155550123' })
+    },
+  },
+  {
+    name: 'PATCH /phone-numbers/:id',
+    call: (auth: string | null) => {
+      const r = request(app).patch(`${URL_A}/num-1`)
+      return (auth === null ? r : r.set('Authorization', auth)).send({ isActiveForOutbound: true })
+    },
+  },
+]
+
+/**
+ * Nothing happened: no tenant lookup, no row read or written, no Twilio call,
+ * and — the expensive one — no purchase queued.
+ *
+ * Asserted on every rejection because a status code alone does not prove the
+ * work was skipped. A handler that ran and then answered 401 would still have
+ * spent this org's Twilio quota and still have queued a number to buy.
+ */
+function expectNoWorkDone(): void {
+  expect(prismaMock.membership.findFirst).not.toHaveBeenCalled()
+  expect(prismaMock.phoneNumber.findMany).not.toHaveBeenCalled()
+  expect(prismaMock.phoneNumber.findFirst).not.toHaveBeenCalled()
+  expect(prismaMock.phoneNumber.create).not.toHaveBeenCalled()
+  expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  expect(listNumbersMock).not.toHaveBeenCalled()
+  expect(getPriceMock).not.toHaveBeenCalled()
+  expect(queueProvisionMock).not.toHaveBeenCalled()
+}
+
+describe('phone-number routes — requireAuth', () => {
+  // An expired or forged token, which Firebase itself refuses. The missing-header
+  // case never reaches Firebase, so it cannot stand in for this one.
+  it.each(ROUTE_CALLS)('$name 401s a token Firebase rejected', async ({ call }) => {
+    verifyTokenMock.mockRejectedValue(
+      Object.assign(new Error('Firebase ID token has expired.'), {
+        code: 'auth/id-token-expired',
+      }),
+    )
+
+    const res = await call(AUTH)
+
+    expect(res.status).toBe(401)
+    expect(res.body).toEqual({ error: 'Not signed in' })
+    expectNoWorkDone()
+  })
+
+  it.each(ROUTE_CALLS)('$name 401s a scheme that is not Bearer, without asking Firebase', async ({
+    call,
+  }) => {
+    const res = await call('Basic dXNlcjpwYXNzd29yZA==')
+
+    expect(res.status).toBe(401)
+    // Never verified: a non-Bearer header cannot carry a Firebase ID token, so
+    // handing it to Firebase would be a round trip spent on a certain "no".
+    expect(verifyTokenMock).not.toHaveBeenCalled()
+    expectNoWorkDone()
+  })
+
+  it.each(ROUTE_CALLS)('$name 401s "Bearer" with an empty token', async ({ call }) => {
+    const res = await call('Bearer    ')
+
+    expect(res.status).toBe(401)
+    expect(verifyTokenMock).not.toHaveBeenCalled()
+    expectNoWorkDone()
+  })
+
+  // A token that verifies, for an account this database has never seen. Only
+  // GET /api/auth/me provisions a User row; every route here must refuse.
+  it.each(ROUTE_CALLS)('$name 401s a valid token with no User row behind it', async ({ call }) => {
+    prismaMock.user.findUnique.mockResolvedValue(null)
+
+    const res = await call(AUTH)
+
+    expect(res.status).toBe(401)
+    expect(res.body).toEqual({ error: 'Not signed in' })
+    expectNoWorkDone()
+  })
+
+  // 403, not 404 and not 401: the caller IS who they say they are, and telling
+  // them the account is off is what lets them stop retrying and ask for help.
+  it.each(ROUTE_CALLS)('$name 403s a disabled account, and does no work', async ({ call }) => {
+    prismaMock.user.findUnique.mockResolvedValue(userRow({ enabled: false }))
+
+    const res = await call(AUTH)
+
+    expect(res.status).toBe(403)
+    expect(res.body).toEqual({ error: 'This account is disabled' })
+    expectNoWorkDone()
+  })
+
+  // An outage is not a sign-out. A 401 here would tell every signed-in user
+  // their session had ended and send them to a sign-in page that is down for
+  // exactly the same reason — a blip that reads as a mass sign-out.
+  it.each(ROUTE_CALLS)('$name 503s, not 401, when Firebase cannot be reached', async ({ call }) => {
+    verifyTokenMock.mockRejectedValue(
+      Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'app/network-error' }),
+    )
+
+    const res = await call(AUTH)
+
+    expect(res.status).toBe(503)
+    expect(res.headers['retry-after']).toBe('5')
+    expectNoWorkDone()
+  })
+
+  // Three different reasons, one answer. A caller who could tell "no such
+  // account" from "bad token" could confirm which emails are registered here.
+  it('answers every 401 reason with the same status and the same words', async () => {
+    const bodies: unknown[] = []
+
+    const noHeader = await request(app).get(URL_A)
+    bodies.push(noHeader.body)
+
+    verifyTokenMock.mockRejectedValue(Object.assign(new Error('bad'), { code: 'auth/argument-error' }))
+    const badToken = await request(app).get(URL_A).set('Authorization', AUTH)
+    bodies.push(badToken.body)
+
+    authAs()
+    prismaMock.user.findUnique.mockResolvedValue(null)
+    const unknownUser = await request(app).get(URL_A).set('Authorization', AUTH)
+    bodies.push(unknownUser.body)
+
+    expect([noHeader.status, badToken.status, unknownUser.status]).toEqual([401, 401, 401])
+    expect(bodies).toEqual([
+      { error: 'Not signed in' },
+      { error: 'Not signed in' },
+      { error: 'Not signed in' },
+    ])
+  })
+})
+
+// ============================================================
+// The three body routes — a request that carries no body at all
+// ============================================================
+// `express.json()` leaves `req.body` UNDEFINED when the request has no JSON
+// content type, which is what a hand-rolled curl or a client that forgot its
+// headers sends. Each route writes `req.body ?? {}` for exactly this. Without
+// the fallback, zod is handed `undefined` and the caller gets a 500 for what is
+// really a 400 they can fix.
+describe('phone-number routes — a request with no body at all', () => {
+  it('POST /search treats a bodyless request as the default search, not a crash', async () => {
+    listNumbersMock.mockResolvedValue([availableRow()])
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    // Every field is optional with a default, so "no body" is a valid US search.
+    expect(listNumbersMock).toHaveBeenCalledWith({
+      country: 'US',
+      areaCode: undefined,
+      contains: undefined,
+      limit: 20,
+    })
+  })
+
+  it('POST / 400s a bodyless purchase with the message that names E.164, not a 500', async () => {
+    const res = await request(app).post(URL_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/e164/i)
+    expect(prismaMock.phoneNumber.create).not.toHaveBeenCalled()
+    expect(queueProvisionMock).not.toHaveBeenCalled()
+  })
+
+  it('PATCH /:id 400s a bodyless activation with the message that names the field', async () => {
+    const res = await request(app).patch(`${URL_A}/num-1`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Send isActiveForOutbound as true or false.')
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// PATCH /:id — a failure that is NOT about the number
+// ============================================================
+// The route turns two named errors into 404 and 400. Everything else has to
+// reach wrapRoute untouched. This is the branch that keeps that true: a database
+// that fell over mid-transaction must not be reported to the user as "your
+// number is gone", because they would go looking for a number that is still
+// there and, worse, buy a replacement.
+describe('PATCH /api/orgs/:orgId/phone-numbers/:id — the transaction fails for another reason', () => {
+  it('500s, never 404, when the transaction throws something it does not recognise', async () => {
+    prismaMock.$transaction.mockRejectedValue(new Error('deadlock detected'))
+
+    const res = await request(app)
+      .patch(`${URL_A}/num-1`)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(500)
+    expect(res.body).toEqual({ error: 'Internal server error' })
+  })
+
+  it('does not leak the database error text to the caller', async () => {
+    prismaMock.$transaction.mockRejectedValue(
+      new Error('relation "PhoneNumber" does not exist at character 42'),
+    )
+
+    const res = await request(app)
+      .patch(`${URL_A}/num-1`)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(JSON.stringify(res.body)).not.toMatch(/relation|character 42/)
+  })
+})
+
+// ============================================================
+// The four routes and the job agree on what a status MEANS
+// ============================================================
+// Each route was built and tested on its own, so each one's tests pin only its
+// own half of the contract. What no single-route test can catch is the two
+// halves drifting apart — POST writing a status the job does not act on, or the
+// job settling on one PATCH will not accept. Every case below is a sentence one
+// route SAYS and another route or the job has to BELIEVE.
+//
+// The vocabulary is the one documented on PhoneNumber.status in schema.prisma:
+// "searching", "active", "releasing", "failed".
+/**
+ * The statuses the buy route treats as "this org already has it".
+ *
+ * Not imported — the route does not export it. It is read back OUT of the query
+ * the route makes in the first test below, so this constant cannot quietly
+ * disagree with the route it describes.
+ */
+const OWNED_STATUSES_FROM_ROUTE = ['searching', 'active', 'releasing']
+
+describe('phone-number routes — the status vocabulary is shared', () => {
+  // POST writes "searching"; the provisioning job acts on "searching" and on
+  // nothing else. If POST ever wrote a different word, the job would read the
+  // row as already settled and the purchase would vanish behind a 201.
+  it('POST writes the one status the provisioning job will act on', async () => {
+    // Nothing owned yet, so the purchase goes through to the write.
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: '+14155550123' })
+
+    const written = prismaMock.phoneNumber.create.mock.calls[0]![0].data.status
+    expect(written).toBe('searching')
+    // The route's own ownership query, read back: this is what pins the constant
+    // above to the route rather than to a copy of it that can drift.
+    expect(prismaMock.phoneNumber.findFirst.mock.calls[0]![0].where.status.in).toEqual(
+      OWNED_STATUSES_FROM_ROUTE,
+    )
+  })
+
+  // The status POST writes is one the ownership check counts as owned, so a
+  // second click while the first purchase is still in flight is a 409 rather
+  // than a second number rented at the same monthly price.
+  it('a row POST just wrote blocks a second purchase of the same number', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue({ id: 'num-inflight' })
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: '+14155550123' })
+
+    expect(res.status).toBe(409)
+    const asked = prismaMock.phoneNumber.findFirst.mock.calls[0]![0].where.status.in
+    expect(asked).toContain('searching')
+  })
+
+  // "failed" is the one status a retry is let through, and it is the status BOTH
+  // failure paths write — the job when Twilio refuses, and the buy route when the
+  // queue is down. If either wrote something else, the number would be
+  // permanently unbuyable by this org with no way for the user to tell why.
+  it('the status the buy route writes when the queue is down is one a retry can get past', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+    queueProvisionMock.mockRejectedValue(new Error('queue is down'))
+
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: '+14155550123' })
+
+    const rollback = prismaMock.phoneNumber.updateMany.mock.calls[0]![0]
+    expect(rollback.data.status).toBe('failed')
+    expect(OWNED_STATUSES_FROM_ROUTE).not.toContain('failed')
+  })
+
+  // The other half of the same sentence, read from PATCH: every status that is
+  // not "active" is refused, and the refusal NAMES the status so a person
+  // waiting on provisioning learns why rather than being told "no" twice.
+  it.each(['searching', 'releasing', 'failed'])(
+    'PATCH refuses a %s number and names the status back',
+    async (status) => {
+      prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow({ status }))
+
+      const res = await request(app)
+        .patch(`${URL_A}/num-1`)
+        .set('Authorization', AUTH)
+        .send({ isActiveForOutbound: true })
+
+      expect(res.status).toBe(400)
+      expect(res.body.error).toContain(status)
+      expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+    },
+  )
+
+  // And the status the job settles a bought number on is the one — the only one
+  // — PATCH will make a caller ID. The job writing anything else would leave a
+  // number the org has paid for and can never dial from.
+  it('PATCH accepts exactly the status the provisioning job writes on success', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow({ status: 'active' }))
+
+    const res = await request(app)
+      .patch(`${URL_A}/num-1`)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(200)
+    expect(res.body.number.isActiveForOutbound).toBe(true)
+  })
+
+  // No route may invent a fifth word. The list route hands whatever is stored
+  // straight through, so a status outside the documented four could only have
+  // come from a writer, and every writer is pinned above.
+  it('every status these routes write is one schema.prisma documents', async () => {
+    const documented = ['searching', 'active', 'releasing', 'failed']
+
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: '+14155550123' })
+    expect(documented).toContain(prismaMock.phoneNumber.create.mock.calls[0]![0].data.status)
+
+    vi.clearAllMocks()
+    authAs()
+    prismaMock.phoneNumber.create.mockResolvedValue(numberRow({ id: 'num-new' }))
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+    queueProvisionMock.mockRejectedValue(new Error('queue is down'))
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: '+14155550123' })
+    expect(documented).toContain(prismaMock.phoneNumber.updateMany.mock.calls[0]![0].data.status)
+  })
+})
+
+// ============================================================
+// mapPhoneNumberToApi — one guard for every route that returns a number
+// ============================================================
+// Three routes hand a PhoneNumber row to the same mapper. The per-route "exactly
+// these fields" tests each assert a literal list, so all three would have to be
+// edited to let a new column through — but they compare against a hard-coded
+// list, which means a column ADDED to the schema and then added to the mapper
+// passes all three the moment someone updates the lists.
+//
+// This asserts from the other direction: every key the DATABASE ROW carries that
+// is not on the allowlist must be absent from the response. A new sensitive
+// column on PhoneNumber is caught here without anyone remembering to come back.
+const API_FIELDS = ['id', 'e164', 'twilioSid', 'status', 'isActiveForOutbound', 'createdAt']
+
+describe('mapPhoneNumberToApi — what never reaches the client', () => {
+  it('drops every row column that is not on the API allowlist', async () => {
+    const row = numberRow()
+    prismaMock.phoneNumber.findMany.mockResolvedValue([row])
+
+    const res = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    const leaked = Object.keys(row).filter(
+      (key) => !API_FIELDS.includes(key) && key in res.body.numbers[0],
+    )
+    expect(leaked).toEqual([])
+  })
+
+  // Named rather than left to the loop above, because these two are the tenant
+  // key and the member key: the ones whose leak would matter most and the ones
+  // the mapper's comment promises are absent.
+  it.each(['orgId', 'assignedUserId'])('never sends %s, from any route', async (field) => {
+    prismaMock.phoneNumber.findMany.mockResolvedValue([numberRow()])
+    const list = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+    const bought = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ e164: '+14155550123' })
+
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow())
+    const patched = await request(app)
+      .patch(`${URL_A}/num-1`)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(list.body.numbers[0]).not.toHaveProperty(field)
+    expect(bought.body.number).not.toHaveProperty(field)
+    expect(patched.body.number).not.toHaveProperty(field)
+  })
+
+  // updatedAt is on the row and is deliberately not sent. It is not a secret,
+  // but a field the client never asked for is a field a client can start relying
+  // on, and this route promises a fixed shape.
+  it('sends the same six keys from all three routes that return a number', async () => {
+    prismaMock.phoneNumber.findMany.mockResolvedValue([numberRow()])
+    const list = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+    const bought = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ e164: '+14155550123' })
+
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow())
+    const patched = await request(app)
+      .patch(`${URL_A}/num-1`)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    const expected = [...API_FIELDS].sort()
+    expect(Object.keys(list.body.numbers[0]).sort()).toEqual(expected)
+    expect(Object.keys(bought.body.number).sort()).toEqual(expected)
+    expect(Object.keys(patched.body.number).sort()).toEqual(expected)
   })
 })

@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
 #
-# The commit gate. CLAUDE.md says green tests block a red commit; this is what
-# makes that true rather than a request. It runs the SAME four checks a session
-# is told to run by hand, so the rule cannot be forgotten or reported falsely.
+# The commit gate. CLAUDE.md says green blocks a red commit; this is what makes
+# that true rather than a request. See .claude/rules/committing.md for the rules
+# it enforces and .githooks/lib/verify.sh for why it attributes failures.
 #
-# It checks the WORKING TREE, not the staged snapshot. That is deliberate:
-# more than one session works in this clone at a time, and testing a synthetic
-# staged-only tree would tell you about a state nobody will ever run.
-#
-# Installed by `npm run hooks:install`, which points core.hooksPath here. The
-# hook lives in the repo rather than .git/hooks so it is version-controlled and
-# every clone gets the same gate.
-#
-# To bypass in a genuine emergency: `git commit --no-verify`. If you do, say so
-# in the commit message body. Never let silence imply the checks passed.
+# Emergency bypass is `git commit --no-verify`. You do not need it for another
+# session's red — this hook already handles that. If you use it anyway, the
+# prepare-commit-msg hook stamps the commit message so the bypass is on the
+# record rather than in someone's memory.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+# shellcheck source=lib/verify.sh
+. .githooks/lib/verify.sh
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+: > "$STATUS_FILE"
+
+blocked=0
+foreign=()
 
 fail() {
   echo ""
@@ -27,7 +30,8 @@ fail() {
 
 # --- Is Postgres up? -----------------------------------------------------------
 # The integration suite needs real Postgres. If it is down we STOP rather than
-# skip: a silent skip is how the one suite that proves concurrency stops running.
+# skip: a silent skip is how the one suite that proves the concurrency
+# guardrails stops running without anyone noticing.
 if ! node --input-type=module -e '
   import net from "node:net"
   import fs from "node:fs"
@@ -47,13 +51,52 @@ if ! node --input-type=module -e '
 "
 fi
 
-# --- The four checks -----------------------------------------------------------
-echo "pre-commit: typecheck…"        && npm run typecheck --silent  || fail "typecheck failed."
-echo "pre-commit: lint…"             && npm run lint --silent       || fail "lint failed."
-echo "pre-commit: tests…"            && npm test --silent           || fail "tests failed."
-echo "pre-commit: integration tests…" && npm run test:integration --silent \
-  || fail "integration tests failed.
-    These are the only tests that prove the concurrency guardrails
-    (two admins cannot both quit at once). Do not skip them."
+# --- Attributable checks: typecheck and lint -----------------------------------
+# Each names a file, so a failure can be traced to whoever wrote it.
+attributable() {
+  local label="$1" prefix="$2"; shift 2
+  echo "pre-commit: $label…"
+  if "$@" > "$TMP/out" 2>&1; then return 0; fi
 
-echo "pre-commit: all green."
+  failing_files "$prefix" "$TMP/out" > "$TMP/files"
+
+  if red_is_ours "$TMP/files"; then
+    echo ""
+    sed 's/^/    /' "$TMP/out" | tail -30
+    fail "$label failed on a file in this commit."
+  fi
+
+  foreign+=("$label")
+  echo "  ⚠ $label is red, but not on any file in this commit:"
+  sed 's/^/      /' "$TMP/files"
+  echo "    Another session is mid-work. Letting the commit through, and"
+  echo "    stamping the commit message to say $label did not pass."
+}
+
+attributable "server typecheck" server npm --prefix server run typecheck --silent
+attributable "vite typecheck"   vite   npm --prefix vite   run typecheck --silent
+attributable "server lint"      server npm --prefix server run lint      --silent
+attributable "vite lint"        vite   npm --prefix vite   run lint      --silent
+
+# --- Unattributable checks: tests ----------------------------------------------
+# A test failure cannot be pinned to a file — your change can break a test you
+# did not stage. These always block.
+echo "pre-commit: tests…"
+npm test --silent || fail "tests failed.
+    A test failure is never written off as another session's: your change
+    can break a test you did not stage."
+
+echo "pre-commit: integration tests…"
+npm run test:integration --silent || fail "integration tests failed.
+    These are the only tests that prove the concurrency guardrails —
+    that two admins cannot both quit at once. Do not skip them."
+
+# --- Record the verdict for prepare-commit-msg ---------------------------------
+if [ ${#foreign[@]} -gt 0 ]; then
+  printf 'degraded: %s\n' "$(IFS=', '; echo "${foreign[*]}")" > "$STATUS_FILE"
+  echo "pre-commit: tests green; ${#foreign[@]} check(s) red on other sessions' files."
+else
+  echo "green" > "$STATUS_FILE"
+  echo "pre-commit: all green."
+fi
+exit $blocked

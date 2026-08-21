@@ -11,6 +11,7 @@ Claude Code auto-loads the rules for what you're touching.
 - **Frontend work** → [copy.md](.claude/rules/copy.md), [design-system.md](.claude/rules/design-system.md), [frontend.md](.claude/rules/frontend.md)
 - **Server work** → [server-routes.md](.claude/rules/server-routes.md), [database-and-prisma.md](.claude/rules/database-and-prisma.md), [dependencies-and-config.md](.claude/rules/dependencies-and-config.md)
 - **Testing** → [testing.md](.claude/rules/testing.md)
+- **Committing** → [committing.md](.claude/rules/committing.md) — the gate, the hook, bypasses
 - **Linear workflow** → [linear-workflow.md](.claude/rules/linear-workflow.md) — Issue status transitions, commit messages, branching
 
 ## Dates & Times (Timezones)
@@ -36,20 +37,21 @@ Every time-of-day shown to a person MUST render in an explicit timezone and carr
 
 ## Before you commit
 
-**Green tests are the gate.** Run all four at the repo root, and read the output, before every `git commit` and every `git push`:
+**Green tests are the gate.** Run this at the repo root, and read the output, before every `git commit` and every `git push`:
 
 ```bash
 npm run verify
 ```
 
-That is `typecheck`, `lint`, `test`, and `test:integration`. **The integration suite is part of the gate, not an extra.** `npm test` does not include it, and it is the only suite that proves the concurrency guardrails — that two admins cannot both quit at once and leave the org locked out. It needs Postgres, so run `npm run docker:up` first.
+That is `typecheck`, `lint`, `test`, and `test:integration`. **The integration suite is part of the gate, not an extra** — `npm test` does not include it, and it holds the only tests that prove the concurrency guardrails. It needs Postgres, so run `npm run docker:up` first.
 
-A `pre-commit` hook runs the same four and refuses a red commit. Install it once per clone with `npm run hooks:install`. Running `npm run verify` by hand first is still the habit — the hook is the backstop, not the plan. It checks the working tree, not the staged snapshot, because more than one session works in this clone at a time.
+- **Red blocks the commit.** Fix it, or stop and report exactly what is broken. Never commit or push over it.
+- **Another session's red is not your red.** The `pre-commit` hook already tells them apart, so you do not need `--no-verify` for a file you did not write. See [committing.md](.claude/rules/committing.md).
+- **Never skip, delete, or `.skip()` a test to reach green.** Change the code, or change the rule on purpose and say so.
+- **A feature commit carries its own tests**, committed together, never as a follow-up. **That holds even when the files you touched do not load [testing.md](.claude/rules/testing.md).**
+- **If you could not run the checks**, say so in your report and in the commit message body. Never let silence imply they passed.
 
-- **Red blocks the commit.** A failing test, a type error, or a lint error stops you. Fix it, or stop and report exactly what is broken. Never commit or push over it.
-- **Never skip, delete, or `.skip()` a test to reach green.** A failing test is reporting a real disagreement between the code and the rule that test encodes. Change the code, or change the rule on purpose and say so.
-- **A feature commit carries its own tests.** Write the tests while you build the feature and commit them together — never as a follow-up. [testing.md](.claude/rules/testing.md) says where they live and what each kind must cover. **That rule holds even when the files you touched do not load testing.md.**
-- **If you cannot run the tests**, say so in your report and in the commit message body. Never let silence imply they passed.
+Mechanics, the hook, and the `Verified-by:` trailer: [committing.md](.claude/rules/committing.md).
 
 ## Verification before finishing
 

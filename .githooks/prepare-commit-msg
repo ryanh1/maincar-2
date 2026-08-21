@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#
+# Puts the gate's verdict INTO the commit message, so "I verified this" is a
+# record rather than a claim. CLAUDE.md says never let silence imply the checks
+# passed; this is what stops silence being an option.
+#
+# Runs after pre-commit and, importantly, still runs under `--no-verify` — which
+# skips pre-commit. So a bypassed commit arrives here with no verdict written,
+# and gets stamped as unverified. The bypass cannot be quiet.
+set -euo pipefail
+
+MSG_FILE="$1"
+SOURCE="${2:-}"
+
+# Leave merges, squashes, and reworded commits alone.
+case "$SOURCE" in
+  merge|squash) exit 0 ;;
+esac
+
+STATUS_FILE="$(git rev-parse --git-dir)/VERIFY_STATUS"
+verdict="$(cat "$STATUS_FILE" 2>/dev/null || true)"
+rm -f "$STATUS_FILE"
+
+case "$verdict" in
+  green)
+    exit 0
+    ;;
+  degraded:*)
+    trailer="Verified-by: pre-commit hook — tests green; ${verdict#degraded: } red on
+  another session's files, not on any file in this commit."
+    ;;
+  *)
+    # No verdict: pre-commit did not run. Either --no-verify, or the hook was
+    # never installed (npm run hooks:install).
+    trailer="Verified-by: NOTHING — the pre-commit gate did not run for this commit.
+  Checks were bypassed or the hook is not installed. Do not read this
+  commit as verified. See .claude/rules/committing.md."
+    ;;
+esac
+
+printf '\n%s\n' "$trailer" >> "$MSG_FILE"
