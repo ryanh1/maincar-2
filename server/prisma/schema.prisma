@@ -22,10 +22,10 @@ datasource db {
 // -----------------------------------------------------------------------------
 
 model Org {
-  id        String   @id @default(cuid())
-  name      String?
-  logo      String?
-  enabled   Boolean  @default(true)
+  id      String  @id @default(cuid())
+  name    String?
+  logo    String?
+  enabled Boolean @default(true)
 
   // Which version of the standard-schema seed (server/src/crm/standardObjects.ts)
   // this org has had applied. Set by seedOrg on org creation; a later release bumps
@@ -84,6 +84,12 @@ model Org {
   emails            Email[]
   emailParticipants EmailParticipant[]
   emailAttachments  EmailAttachment[]
+
+  // Text activity (MAI-138 T10). Back-relations so a deleted org cascades its
+  // messages and their MMS media away — the same onDelete: Cascade the rest of
+  // the CRM spine already uses.
+  smsMessages  SmsMessage[]
+  messageMedia MessageMedia[]
 }
 
 model User {
@@ -123,6 +129,11 @@ model User {
   emailTemplates      EmailTemplate[]
   oauthConnections    OAuthConnection[]
   mailAccounts        MailAccount[]
+
+  // Texts sent or received on this rep's number (SmsMessage.mailboxUserId →
+  // User). SetNull on that side, so deleting a user never destroys the org's
+  // record of what was said (MAI-138 T10).
+  smsMessages SmsMessage[] @relation("SmsMailbox")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -441,8 +452,8 @@ model OAuthConnection {
 
   // Encrypted at rest, format v1.<iv>.<ciphertext>.<tag>. Never logged, never
   // returned by any route, never in a response body — not even to the owner.
-  refreshToken String  @db.Text
-  accessToken  String? @db.Text
+  refreshToken String    @db.Text
+  accessToken  String?   @db.Text
   expiresAt    DateTime?
 
   // What the provider ACTUALLY granted, not what was asked for. The difference
@@ -532,7 +543,7 @@ model Company {
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   // The common name you actually call them ("Google"). Nullable — see the header.
-  name String?
+  name      String?
   // The formal entity ("Alphabet Inc"), optional. Enrichment fills it.
   legalName String?
 
@@ -544,13 +555,13 @@ model Company {
   domain           String?
   alternateDomains String[] @default([])
   // Company LinkedIn page — an identity anchor + enrichment key.
-  linkedinUrl String?
+  linkedinUrl      String?
 
   // Vertical / sector — healthcare | finance | retail | ... Distinct from companyType.
   industry      String?
   sizeEmployees Int?
   // Enrichment-filled; the UI falls back to an initials monogram when absent.
-  logoUrl String?
+  logoUrl       String?
 
   mergedIntoId String? // tombstone → survivor after a merge (5.3c)
   deletedById  String? // who soft-deleted it (Trash + audit)
@@ -574,16 +585,19 @@ model Company {
 
   // The people who work here (Person.companyId → Company). SetNull on that side,
   // so trashing/deleting a company does not delete its people.
-  people Person[]
+  people      Person[]
   // The deals for this account (Deal.companyId → Company). SetNull on that side
   // too, so trashing/deleting a company does not delete its deals (MAI-131 T3).
-  deals Deal[]
+  deals       Deal[]
   // Calls rolled up to this account (Call.companyId → Company). SetNull on that
   // side, so deleting a company never destroys call history (MAI-132 T4).
-  calls Call[]
+  calls       Call[]
   // Emails rolled up to this account (Email.companyId → Company). SetNull on that
   // side too, so deleting a company never destroys message history (MAI-137 T9).
-  emails Email[]
+  emails      Email[]
+  // Texts rolled up to this account (SmsMessage.companyId → Company). SetNull on
+  // that side too, for the same reason (MAI-138 T10).
+  smsMessages SmsMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -654,18 +668,21 @@ model Person {
   isArchived   Boolean   @default(false)
   deletedAt    DateTime?
 
-  phones    PersonPhone[]
-  addresses PersonEmail[] // the person's own email addresses, each with a status
+  phones              PersonPhone[]
+  addresses           PersonEmail[] // the person's own email addresses, each with a status
   // This person's role on each deal they are on. A person can hold DIFFERENT roles
   // on DIFFERENT deals — champion on one, influencer on another (MAI-131 T3).
-  dealRoles DealPersonRole[]
+  dealRoles           DealPersonRole[]
   // Calls with this person (Call.personId → Person). SetNull on that side, so
   // deleting a person never destroys call history (MAI-132 T4).
-  calls     Call[]
+  calls               Call[]
   // Every email this person was a from/to/cc/bcc on (EmailParticipant.personId →
   // Person). SetNull on that side: deleting a person leaves the participant row
   // and its RAW address intact, so the message still reads correctly (MAI-137 T9).
   emailParticipations EmailParticipant[]
+  // Texts with this person (SmsMessage.personId → Person). SetNull on that side,
+  // so deleting a person never destroys text history (MAI-138 T10).
+  smsMessages         SmsMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -875,6 +892,9 @@ model Deal {
   // Emails logged against this deal (Email.dealId → Deal). SetNull on that side
   // too, so deleting a deal never destroys message history (MAI-137 T9).
   emails      Email[]
+  // Texts logged against this deal (SmsMessage.dealId → Deal). SetNull on that
+  // side too, for the same reason (MAI-138 T10).
+  smsMessages SmsMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1313,4 +1333,145 @@ model EmailAttachment {
   updatedAt DateTime @updatedAt
 
   @@index([orgId, emailId])
+}
+
+// -----------------------------------------------------------------------------
+// Activities — SmsMessage + MessageMedia (MAI-138, Phase 3 / T10).
+//
+// Spec: docs/specs/SPEC-CRM-SCHEMA.md §6. Plan: tasks/plan-crm-schema.md (T10).
+//
+// Same shape as Call and Email: a real table, first-class from day 1, with
+// nullable spine links so an inbound text from a number nobody has ever heard of
+// still logs. Sending, and the Twilio inbound/status webhooks that will write
+// these rows, are a LATER spec — this ticket lands the tables and the read routes
+// over them (server/src/routes/messages.ts).
+//
+// THE VOICE BOUNDARY. Call and PhoneNumber are the dialer's models and NOTHING
+// here changes them. `phoneNumberId` below is deliberately a bare id column with
+// no Prisma relation: a relation would need a back-relation array on PhoneNumber,
+// and text history has no business editing the dialer's model to exist. The spec
+// writes it the same way (§6).
+// -----------------------------------------------------------------------------
+
+// SmsMessage — a superset of Twilio's Message resource. Handles SMS and MMS, and
+// leaves room for RCS and WhatsApp, which differ from SMS in `channel` and in
+// what hangs off MessageMedia rather than in the shape of a message.
+//
+// Unlike Email there IS a single personId here, and that is not an inconsistency:
+// a text has exactly two endpoints, so "who was this with" is one person. It is
+// NULLABLE, which is the whole point — an inbound text from an unknown number
+// logs with every spine link null, and a later number→person match fills it in
+// without rewriting what was said. onDelete: SetNull on all three, never Cascade:
+// trashing a Person, Company, or Deal must not destroy text history.
+model SmsMessage {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  personId  String?
+  person    Person?  @relation(fields: [personId], references: [id], onDelete: SetNull)
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  // The rep whose number sent or received it. Nullable + SetNull, not Restrict as
+  // Call.userId is: a text can arrive on an org-owned number that belongs to
+  // nobody in particular, and deleting a rep must leave the org's record standing.
+  mailboxUserId String?
+  mailboxUser   User?   @relation("SmsMailbox", fields: [mailboxUserId], references: [id], onDelete: SetNull)
+
+  // Which of our PhoneNumber rows sent or received it. A bare id, no relation —
+  // see THE VOICE BOUNDARY above.
+  phoneNumberId String?
+
+  // E.164 both sides, kept RAW for the same reason EmailParticipant.address is:
+  // it is what was actually on the message, and a personId is a link we drew
+  // later. A text from a stranger renders from these two alone.
+  fromE164 String
+  toE164   String
+
+  // Allowed values: "outbound", "inbound".
+  direction String
+
+  body String?
+
+  // Twilio's Message status, verbatim. Allowed values: "queued", "sending",
+  // "sent", "delivered", "undelivered", "failed", "received". "received" is the
+  // inbound terminal state; the rest are the outbound lifecycle.
+  status       String  @default("queued")
+  errorCode    String? // Twilio's numeric code, kept as text — it is an identifier, not a number we do arithmetic on
+  errorMessage String?
+
+  // Billing/segmentation facts from Twilio. numMedia is a COUNT Twilio reports,
+  // and the MessageMedia rows are the media themselves: the count arrives on the
+  // webhook before the media have been fetched, so the two are not redundant.
+  numSegments Int?
+  numMedia    Int  @default(0)
+
+  // Allowed values: "sms", "mms", "rcs", "whatsapp". Media for any of them hangs
+  // off MessageMedia, so gaining a channel does not change this table's shape.
+  channel String @default("sms")
+
+  // Twilio bookkeeping. twilioSid is UNIQUE so a re-delivered webhook — Twilio
+  // retries, and it does so with the same SID — upserts instead of logging the
+  // text twice. Postgres allows many NULLs under a unique index, so rows written
+  // before Twilio has accepted the message do not collide.
+  twilioSid           String? @unique
+  messagingServiceSid String?
+  price               String? // Twilio sends this as a decimal STRING; storing it as one keeps it exact
+  priceUnit           String? // the ISO currency of `price`, e.g. "USD"
+
+  media MessageMedia[]
+
+  // Two timestamps, because they are two different facts: sentAt is when it left,
+  // deliveredAt is when the carrier confirmed it landed. An undelivered message
+  // has the first and not the second, and that gap IS the delivery failure.
+  sentAt      DateTime?
+  deliveredAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  // The hot paths: a Person/Company/Deal page loads its recent texts in one
+  // indexed round-trip, newest first — the same three the call history has.
+  @@index([orgId, personId, sentAt])
+  @@index([orgId, companyId, sentAt])
+  @@index([orgId, dealId, sentAt])
+  // The inbound-match path: "which of our numbers was this sent to?"
+  @@index([orgId, toE164])
+}
+
+// MMS / image / video / audio attached to a message. ONE shape for every media
+// type, so supporting MMS photos today and voice notes later is a contentType,
+// not a migration.
+//
+// storageUrl holds a bare S3 object KEY, not a link a browser can open, exactly
+// as Call.recordingUrl and EmailAttachment.storageUrl do. Null until the fetch
+// job has run — and that job is not optional bookkeeping: Twilio PURGES its own
+// media copies, so the row exists (and the list can say "2 images") before the
+// bytes are ours, and our copy is the only one that lasts.
+model MessageMedia {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  smsMessageId String
+  message      SmsMessage @relation(fields: [smsMessageId], references: [id], onDelete: Cascade)
+
+  contentType    String // the MIME type, e.g. "image/jpeg", "video/mp4", "audio/ogg"
+  storageUrl     String? // our S3 object key (null until the fetch job runs)
+  twilioMediaSid String?
+  sizeBytes      Int?
+
+  // Which position this media held on the message. Twilio numbers the webhook
+  // params MediaUrl0, MediaUrl1, … and an MMS with two images is two images IN AN
+  // ORDER; without this the rows come back in whatever order the database likes.
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, smsMessageId])
 }

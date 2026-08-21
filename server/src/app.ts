@@ -14,6 +14,7 @@ import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import invitationsRouter from './routes/invitations.js'
 import membersRouter from './routes/members.js'
+import messagesRouter from './routes/messages.js'
 import objectsRouter from './routes/objects.js'
 import peopleRouter from './routes/people.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
@@ -75,6 +76,12 @@ app.use('/api/orgs/:orgId/members', membersRouter)
 // templates — half-written mail that has not happened yet); this is the record of
 // mail that HAS. Org-scoped like the rest of the CRM, with the org in the path.
 app.use('/api/orgs/:orgId/emails', emailsRouter)
+
+// Logged text activity (MAI-138 T10). READ ONLY for the same reason: sending, and
+// the Twilio inbound/status webhooks that will write these rows, are a later spec.
+// "messages" rather than "sms" because the table is a superset — MMS today, RCS
+// and WhatsApp on the same rows later, told apart by `channel`.
+app.use('/api/orgs/:orgId/messages', messagesRouter)
 
 // Schema-as-data (MAI-133 T5): ObjectDef + AttributeDef describe every object and
 // field. Both org-scoped; the org is in the path so the tenant boundary is checked
