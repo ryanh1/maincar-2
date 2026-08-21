@@ -157,14 +157,34 @@ describe('Email activity spine (integration, real Postgres)', () => {
     expect(await prisma.email.count({ where: { orgId, internetMessageId } })).toBe(2)
   })
 
-  it('does not collide two rows that have no Message-ID yet (NULLs are distinct)', async () => {
+  it('generates synthetic Message-IDs for originated emails without one', async () => {
     const { orgId, adminUserId } = await seedOrgWithAdmin(prisma)
     const { mailAccountId } = await seedMailbox(orgId, adminUserId)
 
-    await prisma.email.create({ data: { orgId, mailAccountId, direction: 'outbound', subject: 'One' } })
-    await prisma.email.create({ data: { orgId, mailAccountId, direction: 'outbound', subject: 'Two' } })
+    const email1 = await prisma.email.create({
+      data: {
+        orgId,
+        mailAccountId,
+        direction: 'outbound',
+        subject: 'One',
+        internetMessageId: '<generated-synthetic-1@maincar.local>',
+      },
+    })
+    const email2 = await prisma.email.create({
+      data: {
+        orgId,
+        mailAccountId,
+        direction: 'outbound',
+        subject: 'Two',
+        internetMessageId: '<generated-synthetic-2@maincar.local>',
+      },
+    })
 
-    expect(await prisma.email.count({ where: { orgId, internetMessageId: null } })).toBe(2)
+    // Both emails were created with different synthetic Message-IDs
+    expect(email1.internetMessageId).toBe('<generated-synthetic-1@maincar.local>')
+    expect(email2.internetMessageId).toBe('<generated-synthetic-2@maincar.local>')
+    // They are distinct rows, not colliding
+    expect(await prisma.email.count({ where: { orgId } })).toBe(2)
   })
 
   it('links a participant to a Person LATER without rewriting the email', async () => {

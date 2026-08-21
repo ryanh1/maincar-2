@@ -15,6 +15,7 @@ import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import mailboxesRouter from './routes/mailboxes.js'
 import invitationsRouter from './routes/invitations.js'
+// import listsRouter from './routes/lists.js' // MAI-142 (T14) not yet complete
 import meetingsRouter from './routes/meetings.js'
 import membersRouter from './routes/members.js'
 import messagesRouter from './routes/messages.js'
@@ -124,6 +125,15 @@ app.use('/api/orgs/:orgId/records', recordsRouter)
 // is the list of things that HAPPENED, and a task is a thing that has not.
 app.use('/api/orgs/:orgId/tasks', tasksRouter)
 app.use('/api/orgs/:orgId/notes', notesRouter)
+
+// Lists (MAI-142 T14) — a saved working set of records, and the process that runs
+// on it. This is why there is no Lead object (spec §5.2): a prospecting cycle is a
+// list a person is ON, and its per-cycle fields are ENTRY values that touch no
+// record. One list holds exactly ONE object type, so its columns mean the same
+// thing on every row. Entries live under /lists/:id/entries — an entry is only
+// ever reachable through the list it is on, which is also where its tenant
+// boundary gets proven.
+// app.use('/api/orgs/:orgId/lists', listsRouter) // MAI-142 (T14) not yet complete
 
 // The authenticated half of the Integration Hub. The org is in the path so
 // membership is re-proven per request. The OAuth callback is NOT here: it is

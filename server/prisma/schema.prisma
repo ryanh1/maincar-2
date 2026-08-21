@@ -107,6 +107,12 @@ model Org {
   // already uses. Their links ride on RecordLink, which already cascades above.
   tasks Task[]
   notes Note[]
+
+  // Lists (MAI-142 T14). Back-relations so a deleted org cascades its lists and
+  // the entries on them away — the same onDelete: Cascade the rest of the CRM
+  // spine already uses.
+  lists       List[]
+  listEntries ListEntry[]
 }
 
 model User {
@@ -1297,7 +1303,10 @@ model Email {
   // Threading — the cross-provider keys. internetMessageId (the RFC5322 Message-ID
   // header) is the one identifier that is stable across Gmail AND Graph AND plain
   // IMAP, which is why it is the dedupe key below. conversationId groups a chain.
-  internetMessageId String? // RFC5322 Message-ID
+  // REQUIRED (MAI-187): Originally nullable to allow partial syncs, but the unique
+  // constraint on (orgId, mailAccountId, internetMessageId) only works if the field
+  // is NOT NULL. For originated messages, a synthetic RFC5322 Message-ID is generated.
+  internetMessageId String // RFC5322 Message-ID
   conversationId    String? // Gmail threadId / Graph conversationId
   inReplyTo         String?
   references        String[] @default([])
@@ -1975,4 +1984,116 @@ model Note {
   @@index([orgId])
   // "Notes I wrote", newest first.
   @@index([orgId, authorUserId, createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// Lists — List and ListEntry (MAI-142 T14) — spec §5.3, §6, impacts §K.
+//
+// Attio's model, and the reason this schema has no Lead object (spec §5.2): a
+// PROCESS lives on a list, not in a second person-shaped table. "Q3 outbound
+// blitz" is a List of people; a person's position in that blitz is a ListEntry.
+//
+// TWO RULES THE TABLES THEMSELVES CARRY:
+//
+//   1. ONE OBJECT TYPE PER LIST. `List.objectSlug` says which object the list
+//      holds — person, company, deal, or a custom object's slug — and every
+//      entry's `objectSlug` is copied from the LIST, never taken from the
+//      request. A list of companies with a person on it is a list whose columns
+//      mean nothing on half its rows, and whose "add to list" screen cannot know
+//      what to search. The route rejects the mismatch; see server/src/routes/lists.ts.
+//   2. ENTRY VALUES ARE THE LIST'S, NOT THE RECORD'S. `valuesJson` holds the
+//      values that belong to being ON THIS LIST — stage in this campaign, call
+//      attempts in this blitz, priority for this push — described by AttributeDef
+//      rows with storage="list" (which server/src/routes/records.ts already
+//      excludes from a record's own values). Writing them touches no record, so
+//      the same person can sit at "contacted" on one list and "untouched" on
+//      another without either fact leaking onto the Person row everyone else reads.
+//
+// The `@@unique([listId, objectSlug, targetId])` below is what makes "add to
+// list" idempotent. ALL THREE COLUMNS ARE NON-NULL, deliberately: Postgres treats
+// NULLs as distinct in a unique index, so one nullable column silently turns this
+// constraint off and the same record lands on the list twice (MAI-187 is exactly
+// that bug, on Email). There is no nullable column in this key and none may be
+// added to it.
+// -----------------------------------------------------------------------------
+
+model List {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  name String
+  // Stable, url-safe identity, unique per org. Derived from the name at create
+  // when the caller does not supply one, and never patchable afterwards: a slug
+  // that moves is a saved link that stops resolving.
+  slug String
+
+  // Which object this list holds: person | company | deal | <custom slug>. Set at
+  // create and NEVER patchable — see rule 1 in the block above. Verified against
+  // an ObjectDef in this org, so a typo is a 422 and not a list nothing can join.
+  objectSlug String
+
+  // What the list is for, and how it shows up in the sidebar. Both optional; the
+  // icon is a lucide id, the same vocabulary ObjectDef.icon speaks (spec §10).
+  description String?
+  icon        String?
+
+  // Who runs this list. A plain nullable String, not a relation, for the reason
+  // Task.deletedById is one: the list outlives the account that owned it.
+  ownerUserId String?
+
+  isArchived Boolean   @default(false)
+  // Soft delete into the 30-day trash (spec §5.13).
+  deletedAt  DateTime?
+
+  entries ListEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, slug])
+  @@index([orgId])
+  // "The lists of people", "the lists of companies" — the sidebar's own query.
+  @@index([orgId, objectSlug])
+}
+
+model ListEntry {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  listId String
+  list   List   @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  // The record this entry points at. `objectSlug` ALWAYS equals the parent
+  // List.objectSlug — it is copied from the list on write, never read from the
+  // request — and is stored here anyway so "which lists is this record on" is one
+  // indexed lookup instead of a join back through List.
+  objectSlug String
+  targetId   String
+
+  // Entry-only values: stage in THIS process, attempt count, blitz priority.
+  // Described by AttributeDef rows whose storage is "list", and written ONLY
+  // through server/src/crm/valuesValidator.ts — the same one validator every other
+  // custom value goes through, so a cleared value is stored ABSENT and never ""
+  // (spec §5.14). Nothing here touches the underlying record.
+  valuesJson Json @default("{}")
+
+  // Manual ordering within the list. Nullable: most lists are sorted by a column,
+  // and a null position means "this list has never been hand-ordered", which is a
+  // different fact from "this row is at position 0".
+  position      Int?
+  addedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The same record cannot be added to one list twice. Every column here is
+  // NON-NULL on purpose — see the block above this model.
+  @@unique([listId, objectSlug, targetId])
+  @@index([orgId])
+  // The list's own page, in hand-order.
+  @@index([orgId, listId, position])
+  // "Which lists is this record on" — the record page's Lists panel.
+  @@index([orgId, objectSlug, targetId])
 }

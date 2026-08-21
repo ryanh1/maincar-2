@@ -387,7 +387,13 @@ describe('OAuthConnection + MailAccount (integration, real Postgres)', () => {
       isPrimary: true,
     })
     const email = await prisma.email.create({
-      data: { orgId: org.orgId, mailAccountId: mailboxId, direction: 'inbound', subject: 'kept' },
+      data: {
+        orgId: org.orgId,
+        mailAccountId: mailboxId,
+        direction: 'inbound',
+        subject: 'kept',
+        internetMessageId: '<test-message@example.com>',
+      },
     })
 
     await disconnectConnection(connectionId, org.orgId, org.adminUserId, prisma)
