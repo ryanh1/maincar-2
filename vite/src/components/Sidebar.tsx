@@ -1,5 +1,5 @@
 import { Home, LogOut, Pencil, Phone, Settings } from 'lucide-react'
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
 import { useComposerOptional } from '@/components/composer/composerContext'
@@ -7,6 +7,7 @@ import { useIsDesktop } from '@/components/composer/desktopOnly'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { OrgSwitcher } from '@/components/OrgSwitcher'
+import { useGetIntegrationHealth } from '@/hooks/integrations'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
 
@@ -16,9 +17,32 @@ const NAV = [
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
+// The badge deep-links to the Integrations tab, not just to Settings: a rep who is
+// not on that page is exactly the one who needs telling. The tab is selected by the
+// `tab` query param (Settings.tsx), so the fix is one click away.
+const INTEGRATIONS_TAB = '/settings?tab=integrations'
+
+/**
+ * The badge's accessible name. It names the problem AND the fix, never a bare number
+ * — a screen reader hearing "3" learns nothing (rules/copy.md → say what to do). One
+ * sentence, imperative, so it survives the flow.
+ */
+function brokenBadgeLabel(count: number): string {
+  return count === 1
+    ? 'Reconnect 1 broken email connection in Integrations.'
+    : `Reconnect ${count} broken email connections in Integrations.`
+}
+
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { user, signOut } = useAuth()
+  const { user, signOut, org } = useAuth()
   const displayName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.email
+
+  // Only genuinely broken (status='error') connections — the health endpoint already
+  // excludes deliberately-limited ones, so a rep who withheld a permission never
+  // raises a permanent alarm (SPEC-int-health.md). The hook disables itself without an
+  // org, so nothing fetches for a user who has none yet.
+  const health = useGetIntegrationHealth(org?.id)
+  const brokenCount = health.data?.broken.length ?? 0
 
   // Compose is drawn only where it can actually open something. Below `lg` the
   // dock is gone (see `desktopOnly.ts`), and outside `ComposerProvider` there is
@@ -72,24 +96,46 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         )}
 
         <nav className="flex flex-1 flex-col gap-1 p-3">
-          {NAV.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              onClick={onClose}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                  isActive
-                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                    : 'hover:bg-white/5',
-                )
-              }
-            >
-              <Icon size={16} />
-              {label}
-            </NavLink>
-          ))}
+          {NAV.map(({ to, label, icon: Icon }) => {
+            // The badge rides the Settings row, but is its own link so a click lands on
+            // the Integrations tab rather than the default Settings tab. Rendered as a
+            // sibling, never a child of the NavLink — an anchor inside an anchor is
+            // invalid, so absolute positioning does the overlap instead.
+            const showBrokenBadge = to === '/settings' && brokenCount > 0
+            return (
+              <div key={to} className="relative">
+                <NavLink
+                  to={to}
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    cn(
+                      'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                      isActive
+                        ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                        : 'hover:bg-white/5',
+                      // Keep the label clear of the badge floating on the right.
+                      showBrokenBadge && 'pr-12',
+                    )
+                  }
+                >
+                  <Icon size={16} />
+                  {label}
+                </NavLink>
+                {showBrokenBadge && (
+                  <Link
+                    to={INTEGRATIONS_TAB}
+                    onClick={onClose}
+                    aria-label={brokenBadgeLabel(brokenCount)}
+                    className="absolute right-3 top-1/2 flex h-4 min-w-4 -translate-y-1/2 items-center justify-center rounded-full bg-status-failed px-1 text-xs font-medium tabular-nums text-white"
+                  >
+                    {/* Hidden from the reader that already hears the label above, so the
+                        count is not announced a second time as a bare number. */}
+                    <span aria-hidden="true">{brokenCount}</span>
+                  </Link>
+                )}
+              </div>
+            )
+          })}
         </nav>
 
         <div className="border-t border-sidebar-border p-3">
