@@ -41,6 +41,7 @@ model Org {
   phoneNumbers     PhoneNumber[]
   calls            Call[]
   emailDrafts      EmailDraft[]
+  emailTemplates   EmailTemplate[]
   oauthConnections OAuthConnection[]
   mailAccounts     MailAccount[]
 
@@ -100,6 +101,7 @@ model User {
   phoneNumbers        PhoneNumber[]
   calls               Call[]
   emailDrafts         EmailDraft[]
+  emailTemplates      EmailTemplate[]
   oauthConnections    OAuthConnection[]
   mailAccounts        MailAccount[]
 
@@ -349,6 +351,48 @@ model EmailDraft {
 
   // The dock's only query: this rep's drafts in this org, by last edit.
   @@index([orgId, userId, updatedAt])
+}
+
+// The org's saved emails — the five a rep sends over and over
+// (docs/specs/SPEC-composer-templates.md § Data model).
+//
+// Org-wide, NOT private to its author. That is the deliberate difference from
+// EmailDraft above: a draft is half of one person's unsent email, so it filters
+// on userId as well as orgId. A template is a thing the TEAM reuses — a template
+// a teammate cannot use is a note to self — so every query filters on orgId
+// ALONE and any member may edit or delete any of them (spec § Acceptance
+// criteria 2). Per-user private templates are an "ask first" in the spec's
+// Boundaries: do not add a userId filter without changing the spec first.
+model EmailTemplate {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Who wrote it. Attribution only, never a filter. Nullable + SetNull, matching
+  // Invitation.invitedByUser: the template belongs to the ORG, so it has to
+  // outlive the rep who wrote it. Cascade would delete the team's templates when
+  // their author leaves, and the default Restrict would make that rep undeletable.
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  name     String
+  subject  String
+  bodyHtml String
+
+  // The distinct merge-field ids this template uses, derived server-side from the
+  // subject and the body together on EVERY write. Stored so the list can say
+  // "uses 3 fields" without re-parsing every body. DERIVED data, never
+  // authoritative: the TEXT WINS, and a client-supplied value is ignored. Stays
+  // null until merge fields land with the CRM port (SPEC-composer-body.md §
+  // Deferred).
+  fieldsJson Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The Templates screen's only query: this org's templates, alphabetically.
+  @@index([orgId, name])
 }
 
 // -----------------------------------------------------------------------------
