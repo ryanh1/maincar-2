@@ -28,6 +28,7 @@ import { logger } from '../../dependencies/logger.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { listRecords, ListQueryError } from '../crm/recordList.js'
 import type { ObjectDef, AttributeDef, Prisma } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
@@ -111,6 +112,46 @@ function blankToNull(value: unknown): unknown {
   const trimmed = value.trim()
   return trimmed === '' ? null : trimmed
 }
+
+// The body for POST /:id/list (MAI-163). A recursive filter tree, one sort key,
+// an opaque cursor, and a chunk size — see recordList.ts for the compiler.
+const filterConditionSchema = z.object({
+  type: z.literal('condition'),
+  field: z.string().min(1),
+  operator: z.enum([
+    'eq',
+    'neq',
+    'contains',
+    'not_contains',
+    'starts_with',
+    'ends_with',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'is_empty',
+    'is_not_empty',
+    'in',
+  ]),
+  value: z.unknown().optional(),
+})
+type FilterNodeInput = z.infer<typeof filterConditionSchema> | { type: 'group'; op: 'and' | 'or'; children: FilterNodeInput[] }
+const filterNodeSchema: z.ZodType<FilterNodeInput> = z.lazy(() =>
+  z.union([
+    filterConditionSchema,
+    z.object({
+      type: z.literal('group'),
+      op: z.enum(['and', 'or']),
+      children: z.array(filterNodeSchema).min(1),
+    }),
+  ]),
+)
+const listBodySchema = z.object({
+  filter: filterNodeSchema.nullish(),
+  sort: z.object({ field: z.string().min(1), direction: z.enum(['asc', 'desc']) }).nullish(),
+  cursor: z.string().nullish(),
+  limit: z.number().int().positive().optional(),
+})
 
 const optionalText = z.preprocess(blankToUndefined, z.string().optional())
 
@@ -204,6 +245,54 @@ router.get(
 
     // --- Return response ---
     res.json({ object: mapObjectToApi(object) })
+  }),
+)
+
+// ============================================================
+// POST /api/orgs/:orgId/objects/:id/list — server sort/filter/count + cursor
+// windows over the object's rows (MAI-163, plan T0.1, spec CHUNK-1 §A).
+// ============================================================
+// One endpoint the grid calls for every window of rows, whichever storage the
+// object uses (recordList.ts picks the real table vs. the generic Record table).
+// The query is a body, not a query-string, because the filter tree nests
+// arbitrarily. Response is exactly { rows, nextCursor, totalCount } per spec.
+router.post(
+  '/:id/list',
+  wrapRoute('POST /api/orgs/:orgId/objects/:id/list', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = listBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // --- Load the object + its live attributes (org-scoped) ---
+    const object = await prisma.objectDef.findFirst({ where: { id, orgId, deletedAt: null } })
+    if (!object) {
+      return void res.status(404).json({ error: 'Object not found' })
+    }
+    const attributes = await prisma.attributeDef.findMany({
+      where: { orgId, objectId: id, deletedAt: null, isArchived: false },
+    })
+
+    // --- Execute query ---
+    try {
+      const result = await listRecords(prisma, { orgId, object, attributes, query: parsed.data })
+      // --- Return response ---
+      res.json(result)
+    } catch (error) {
+      if (error instanceof ListQueryError) {
+        return void res.status(400).json({ error: error.message })
+      }
+      throw error
+    }
   }),
 )
 
