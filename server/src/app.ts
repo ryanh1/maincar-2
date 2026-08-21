@@ -16,6 +16,7 @@ import membersRouter from './routes/members.js'
 import objectsRouter from './routes/objects.js'
 import peopleRouter from './routes/people.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
+import recordsRouter from './routes/records.js'
 import teamRouter from './routes/team.js'
 import twilioVoiceRouter from './routes/twilioVoice.js'
 
@@ -74,6 +75,9 @@ app.use('/api/orgs/:orgId/members', membersRouter)
 // nested mount, matching the flat one-router-per-thing convention above.
 app.use('/api/orgs/:orgId/objects', objectsRouter)
 app.use('/api/orgs/:orgId/attributes', attributesRouter)
+// Rows of custom (record-backed) objects (MAI-135 T7). Every valuesJson write goes
+// through the one validator; filtering hits the native GIN index via containment.
+app.use('/api/orgs/:orgId/records', recordsRouter)
 
 // The authenticated half of the Integration Hub. The org is in the path so
 // membership is re-proven per request. The OAuth callback is NOT here: it is

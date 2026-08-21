@@ -65,6 +65,12 @@ model Org {
   // the CRM spine already uses.
   objectDefs    ObjectDef[]
   attributeDefs AttributeDef[]
+
+  // Custom objects (MAI-135 T7). Back-relations so a deleted org cascades its
+  // custom-object rows and their links away — the same onDelete: Cascade the rest
+  // of the CRM spine already uses.
+  records     Record[]
+  recordLinks RecordLink[]
 }
 
 model User {
@@ -971,4 +977,74 @@ model AttributeDef {
 
   @@unique([objectId, slug])
   @@index([orgId])
+}
+
+// -----------------------------------------------------------------------------
+// Custom objects (MAI-135 T7) — rows of user-invented objects (spec §5.1, §5.14).
+//
+// A custom ObjectDef has storage="record"; its rows live HERE, one per record,
+// with every field packed into valuesJson keyed by AttributeDef slug. The typed
+// core (Person/Company/Deal/...) does NOT use this — it uses real tables and real
+// foreign keys. Every write into valuesJson goes through the one validator in
+// server/src/crm/valuesValidator.ts, keyed on the object's AttributeDef rows:
+// there are no ad-hoc JSON writes anywhere (spec §5.11, plan T7 risk "JSONB
+// validation drift").
+// -----------------------------------------------------------------------------
+
+model Record {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // The ObjectDef this row belongs to. A plain string, not a relation, matching
+  // the spec: the row is generic and its shape is described by AttributeDef rows,
+  // not by a foreign key. The route verifies the object is in this org on write.
+  objectId String
+
+  // { attributeSlug: value }. Empty means the key is ABSENT, never "" (spec §5.14).
+  // Only the validator writes here.
+  valuesJson Json @default("{}")
+
+  isArchived Boolean   @default(false)
+  deletedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, objectId])
+  // GIN index for containment filters on valuesJson (@>). Generated natively by
+  // Prisma (type: Gin), NOT hand-written SQL. JsonbPathOps is the smaller, faster
+  // operator class for the containment queries the filter route uses (spec §5.1).
+  @@index([valuesJson(ops: JsonbPathOps)], type: Gin)
+}
+
+// A reference that crosses into a custom object, or a note/task link to anything
+// (spec §5.4). The core spine does NOT use this — it uses real foreign keys; this
+// exists only for edges the typed columns cannot express.
+model RecordLink {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // The record this link starts from, and the AttributeDef slug when the link IS a
+  // reference field (null for a bare note/task link). Object identifiers are slugs:
+  // person | company | deal | note | task | <custom>.
+  fromObject String
+  fromId     String
+  attribute  String?
+
+  // The record this link points at.
+  toObject String
+  toId     String
+
+  // Note/task link seam (spec §5.4). Plain nullable columns for now; the Note and
+  // Task models and their @relation back-references land in T13 (MAI-141).
+  noteId String?
+  taskId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, fromObject, fromId])
+  @@index([orgId, toObject, toId])
 }
