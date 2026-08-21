@@ -51,6 +51,12 @@ model Org {
   pipelineStages  PipelineStage[]
   deals           Deal[]
   dealPersonRoles DealPersonRole[]
+
+  // Schema-as-data (MAI-133 T5). Back-relations so a deleted org cascades its
+  // object/attribute definitions away — the same onDelete: Cascade the rest of
+  // the CRM spine already uses.
+  objectDefs    ObjectDef[]
+  attributeDefs AttributeDef[]
 }
 
 model User {
@@ -818,4 +824,100 @@ model DealPersonRole {
   @@unique([dealId, personId])
   @@index([orgId])
   @@index([personId])
+}
+
+// -----------------------------------------------------------------------------
+// Schema-as-data (MAI-133 T5) — ObjectDef + AttributeDef describe BOTH the typed
+// tables (Person/Company/Deal/...) and the generic Record rows. The UI, the field
+// editor, validation, and views all read these rows and never care where a value
+// physically sits (spec §5.1). Adding a custom FIELD is a row insert here, never a
+// migration; adding a standard field is a real migration (§5.1, §5.6a).
+// -----------------------------------------------------------------------------
+
+// One row per object type in an org. Standard objects (person/company/deal/...)
+// are seeded with isStandard=true and can be HIDDEN but never archived/deleted —
+// the app's own code depends on them (§5.10, §10.2). Custom objects the user
+// invents are storage="record" and live as Record rows (§5.1).
+model ObjectDef {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  slug       String // person | company | deal | call | task | note | <custom>
+  name       String // singular display label, e.g. "Company"
+  namePlural String // e.g. "Companies" — navbar links, "+ New" buttons, table headers
+  icon       String? // a lucide icon id, e.g. "building-2" (§9). Seeded for standard objects.
+  iconColor  String? // optional tint for the icon, e.g. a purple custom object (§9)
+
+  // "table"  = a real Postgres table; standard columns + customJson.
+  // "record" = a Record row with valuesJson. Custom objects only.
+  storage String @default("record")
+
+  isStandard   Boolean @default(false) // app-seeded and app-depended-on
+  isFirstClass Boolean @default(true) // gets a navbar link and a table
+
+  isHidden   Boolean   @default(false)
+  isArchived Boolean   @default(false)
+  deletedAt  DateTime? // blocked when isStandard
+
+  attributes AttributeDef[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, slug])
+  @@index([orgId])
+}
+
+// One row per field on an object. type is a semantic type from §8's table; the
+// value's physical home is `storage`: "column" (a real table column, always
+// isSystem), "custom" (customJson/valuesJson), or "list" (ListEntry.valuesJson).
+// isSystem fields can be renamed/hidden but never deleted or retyped (§10.2).
+model AttributeDef {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  objectId String
+  object   ObjectDef @relation(fields: [objectId], references: [id], onDelete: Cascade)
+
+  slug        String
+  name        String // display label shown in the UI, may differ from the slug
+  description String? // one-line help text shown in the field editor / tooltip
+  icon        String?
+
+  // text | number | checkbox | date | timestamp | phone | email | url | domain
+  // | select | multiselect | status | currency | rating | location
+  // | person_name | record_reference | user_reference | ai   (full table in §8)
+  type String
+
+  optionsJson    Json? // select options: [{ value, label, color, order, isArchived }] (§5.6a)
+  refObjectId    String? // for record_reference
+  formatJson     Json? // display format (Sheets-style presets / custom mask)
+  validationJson Json? // min/max/pattern/required-strict
+
+  isIdentity Boolean @default(false) // a unique-to-one-entity field; drives dedupe
+
+  // "column" = lives in a real column on the table (isSystem is always true here)
+  // "custom" = lives in customJson / valuesJson
+  // "list"   = lives in ListEntry.valuesJson
+  storage String @default("custom")
+
+  isMulti    Boolean @default(false)
+  isRequired Boolean @default(false)
+  isUnique   Boolean @default(false)
+  isReadOnly Boolean @default(false)
+  isSystem   Boolean @default(false) // rename/hide OK; delete and retype blocked
+
+  defaultJson Json?
+  sortOrder   Int   @default(0)
+
+  isArchived Boolean   @default(false)
+  deletedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([objectId, slug])
+  @@index([orgId])
 }

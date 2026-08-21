@@ -9,9 +9,11 @@ import callsRouter from './routes/calls.js'
 import companiesRouter from './routes/companies.js'
 import dealsRouter from './routes/deals.js'
 import emailRouter from './routes/email.js'
+import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import invitationsRouter from './routes/invitations.js'
 import membersRouter from './routes/members.js'
+import objectsRouter from './routes/objects.js'
 import peopleRouter from './routes/people.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
 import teamRouter from './routes/team.js'
@@ -65,6 +67,13 @@ app.use('/api/orgs/:orgId/companies', companiesRouter)
 app.use('/api/orgs/:orgId/people', peopleRouter)
 app.use('/api/orgs/:orgId/deals', dealsRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
+
+// Schema-as-data (MAI-133 T5): ObjectDef + AttributeDef describe every object and
+// field. Both org-scoped; the org is in the path so the tenant boundary is checked
+// per request. attributes carry their objectId in the body/query rather than a
+// nested mount, matching the flat one-router-per-thing convention above.
+app.use('/api/orgs/:orgId/objects', objectsRouter)
+app.use('/api/orgs/:orgId/attributes', attributesRouter)
 
 // The authenticated half of the Integration Hub. The org is in the path so
 // membership is re-proven per request. The OAuth callback is NOT here: it is
