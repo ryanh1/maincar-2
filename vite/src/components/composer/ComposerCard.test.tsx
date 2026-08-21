@@ -287,3 +287,188 @@ describe('ComposerCard', () => {
     await waitFor(() => expect(saveDraft).not.toHaveBeenCalled())
   })
 })
+
+/** The box you type the next address into, for whichever row. */
+function recipientBox(label: string): HTMLInputElement {
+  return screen.getByLabelText(label) as HTMLInputElement
+}
+
+/** Address someone the way a rep does: type it, press Enter. */
+function addRecipient(label: string, address: string) {
+  const box = recipientBox(label)
+  fireEvent.change(box, { target: { value: address } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+}
+
+/** Every chip on screen, in order, by the address its own `✕` names. */
+function chipAddresses(): string[] {
+  return screen
+    .queryAllByRole('button', { name: /^Remove / })
+    .map((button) => button.getAttribute('aria-label')!.replace(/^Remove /, ''))
+}
+
+function ccBccLink() {
+  return screen.queryByRole('button', { name: 'Cc/Bcc' })
+}
+
+describe('ComposerCard recipients', () => {
+  it('opens with To on screen and the caret already in it', () => {
+    renderCard()
+
+    expect(recipientBox('To')).toHaveFocus()
+  })
+
+  it('hides Cc and Bcc behind a link, and the link leaves once both rows are up', () => {
+    renderCard()
+
+    expect(screen.queryByLabelText('Cc')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Bcc')).not.toBeInTheDocument()
+
+    fireEvent.click(ccBccLink()!)
+
+    expect(screen.getByLabelText('Cc')).toBeInTheDocument()
+    expect(screen.getByLabelText('Bcc')).toBeInTheDocument()
+    // Nothing left for it to reveal.
+    expect(ccBccLink()).not.toBeInTheDocument()
+  })
+
+  it('shows both rows from the start when the draft already carries a Cc', () => {
+    renderCard(makeDraft({ ccAddrs: ['bob@acme.test'] }))
+
+    expect(screen.getByLabelText('Cc')).toBeInTheDocument()
+    expect(screen.getByLabelText('Bcc')).toBeInTheDocument()
+    expect(ccBccLink()).not.toBeInTheDocument()
+    expect(chipAddresses()).toEqual(['bob@acme.test'])
+  })
+
+  it('shows both rows from the start for a Bcc-only draft', () => {
+    renderCard(makeDraft({ bccAddrs: ['legal@acme.test'] }))
+
+    expect(screen.getByLabelText('Cc')).toBeInTheDocument()
+    expect(screen.getByLabelText('Bcc')).toBeInTheDocument()
+    expect(ccBccLink()).not.toBeInTheDocument()
+  })
+
+  it('seeds every row from the draft it opened with', () => {
+    renderCard(
+      makeDraft({
+        toAddrs: ['ann@acme.test'],
+        ccAddrs: ['bob@acme.test'],
+        bccAddrs: ['legal@acme.test'],
+      }),
+    )
+
+    expect(chipAddresses()).toEqual(['ann@acme.test', 'bob@acme.test', 'legal@acme.test'])
+  })
+
+  it('rides the same debounce as the body, and sends only the field that changed', async () => {
+    vi.useFakeTimers()
+    const { saveDraft } = renderCard()
+
+    addRecipient('To', 'ann@acme.test')
+
+    await advance(AUTOSAVE_DELAY_MS - 1)
+    expect(saveDraft).not.toHaveBeenCalled()
+
+    await advance(1)
+    expect(saveDraft).toHaveBeenCalledTimes(1)
+    expect(saveDraft).toHaveBeenCalledWith('draft-1', { toAddrs: ['ann@acme.test'] })
+
+    await advance(AUTOSAVE_DELAY_MS * 2)
+    expect(saveDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends To, Cc, Bcc, subject, and body in one save', async () => {
+    vi.useFakeTimers()
+    const { saveDraft } = renderCard()
+
+    addRecipient('To', 'ann@acme.test')
+    fireEvent.click(ccBccLink()!)
+    addRecipient('Cc', 'bob@acme.test')
+    addRecipient('Bcc', 'legal@acme.test')
+    type(subjectField(), 'Quote')
+    type(bodyField(), 'Numbers attached.')
+
+    await advance(AUTOSAVE_DELAY_MS)
+
+    expect(saveDraft).toHaveBeenCalledTimes(1)
+    expect(saveDraft).toHaveBeenCalledWith('draft-1', {
+      subject: 'Quote',
+      bodyHtml: 'Numbers attached.',
+      toAddrs: ['ann@acme.test'],
+      ccAddrs: ['bob@acme.test'],
+      bccAddrs: ['legal@acme.test'],
+    })
+  })
+
+  it('saves the shorter list when Backspace removes a whole recipient', async () => {
+    vi.useFakeTimers()
+    const { saveDraft } = renderCard(
+      makeDraft({ toAddrs: ['ann@acme.test', 'bob@acme.test'] }),
+    )
+
+    fireEvent.keyDown(recipientBox('To'), { key: 'Backspace' })
+    await advance(AUTOSAVE_DELAY_MS)
+
+    expect(chipAddresses()).toEqual(['ann@acme.test'])
+    expect(saveDraft).toHaveBeenCalledWith('draft-1', { toAddrs: ['ann@acme.test'] })
+  })
+
+  it('saves nothing on the first render of a draft that already has recipients', async () => {
+    vi.useFakeTimers()
+    const { saveDraft } = renderCard(
+      makeDraft({ toAddrs: ['ann@acme.test'], ccAddrs: ['bob@acme.test'] }),
+    )
+
+    await advance(AUTOSAVE_DELAY_MS * 3)
+
+    expect(saveDraft).not.toHaveBeenCalled()
+  })
+
+  it('renames the card as the first recipient changes', () => {
+    renderCard(makeDraft({ subject: 'Quote' }))
+
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Quote')
+
+    addRecipient('To', 'ann@acme.test')
+
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Quote — ann@acme.test')
+  })
+
+  it('never re-reads its own recipients, so a save response cannot drop a chip', () => {
+    const { rerenderWith } = renderCard()
+
+    addRecipient('To', 'ann@acme.test')
+
+    // The save comes back and the dock's copy of the draft updates. The chips
+    // must ignore it completely, for the same reason the body does: the rep may
+    // have added another recipient while the request was in flight.
+    rerenderWith(makeDraft({ toAddrs: ['stale@acme.test'] }))
+
+    expect(chipAddresses()).toEqual(['ann@acme.test'])
+  })
+
+  it('flushes the recipients on the way out when the dock squeezes the card', async () => {
+    const { saveDraft, unmount } = renderCard()
+
+    addRecipient('To', 'ann@acme.test')
+    unmount()
+
+    await waitFor(() =>
+      expect(saveDraft).toHaveBeenCalledWith('draft-1', { toAddrs: ['ann@acme.test'] }),
+    )
+  })
+
+  it('keeps three recipient rows out of the body height, so the card stays 26rem', () => {
+    renderCard(makeDraft({ ccAddrs: ['bob@acme.test'] }))
+
+    // The card is a fixed height, so every row above the body has to refuse to
+    // shrink and the body has to be the one that gives up the space.
+    for (const label of ['To', 'Cc', 'Bcc']) {
+      const row = recipientBox(label).closest('div.shrink-0')
+      expect(row).not.toBeNull()
+    }
+    expect(bodyField()).toHaveClass('min-h-0', 'flex-1')
+    expect(screen.getByRole('article', { name: 'New message' })).toHaveClass('h-[26rem]')
+  })
+})

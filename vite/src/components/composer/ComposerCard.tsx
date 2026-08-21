@@ -15,9 +15,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import type { EmailDraft, EmailDraftPatch } from '@/lib/emailTypes'
+import type { EmailDraft, EmailDraftPatch, RecipientChip } from '@/lib/emailTypes'
 import { useComposer } from './composerContext'
 import { draftTitle } from './draftTitle'
+import { RecipientField } from './ComposerCard_Recipients'
 
 /**
  * How long after the last keystroke the card reports its text upward.
@@ -36,23 +37,50 @@ const AUTOSAVE_DELAY_MS = 1200
  */
 const SEND_DISABLED_REASON = 'Connect a mailbox in Settings → Integrations to send.'
 
+/**
+ * The draft stores plain strings; the field wants chips.
+ *
+ * `displayName` and `recordId` are null on the way in because nothing fills them
+ * in yet — there is no CRM to match an address against — so a round trip through
+ * storage loses nothing today (SPEC-composer-recipients.md → RecipientChip).
+ */
+function chipsFrom(addresses: string[]): RecipientChip[] {
+  return addresses.map((address) => ({ address, displayName: null, recordId: null }))
+}
+
+function addressesOf(chips: RecipientChip[]): string[] {
+  return chips.map((chip) => chip.address)
+}
+
+/**
+ * The same addresses in the same order.
+ *
+ * Order counts and case counts: the route writes the array it is handed, and a
+ * rep who retypes `Ann@` over `ann@` changed the draft.
+ */
+function sameAddresses(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((address, index) => address === b[index])
+}
+
 interface ComposerCardProps {
   /**
-   * The draft as the dock holds it. Read for the id, the recipients, and the
-   * text this card OPENED with — never for the text while it is open. See the
-   * note on `subject` below.
+   * The draft as the dock holds it. Read for the id and the values this card
+   * OPENED with — never for a value while it is open. See the note on the local
+   * state below.
    */
   draft: EmailDraft
 }
 
 /**
- * One Gmail-shaped composer card: header, subject, body, footer.
+ * One Gmail-shaped composer card: header, recipients, subject, body, footer.
  *
  * **The card owns its own text while it is open and never re-reads its own saved
  * value.** That is the rule this whole module lives or dies by
  * (SPEC-composer-dock.md → Code style, rule 1). A save response merged back into
  * the editor would re-render it mid-sentence and drop the caret to the end, so
- * the text below is local state seeded once and reported upward on a debounce.
+ * the state below is seeded once and reported upward on a debounce. The
+ * recipients keep the same discipline: a chip list rebuilt from a save response
+ * would blow away the chip a rep added while the request was in flight.
  * No unit test catches a moving caret — type for 30 seconds in a browser.
  *
  * The body is a plain `textarea` for all of Phase 1 and becomes the rich editor
@@ -68,30 +96,55 @@ export function ComposerCard({ draft }: ComposerCardProps) {
   // reach the input the rep is typing in.
   const [subject, setSubject] = useState(draft.subject ?? '')
   const [body, setBody] = useState(draft.bodyHtml ?? '')
+  const [toChips, setToChips] = useState(() => chipsFrom(draft.toAddrs))
+  const [ccChips, setCcChips] = useState(() => chipsFrom(draft.ccAddrs))
+  const [bccChips, setBccChips] = useState(() => chipsFrom(draft.bccAddrs))
   const [confirmDiscard, setConfirmDiscard] = useState(false)
+
+  // Cc and Bcc hide behind a link, and are open from the start when the draft
+  // already carries either — a rep who added a Cc and refreshed finds the row
+  // still there with its chip, not a link they have to press again.
+  const [showCcBcc, setShowCcBcc] = useState(
+    () => draft.ccAddrs.length > 0 || draft.bccAddrs.length > 0,
+  )
 
   // What has already been reported upward. Comparing against this is what makes
   // the first render silent — opening a card is not editing it, and a PATCH that
   // writes back exactly what was just loaded is a wasted round trip that also
   // bumps `updatedAt` on a draft nobody touched.
-  const savedRef = useRef({ subject: draft.subject ?? '', body: draft.bodyHtml ?? '' })
+  const savedRef = useRef({
+    subject: draft.subject ?? '',
+    body: draft.bodyHtml ?? '',
+    toAddrs: draft.toAddrs,
+    ccAddrs: draft.ccAddrs,
+    bccAddrs: draft.bccAddrs,
+  })
 
   const flush = useCallback(async () => {
     const patch: EmailDraftPatch = {}
     if (subject !== savedRef.current.subject) patch.subject = subject
     if (body !== savedRef.current.body) patch.bodyHtml = body
+
+    const toAddrs = addressesOf(toChips)
+    const ccAddrs = addressesOf(ccChips)
+    const bccAddrs = addressesOf(bccChips)
+    if (!sameAddresses(toAddrs, savedRef.current.toAddrs)) patch.toAddrs = toAddrs
+    if (!sameAddresses(ccAddrs, savedRef.current.ccAddrs)) patch.ccAddrs = ccAddrs
+    if (!sameAddresses(bccAddrs, savedRef.current.bccAddrs)) patch.bccAddrs = bccAddrs
+
     // Nothing changed. The route rejects a patch with no keys, and the `−`, the
     // `✕`, and the unmount below all flush unconditionally.
     if (Object.keys(patch).length === 0) return
 
     // Marked saved BEFORE the await, so a `−` pressed while this request is in
     // flight does not send the same keys a second time.
-    savedRef.current = { subject, body }
+    savedRef.current = { subject, body, toAddrs, ccAddrs, bccAddrs }
     await saveDraft(draftId, patch)
-  }, [subject, body, draftId, saveDraft])
+  }, [subject, body, toChips, ccChips, bccChips, draftId, saveDraft])
 
-  // The debounce. `flush` changes identity exactly when the text does, so this
-  // effect is the "1200 ms after the last keystroke" rule written out.
+  // The debounce. `flush` changes identity exactly when the draft's own values
+  // do, so this effect is the "1200 ms after the last keystroke" rule written
+  // out. A chip is a change like any other: it rides the same debounce.
   const isFirstRender = useRef(true)
   useEffect(() => {
     if (isFirstRender.current) {
@@ -135,9 +188,10 @@ export function ComposerCard({ draft }: ComposerCardProps) {
     await discardDraft(draftId)
   }
 
-  // Built from the LOCAL subject, so the header renames itself as the rep types
-  // rather than a save later.
-  const title = draftTitle({ subject, toAddrs: draft.toAddrs })
+  // Built from the LOCAL subject and the LOCAL chips, so the header renames
+  // itself as the rep types and as the first recipient changes, rather than a
+  // save later.
+  const title = draftTitle({ subject, toAddrs: addressesOf(toChips) })
   const subjectId = `composer-subject-${draftId}`
 
   return (
@@ -169,6 +223,38 @@ export function ComposerCard({ draft }: ComposerCardProps) {
         </Button>
       </header>
 
+      {/*
+        The Cc/Bcc link sits at the right end of the To row, the way Gmail's
+        does, and leaves once it has been pressed — a link that reveals a row
+        already on screen has nothing left to do. `has-[input:focus]` carries the
+        row's focus color across to the link's own bottom border, so the line
+        under the row is one color and not two.
+      */}
+      <div className="flex shrink-0 items-stretch has-[input:focus]:*:border-primary">
+        <div className="min-w-0 flex-1">
+          <RecipientField label="To" chips={toChips} onChange={setToChips} autoFocus />
+        </div>
+        {showCcBcc ? null : (
+          <button
+            type="button"
+            onClick={() => setShowCcBcc(true)}
+            // `flex items-start` rather than the button's own centering: the row
+            // grows as chips wrap, and a link that drifts to the middle of it
+            // stops lining up with the `To` label beside it.
+            className="flex shrink-0 cursor-pointer items-start border-b border-border px-3 py-1 text-xs leading-6 font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+          >
+            Cc/Bcc
+          </button>
+        )}
+      </div>
+
+      {showCcBcc ? (
+        <>
+          <RecipientField label="Cc" chips={ccChips} onChange={setCcChips} />
+          <RecipientField label="Bcc" chips={bccChips} onChange={setBccChips} />
+        </>
+      ) : null}
+
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3">
         <Label htmlFor={subjectId} className="w-8 shrink-0 text-xs font-medium text-muted-foreground">
           Re
@@ -195,7 +281,9 @@ export function ComposerCard({ draft }: ComposerCardProps) {
         onChange={(event) => setBody(event.target.value)}
         // `field-sizing-fixed` overrides the primitive's grow-with-content
         // behaviour: the card is a fixed 26rem, so the body scrolls inside it
-        // instead of pushing the footer off the bottom.
+        // instead of pushing the footer off the bottom. The recipient rows are
+        // `shrink-0`, so this is the one part of the card that gives up height
+        // when a To field wraps onto a second line.
         className="field-sizing-fixed min-h-0 flex-1 rounded-none border-0 bg-transparent px-3 py-2 text-sm shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
       />
 
