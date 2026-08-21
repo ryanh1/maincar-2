@@ -118,6 +118,12 @@ function authAs(membership: ReturnType<typeof membershipRow> | null = membership
   verifyTokenMock.mockResolvedValue({ uid: 'uid-a', email: 'a@orga.com' })
   prismaMock.user.findUnique.mockResolvedValue(userRow())
   prismaMock.user.findUniqueOrThrow.mockResolvedValue(userRow())
+  // reset, not just re-point: `authAsAdmin` below queues TWO one-shot answers for
+  // the assignment route, and a test that consumes only the first leaves the
+  // second in the queue. `vi.clearAllMocks()` clears recorded calls but not a
+  // pending `mockResolvedValueOnce`, so without this the leftover would answer
+  // the NEXT test's membership gate with a row that is not a membership at all.
+  prismaMock.membership.findFirst.mockReset()
   // The gate looks the caller's membership up per request; null means "not a member".
   prismaMock.membership.findFirst.mockResolvedValue(membership)
 }
@@ -1663,5 +1669,437 @@ describe('mapPhoneNumberToApi — what never reaches the client', () => {
     expect(Object.keys(list.body.numbers[0]).sort()).toEqual(expected)
     expect(Object.keys(bought.body.number).sort()).toEqual(expected)
     expect(Object.keys(patched.body.number).sort()).toEqual(expected)
+  })
+})
+
+// ============================================================
+// MAI-197 — the org-wide view and who holds a number
+// ============================================================
+// Everything above answers "which numbers are MINE". This block answers the two
+// questions an admin could not ask at all before: which numbers is the org
+// paying for, and who has them.
+
+/** The holder's identity as the admin table shows it — name AND email. */
+function assigneeRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'user-b',
+    firstName: 'Bee',
+    lastName: 'Ta',
+    email: 'b@orga.com',
+    ...overrides,
+  }
+}
+
+/** A row as the admin list reads it: the number, with its holder joined on. */
+function orgNumberRow(overrides: Record<string, unknown> = {}) {
+  const row = numberRow(overrides)
+  return {
+    ...row,
+    assignedUser: row.assignedUserId === null ? null : assigneeRow({ id: row.assignedUserId }),
+    ...overrides,
+  }
+}
+
+/**
+ * Signs an ADMIN in.
+ *
+ * The assignment route reads `membership.findFirst` TWICE — the caller's own
+ * gate, then the seat of the person being handed the number — so the two answers
+ * are QUEUED in that order. One `mockResolvedValue` would answer both questions
+ * with the caller's own row, and the org-boundary check would pass on a user who
+ * is not in the org at all.
+ */
+function authAsAdmin(
+  caller: ReturnType<typeof membershipRow> | null = membershipRow({ roles: ['admin'] }),
+  target: { user: ReturnType<typeof assigneeRow> } | null = { user: assigneeRow() },
+): void {
+  verifyTokenMock.mockResolvedValue({ uid: 'uid-a', email: 'a@orga.com' })
+  prismaMock.user.findUnique.mockResolvedValue(userRow())
+  prismaMock.user.findUniqueOrThrow.mockResolvedValue(userRow())
+  prismaMock.membership.findFirst.mockReset()
+  prismaMock.membership.findFirst.mockResolvedValueOnce(caller)
+  prismaMock.membership.findFirst.mockResolvedValueOnce(target)
+  prismaMock.membership.findFirst.mockResolvedValue(null)
+}
+
+const ALL_A = `${URL_A}/all`
+const ASSIGN_A = `${URL_A}/num-1/assignment`
+const NOT_A_MEMBER_ERROR = 'Pick someone who is in this organization.'
+const ASSIGNEE_ERROR = 'Pick a member to give this number to, or send null to take it back.'
+
+describe('GET /api/orgs/:orgId/phone-numbers/all', () => {
+  it('returns every number in the org with its holder, keyed, with the totals', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findMany.mockResolvedValue([
+      orgNumberRow({ id: 'num-mine', assignedUserId: 'user-a' }),
+      orgNumberRow({ id: 'num-theirs', assignedUserId: 'user-b' }),
+    ])
+
+    const res = await request(app).get(ALL_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.numbers).toHaveLength(2)
+    expect(res.body.total).toBe(2)
+    // The whole point: a colleague's number is here, with a name on it.
+    expect(res.body.numbers[1].assignedUser.email).toBe('b@orga.com')
+    expect(res.body.numbers[1].assignedUser.firstName).toBe('Bee')
+  })
+
+  it('sends a number nobody holds as assignedUser null, and counts it', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findMany.mockResolvedValue([
+      orgNumberRow({ id: 'num-held', assignedUserId: 'user-b' }),
+      orgNumberRow({ id: 'num-spare', assignedUserId: null }),
+    ])
+
+    const res = await request(app).get(ALL_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    // null, never absent: "nobody has it" is an answer, not a missing lookup.
+    expect(res.body.numbers[1].assignedUser).toBeNull()
+    expect(res.body.unassignedCount).toBe(1)
+  })
+
+  // The one clause that separates this route from the per-user list. Filtering
+  // on the caller here would make the admin view a second copy of "my numbers".
+  it('filters by orgId and deliberately NOT by the caller', async () => {
+    authAsAdmin()
+
+    await request(app).get(ALL_A).set('Authorization', AUTH)
+
+    const args = prismaMock.phoneNumber.findMany.mock.calls[0]![0]
+    expect(args.where).toEqual({ orgId: ORG_A })
+    expect(args.where).not.toHaveProperty('assignedUserId')
+    // Newest first: an admin reading an inventory is checking recent buys.
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }])
+  })
+
+  it('refuses a non-admin member with 403, and reads nothing', async () => {
+    authAs(membershipRow({ roles: ['basic'] }))
+
+    const res = await request(app).get(ALL_A).set('Authorization', AUTH)
+
+    // 403, not 404: the rep can see the org perfectly well. They may not read
+    // the whole inventory.
+    expect(res.status).toBe(403)
+    expect(prismaMock.phoneNumber.findMany).not.toHaveBeenCalled()
+  })
+
+  it('answers a caller outside the org with 404, not 403', async () => {
+    authAs(null)
+
+    const res = await request(app).get(`/api/orgs/${ORG_B}/phone-numbers/all`).set('Authorization', AUTH)
+
+    // 403 would confirm Org B is real.
+    expect(res.status).toBe(404)
+    expect(prismaMock.phoneNumber.findMany).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unauthenticated caller before any query', async () => {
+    const res = await request(app).get(ALL_A)
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.phoneNumber.findMany).not.toHaveBeenCalled()
+  })
+
+  it('sends the per-user fields plus assignedUser, and no tenant keys', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findMany.mockResolvedValue([orgNumberRow()])
+
+    const res = await request(app).get(ALL_A).set('Authorization', AUTH)
+
+    expect(Object.keys(res.body.numbers[0]).sort()).toEqual([
+      'assignedUser',
+      'createdAt',
+      'e164',
+      'id',
+      'isActiveForOutbound',
+      'status',
+      'twilioSid',
+    ])
+    // The holder travels inside `assignedUser`, so the flat tenant/member keys
+    // still have no business on the row.
+    expect(res.body.numbers[0]).not.toHaveProperty('orgId')
+    expect(res.body.numbers[0]).not.toHaveProperty('assignedUserId')
+  })
+
+  it('sends only the four holder fields the table shows', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findMany.mockResolvedValue([orgNumberRow()])
+
+    const res = await request(app).get(ALL_A).set('Authorization', AUTH)
+
+    expect(Object.keys(res.body.numbers[0].assignedUser).sort()).toEqual([
+      'email',
+      'firstName',
+      'id',
+      'lastName',
+    ])
+    // And the join asks Postgres for exactly those, so a new User column cannot
+    // arrive on this row by accident.
+    const include = prismaMock.phoneNumber.findMany.mock.calls[0]![0].include
+    expect(include.assignedUser.select).toEqual({
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+    })
+  })
+})
+
+describe('PATCH /api/orgs/:orgId/phone-numbers/:id/assignment', () => {
+  it('gives a number nobody holds to a member', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      orgNumberRow({ assignedUserId: null, assignedUser: null }),
+    )
+
+    const res = await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.number.assignedUser.id).toBe('user-b')
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith({
+      where: { id: 'num-1', orgId: ORG_A },
+      data: { assignedUserId: 'user-b', isActiveForOutbound: false },
+    })
+  })
+
+  // The invariant MAI-197 names: reassignment cannot leave one user with two
+  // active outbound numbers. The flag meant "this is the OLD holder's caller
+  // ID", so carrying it across is exactly how the second one would appear.
+  it('clears the caller-ID flag when a HELD number changes hands', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      orgNumberRow({ assignedUserId: 'user-a', isActiveForOutbound: true }),
+    )
+
+    const res = await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.number.isActiveForOutbound).toBe(false)
+    expect(prismaMock.phoneNumber.updateMany.mock.calls[0]![0].data.isActiveForOutbound).toBe(false)
+  })
+
+  it('takes a number back with null, clearing the holder and the caller ID', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      orgNumberRow({ assignedUserId: 'user-a', isActiveForOutbound: true }),
+    )
+
+    const res = await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: null })
+
+    expect(res.status).toBe(200)
+    expect(res.body.number.assignedUser).toBeNull()
+    expect(res.body.number.isActiveForOutbound).toBe(false)
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith({
+      where: { id: 'num-1', orgId: ORG_A },
+      data: { assignedUserId: null, isActiveForOutbound: false },
+    })
+    // Nobody to check a seat for, so no membership lookup is made for the target.
+    expect(prismaMock.membership.findFirst).toHaveBeenCalledTimes(1)
+  })
+
+  // A no-op has to be a no-op. The write clears the caller ID, so re-submitting
+  // the holder a number already has would switch that person's line off.
+  it('writes NOTHING when the holder is already the one asked for', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      orgNumberRow({ assignedUserId: 'user-b', isActiveForOutbound: true }),
+    )
+
+    const res = await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    expect(res.status).toBe(200)
+    // The caller ID survived, which is the whole reason this branch exists.
+    expect(res.body.number.isActiveForOutbound).toBe(true)
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('treats an already-unassigned number asked to be unassigned as the same no-op', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      orgNumberRow({ assignedUserId: null, assignedUser: null }),
+    )
+
+    const res = await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: null })
+
+    expect(res.status).toBe(200)
+    expect(res.body.number.assignedUser).toBeNull()
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  // The org boundary, applied to a value that came straight off the body.
+  it('refuses a user who holds no active seat in this org, and writes nothing', async () => {
+    authAsAdmin(membershipRow({ roles: ['admin'] }), null)
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(orgNumberRow({ assignedUserId: 'user-a' }))
+
+    const res = await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-in-org-b' })
+
+    // 404 and it names nobody: an admin must not learn whether that account exists.
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe(NOT_A_MEMBER_ERROR)
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('looks the new holder up scoped to this org and to an ACTIVE seat', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(orgNumberRow({ assignedUserId: 'user-a' }))
+
+    await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    // A removed member's row is isActive:false, so offboarding takes effect here
+    // too: their seat is gone and no number can be handed to them.
+    expect(prismaMock.membership.findFirst.mock.calls[1]![0].where).toEqual({
+      userId: 'user-b',
+      orgId: ORG_A,
+      isActive: true,
+    })
+  })
+
+  it('refuses a non-admin member with 403, and writes nothing', async () => {
+    authAs(membershipRow({ roles: ['basic'] }))
+
+    const res = await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    expect(res.status).toBe(403)
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+    // Refused before the body was even read, so no number was looked up either.
+    expect(prismaMock.phoneNumber.findFirst).not.toHaveBeenCalled()
+  })
+
+  it('answers an admin of another org with 404, and writes nothing', async () => {
+    authAs(null)
+
+    const res = await request(app)
+      .patch(`/api/orgs/${ORG_B}/phone-numbers/num-1/assignment`)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unauthenticated caller before any query', async () => {
+    const res = await request(app).patch(ASSIGN_A).send({ assignedUserId: 'user-b' })
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('404s when the number is not in this org', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+
+    const res = await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Phone number not found')
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  // The row can vanish between the read and the write. The scoped updateMany
+  // then touches nothing, and `count === 0` is what turns that into a 404 rather
+  // than a silent success.
+  it('404s when the scoped write matches no row', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(orgNumberRow({ assignedUserId: 'user-a' }))
+    prismaMock.phoneNumber.updateMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Phone number not found')
+  })
+
+  it.each([
+    ['a missing key', {}],
+    ['a number', { assignedUserId: 7 }],
+    ['an empty string', { assignedUserId: '' }],
+    ['blank space', { assignedUserId: '   ' }],
+    ['an array', { assignedUserId: ['user-b'] }],
+  ])('refuses %s with one actionable message', async (_label, body) => {
+    authAsAdmin()
+
+    const res = await request(app).patch(ASSIGN_A).set('Authorization', AUTH).send(body)
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe(ASSIGNEE_ERROR)
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  // Whatever the input, this route can only ever turn the flag OFF. That is what
+  // makes "at most one active number per user" hold without a count or a lock:
+  // there is no path here that creates a second active row.
+  it.each([null, 'user-b'])('never turns the caller-ID flag ON (holder %s)', async (holder) => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      orgNumberRow({ assignedUserId: 'user-a', isActiveForOutbound: false }),
+    )
+
+    await request(app).patch(ASSIGN_A).set('Authorization', AUTH).send({ assignedUserId: holder })
+
+    for (const call of prismaMock.phoneNumber.updateMany.mock.calls) {
+      expect(call[0].data.isActiveForOutbound).toBe(false)
+    }
+  })
+
+  it('runs the read and the write inside ONE transaction', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(orgNumberRow({ assignedUserId: 'user-a' }))
+
+    await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    // The current holder decides whether this is a no-op, so the read and the
+    // write have to see the same instant.
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    const txOrder = prismaMock.$transaction.mock.invocationCallOrder[0]!
+    expect(prismaMock.phoneNumber.findFirst.mock.invocationCallOrder[0]!).toBeGreaterThan(txOrder)
+    expect(prismaMock.phoneNumber.updateMany.mock.invocationCallOrder[0]!).toBeGreaterThan(txOrder)
+  })
+
+  it('never writes with update() or delete() by id', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(orgNumberRow({ assignedUserId: 'user-a' }))
+
+    await request(app)
+      .patch(ASSIGN_A)
+      .set('Authorization', AUTH)
+      .send({ assignedUserId: 'user-b' })
+
+    expect(prismaMock.phoneNumber.delete).not.toHaveBeenCalled()
+    expect(prismaMock.phoneNumber.deleteMany).not.toHaveBeenCalled()
   })
 })

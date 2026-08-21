@@ -74,3 +74,38 @@ export interface SearchNumbersResponse {
 export interface PhoneNumberResponse {
   number: PhoneNumber
 }
+
+/**
+ * The holder of a number, as the admin view shows it — enough to tell two reps
+ * apart by name or by email. Mirrors `ASSIGNEE_SELECT` in
+ * `server/src/routes/phoneNumbers.ts`.
+ */
+export interface PhoneNumberAssignee {
+  id: string
+  firstName: string | null
+  lastName: string | null
+  email: string
+}
+
+/**
+ * One number the org owns, from the admin-only org-wide view
+ * (`mapOrgPhoneNumberToApi`). `assignedUser` is `null` when the org holds the
+ * number and nobody has it yet — a real state since MAI-197, not a missing
+ * lookup.
+ */
+export interface OrgPhoneNumber extends PhoneNumber {
+  assignedUser: PhoneNumberAssignee | null
+}
+
+/** What GET .../phone-numbers/all returns: every number in the org, plus totals. */
+export interface GetOrgNumbersResponse {
+  numbers: OrgPhoneNumber[]
+  total: number
+  /** How many of the returned rows nobody holds. */
+  unassignedCount: number
+}
+
+/** What PATCH .../assignment returns: the number, with its new holder. */
+export interface OrgPhoneNumberResponse {
+  number: OrgPhoneNumber
+}

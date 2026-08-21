@@ -47,6 +47,37 @@ function mapPhoneNumberToApi(number: PhoneNumber) {
   }
 }
 
+/** The holder's identity, as the admin table shows it. */
+const ASSIGNEE_SELECT = { id: true, firstName: true, lastName: true, email: true } as const
+
+type Assignee = { id: string; firstName: string | null; lastName: string | null; email: string }
+
+/**
+ * The same number, plus who holds it — the ONE thing the per-user mapper leaves
+ * out because a rep reading their own list is already the answer.
+ *
+ * An admin is reading someone else's row, so the holder is the entire point of
+ * the view: "which number belongs to which rep" has no answer without it. `null`
+ * means the org owns the number and nobody has it, which is a real state since
+ * MAI-197 and not a missing lookup.
+ *
+ * The name and the email both travel, because two reps called Sam are told apart
+ * by the address and by nothing else on the row.
+ */
+function mapOrgPhoneNumberToApi(number: PhoneNumber & { assignedUser: Assignee | null }) {
+  return {
+    ...mapPhoneNumberToApi(number),
+    assignedUser: number.assignedUser
+      ? {
+          id: number.assignedUser.id,
+          firstName: number.assignedUser.firstName,
+          lastName: number.assignedUser.lastName,
+          email: number.assignedUser.email,
+        }
+      : null,
+  }
+}
+
 // --- Search input ---
 
 export const SEARCH_DEFAULT_LIMIT = 20
@@ -181,6 +212,25 @@ class NumberNotReady extends Error {
     super('phone number not active')
   }
 }
+/** The admin named someone who does not hold an active seat in this org. */
+class NotAMember extends Error {}
+
+// --- Assignment input ---
+
+// One route covers assign, reassign, and unassign, because all three answer the
+// same question — who holds this number — and splitting them into three verbs
+// would give the same write three places to drift. `null` is the unassign.
+const assignmentBodySchema = z.object({
+  assignedUserId: z.string().trim().min(1).nullable(),
+})
+
+// One message for every shape the body can be wrong in. Zod's own wording names
+// the type it wanted, which tells the person nothing they can act on.
+const ASSIGNEE_ERROR = 'Pick a member to give this number to, or send null to take it back.'
+
+// 404 rather than 403 or 400, and it names no one: an admin asking about a user
+// id from another org must not learn whether that account exists.
+const NOT_A_MEMBER_ERROR = 'Pick someone who is in this organization.'
 
 // Only the one field, and only a boolean. `false` is parsed, not rejected here,
 // so the route can answer it with a message that says what to do instead.
@@ -230,6 +280,57 @@ router.get(
       numbers: numbers.map(mapPhoneNumberToApi),
       total: numbers.length,
       activeCount: numbers.filter((n) => n.isActiveForOutbound).length,
+    })
+  }),
+)
+
+// ============================================================
+// GET /api/orgs/:orgId/phone-numbers/all — every number in the org (admin only)
+// ============================================================
+// The sibling route above answers "which numbers are MINE". This one answers
+// "which numbers is this organization paying for, and who has them" — the two
+// questions an admin cannot ask without it, and the reason MAI-197 exists.
+//
+// Registered before any `/:id` route, because `/all` would otherwise be read as
+// an id. There is no `GET /:id` today; the order is what keeps that true if one
+// is ever added.
+//
+// Admin-gated on the SERVER. Hiding the pane from a rep is a courtesy; this is
+// the boundary, and it answers 403 rather than 404 because the caller can see
+// the org perfectly well — they just may not read the whole inventory.
+//
+// Not paginated, for the same reason the per-user list is not: every row is a
+// number the org rents every month, so the list is bounded by the bill rather
+// than by anything a page size would protect. A page 2 would hide a number the
+// org is paying for, which is the exact question this view exists to answer.
+router.get(
+  '/all',
+  wrapRoute('GET /api/orgs/:orgId/phone-numbers/all', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId, { admin: true })
+    if (!membership) return
+
+    // --- Execute query ---
+    // orgId alone: the tenant boundary, and deliberately no assignedUserId — the
+    // whole point is the numbers that are NOT the caller's. Newest first, because
+    // an admin reading an inventory is usually checking what was just bought.
+    const numbers = await prisma.phoneNumber.findMany({
+      where: { orgId },
+      include: { assignedUser: { select: ASSIGNEE_SELECT } },
+      orderBy: [{ createdAt: 'desc' }],
+    })
+
+    // --- Return response ---
+    // unassignedCount is counted from the rows just read rather than with a
+    // second query: one read cannot disagree with itself. It is what lets the
+    // table say "3 numbers have nobody" without the reader counting rows.
+    res.json({
+      numbers: numbers.map(mapOrgPhoneNumberToApi),
+      total: numbers.length,
+      unassignedCount: numbers.filter((n) => n.assignedUserId === null).length,
     })
   }),
 )
@@ -520,6 +621,117 @@ router.patch(
 
     // --- Return response ---
     res.json({ number: mapPhoneNumberToApi(target) })
+  }),
+)
+
+// ============================================================
+// PATCH /api/orgs/:orgId/phone-numbers/:id/assignment — who holds it (admin only)
+// ============================================================
+// Assign, reassign, and unassign are ONE route, because they are one write: the
+// holder becomes somebody, or the holder becomes nobody. Three routes would give
+// the same field three places to be validated differently.
+//
+// A number in any status can be handed over. A `searching` row is a purchase in
+// flight, and the person who should end up with it is not always the person who
+// clicked buy — refusing the move until provisioning finishes would strand it.
+router.patch(
+  '/:id/assignment',
+  wrapRoute('PATCH /api/orgs/:orgId/phone-numbers/:id/assignment', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    // Admin, and before the body is read: a rep must not learn from a validation
+    // error whether a number id is real.
+    const membership = await requireMembership(authReq, res, orgId, { admin: true })
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = assignmentBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: ASSIGNEE_ERROR })
+    }
+    const nextUserId = parsed.data.assignedUserId
+
+    // --- Execute query ---
+    // One transaction, with the row READ inside it: the current holder decides
+    // whether this is a no-op, and a no-op must not clear the caller ID.
+    let updated: PhoneNumber & { assignedUser: Assignee | null }
+    try {
+      updated = await prisma.$transaction(async (tx) => {
+        // orgId is the tenant boundary and there is no assignedUserId filter —
+        // an admin acts on the org's numbers, including a colleague's.
+        const found = await tx.phoneNumber.findFirst({
+          where: { id, orgId },
+          include: { assignedUser: { select: ASSIGNEE_SELECT } },
+        })
+        if (!found) throw new NumberNotFound()
+
+        // Already theirs. Answered as a success and written NOT AT ALL, because
+        // the write below clears the caller ID: re-submitting the holder a number
+        // already has would otherwise silently switch off that person's outbound
+        // line. A no-op has to be a no-op.
+        if (found.assignedUserId === nextUserId) return found
+
+        // The new holder must hold an ACTIVE seat in THIS org. Without this a
+        // number could be handed to a user id from another tenant, and the org
+        // boundary would be broken by a value straight off the request body.
+        let assignee: Assignee | null = null
+        if (nextUserId !== null) {
+          const target = await tx.membership.findFirst({
+            where: { userId: nextUserId, orgId, isActive: true },
+            select: { user: { select: ASSIGNEE_SELECT } },
+          })
+          if (!target) throw new NotAMember()
+          assignee = target.user
+        }
+
+        // isActiveForOutbound goes false on EVERY handover, and that single line
+        // is what keeps "at most one active number per user" true. The flag meant
+        // "this is the OLD holder's caller ID"; carrying it across would give the
+        // new holder a second active number if they already had one, and the
+        // schema has no constraint to catch it. Nothing here can ever turn a flag
+        // ON, so there is no count to race on and no row lock to take. The new
+        // holder picks their own caller ID through the sibling PATCH route.
+        //
+        // updateMany scoped by orgId, never update by id: the where clause carries
+        // the boundary even if the read above were ever bypassed.
+        const result = await tx.phoneNumber.updateMany({
+          where: { id, orgId },
+          data: { assignedUserId: nextUserId, isActiveForOutbound: false },
+        })
+        if (result.count === 0) throw new NumberNotFound()
+
+        // The row just read, with the two fields this route writes. Every field
+        // the mapper sends is either unchanged or set right here, so the response
+        // cannot disagree with what was stored — and it costs no extra read.
+        return {
+          ...found,
+          assignedUserId: nextUserId,
+          isActiveForOutbound: false,
+          assignedUser: assignee,
+        }
+      })
+    } catch (error) {
+      if (error instanceof NumberNotFound) {
+        return void res.status(404).json({ error: NOT_FOUND_ERROR })
+      }
+      if (error instanceof NotAMember) {
+        return void res.status(404).json({ error: NOT_A_MEMBER_ERROR })
+      }
+      throw error
+    }
+
+    // Identifiers only. Never the number itself, which is PII.
+    logger.info(
+      { orgId, userId, phoneNumberId: id, assignedUserId: nextUserId },
+      'changed who holds a phone number',
+    )
+
+    // --- Return response ---
+    res.json({ number: mapOrgPhoneNumberToApi(updated) })
   }),
 )
 

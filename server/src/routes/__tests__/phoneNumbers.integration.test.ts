@@ -533,3 +533,280 @@ describe('PhoneNumber provisioning compare-and-set (integration, real Postgres)'
     expect(still!.status).toBe('active')
   })
 })
+
+// ============================================================
+// MAI-197 — the org-wide view and the handover, against real Postgres
+// ============================================================
+// The unit suite mocks Prisma, so it proves the routes ASK correctly. Only a real
+// Postgres can prove the column is genuinely nullable, that the join returns the
+// holder, that the org filter really excludes the other tenant, and that the
+// active-number invariant survives an actual handover.
+describe('PhoneNumber org-wide view and assignment (integration, real Postgres)', () => {
+  let prisma: PrismaClient
+
+  beforeAll(() => {
+    prisma = createTestPrisma()
+  })
+
+  afterAll(async () => {
+    await prisma.$disconnect()
+  })
+
+  /** The admin list route's own clause, verbatim. */
+  function orgListArgs(orgId: string) {
+    return {
+      where: { orgId },
+      include: {
+        assignedUser: { select: { id: true, firstName: true, lastName: true, email: true } },
+      },
+      orderBy: [{ createdAt: 'desc' as const }],
+    }
+  }
+
+  /** The assignment route's own write, verbatim. */
+  function handoverArgs(id: string, orgId: string, assignedUserId: string | null) {
+    return {
+      where: { id, orgId },
+      data: { assignedUserId, isActiveForOutbound: false },
+    }
+  }
+
+  // The migration, proved rather than assumed. `assignedUserId String?` in the
+  // schema file means nothing if the column in Postgres is still NOT NULL.
+  it('stores a number that nobody holds', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+
+    const row = await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: null,
+      e164: '+12025557001',
+    })
+
+    const stored = await prisma.phoneNumber.findFirst({ where: { id: row.id } })
+    expect(stored!.assignedUserId).toBeNull()
+  })
+
+  it('returns a COLLEAGUE’s number, with the holder’s name and email joined on', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const colleague = await seedMember(prisma, org.orgId)
+
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: colleague.userId,
+      e164: '+12025557002',
+    })
+
+    const rows = await prisma.phoneNumber.findMany(orgListArgs(org.orgId))
+
+    // The per-user list would return nothing here. That gap is the bug MAI-197
+    // reports: an admin could not answer "which number belongs to which rep".
+    expect(rows).toHaveLength(1)
+    expect(rows[0].assignedUser!.id).toBe(colleague.userId)
+    expect(rows[0].assignedUser!.email).toBe(colleague.email)
+  })
+
+  it('joins null for a number nobody holds, rather than dropping the row', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: null,
+      e164: '+12025557003',
+    })
+
+    const rows = await prisma.phoneNumber.findMany(orgListArgs(org.orgId))
+
+    // A join that dropped it would hide a number the org is still paying for —
+    // the one row an inventory view most needs to show.
+    expect(rows).toHaveLength(1)
+    expect(rows[0].assignedUser).toBeNull()
+  })
+
+  it('never returns a number from another org', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+
+    await seedPhoneNumber(prisma, {
+      orgId: orgB.orgId,
+      assignedUserId: orgB.adminUserId,
+      e164: '+12025557004',
+    })
+    await seedPhoneNumber(prisma, {
+      orgId: orgB.orgId,
+      assignedUserId: null,
+      e164: '+12025557005',
+    })
+
+    const rows = await prisma.phoneNumber.findMany(orgListArgs(orgA.orgId))
+
+    expect(rows).toHaveLength(0)
+  })
+
+  it('orders the inventory newest first', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      e164: '+12025557010',
+      createdAt: new Date('2026-02-01T00:00:00.000Z'),
+    })
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: null,
+      e164: '+12025557011',
+      createdAt: new Date('2026-04-01T00:00:00.000Z'),
+    })
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      e164: '+12025557012',
+      createdAt: new Date('2026-03-01T00:00:00.000Z'),
+    })
+
+    const rows = await prisma.phoneNumber.findMany(orgListArgs(org.orgId))
+
+    expect(rows.map((r) => r.e164)).toEqual(['+12025557011', '+12025557012', '+12025557010'])
+  })
+
+  // The invariant MAI-197 names, proved end to end on real rows: the new holder
+  // already has an active number of their own, and the handover must not give
+  // them a second one.
+  it('a handover cannot leave one user with two active outbound numbers', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const rep = await seedMember(prisma, org.orgId)
+
+    // The rep's own caller ID, untouched by any of this.
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: rep.userId,
+      e164: '+12025557020',
+      isActiveForOutbound: true,
+    })
+    // The admin's caller ID, about to be handed to the rep.
+    const moving = await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      e164: '+12025557021',
+      isActiveForOutbound: true,
+    })
+
+    await prisma.phoneNumber.updateMany(handoverArgs(moving.id, org.orgId, rep.userId))
+
+    const repsNumbers = await prisma.phoneNumber.findMany({
+      where: { orgId: org.orgId, assignedUserId: rep.userId },
+    })
+    expect(repsNumbers).toHaveLength(2)
+    // Two numbers, exactly one caller ID. Carrying the flag across would have
+    // made this 2, and nothing in the schema would have caught it.
+    expect(repsNumbers.filter((n) => n.isActiveForOutbound)).toHaveLength(1)
+    expect(repsNumbers.find((n) => n.isActiveForOutbound)!.e164).toBe('+12025557020')
+  })
+
+  it('taking a number back clears both the holder and the caller ID', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const rep = await seedMember(prisma, org.orgId)
+    const row = await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: rep.userId,
+      e164: '+12025557030',
+      isActiveForOutbound: true,
+    })
+
+    await prisma.phoneNumber.updateMany(handoverArgs(row.id, org.orgId, null))
+
+    const stored = await prisma.phoneNumber.findFirst({ where: { id: row.id } })
+    expect(stored!.assignedUserId).toBeNull()
+    // A caller ID with no caller cannot place a call, so this pair is the only
+    // honest state for an unassigned number.
+    expect(stored!.isActiveForOutbound).toBe(false)
+  })
+
+  // The tenant boundary, on the write rather than the read. `updateMany` scoped
+  // by orgId is what makes a guessed id from another org write nothing.
+  it('cannot hand over a number that belongs to another org', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+    const row = await seedPhoneNumber(prisma, {
+      orgId: orgB.orgId,
+      assignedUserId: orgB.adminUserId,
+      e164: '+12025557040',
+    })
+
+    const result = await prisma.phoneNumber.updateMany(
+      handoverArgs(row.id, orgA.orgId, orgA.adminUserId),
+    )
+
+    // count 0 is what the route turns into a 404.
+    expect(result.count).toBe(0)
+    const untouched = await prisma.phoneNumber.findFirst({ where: { id: row.id } })
+    expect(untouched!.assignedUserId).toBe(orgB.adminUserId)
+  })
+
+  // The route's own target lookup. A removed member's seat is isActive:false, so
+  // offboarding takes effect here too and no number can be handed to them.
+  it('finds no seat for a member whose membership has been deactivated', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const leaver = await seedMember(prisma, org.orgId)
+    await prisma.membership.updateMany({
+      where: { userId: leaver.userId, orgId: org.orgId },
+      data: { isActive: false },
+    })
+
+    const seat = await prisma.membership.findFirst({
+      where: { userId: leaver.userId, orgId: org.orgId, isActive: true },
+      select: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
+    })
+
+    expect(seat).toBeNull()
+  })
+
+  it('finds no seat for a member of a DIFFERENT org', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+
+    const seat = await prisma.membership.findFirst({
+      where: { userId: orgB.adminUserId, orgId: orgA.orgId, isActive: true },
+      select: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
+    })
+
+    // Without this scoping, a user id straight off the request body could put
+    // another tenant's user on this org's number.
+    expect(seat).toBeNull()
+  })
+
+  // The Restrict on the relation, still standing after the column went nullable.
+  // Releasing a number is a Twilio call, not a row delete, so a user who still
+  // holds one must not be deletable out from under it.
+  it('still refuses to delete a user who holds a number', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const rep = await seedMember(prisma, org.orgId)
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: rep.userId,
+      e164: '+12025557050',
+    })
+
+    await expect(prisma.user.delete({ where: { id: rep.userId } })).rejects.toThrow()
+  })
+
+  // And the other half: once the number is taken back, the Restrict has nothing
+  // to hold on to. This is the departing-rep path the issue describes.
+  it('lets the same user be deleted once the number is taken back', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const leaver = await seedMember(prisma, org.orgId)
+    const row = await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: leaver.userId,
+      e164: '+12025557051',
+    })
+
+    await prisma.phoneNumber.updateMany(handoverArgs(row.id, org.orgId, null))
+    await prisma.membership.deleteMany({ where: { userId: leaver.userId } })
+
+    await expect(prisma.user.delete({ where: { id: leaver.userId } })).resolves.toBeTruthy()
+    // The number outlives them, still rented, still visible to the admin.
+    const orphan = await prisma.phoneNumber.findFirst({ where: { id: row.id } })
+    expect(orphan!.assignedUserId).toBeNull()
+  })
+})

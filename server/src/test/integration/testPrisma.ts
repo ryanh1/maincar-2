@@ -118,16 +118,19 @@ export async function seedMember(
 }
 
 /**
- * Adds a phone number to an org, assigned to a user.
+ * Adds a phone number to an org, assigned to a user — or to nobody.
  *
  * `createdAt` is settable because the list route's tie-break sorts on it, and a
  * test cannot prove "oldest first" with rows written milliseconds apart.
+ *
+ * `assignedUserId` takes null since MAI-197: the org can hold a number no member
+ * has, and the admin view exists to show exactly those.
  */
 export async function seedPhoneNumber(
   prisma: PrismaClient,
   opts: {
     orgId: string
-    assignedUserId: string
+    assignedUserId: string | null
     e164?: string
     twilioSid?: string | null
     status?: string
