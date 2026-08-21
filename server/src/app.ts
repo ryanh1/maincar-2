@@ -5,6 +5,7 @@ import { logger } from '../dependencies/logger.js'
 import { WEB_ORIGIN } from './config.js'
 import { requestId } from './middleware/requestId.js'
 import authRouter from './routes/auth.js'
+import emailRouter from './routes/email.js'
 import invitationsRouter from './routes/invitations.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
 import teamRouter from './routes/team.js'
@@ -42,6 +43,12 @@ app.use('/api', invitationsRouter)
 
 app.use('/api/auth', authRouter)
 app.use('/api/team', teamRouter)
+
+// Mounted at /api/email rather than under /api/orgs/:orgId: the org sits inside
+// this router's own paths (/orgs/:orgId/drafts), which keeps every route the
+// composer will ever add — drafts today, templates and send later — under one
+// prefix a reader can find.
+app.use('/api/email', emailRouter)
 
 // The org is in the path, so the tenant boundary is checked per request rather
 // than read from the caller's currentOrgId preference.
