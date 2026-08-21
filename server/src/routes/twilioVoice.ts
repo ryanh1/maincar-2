@@ -13,16 +13,20 @@
  * scoped to the route rather than added globally, so nothing else starts
  * accepting form posts.
  *
- * This file owns two Twilio endpoints. POST /voice returns TwiML for a call the
+ * This file owns three Twilio endpoints. POST /voice returns TwiML for a call the
  * rep's browser Voice SDK Device originated (`Device.connect({ params: { callId }
  * })`, vite/src/components/dialer/DialerProvider.tsx) — it is TOLD which call by
  * the `callId` param that connect() carries, not by Twilio's `Direction`, because
  * that param can only be present on a request WE built. The same URL is where
  * purchased numbers point their INBOUND calls (a later issue), so a request with
  * no `callId` — including every real inbound call — is answered with empty TwiML
- * rather than mis-dialed. POST /voice/status is the call-progress status
- * callback: it maps Twilio's CallStatus onto Call.status, records duration and
- * end time, and kicks off the recording upload/transcribe pipeline.
+ * rather than mis-dialed. It tells Twilio to record the bridged call only when the
+ * row's `recordingConsent` is `"granted"`. POST /voice/status is the call-progress
+ * status callback: it maps Twilio's CallStatus onto Call.status and records
+ * duration and end time. POST /voice/recording-status is the recording-progress
+ * callback — the only place Twilio delivers a `RecordingSid` for a `<Dial
+ * record>` call — and is where `recordingEnabled` is set from Twilio's own
+ * confirmation and the upload/transcribe pipeline is kicked off.
  */
 import express, { Router, type NextFunction, type Request, type Response } from 'express'
 
@@ -159,10 +163,15 @@ router.post(
     // --- Return TwiML ---
     // Bridges the browser leg already on the line to the ONE destination number —
     // text/xml is what Twilio expects; the SDK escapes and well-forms the XML.
-    res
-      .status(200)
-      .type('text/xml')
-      .send(buildBridgeTwiml({ toE164: call.toE164, callerId: call.fromE164 }))
+    // `record` is derived from the row's own stored consent, never from anything
+    // Twilio sends: a request Twilio never verified cannot turn recording on.
+    res.status(200).type('text/xml').send(
+      buildBridgeTwiml({
+        toE164: call.toE164,
+        callerId: call.fromE164,
+        record: call.recordingConsent === 'granted',
+      }),
+    )
   }),
 )
 
@@ -258,6 +267,89 @@ router.post(
       },
       'twilio status callback processed',
     )
+
+    // --- Return response ---
+    // Twilio ignores the body; a keyed 200 acknowledges receipt.
+    res.status(200).json({ received: true })
+  }),
+)
+
+// ============================================================
+// POST /api/twilio/voice/recording-status — recording-progress callback
+// ============================================================
+// Twilio POSTs here only for a call whose <Dial> carried `record`
+// (dependencies/twilio.ts -> buildBridgeTwiml), which happens only when the row's
+// recordingConsent was "granted" at the moment POST /voice ran. This is the ONLY
+// place Twilio delivers a RecordingSid for this architecture — it is not part of
+// the CallStatus callback above, because the recording belongs to the <Dial>
+// verb, not the <Number> leg that callback tracks. `recordingEnabled` is set HERE,
+// from Twilio's own confirmation that a recording exists — never from consent —
+// so a call whose recording failed to start still reads as not recorded.
+const RECORDING_STATUSES_MEANING_RECORDING_HAPPENED = new Set(['in-progress', 'completed'])
+
+router.post(
+  '/voice/recording-status',
+  express.urlencoded({ extended: false }),
+  verifyTwilioWebhook('POST /api/twilio/voice/recording-status'),
+  wrapRoute('POST /api/twilio/voice/recording-status', async (req, res) => {
+    // --- Parse & validate params ---
+    const params = (req.body ?? {}) as Record<string, string>
+    const callSid = params.CallSid
+    const recordingSid = params.RecordingSid
+    const recordingStatus = params.RecordingStatus
+
+    // --- Find the call ---
+    // By twilioCallSid alone, exactly as the status callback does: it is the SID
+    // of the browser leg that <Dial> hung off, which is the same SID stamped by
+    // POST /voice above.
+    const call = await prisma.call.findFirst({ where: { twilioCallSid: callSid } })
+    if (!call) {
+      logger.warn(
+        { route: 'POST /api/twilio/voice/recording-status', requestId: req.id, callSid },
+        'twilio recording-status callback for an unknown CallSid',
+      )
+      return void res.status(404).json({ error: 'Call not found' })
+    }
+
+    // --- Mark recording as confirmed ---
+    // "in-progress" and "completed" both mean Twilio is actually recording; either
+    // is enough to flip the flag on. Anything else (failed, absent) is logged and
+    // left alone — recordingEnabled stays whatever it already was rather than
+    // being guessed at. updateMany scoped by orgId, never update-by-id
+    // (rules/database-and-prisma.md).
+    if (RECORDING_STATUSES_MEANING_RECORDING_HAPPENED.has(recordingStatus)) {
+      await prisma.call.updateMany({
+        where: { id: call.id, orgId: call.orgId },
+        data: { recordingEnabled: true },
+      })
+    } else {
+      logger.warn(
+        {
+          route: 'POST /api/twilio/voice/recording-status',
+          requestId: req.id,
+          orgId: call.orgId,
+          callId: call.id,
+          recordingStatus,
+        },
+        'twilio recording-status callback reported the recording did not happen',
+      )
+    }
+
+    // --- Chain the upload pipeline ---
+    // Only once the recording is actually done — media exists to fetch only on
+    // "completed"; an "in-progress" delivery has nothing to download yet.
+    if (recordingStatus === 'completed' && recordingSid) {
+      await queueUploadRecording(call.id, recordingSid)
+      logger.info(
+        {
+          route: 'POST /api/twilio/voice/recording-status',
+          requestId: req.id,
+          orgId: call.orgId,
+          callId: call.id,
+        },
+        'twilio recording-status callback: recording complete, queued upload',
+      )
+    }
 
     // --- Return response ---
     // Twilio ignores the body; a keyed 200 acknowledges receipt.

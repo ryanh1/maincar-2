@@ -136,10 +136,31 @@ describe('a call the browser Device originated (carries our callId)', () => {
     expect(res.status).toBe(200)
     expect(res.type).toBe('text/xml')
     expect(res.text).toContain('<Response>')
-    expect(res.text).toContain('<Dial callerId="+12025550123">')
+    expect(res.text).toContain('<Dial callerId="+12025550123"')
     expect(res.text).toContain('<Number')
     expect(res.text).toContain('+13035550199')
   })
+
+  it('tells Twilio to record when the row’s recordingConsent is granted', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(callRow({ recordingConsent: 'granted' }))
+
+    const res = await post({ CallSid: CALL_SID, callId: 'call-1' })
+
+    expect(res.text).toContain('record="record-from-answer"')
+    expect(res.text).toMatch(/recordingStatusCallback="[^"]*\/api\/twilio\/voice\/recording-status"/)
+  })
+
+  it.each([['declined'], [null]])(
+    'never tells Twilio to record when recordingConsent is %s',
+    async (consent) => {
+      prismaMock.call.findFirst.mockResolvedValue(callRow({ recordingConsent: consent }))
+
+      const res = await post({ CallSid: CALL_SID, callId: 'call-1' })
+
+      expect(res.text).not.toContain('record=')
+      expect(res.text).not.toContain('recordingStatusCallback')
+    },
+  )
 
   it('looks the call up by id', async () => {
     await post({ CallSid: CALL_SID, callId: 'call-1' })
@@ -347,6 +368,140 @@ describe('status callback — recording pipeline', () => {
 describe('status callback — acknowledgement', () => {
   it('200s with a keyed body Twilio can ignore', async () => {
     const res = await postStatus({ CallSid: CALL_SID, CallStatus: 'in-progress' })
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ received: true })
+  })
+})
+
+// ============================================================
+// POST /api/twilio/voice/recording-status — the recording-progress callback
+// ============================================================
+const RECORDING_STATUS_URL = '/api/twilio/voice/recording-status'
+const RECORDING_SID = 'RE0123456789abcdef'
+
+/** POSTs a Twilio-shaped recording-status callback with a signature header. */
+function postRecordingStatus(body: Record<string, string>, signature: string | null = SIG) {
+  const req = request(app).post(RECORDING_STATUS_URL).type('form')
+  if (signature !== null) req.set('X-Twilio-Signature', signature)
+  return req.send(body)
+}
+
+describe('recording-status callback — signature', () => {
+  it('403s on a bad signature, before any lookup', async () => {
+    verifySignatureMock.mockReturnValue(false)
+
+    const res = await postRecordingStatus({
+      CallSid: CALL_SID,
+      RecordingSid: RECORDING_SID,
+      RecordingStatus: 'completed',
+    })
+
+    expect(res.status).toBe(403)
+    expect(res.body).toEqual({ error: 'Invalid Twilio signature' })
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+    expect(queueUploadRecordingMock).not.toHaveBeenCalled()
+  })
+
+  it('403s when the signature header is absent', async () => {
+    verifySignatureMock.mockReturnValue(false)
+
+    const res = await postRecordingStatus(
+      { CallSid: CALL_SID, RecordingSid: RECORDING_SID, RecordingStatus: 'completed' },
+      null,
+    )
+
+    expect(res.status).toBe(403)
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
+  })
+})
+
+describe('recording-status callback — lookup', () => {
+  it('looks the call up by CallSid', async () => {
+    await postRecordingStatus({
+      CallSid: CALL_SID,
+      RecordingSid: RECORDING_SID,
+      RecordingStatus: 'completed',
+    })
+
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({ where: { twilioCallSid: CALL_SID } })
+  })
+
+  it('404s when no call matches the CallSid, and writes nothing', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(null)
+
+    const res = await postRecordingStatus({
+      CallSid: 'CAunknownSID',
+      RecordingSid: RECORDING_SID,
+      RecordingStatus: 'completed',
+    })
+
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Call not found' })
+    expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+    expect(queueUploadRecordingMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('recording-status callback — recordingEnabled', () => {
+  it.each(['in-progress', 'completed'])(
+    'sets recordingEnabled true, scoped by orgId, on RecordingStatus %s',
+    async (recordingStatus) => {
+      await postRecordingStatus({ CallSid: CALL_SID, RecordingSid: RECORDING_SID, RecordingStatus: recordingStatus })
+
+      expect(prismaMock.call.updateMany).toHaveBeenCalledWith({
+        where: { id: 'call-1', orgId: 'org-a' },
+        data: { recordingEnabled: true },
+      })
+      // update-by-id is never used for org-scoped data.
+      expect(prismaMock.call.update).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['failed', 'absent'])(
+    'leaves recordingEnabled untouched on RecordingStatus %s',
+    async (recordingStatus) => {
+      await postRecordingStatus({ CallSid: CALL_SID, RecordingSid: RECORDING_SID, RecordingStatus: recordingStatus })
+
+      expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+    },
+  )
+})
+
+describe('recording-status callback — upload pipeline', () => {
+  it('queues the upload job with the call id and RecordingSid on RecordingStatus completed', async () => {
+    const res = await postRecordingStatus({
+      CallSid: CALL_SID,
+      RecordingSid: RECORDING_SID,
+      RecordingStatus: 'completed',
+    })
+
+    expect(res.status).toBe(200)
+    expect(queueUploadRecordingMock).toHaveBeenCalledTimes(1)
+    expect(queueUploadRecordingMock).toHaveBeenCalledWith('call-1', RECORDING_SID)
+  })
+
+  it('does not queue the upload job on RecordingStatus in-progress — no media exists yet', async () => {
+    await postRecordingStatus({ CallSid: CALL_SID, RecordingSid: RECORDING_SID, RecordingStatus: 'in-progress' })
+
+    expect(queueUploadRecordingMock).not.toHaveBeenCalled()
+  })
+
+  it('does not queue the upload job on RecordingStatus failed', async () => {
+    await postRecordingStatus({ CallSid: CALL_SID, RecordingSid: RECORDING_SID, RecordingStatus: 'failed' })
+
+    expect(queueUploadRecordingMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('recording-status callback — acknowledgement', () => {
+  it('200s with a keyed body Twilio can ignore', async () => {
+    const res = await postRecordingStatus({
+      CallSid: CALL_SID,
+      RecordingSid: RECORDING_SID,
+      RecordingStatus: 'completed',
+    })
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ received: true })

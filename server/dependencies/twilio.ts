@@ -214,6 +214,17 @@ export const OUTBOUND_VOICE_WEBHOOK_PATH = '/api/twilio/voice'
 export const OUTBOUND_STATUS_WEBHOOK_PATH = '/api/twilio/voice/status'
 
 /**
+ * The path Twilio POSTs to when a `<Dial record>` recording changes state
+ * (in-progress, completed). This is the ONLY reliable source of `RecordingSid` —
+ * Twilio does not add it to the call's own CallStatus callback above, because the
+ * recording belongs to the `<Dial>` verb, not to the `<Number>` leg that callback
+ * tracks. `buildBridgeTwiml` wires this in as `recordingStatusCallback`; its
+ * handler (routes/twilioVoice.ts → POST /voice/recording-status) is where
+ * `Call.recordingEnabled` is actually set, from Twilio's own confirmation.
+ */
+export const OUTBOUND_RECORDING_STATUS_WEBHOOK_PATH = '/api/twilio/voice/recording-status'
+
+/**
  * Raised when PUBLIC_BASE_URL is not set, so no absolute webhook URL can be built.
  *
  * Thrown rather than tolerated, for the same reason the provisioning job refuses
@@ -328,6 +339,12 @@ export interface BridgeCallRequest {
   toE164: string
   /** E.164 caller ID to present to the destination — the Call row's `fromE164`. */
   callerId: string
+  /**
+   * Record the bridged call. The route is responsible for this being true ONLY
+   * when the Call row's `recordingConsent` is `"granted"` — this function does
+   * not read consent itself, it only wires the TwiML once told to.
+   */
+  record: boolean
 }
 
 /**
@@ -341,15 +358,33 @@ export interface BridgeCallRequest {
  * old REST-initiated call's did, even though nothing called `calls.create()` this
  * time.
  *
- * THIS COSTS MONEY once Twilio dials it: a connected call is billed per minute.
- * The route above is responsible for the double-call guard that keeps one click
- * from becoming two calls; this function only builds what to tell Twilio.
+ * When `record` is true, the `<Dial>` itself carries `record="record-from-answer"`
+ * (start once the callee answers, never during ringing) plus a
+ * `recordingStatusCallback` pointed at OUTBOUND_RECORDING_STATUS_WEBHOOK_PATH —
+ * the ONLY place Twilio ever delivers a `RecordingSid` for this architecture (see
+ * that constant's comment). Without `record`, Twilio is never told to record at
+ * all, so no recording exists and that webhook never fires for this call.
+ *
+ * THIS COSTS MONEY once Twilio dials it: a connected call is billed per minute,
+ * and a recorded one is billed for the recording too. The route above is
+ * responsible for the double-call guard that keeps one click from becoming two
+ * calls; this function only builds what to tell Twilio.
  */
 export function buildBridgeTwiml(request: BridgeCallRequest): string {
   if (!PUBLIC_BASE_URL) throw new WebhookBaseUrlMissingError()
 
   const response = new twilio.twiml.VoiceResponse()
-  const dial = response.dial({ callerId: request.callerId })
+  const dial = response.dial({
+    callerId: request.callerId,
+    ...(request.record
+      ? {
+          record: 'record-from-answer' as const,
+          recordingStatusCallback: `${PUBLIC_BASE_URL}${OUTBOUND_RECORDING_STATUS_WEBHOOK_PATH}`,
+          recordingStatusCallbackMethod: 'POST' as const,
+          recordingStatusCallbackEvent: ['in-progress', 'completed'] as const,
+        }
+      : {}),
+  })
   dial.number(
     {
       statusCallback: `${PUBLIC_BASE_URL}${OUTBOUND_STATUS_WEBHOOK_PATH}`,

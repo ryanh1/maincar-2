@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Mic, MicOff, Pause, Phone, PhoneOff, Play } from 'lucide-react'
+import { Mic, MicOff, Phone, PhoneOff } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { cn } from '@/lib/utils'
@@ -9,28 +9,6 @@ import { IconButton } from '@/components/ui/icon-button'
 import type { CallPhase } from '@/components/dialer/dialerContext'
 import { useDialer } from '@/components/dialer/dialerContext'
 import { useEndCall } from '@/hooks/dialer'
-
-/**
- * The mute/hold seam.
- *
- * Muting or holding a live call means telling the browser Voice SDK to stop
- * sending the mic / park the audio — `Twilio.Device.activeConnection().mute(true)`
- * and the hold flow behind it. That device is NOT in the app yet (nothing imports
- * `@twilio/voice-sdk`), so these buttons cannot actually silence the audio.
- *
- * They are still honest controls, not dead ones: each press flips the VISIBLE
- * state (the icon, the pressed styling, the accessible label) and calls the seam
- * with the new value. Once a Device is wired, pass an `onToggleMute` /
- * `onToggleHold` that forwards to the SDK and the audio follows for free — the
- * button already reports the state and calls this on every press.
- *
- * TODO(MAI): forward these seams to the Twilio.js Device once the browser Voice
- * SDK is added under `vite/src/dependencies/`.
- */
-export type ToggleCallControl = (next: boolean) => void
-
-// Stable identities so the default props do not change between renders.
-const noopToggle: ToggleCallControl = () => {}
 
 /** Human-facing status line for each phase the in-call view can show. */
 const STATUS_LABEL: Record<CallPhase, string> = {
@@ -46,67 +24,48 @@ export interface InCallControlsProps {
   /** The live call to hang up. */
   callId: string
   /**
-   * Whether this call is being recorded. Drives the red recording dot. Comes from
-   * the call's `recordingEnabled` — the dot never shows on a call with no consent.
+   * Whether this call is being recorded. Drives the red recording dot. Today this
+   * is an optimistic read of consent at the moment the call was placed
+   * (useCreateCall.ts), not Twilio's own confirmation — there is no live channel
+   * from the recording-status webhook back to this dialer session (MAI-191). The
+   * dot still never shows on a call with no consent, since consent is a
+   * precondition either way.
    */
   recording?: boolean
-  /**
-   * Mute seam. Called with the new muted state on every press. Defaults to a
-   * documented no-op because the browser Voice SDK is not wired yet — see
-   * {@link ToggleCallControl}.
-   */
-  onToggleMute?: ToggleCallControl
-  /**
-   * Hold seam. Called with the new held state on every press. Same no-op default
-   * and same reason as {@link onToggleMute}.
-   */
-  onToggleHold?: ToggleCallControl
   className?: string
 }
 
 /**
  * The controls shown while a call is live: a phone icon, the running duration and
- * a status line, and the mute / hold / end buttons.
+ * a status line, and the mute / end buttons.
  *
  * Wiring honesty (CLAUDE.md → "Never leave a feature half-wired"):
- *  - End is fully wired. It hangs the call up through `useEndCall`, which moves the
- *    shared dialer to its completed state on success.
- *  - Mute and Hold are seams. They flip the visible state and call
- *    `onToggleMute` / `onToggleHold`, but cannot silence the audio until the
- *    browser Voice SDK is added — see {@link ToggleCallControl}.
+ *  - End is fully wired: it hangs the call up through `useEndCall`, which moves
+ *    the shared dialer to its completed state on success.
+ *  - Mute is fully wired too, through `useDialer().muteCall`, which forwards
+ *    straight to the live browser Voice SDK Call's `mute()` (MAI-195) — pressing
+ *    it actually stops the rep's audio reaching the callee.
+ *  - Hold has no button here. The Voice SDK's `Call` has no hold method; a real
+ *    hold means a server-side redirect of the call to hold music, which is its
+ *    own feature. Rather than ship it as a live-looking no-op, it was removed
+ *    (MAI-195) until that feature exists.
  *
  * The duration and status read the shared dialer state (`useDialer`), so the timer
  * ticks with the one interval the provider owns rather than a second clock here.
  */
-export function InCallControls({
-  orgId,
-  callId,
-  recording = false,
-  onToggleMute = noopToggle,
-  onToggleHold = noopToggle,
-  className,
-}: InCallControlsProps) {
-  const { phase, elapsedSeconds } = useDialer()
+export function InCallControls({ orgId, callId, recording = false, className }: InCallControlsProps) {
+  const { phase, elapsedSeconds, muteCall } = useDialer()
   const endCall = useEndCall()
 
   const [muted, setMuted] = useState(false)
-  const [held, setHeld] = useState(false)
 
   const toggleMute = useCallback(() => {
     setMuted((current) => {
       const next = !current
-      onToggleMute(next)
+      muteCall(next)
       return next
     })
-  }, [onToggleMute])
-
-  const toggleHold = useCallback(() => {
-    setHeld((current) => {
-      const next = !current
-      onToggleHold(next)
-      return next
-    })
-  }, [onToggleHold])
+  }, [muteCall])
 
   // Hang up. Guarded so a double-click during the round trip is a no-op rather than
   // a second DELETE, and so a refused hang-up tells the rep why instead of nothing.
@@ -148,16 +107,6 @@ export function InCallControls({
           onClick={toggleMute}
         >
           {muted ? <MicOff size={16} aria-hidden /> : <Mic size={16} aria-hidden />}
-        </IconButton>
-
-        <IconButton
-          type="button"
-          variant={held ? 'secondary' : 'outline'}
-          aria-pressed={held}
-          tooltip={held ? 'Resume the call' : 'Hold the call'}
-          onClick={toggleHold}
-        >
-          {held ? <Play size={16} aria-hidden /> : <Pause size={16} aria-hidden />}
         </IconButton>
 
         <IconButton

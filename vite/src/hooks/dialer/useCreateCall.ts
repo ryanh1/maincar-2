@@ -45,8 +45,13 @@ export function useCreateCall() {
       }),
     onSuccess: (data, variables) => {
       // Hand the queued call's identity to the dialer so the in-call controls can
-      // hang it up. Recording is on only when the caller granted consent — the
-      // POST echo carries the consent, not a separate recording flag.
+      // hang it up. `recording` here is an OPTIMISTIC read of consent, taken the
+      // moment the call is queued — Twilio has not been asked to record anything
+      // yet at this point, let alone confirmed it (MAI-191, dependencies/twilio.ts
+      // → buildBridgeTwiml). There is no live channel back from the recording
+      // webhook to this dialer session, so the dot cannot yet be corrected mid-call
+      // if Twilio fails to start the recording; the call detail page is the
+      // confirmed source of truth (Call.recordingEnabled) once the call ends.
       startCall({
         orgId: variables.orgId,
         callId: data.call.id,

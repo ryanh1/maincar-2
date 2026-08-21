@@ -130,9 +130,11 @@ describe('twilioErrorStatus', () => {
 
 describe('buildBridgeTwiml', () => {
   it('dials the destination through <Number>, presenting the caller ID, off PUBLIC_BASE_URL', () => {
-    const twiml = buildBridgeTwiml({ toE164: '+13035550199', callerId: '+12025550123' })
+    const twiml = buildBridgeTwiml({ toE164: '+13035550199', callerId: '+12025550123', record: false })
 
     expect(twiml).toContain('<Response>')
+    // No consent, no record attrs at all — not even a `record: false` on the SDK
+    // call, which Twilio would treat identically but which would misstate why.
     expect(dialMock).toHaveBeenCalledWith({ callerId: '+12025550123' })
     expect(numberMock).toHaveBeenCalledTimes(1)
     const [attrs, number] = numberMock.mock.calls[0]
@@ -143,6 +145,18 @@ describe('buildBridgeTwiml', () => {
     expect(attrs.statusCallback).toBe('https://api.test.example.com/api/twilio/voice/status')
     expect(attrs.statusCallbackMethod).toBe('POST')
     expect(attrs.statusCallbackEvent).toEqual(['initiated', 'ringing', 'answered', 'completed'])
+  })
+
+  it('tells Twilio to record when record is true, with a recordingStatusCallback off PUBLIC_BASE_URL', () => {
+    buildBridgeTwiml({ toE164: '+13035550199', callerId: '+12025550123', record: true })
+
+    expect(dialMock).toHaveBeenCalledWith({
+      callerId: '+12025550123',
+      record: 'record-from-answer',
+      recordingStatusCallback: 'https://api.test.example.com/api/twilio/voice/recording-status',
+      recordingStatusCallbackMethod: 'POST',
+      recordingStatusCallbackEvent: ['in-progress', 'completed'],
+    })
   })
 
   it('throws WebhookBaseUrlMissingError when PUBLIC_BASE_URL is unset, building nothing', async () => {
@@ -157,9 +171,9 @@ describe('buildBridgeTwiml', () => {
     }))
     try {
       const fresh = await import('../twilio.js')
-      expect(() => fresh.buildBridgeTwiml({ toE164: '+1', callerId: '+1' })).toThrow(
-        fresh.WebhookBaseUrlMissingError,
-      )
+      expect(() =>
+        fresh.buildBridgeTwiml({ toE164: '+1', callerId: '+1', record: false }),
+      ).toThrow(fresh.WebhookBaseUrlMissingError)
       expect(dialMock).not.toHaveBeenCalled()
     } finally {
       vi.doUnmock('../../src/config.js')
