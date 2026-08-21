@@ -81,11 +81,30 @@ export interface DialerContextValue {
   /**
    * The call ended: go to `completed` and stop the timer, freezing
    * `elapsedSeconds` at its last value. `useEndCall` calls this on a successful
-   * hang-up.
+   * hang-up, and it also fires from the Voice SDK Device's own `disconnect` /
+   * `cancel` / `reject` / `error` events (see `placeDeviceCall`) — those are the
+   * ground truth for when the browser's leg of the call actually ends.
    */
   endCall: () => void
   /** Back to the rest state: `idle`, not dialing, timer at 0, ready for the next call. */
   reset: () => void
+
+  /**
+   * Connect the rep's browser Voice SDK Device to a queued call, and wire that
+   * call's lifecycle onto `connectCall`/`endCall` so the dialer's phase tracks
+   * what the Device actually reports (answered, hung up, never answered, or
+   * errored) rather than a guess about server timing.
+   *
+   * `params` becomes the POST body Twilio sends our TwiML webhook
+   * (routes/twilioVoice.ts) when it fetches instructions for this call — always
+   * pass `{ callId }`, the queued row's id, so that handler can find it.
+   *
+   * Rejects if the Device has no access token yet (the org is still resolving, or
+   * the mint failed) — `useCreateCall` is responsible for surfacing that to the
+   * rep and resetting the dialer, since a call that never reaches the Device
+   * never reaches Twilio either.
+   */
+  placeDeviceCall: (params: Record<string, string>) => Promise<void>
 }
 
 export const DialerContext = createContext<DialerContextValue | null>(null)

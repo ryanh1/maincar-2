@@ -112,3 +112,10 @@ export interface CreateCallResponse {
 export interface CallDetailResponse {
   call: CallDetail
 }
+
+/** What GET /voice-token returns: a short-lived credential for `new Device(token)`. */
+export interface VoiceTokenResponse {
+  token: string
+  identity: string
+  ttlSeconds: number
+}

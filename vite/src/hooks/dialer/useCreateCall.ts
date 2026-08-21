@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 
 import { jsonFetch } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
@@ -15,8 +16,9 @@ export interface CreateCallVariables extends CreateCallInput {
 }
 
 /**
- * Place an outbound call: POST the number, then move the shared dialer into its
- * ringing state.
+ * Place an outbound call: POST the number, move the shared dialer into its
+ * ringing state, then connect the browser Voice SDK Device — the POST only
+ * queues a Call row; the Device is what actually reaches Twilio (MAI-189).
  *
  * The context transition happens on SUCCESS, not on submit: a call that the
  * server refused — no active number (400), a duplicate already in flight (409),
@@ -33,7 +35,7 @@ export interface CreateCallVariables extends CreateCallInput {
  */
 export function useCreateCall() {
   const queryClient = useQueryClient()
-  const { startCall } = useDialer()
+  const { startCall, placeDeviceCall, reset } = useDialer()
 
   return useMutation({
     mutationFn: ({ orgId, ...body }: CreateCallVariables) =>
@@ -49,6 +51,21 @@ export function useCreateCall() {
         orgId: variables.orgId,
         callId: data.call.id,
         recording: data.call.recordingConsent === 'granted',
+      })
+      // Connect the Device with the row's id, so the voice webhook
+      // (routes/twilioVoice.ts) can find it. A failure here — the Device is not
+      // ready, the mic is blocked — means the call never reaches Twilio at all:
+      // reset the dialer and say why, rather than leaving it stuck on "ringing"
+      // for a call nobody is dialing. The queued row itself is left for the
+      // stale-call backstop (MAI-202) to settle; it carries no cost until Twilio
+      // actually answers, and this hook has no clean way to cancel it mid-flight.
+      void placeDeviceCall({ callId: data.call.id }).catch((err: unknown) => {
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : 'Could not connect the call. Check your microphone and try again.',
+        )
+        reset()
       })
       void queryClient.invalidateQueries({ queryKey: queryKeys.calls.list(variables.orgId) })
     },

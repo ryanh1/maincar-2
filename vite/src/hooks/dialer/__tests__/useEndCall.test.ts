@@ -18,6 +18,12 @@ vi.mock('@/lib/api', async () => {
   return { ...actual, jsonFetch }
 })
 
+// DialerProvider (which every test here mounts) now reads the caller's org to
+// build a Voice SDK Device. No test in this file exercises that device — hanging
+// up a call talks to the server, not the SDK — so `org: null` is enough to keep
+// the Device un-built and out of the way, without also mocking the SDK wrapper.
+vi.mock('@/providers/useAuth', () => ({ useAuth: () => ({ org: null }) }))
+
 function canceledCall(id: string): CallDetail {
   return {
     id,

@@ -1,6 +1,13 @@
 import twilio, { type Twilio } from 'twilio'
 
-import { PUBLIC_BASE_URL, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN } from '../src/config.js'
+import {
+  PUBLIC_BASE_URL,
+  TWILIO_ACCOUNT_SID,
+  TWILIO_API_KEY_SECRET,
+  TWILIO_API_KEY_SID,
+  TWILIO_AUTH_TOKEN,
+  TWILIO_TWIML_APP_SID,
+} from '../src/config.js'
 
 // The Twilio SDK is constructed HERE and nowhere else
 // (CLAUDE.md → Third-party APIs / SDKs). Route and service code calls the
@@ -176,22 +183,33 @@ export async function buyPhoneNumber(purchase: NumberPurchase): Promise<Purchase
 }
 
 // --- Outbound dialing ---------------------------------------------------------
+//
+// The browser places the call directly: the rep's Device (the Voice SDK,
+// vite/src/dependencies/twilioVoice.ts) connects to the TwiML Application named by
+// TWILIO_TWIML_APP_SID, Twilio fetches the URL below for instructions, and the
+// TwiML bridges that browser leg to the destination with <Dial><Number>. Nothing
+// here calls Twilio's REST calls.create() — that was the earlier design, and it
+// is what dialed the destination TWICE (once via calls.create's `to`, once via the
+// TwiML's own <Dial>). One leg, one <Dial>, one call to the destination.
 
 /**
- * The path Twilio fetches for TwiML once it has our outbound call in hand — the
- * same voice webhook a purchased number points its inbound calls at. The handler
- * branches on `Direction` to tell the two apart. That handler is a later issue
- * (POST /api/twilio/voice); this constant is where its outbound leg is wired in
- * from, so the two names cannot drift.
+ * The path Twilio fetches for TwiML once the rep's browser Device has a call in
+ * hand — the same voice webhook a purchased number points its inbound calls at.
+ * The handler tells the two apart by whether the request carries OUR `callId`
+ * param (see `buildBridgeTwiml`'s caller, routes/twilioVoice.ts): only a call we
+ * originated carries one, so a real inbound call to a purchased number can never
+ * collide with it. This constant is where the TwiML Application's Voice Request
+ * URL and `buyPhoneNumber`'s voiceUrl are both wired in from, so the three names
+ * cannot drift.
  */
 export const OUTBOUND_VOICE_WEBHOOK_PATH = '/api/twilio/voice'
 
 /**
  * The path Twilio POSTs call-progress events to (initiated → ringing → answered
- * → completed). Its handler — POST /api/twilio/voice/status — is a later issue;
- * it looks the Call row up by the SID this function returns and advances its
- * status. Named here so the URL Twilio is told to call and the route that later
- * answers it are defined in one place.
+ * → completed) for the bridged leg. Its handler — POST /api/twilio/voice/status —
+ * looks the Call row up by the SID it carries and advances its status. Named here
+ * so the URL Twilio is told to call and the route that answers it are defined in
+ * one place.
  */
 export const OUTBOUND_STATUS_WEBHOOK_PATH = '/api/twilio/voice/status'
 
@@ -213,59 +231,66 @@ export class WebhookBaseUrlMissingError extends Error {
   }
 }
 
-/** What to dial, and which Call row the webhooks should tie the legs back to. */
-export interface OutboundCallRequest {
-  /** E.164 destination, already validated by the route. */
-  to: string
-  /** The caller's active outbound number, in E.164. Must be a number Twilio owns. */
-  from: string
-  /** The Call row's id, threaded onto the TwiML URL so the webhook can find it. */
-  callId: string
+/**
+ * Raised when the browser Voice SDK cannot be handed a working access token
+ * because the account isn't wired up for it yet.
+ *
+ * A Voice access token needs THREE things beyond the account SID/auth token pair
+ * every other Twilio call in this file uses: an API Key (TWILIO_API_KEY_SID +
+ * TWILIO_API_KEY_SECRET, minted in the Twilio console — the account auth token
+ * cannot sign one) and a TwiML Application (TWILIO_TWIML_APP_SID) whose Voice
+ * Request URL is OUTBOUND_VOICE_WEBHOOK_PATH above. Thrown rather than tolerated,
+ * same reasoning as WebhookBaseUrlMissingError: a rep pressing Call deserves a
+ * named reason, not a Device that silently never connects.
+ */
+export class VoiceTokenConfigMissingError extends Error {
+  constructor() {
+    super(
+      'Browser calling is not configured. Set TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, ' +
+        'and TWILIO_TWIML_APP_SID in .env (see .env.example).',
+    )
+    this.name = 'VoiceTokenConfigMissingError'
+  }
 }
 
-/** What Twilio echoed back when it accepted the call. */
-export interface InitiatedCall {
-  /** Twilio's `CA…` SID for the call. The key the status webhook looks the row up by. */
-  sid: string
-  /** Twilio's own initial status for the call, e.g. "queued". */
-  status: string
+/** How long a minted Voice access token is good for, in seconds. */
+const VOICE_ACCESS_TOKEN_TTL_SECONDS = 3600
+
+/** A short-lived credential that lets one rep's browser register a Device. */
+export interface VoiceAccessToken {
+  /** The signed JWT to hand `new Device(token)` on the client. */
+  token: string
+  /** The identity the token was minted for — echoed back so the caller can log it. */
+  identity: string
+  /** Seconds until the token expires. The client refreshes on the SDK's own warning. */
+  ttlSeconds: number
 }
 
 /**
- * Ask Twilio to place an outbound call.
+ * Mint a Voice access token for one rep's browser.
  *
- * THIS COSTS MONEY: a connected call is billed per minute. The route above is
- * responsible for the double-call guard that keeps one click from becoming two
- * calls; this function just translates the request into the SDK call and hands
- * back only what Twilio confirmed.
- *
- * The webhook URLs are built here, from PUBLIC_BASE_URL, rather than passed in:
- * this is the one layer that already owns Twilio's webhook wiring (see
- * `buyPhoneNumber`), and keeping the config read out of the route is what lets
- * the route be unit-tested without a public origin set. A missing base is a
- * named throw, never a relative URL Twilio cannot call back.
+ * `identity` is the rep's user id: stable, unique, and never PII, so it is safe
+ * to carry inside a JWT the browser holds. `incomingAllow: false` because this
+ * phase is outbound-only — nothing yet routes an inbound call to a rep's Device
+ * (that is inbound/voicemail work, tracked separately from this dialer).
  */
-export async function initiateOutboundCall(request: OutboundCallRequest): Promise<InitiatedCall> {
-  if (!PUBLIC_BASE_URL) throw new WebhookBaseUrlMissingError()
+export function mintVoiceAccessToken(identity: string): VoiceAccessToken {
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_API_KEY_SID || !TWILIO_API_KEY_SECRET || !TWILIO_TWIML_APP_SID) {
+    throw new VoiceTokenConfigMissingError()
+  }
 
-  // callId is threaded onto the TwiML URL so the voice webhook can find the row
-  // even in the window before the SID this call returns has been stored.
-  const twimlUrl = `${PUBLIC_BASE_URL}${OUTBOUND_VOICE_WEBHOOK_PATH}?callId=${encodeURIComponent(
-    request.callId,
-  )}`
-  const statusCallback = `${PUBLIC_BASE_URL}${OUTBOUND_STATUS_WEBHOOK_PATH}`
-
-  const call = await getTwilioClient().calls.create({
-    to: request.to,
-    from: request.from,
-    url: twimlUrl,
-    method: 'POST',
-    statusCallback,
-    statusCallbackMethod: 'POST',
-    statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+  const token = new twilio.jwt.AccessToken(TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, {
+    identity,
+    ttl: VOICE_ACCESS_TOKEN_TTL_SECONDS,
   })
+  token.addGrant(
+    new twilio.jwt.AccessToken.VoiceGrant({
+      outgoingApplicationSid: TWILIO_TWIML_APP_SID,
+      incomingAllow: false,
+    }),
+  )
 
-  return { sid: call.sid, status: call.status }
+  return { token: token.toJwt(), identity, ttlSeconds: VOICE_ACCESS_TOKEN_TTL_SECONDS }
 }
 
 // --- Voice webhook (Twilio → us) -------------------------------------------
@@ -297,16 +322,42 @@ export function verifyTwilioSignature(args: {
   return twilio.validateRequest(TWILIO_AUTH_TOKEN, args.signature, args.url, args.params)
 }
 
+/** Which number to bridge the browser leg to, and what caller ID to present. */
+export interface BridgeCallRequest {
+  /** E.164 destination — the Call row's `toE164`, already validated by the route. */
+  toE164: string
+  /** E.164 caller ID to present to the destination — the Call row's `fromE164`. */
+  callerId: string
+}
+
 /**
- * TwiML that dials one E.164 number: `<Response><Dial>+1…</Dial></Response>`.
+ * TwiML that bridges the browser leg already on the line to one PSTN number:
+ * `<Response><Dial callerId="+1…"><Number statusCallback="…">+1…</Number></Dial></Response>`.
  *
- * Built through the SDK's `VoiceResponse`, not string-concatenated, so the XML
- * is escaped and well-formed by construction. The number is passed straight
- * through — the route has already validated it as the Call row's `toE164`.
+ * Built through the SDK's `VoiceResponse`, not string-concatenated, so the XML is
+ * escaped and well-formed by construction. `<Number>` (not the bare `<Dial>` form
+ * `buildDialTwiml` used) carries its own statusCallback, so THIS leg's progress —
+ * ringing, answered, completed — reaches POST /voice/status exactly the way the
+ * old REST-initiated call's did, even though nothing called `calls.create()` this
+ * time.
+ *
+ * THIS COSTS MONEY once Twilio dials it: a connected call is billed per minute.
+ * The route above is responsible for the double-call guard that keeps one click
+ * from becoming two calls; this function only builds what to tell Twilio.
  */
-export function buildDialTwiml(toE164: string): string {
+export function buildBridgeTwiml(request: BridgeCallRequest): string {
+  if (!PUBLIC_BASE_URL) throw new WebhookBaseUrlMissingError()
+
   const response = new twilio.twiml.VoiceResponse()
-  response.dial(toE164)
+  const dial = response.dial({ callerId: request.callerId })
+  dial.number(
+    {
+      statusCallback: `${PUBLIC_BASE_URL}${OUTBOUND_STATUS_WEBHOOK_PATH}`,
+      statusCallbackMethod: 'POST',
+      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+    },
+    request.toE164,
+  )
   return response.toString()
 }
 

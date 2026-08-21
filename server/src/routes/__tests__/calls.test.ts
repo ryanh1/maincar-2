@@ -10,7 +10,7 @@ import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock, initiateCallMock, hangUpCallMock, presignMock } = vi.hoisted(() => ({
+const { prismaMock, verifyTokenMock, mintVoiceAccessTokenMock, hangUpCallMock, presignMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
@@ -39,7 +39,7 @@ const { prismaMock, verifyTokenMock, initiateCallMock, hangUpCallMock, presignMo
     $queryRaw: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
-  initiateCallMock: vi.fn(),
+  mintVoiceAccessTokenMock: vi.fn(),
   hangUpCallMock: vi.fn(),
   presignMock: vi.fn(),
 }))
@@ -52,9 +52,12 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
 }))
 // The Twilio wrapper, not the SDK. Mocking our own module is what makes the
 // route testable without a network, an account, or a cent of spend — and it is
-// only possible because the SDK is constructed in exactly one file.
+// only possible because the SDK is constructed in exactly one file. Nothing in
+// this route calls Twilio to place a call any more — the browser Voice SDK does
+// that — so the only Twilio functions left are minting the browser's access
+// token and hanging an active call up.
 vi.mock('../../../dependencies/twilio.js', () => ({
-  initiateOutboundCall: initiateCallMock,
+  mintVoiceAccessToken: mintVoiceAccessTokenMock,
   hangUpCall: hangUpCallMock,
 }))
 // The S3 wrapper, not the AWS SDK. Mocking our own module is what lets the detail
@@ -157,11 +160,51 @@ beforeEach(() => {
   // Runs the callback against the same mock, so the assertions below see the
   // reads and writes the route makes INSIDE the transaction.
   prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock))
-  initiateCallMock.mockResolvedValue({ sid: 'CA123', status: 'queued' })
+  mintVoiceAccessTokenMock.mockReturnValue({ token: 'fake.jwt.token', identity: 'user-a', ttlSeconds: 3600 })
   hangUpCallMock.mockResolvedValue({ sid: 'CA123', status: 'completed' })
   // A stand-in for the URL the real presigner signs. The route's job is to call
   // this with the stored key and return what comes back, never to sign itself.
   presignMock.mockResolvedValue('https://minio.local/maincar2-local/recordings/call-1.mp3?sig=abc')
+})
+
+// ============================================================
+// GET — voice-token: mints a browser Voice SDK access token
+// ============================================================
+describe('GET /api/orgs/:orgId/calls/voice-token', () => {
+  it('mints a token for the caller and returns it', async () => {
+    const res = await request(app).get(`${URL_A}/voice-token`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ token: 'fake.jwt.token', identity: 'user-a', ttlSeconds: 3600 })
+    expect(mintVoiceAccessTokenMock).toHaveBeenCalledWith('user-a')
+  })
+
+  it('400s with an honest message when Twilio voice is not configured', async () => {
+    mintVoiceAccessTokenMock.mockImplementation(() => {
+      throw new Error('Browser calling is not configured.')
+    })
+
+    const res = await request(app).get(`${URL_A}/voice-token`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Browser calling is not set up for this organization yet.')
+  })
+
+  it('401s without auth, and mints nothing', async () => {
+    const res = await request(app).get(`${URL_A}/voice-token`)
+
+    expect(res.status).toBe(401)
+    expect(mintVoiceAccessTokenMock).not.toHaveBeenCalled()
+  })
+
+  it('404s for an org the caller does not belong to, and mints nothing', async () => {
+    authAs(null)
+
+    const res = await request(app).get(`/api/orgs/${ORG_B}/calls/voice-token`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(mintVoiceAccessTokenMock).not.toHaveBeenCalled()
+  })
 })
 
 // ============================================================
@@ -491,7 +534,7 @@ describe('GET /api/orgs/:orgId/calls/:id — org isolation', () => {
 // POST — happy path
 // ============================================================
 describe('POST /api/orgs/:orgId/calls', () => {
-  it('creates a queued call, dials, and returns the call with its SID', async () => {
+  it('creates a queued call and returns it with no SID yet — the browser Device dials, not this route', async () => {
     prismaMock.call.create.mockResolvedValue(callRow({ id: 'call-1', status: 'queued' }))
 
     const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
@@ -501,15 +544,9 @@ describe('POST /api/orgs/:orgId/calls', () => {
     expect(res.body.call.direction).toBe('outbound')
     expect(res.body.call.fromE164).toBe('+12025550123')
     expect(res.body.call.toE164).toBe('+13035550199')
-    expect(res.body.call.twilioCallSid).toBe('CA123')
-
-    // Dialed through the injected wrapper, with the locked number as caller ID.
-    expect(initiateCallMock).toHaveBeenCalledTimes(1)
-    expect(initiateCallMock).toHaveBeenCalledWith({
-      to: '+13035550199',
-      from: '+12025550123',
-      callId: 'call-1',
-    })
+    // Nothing here calls Twilio, so no SID exists yet — it lands once the browser
+    // Device connects and Twilio fetches POST /api/twilio/voice.
+    expect(res.body.call.twilioCallSid).toBeNull()
   })
 
   it('appends the ONE activity-feed row, inside the same transaction as the call (MAI-140)', async () => {
@@ -609,14 +646,12 @@ describe('POST /api/orgs/:orgId/calls', () => {
     expect(lockOrder).toBeLessThan(createOrder)
   })
 
-  it('stores the SID with an org-scoped updateMany, never update-by-id', async () => {
+  it('never calls Twilio, and writes no updateMany — the browser Device dials, not this route', async () => {
     await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
 
     expect(prismaMock.call.update).not.toHaveBeenCalled()
-    expect(prismaMock.call.updateMany).toHaveBeenCalledWith({
-      where: { id: 'call-1', orgId: ORG_A },
-      data: { twilioCallSid: 'CA123' },
-    })
+    expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+    expect(hangUpCallMock).not.toHaveBeenCalled()
   })
 })
 
@@ -656,7 +691,7 @@ describe('POST /api/orgs/:orgId/calls — invalid input', () => {
 
     expect(res.status).toBe(400)
     expect(res.body.error).toBe('Send recordingConsent as "granted" or "declined".')
-    expect(initiateCallMock).not.toHaveBeenCalled()
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
   })
 
   it('400s an unrecognized recordingConsent value', async () => {
@@ -679,7 +714,6 @@ describe('POST /api/orgs/:orgId/calls — invalid input', () => {
       'Activate a phone number for outbound calling before you place a call.',
     )
     expect(prismaMock.call.create).not.toHaveBeenCalled()
-    expect(initiateCallMock).not.toHaveBeenCalled()
   })
 })
 
@@ -699,7 +733,6 @@ describe('POST /api/orgs/:orgId/calls — double-call guard', () => {
     // The call already up is handed back so the client can adopt it.
     expect(res.body.call.id).toBe('call-inflight')
     expect(prismaMock.call.create).not.toHaveBeenCalled()
-    expect(initiateCallMock).not.toHaveBeenCalled()
   })
 
   it('scopes the in-flight check to this user, this org, this number, and the live statuses', async () => {
@@ -768,24 +801,6 @@ describe('POST /api/orgs/:orgId/calls — CRM-spine match', () => {
       personId: null,
       companyId: null,
       dealId: null,
-    })
-  })
-})
-
-// ============================================================
-// POST — a Twilio failure must not strand a queued row
-// ============================================================
-describe('POST /api/orgs/:orgId/calls — Twilio failure', () => {
-  it('marks the row failed and 500s when Twilio will not place the call', async () => {
-    initiateCallMock.mockRejectedValue(new Error('Twilio is down'))
-
-    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
-
-    expect(res.status).toBe(500)
-    // Compare-and-set on "queued", scoped by org, so it cannot drag a settled row.
-    expect(prismaMock.call.updateMany).toHaveBeenCalledWith({
-      where: { id: 'call-1', orgId: ORG_A, status: 'queued' },
-      data: { status: 'failed' },
     })
   })
 })

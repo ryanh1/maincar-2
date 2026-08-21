@@ -1,6 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 
+// DialerProvider now builds a browser Voice SDK Device once an org and a token
+// are known. These three are mocked at the module boundary so the state-machine
+// tests below run with no org (no Device at all — unchanged from before this
+// ticket), while a dedicated describe block further down supplies an org and a
+// token to prove the Device wiring itself.
+const { useAuthMock } = vi.hoisted(() => ({ useAuthMock: vi.fn(() => ({ org: null as { id: string } | null })) }))
+vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
+
+const { useGetVoiceTokenMock } = vi.hoisted(() => ({
+  useGetVoiceTokenMock: vi.fn(() => ({ data: undefined as unknown, refetch: vi.fn() })),
+}))
+vi.mock('@/hooks/dialer/useGetVoiceToken', () => ({ useGetVoiceToken: useGetVoiceTokenMock }))
+
+const { deviceCtorMock, deviceConnectMock, deviceOnMock, deviceUpdateTokenMock, deviceDestroyMock } =
+  vi.hoisted(() => ({
+    deviceCtorMock: vi.fn(),
+    deviceConnectMock: vi.fn(),
+    deviceOnMock: vi.fn(),
+    deviceUpdateTokenMock: vi.fn(),
+    deviceDestroyMock: vi.fn(),
+  }))
+vi.mock('@/dependencies/twilioVoice', () => ({
+  // `function`, not an arrow, so `new Device(token)` works — an arrow function
+  // cannot be a constructor.
+  Device: vi.fn(function Device(token: string) {
+    deviceCtorMock(token)
+    return {
+      connect: deviceConnectMock,
+      on: deviceOnMock,
+      updateToken: deviceUpdateTokenMock,
+      destroy: deviceDestroyMock,
+    }
+  }),
+}))
+
 import { DialerProvider } from './DialerProvider'
 import { useDialer, useDialerOptional } from './dialerContext'
 
@@ -9,6 +44,16 @@ function renderDialer() {
 }
 
 describe('DialerProvider', () => {
+  beforeEach(() => {
+    useAuthMock.mockReturnValue({ org: null })
+    useGetVoiceTokenMock.mockReturnValue({ data: undefined, refetch: vi.fn() })
+    deviceCtorMock.mockClear()
+    deviceConnectMock.mockReset()
+    deviceOnMock.mockClear()
+    deviceUpdateTokenMock.mockClear()
+    deviceDestroyMock.mockClear()
+  })
+
   it('starts collapsed and idle, on the keypad, with a stopped timer', () => {
     const { result } = renderDialer()
 
@@ -154,6 +199,90 @@ describe('DialerProvider', () => {
       expect(clearSpy).toHaveBeenCalledTimes(2)
 
       clearSpy.mockRestore()
+    })
+  })
+
+  describe('the browser Voice SDK Device', () => {
+    it('builds no Device while there is no org, and placeDeviceCall refuses', async () => {
+      const { result } = renderDialer()
+
+      expect(deviceCtorMock).not.toHaveBeenCalled()
+      await expect(result.current.placeDeviceCall({ callId: 'call-1' })).rejects.toThrow(
+        'The dialer is still starting up.',
+      )
+    })
+
+    it('builds the Device from the minted token once an org resolves', () => {
+      useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'fake-token', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+
+      renderDialer()
+
+      expect(deviceCtorMock).toHaveBeenCalledWith('fake-token')
+      expect(deviceCtorMock).toHaveBeenCalledTimes(1)
+      // Registers the Device-level seams: a token refresh and a fatal SDK error.
+      expect(deviceOnMock).toHaveBeenCalledWith('tokenWillExpire', expect.any(Function))
+      expect(deviceOnMock).toHaveBeenCalledWith('error', expect.any(Function))
+    })
+
+    it('updates the existing Device rather than rebuilding it when the token refreshes', () => {
+      useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'token-1', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+      const { rerender } = renderDialer()
+      expect(deviceCtorMock).toHaveBeenCalledTimes(1)
+
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'token-2', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+      rerender()
+
+      expect(deviceCtorMock).toHaveBeenCalledTimes(1)
+      expect(deviceUpdateTokenMock).toHaveBeenCalledWith('token-2')
+    })
+
+    it('connects the Device with the given params, and wires accept/disconnect onto the dialer phase', async () => {
+      useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'fake-token', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+      // A fake Twilio Call object: records which handler was registered for
+      // which event, so the test can fire them the way the real SDK would.
+      const callHandlers: Record<string, () => void> = {}
+      const fakeCall = { on: vi.fn((event: string, handler: () => void) => (callHandlers[event] = handler)) }
+      deviceConnectMock.mockResolvedValue(fakeCall)
+
+      const { result } = renderDialer()
+      await act(() => result.current.placeDeviceCall({ callId: 'call-1' }))
+
+      expect(deviceConnectMock).toHaveBeenCalledWith({ params: { callId: 'call-1' } })
+      expect(result.current.phase).toBe('idle') // connect() alone does not move the phase
+
+      act(() => callHandlers.accept())
+      expect(result.current.phase).toBe('in-progress')
+
+      act(() => callHandlers.disconnect())
+      expect(result.current.phase).toBe('completed')
+    })
+
+    it('destroys the Device on unmount', () => {
+      useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'fake-token', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+      const { unmount } = renderDialer()
+
+      unmount()
+
+      expect(deviceDestroyMock).toHaveBeenCalledTimes(1)
     })
   })
 })

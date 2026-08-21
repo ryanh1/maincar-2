@@ -19,6 +19,34 @@ vi.mock('@/lib/api', async () => {
   return { ...actual, jsonFetch }
 })
 
+// DialerProvider (which every test here mounts) now builds a Voice SDK Device
+// once an org and a token are known, and useCreateCall connects it on success.
+// Mocked at the module boundary — same reasoning as jsonFetch above — so these
+// tests exercise the mutation and the dialer state, not a real WebRTC stack.
+// useAuth is mocked the same way NumericKeypad.test.tsx mocks it.
+const { useAuthMock } = vi.hoisted(() => ({ useAuthMock: vi.fn(() => ({ org: { id: 'org-1' } })) }))
+vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
+
+const { useGetVoiceTokenMock } = vi.hoisted(() => ({
+  useGetVoiceTokenMock: vi.fn(() => ({
+    data: { token: 'fake-voice-token', identity: 'user-1', ttlSeconds: 3600 },
+    refetch: vi.fn(),
+  })),
+}))
+vi.mock('@/hooks/dialer/useGetVoiceToken', () => ({ useGetVoiceToken: useGetVoiceTokenMock }))
+
+const { deviceConnectMock } = vi.hoisted(() => ({ deviceConnectMock: vi.fn() }))
+vi.mock('@/dependencies/twilioVoice', () => ({
+  // `function`, not an arrow, so `new Device(token)` in DialerProvider works —
+  // an arrow function cannot be a constructor.
+  Device: vi.fn(function Device() {
+    return { connect: deviceConnectMock, updateToken: vi.fn(), destroy: vi.fn(), on: vi.fn() }
+  }),
+}))
+
+const { toastErrorMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn() }))
+vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
+
 function queuedCall(id: string): Call {
   return {
     id,
@@ -45,6 +73,11 @@ function renderCreateCall(client: QueryClient = makeTestQueryClient()) {
 
 beforeEach(() => {
   jsonFetch.mockReset()
+  toastErrorMock.mockReset()
+  // A Twilio Call object with a no-op `.on()` — enough for `placeDeviceCall` to
+  // wire its listeners without erroring. Individual tests override to fail this
+  // when they want to prove the connect-failure path.
+  deviceConnectMock.mockReset().mockResolvedValue({ on: vi.fn() })
 })
 
 describe('useCreateCall', () => {
@@ -127,5 +160,38 @@ describe('useCreateCall', () => {
     expect((result.current.create.error as ApiError).message).toBe(
       'You already have a call to this number in progress.',
     )
+  })
+
+  it('connects the browser Voice SDK Device with the queued call’s id, on success', async () => {
+    jsonFetch.mockResolvedValue({ call: queuedCall('call-1') })
+
+    const { result } = renderCreateCall()
+    result.current.create.mutate({
+      orgId: 'org-1',
+      toE164: '+12025550123',
+      recordingConsent: 'granted',
+    })
+
+    await waitFor(() => expect(deviceConnectMock).toHaveBeenCalledWith({ params: { callId: 'call-1' } }))
+  })
+
+  it('resets the dialer and toasts when the Device cannot connect the call', async () => {
+    jsonFetch.mockResolvedValue({ call: queuedCall('call-1') })
+    deviceConnectMock.mockRejectedValue(new Error('Could not reach the microphone.'))
+
+    const { result } = renderCreateCall()
+    result.current.create.mutate({
+      orgId: 'org-1',
+      toE164: '+12025550123',
+      recordingConsent: 'granted',
+    })
+
+    // Shows ringing first — the POST succeeded — then reverts once the Device
+    // itself fails to connect, rather than leaving a "ringing" call nobody is
+    // dialing.
+    await waitFor(() => expect(result.current.dialer.phase).toBe('idle'))
+    expect(result.current.dialer.dialing).toBe(false)
+    expect(result.current.dialer.activeCall).toBeNull()
+    expect(toastErrorMock).toHaveBeenCalledWith('Could not reach the microphone.')
   })
 })

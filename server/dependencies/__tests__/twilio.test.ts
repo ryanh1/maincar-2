@@ -1,6 +1,7 @@
 // Unit tests for the outbound-calling half of the Twilio wrapper
-// (dependencies/twilio.ts): placing a call, hanging one up, fetching and deleting
-// a recording, and verifying a webhook signature.
+// (dependencies/twilio.ts): minting a browser Voice SDK access token, building the
+// TwiML that bridges a browser call to a destination, hanging a call up, fetching
+// and deleting a recording, and verifying a webhook signature.
 //
 // The routes and jobs that use these mock this module wholesale, so its real body
 // only runs here. The Twilio SDK is mocked at the module boundary and `fetch` is
@@ -17,57 +18,90 @@ vi.mock('../../src/config.js', () => ({
   PUBLIC_BASE_URL: 'https://api.test.example.com',
   TWILIO_ACCOUNT_SID: 'ACtestaccountsid',
   TWILIO_AUTH_TOKEN: 'test-auth-token',
+  TWILIO_API_KEY_SID: 'SKtestapikeysid',
+  TWILIO_API_KEY_SECRET: 'test-api-key-secret',
+  TWILIO_TWIML_APP_SID: 'APtesttwimlappsid',
 }))
 
 const {
   twilioCtor,
-  callsCreateMock,
   callsUpdateMock,
   callsFnMock,
   recordingsRemoveMock,
   recordingsFnMock,
   validateRequestMock,
+  dialMock,
+  numberMock,
+  accessTokenCtor,
+  accessTokenAddGrantMock,
+  voiceGrantCtor,
 } = vi.hoisted(() => {
-  const callsCreateMock = vi.fn()
   const callsUpdateMock = vi.fn()
   const callsFnMock = vi.fn((_sid: string) => ({ update: callsUpdateMock }))
   const recordingsRemoveMock = vi.fn()
   const recordingsFnMock = vi.fn((_sid: string) => ({ remove: recordingsRemoveMock }))
   const validateRequestMock = vi.fn()
+  const numberMock = vi.fn()
+  const dialMock = vi.fn(() => ({ number: numberMock }))
   const twilioCtor = vi.fn(() => ({
-    // `calls` is both callable — client.calls(sid).update() — and a namespace —
-    // client.calls.create(). Object.assign models both on one mock.
-    calls: Object.assign(callsFnMock, { create: callsCreateMock }),
+    calls: callsFnMock,
     recordings: recordingsFnMock,
   }))
+  const accessTokenAddGrantMock = vi.fn()
+  const accessTokenToJwtMock = vi.fn(() => 'fake.jwt.token')
+  // `function`, not an arrow, because mintVoiceAccessToken calls this with `new` —
+  // an arrow function cannot be a constructor.
+  const accessTokenCtor = vi.fn(function accessTokenCtor() {
+    return { addGrant: accessTokenAddGrantMock, toJwt: accessTokenToJwtMock }
+  })
+  const voiceGrantCtor = vi.fn(function voiceGrantCtor() {})
   return {
     twilioCtor,
-    callsCreateMock,
     callsUpdateMock,
     callsFnMock,
     recordingsRemoveMock,
     recordingsFnMock,
     validateRequestMock,
+    dialMock,
+    numberMock,
+    accessTokenCtor,
+    accessTokenAddGrantMock,
+    accessTokenToJwtMock,
+    voiceGrantCtor,
   }
 })
 
 vi.mock('twilio', () => {
-  // The default export is the client factory, and it also carries validateRequest
-  // and the twiml builders as static members — exactly the SDK's shape.
+  // The default export is the client factory, and it also carries validateRequest,
+  // the jwt namespace, and the twiml builders as static members — exactly the
+  // SDK's shape. VoiceResponse's dial() returns an object whose number() is the
+  // only method buildBridgeTwiml calls, so only that much of the real builder
+  // needs modeling.
+  Object.assign(accessTokenCtor, { VoiceGrant: voiceGrantCtor })
   const twilio = Object.assign(twilioCtor, {
     validateRequest: validateRequestMock,
-    twiml: { VoiceResponse: class {} },
+    jwt: { AccessToken: accessTokenCtor },
+    twiml: {
+      VoiceResponse: class {
+        dial = dialMock
+        toString() {
+          return '<Response><Dial/></Response>'
+        }
+      },
+    },
   })
   return { default: twilio }
 })
 
 import {
+  buildBridgeTwiml,
   deleteRecording,
   fetchRecordingMp3,
   hangUpCall,
-  initiateOutboundCall,
+  mintVoiceAccessToken,
   twilioErrorStatus,
   verifyTwilioSignature,
+  VoiceTokenConfigMissingError,
   WebhookBaseUrlMissingError,
 } from '../twilio.js'
 
@@ -76,7 +110,6 @@ let fetchMock: ReturnType<typeof vi.fn>
 beforeEach(() => {
   fetchMock = vi.fn()
   vi.stubGlobal('fetch', fetchMock)
-  callsCreateMock.mockResolvedValue({ sid: 'CA123', status: 'queued' })
   callsUpdateMock.mockResolvedValue({ sid: 'CA123', status: 'completed' })
   recordingsRemoveMock.mockResolvedValue(undefined)
   validateRequestMock.mockReturnValue(true)
@@ -95,47 +128,39 @@ describe('twilioErrorStatus', () => {
   })
 })
 
-describe('initiateOutboundCall', () => {
-  it('dials to/from and wires both webhook URLs off PUBLIC_BASE_URL, returning only what Twilio confirmed', async () => {
-    const result = await initiateOutboundCall({
-      to: '+13035550199',
-      from: '+12025550123',
-      callId: 'call-1',
-    })
+describe('buildBridgeTwiml', () => {
+  it('dials the destination through <Number>, presenting the caller ID, off PUBLIC_BASE_URL', () => {
+    const twiml = buildBridgeTwiml({ toE164: '+13035550199', callerId: '+12025550123' })
 
-    expect(result).toEqual({ sid: 'CA123', status: 'queued' })
-    expect(callsCreateMock).toHaveBeenCalledTimes(1)
-    const arg = callsCreateMock.mock.calls[0][0]
-    expect(arg.to).toBe('+13035550199')
-    expect(arg.from).toBe('+12025550123')
-    // The TwiML URL threads the callId so the voice webhook can find the row, and
-    // the status callback is the fixed path — both absolute, off the public base.
-    expect(arg.url).toBe('https://api.test.example.com/api/twilio/voice?callId=call-1')
-    expect(arg.statusCallback).toBe('https://api.test.example.com/api/twilio/voice/status')
-    expect(arg.statusCallbackEvent).toEqual(['initiated', 'ringing', 'answered', 'completed'])
+    expect(twiml).toContain('<Response>')
+    expect(dialMock).toHaveBeenCalledWith({ callerId: '+12025550123' })
+    expect(numberMock).toHaveBeenCalledTimes(1)
+    const [attrs, number] = numberMock.mock.calls[0]
+    expect(number).toBe('+13035550199')
+    // The bridged leg carries its OWN statusCallback, off the public base — this
+    // is what keeps POST /voice/status driving Call.status even though nothing
+    // called calls.create() this time.
+    expect(attrs.statusCallback).toBe('https://api.test.example.com/api/twilio/voice/status')
+    expect(attrs.statusCallbackMethod).toBe('POST')
+    expect(attrs.statusCallbackEvent).toEqual(['initiated', 'ringing', 'answered', 'completed'])
   })
 
-  it('url-encodes the callId on the TwiML URL', async () => {
-    await initiateOutboundCall({ to: '+13035550199', from: '+12025550123', callId: 'a b/c' })
-
-    expect(callsCreateMock.mock.calls[0][0].url).toBe(
-      'https://api.test.example.com/api/twilio/voice?callId=a%20b%2Fc',
-    )
-  })
-
-  it('throws WebhookBaseUrlMissingError when PUBLIC_BASE_URL is unset, dialing nothing', async () => {
+  it('throws WebhookBaseUrlMissingError when PUBLIC_BASE_URL is unset, building nothing', async () => {
     vi.resetModules()
     vi.doMock('../../src/config.js', () => ({
       PUBLIC_BASE_URL: '',
       TWILIO_ACCOUNT_SID: 'ACtestaccountsid',
       TWILIO_AUTH_TOKEN: 'test-auth-token',
+      TWILIO_API_KEY_SID: 'SKtestapikeysid',
+      TWILIO_API_KEY_SECRET: 'test-api-key-secret',
+      TWILIO_TWIML_APP_SID: 'APtesttwimlappsid',
     }))
     try {
       const fresh = await import('../twilio.js')
-      await expect(
-        fresh.initiateOutboundCall({ to: '+1', from: '+1', callId: 'c' }),
-      ).rejects.toBeInstanceOf(fresh.WebhookBaseUrlMissingError)
-      expect(callsCreateMock).not.toHaveBeenCalled()
+      expect(() => fresh.buildBridgeTwiml({ toE164: '+1', callerId: '+1' })).toThrow(
+        fresh.WebhookBaseUrlMissingError,
+      )
+      expect(dialMock).not.toHaveBeenCalled()
     } finally {
       vi.doUnmock('../../src/config.js')
       vi.resetModules()
@@ -144,6 +169,53 @@ describe('initiateOutboundCall', () => {
 
   it('exposes WebhookBaseUrlMissingError with a stable name', () => {
     expect(new WebhookBaseUrlMissingError().name).toBe('WebhookBaseUrlMissingError')
+  })
+})
+
+describe('mintVoiceAccessToken', () => {
+  it('mints a token for the identity, granting only outgoing calls through our TwiML App', () => {
+    const result = mintVoiceAccessToken('user-1')
+
+    expect(result).toEqual({ token: 'fake.jwt.token', identity: 'user-1', ttlSeconds: 3600 })
+    expect(accessTokenCtor).toHaveBeenCalledWith('ACtestaccountsid', 'SKtestapikeysid', 'test-api-key-secret', {
+      identity: 'user-1',
+      ttl: 3600,
+    })
+    expect(voiceGrantCtor).toHaveBeenCalledWith({
+      outgoingApplicationSid: 'APtesttwimlappsid',
+      incomingAllow: false,
+    })
+    expect(accessTokenAddGrantMock).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['TWILIO_ACCOUNT_SID', { TWILIO_ACCOUNT_SID: '' }],
+    ['TWILIO_API_KEY_SID', { TWILIO_API_KEY_SID: '' }],
+    ['TWILIO_API_KEY_SECRET', { TWILIO_API_KEY_SECRET: '' }],
+    ['TWILIO_TWIML_APP_SID', { TWILIO_TWIML_APP_SID: '' }],
+  ])('throws VoiceTokenConfigMissingError when %s is unset, minting nothing', async (_name, override) => {
+    vi.resetModules()
+    vi.doMock('../../src/config.js', () => ({
+      PUBLIC_BASE_URL: 'https://api.test.example.com',
+      TWILIO_ACCOUNT_SID: 'ACtestaccountsid',
+      TWILIO_AUTH_TOKEN: 'test-auth-token',
+      TWILIO_API_KEY_SID: 'SKtestapikeysid',
+      TWILIO_API_KEY_SECRET: 'test-api-key-secret',
+      TWILIO_TWIML_APP_SID: 'APtesttwimlappsid',
+      ...override,
+    }))
+    try {
+      const fresh = await import('../twilio.js')
+      expect(() => fresh.mintVoiceAccessToken('user-1')).toThrow(fresh.VoiceTokenConfigMissingError)
+      expect(accessTokenCtor).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('../../src/config.js')
+      vi.resetModules()
+    }
+  })
+
+  it('exposes VoiceTokenConfigMissingError with a stable name', () => {
+    expect(new VoiceTokenConfigMissingError().name).toBe('VoiceTokenConfigMissingError')
   })
 })
 

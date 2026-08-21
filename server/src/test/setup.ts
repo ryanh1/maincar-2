@@ -10,6 +10,13 @@
 process.env.DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5440/maincar2_unit_never_used'
 
+// A fixed public origin so any test that boots the real app (importing the real
+// config.js rather than mocking it) and exercises a webhook-URL builder gets a
+// deterministic value, never a developer's real tunnel URL from their local .env.
+// A file that cares about the exact value mocks config.js itself instead (see
+// dependencies/__tests__/twilio.test.ts, jobs/__tests__/provisionNumber.test.ts).
+process.env.PUBLIC_BASE_URL = 'https://api.test.example.com'
+
 // A fixed 32-byte (base64) key so config.ts boots and tokenCrypto round-trips
 // deterministically. Set here rather than read from .env so the suite never
 // depends on a developer's local secrets.

@@ -2,6 +2,7 @@
 // (frontend.md → Frontend data fetching).
 export { useGetCalls } from './useGetCalls'
 export { useGetCallDetail } from './useGetCallDetail'
+export { useGetVoiceToken } from './useGetVoiceToken'
 export { useCreateCall } from './useCreateCall'
 export { useEndCall } from './useEndCall'
 
@@ -27,5 +28,6 @@ export type {
   GetCallsResponse,
   CreateCallResponse,
   CallDetailResponse,
+  VoiceTokenResponse,
 } from '@/lib/callTypes'
 export { CALL_SORT_COLUMNS } from '@/lib/callTypes'

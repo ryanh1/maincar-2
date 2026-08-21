@@ -24,6 +24,15 @@ vi.mock('@/lib/api', async () => {
   return { ...actual, jsonFetch }
 })
 vi.mock('@/components/Sidebar', () => ({ Sidebar: () => <nav>sidebar</nav> }))
+// The "mounted in ProtectedLayout" suite below renders the real ProtectedLayout,
+// which mounts the real DialerProvider — nothing here is about the dialer, so its
+// Voice SDK Device is mocked out rather than letting the real WebRTC stack run
+// against a fake token.
+vi.mock('@/dependencies/twilioVoice', () => ({
+  Device: vi.fn(function Device() {
+    return { connect: vi.fn(), on: vi.fn(), updateToken: vi.fn(), destroy: vi.fn() }
+  }),
+}))
 
 import { ApiError } from '@/lib/api'
 import { ProtectedLayout } from '@/components/ProtectedLayout'
@@ -69,6 +78,13 @@ function draftIdOf(url: string): string {
 /** Every request the fake server serves, keyed by method. */
 function serve(url: string, init?: RequestInit): unknown {
   const method = init?.method ?? 'GET'
+  // `ProtectedLayout` mounts `DialerProvider`, which mints itself a Voice SDK
+  // token as soon as an org is known — nothing in THIS suite is about the
+  // dialer, but the request still has to be answered with a shape the SDK
+  // accepts, or `new Device(undefined)` throws and takes the whole render down.
+  if (url.endsWith('/calls/voice-token')) {
+    return { token: 'fake-voice-token', identity: 'user-1', ttlSeconds: 3600 }
+  }
   if (method === 'GET') {
     const drafts = draftsByOrg.get(orgOf(url)) ?? []
     return { drafts, total: drafts.length }

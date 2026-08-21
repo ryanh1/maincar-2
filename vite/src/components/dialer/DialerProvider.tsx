@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { toast } from 'sonner'
 
+import { Device, type TwilioVoiceCall } from '@/dependencies/twilioVoice'
+import { useAuth } from '@/providers/useAuth'
+import { useGetVoiceToken } from '@/hooks/dialer/useGetVoiceToken'
 import {
   DialerContext,
   type ActiveCall,
@@ -12,12 +16,13 @@ import {
 /**
  * The dialer's shared state, mounted once high in the tree so a call survives
  * navigation the way the composer's cards do. It holds the widget's size, where
- * the current call is in its life, and the running call timer; the data hooks
- * (`useCreateCall`, `useEndCall`) read this context and drive the lifecycle
- * transitions on it, so there is one source of truth for "is a call up".
+ * the current call is in its life, the running call timer, and the rep's browser
+ * Voice SDK Device; the data hooks (`useCreateCall`, `useEndCall`) read this
+ * context and drive the lifecycle transitions on it, so there is one source of
+ * truth for "is a call up".
  *
- * There is no visible UI here yet. Later issues render the keypad, the in-call
- * controls, and the history pages that CONSUME this state through `useDialer()`.
+ * Later issues render the keypad, the in-call controls, and the history pages
+ * that CONSUME this state through `useDialer()`.
  */
 export function DialerProvider({ children }: { children: ReactNode }) {
   const [view, setView] = useState<DialerView>('collapsed')
@@ -84,6 +89,62 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     [phase],
   )
 
+  // --- The rep's browser Voice SDK Device ---
+  // One Device per rep, built lazily from a minted access token and kept for the
+  // whole session — never rebuilt per call, so a second call does not pay a fresh
+  // WebRTC setup cost. `@twilio/voice-sdk` is imported nowhere but
+  // `dependencies/twilioVoice.ts` (CLAUDE.md → Third-party APIs / SDKs).
+  const { org } = useAuth()
+  const { data: voiceToken, refetch: refetchVoiceToken } = useGetVoiceToken(org?.id)
+  const deviceRef = useRef<Device | null>(null)
+
+  useEffect(() => {
+    if (!voiceToken) return
+    if (deviceRef.current) {
+      deviceRef.current.updateToken(voiceToken.token)
+      return
+    }
+    const device = new Device(voiceToken.token)
+    // The SDK's own warning that the token is about to expire — refresh from the
+    // server rather than guessing a lifetime, so a long session never hits a
+    // token that quietly stopped working mid-call.
+    device.on('tokenWillExpire', () => void refetchVoiceToken())
+    device.on('error', (error: { message?: string }) => {
+      toast.error(error.message ?? 'The dialer lost its connection. Reload the page and try again.')
+    })
+    deviceRef.current = device
+  }, [voiceToken, refetchVoiceToken])
+
+  // Torn down on unmount only — the Device outlives any one call.
+  useEffect(
+    () => () => {
+      deviceRef.current?.destroy()
+      deviceRef.current = null
+    },
+    [],
+  )
+
+  // Places one call through the Device and wires that call's OWN lifecycle onto
+  // the shared dialer state: 'accept' is the callee actually answering,
+  // 'disconnect'/'cancel'/'reject'/'error' are every way a call ends before or
+  // after that. This is what makes `phase` track a real call instead of an
+  // optimistic guess.
+  const placeDeviceCall = useCallback(
+    async (params: Record<string, string>) => {
+      const device = deviceRef.current
+      if (!device) {
+        throw new Error('The dialer is still starting up. Wait a moment and try again.')
+      }
+      const call: TwilioVoiceCall = await device.connect({ params })
+      call.on('accept', () => connectCall())
+      call.on('disconnect', () => endCall())
+      call.on('cancel', () => endCall())
+      call.on('reject', () => endCall())
+      call.on('error', () => endCall())
+    },
+    [connectCall, endCall],
+  )
+
   const value = useMemo<DialerContextValue>(
     () => ({
       view,
@@ -99,6 +160,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       connectCall,
       endCall,
       reset,
+      placeDeviceCall,
     }),
     [
       view,
@@ -114,6 +176,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       connectCall,
       endCall,
       reset,
+      placeDeviceCall,
     ],
   )
 

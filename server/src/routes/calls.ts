@@ -18,7 +18,7 @@ import { z } from 'zod'
 
 import prisma from '../db.js'
 import { logger } from '../../dependencies/logger.js'
-import { initiateOutboundCall, hangUpCall } from '../../dependencies/twilio.js'
+import { hangUpCall, mintVoiceAccessToken } from '../../dependencies/twilio.js'
 import { getRecordingDownloadUrl } from '../../dependencies/s3.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
@@ -222,6 +222,50 @@ class DoubleCall extends Error {
 router.use(requireAuth)
 
 // ============================================================
+// GET /api/orgs/:orgId/calls/voice-token — a browser Voice SDK access token
+// ============================================================
+// Registered before GET /:id so "voice-token" is never swallowed as an :id. Mints
+// a short-lived token the rep's browser hands to `new Device(token)` (the Voice
+// SDK, vite/src/dependencies/twilioVoice.ts) to register itself as a WebRTC
+// endpoint. Any member may mint one — the token only grants the ability to place
+// calls through this org's TwiML Application; it names no destination, so it
+// carries no more reach than the org already trusts this member with, and the
+// actual number dialed is still decided server-side per call (POST / below).
+router.get(
+  '/voice-token',
+  wrapRoute('GET /api/orgs/:orgId/calls/voice-token', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Mint the token ---
+    // Identity is the rep's user id: stable, unique, and not itself PII. A missing
+    // Twilio Voice config (API key or TwiML App) is the caller's problem to fix,
+    // not this request's to retry, so it surfaces as a named 400 rather than a 500.
+    let voiceToken
+    try {
+      voiceToken = mintVoiceAccessToken(userId)
+    } catch (error) {
+      logger.error({ orgId, userId, error }, 'could not mint a voice access token')
+      return void res
+        .status(400)
+        .json({ error: 'Browser calling is not set up for this organization yet.' })
+    }
+
+    // --- Return response ---
+    res.json({
+      token: voiceToken.token,
+      identity: voiceToken.identity,
+      ttlSeconds: voiceToken.ttlSeconds,
+    })
+  }),
+)
+
+// ============================================================
 // GET /api/orgs/:orgId/calls — the org's call history
 // ============================================================
 // Paginated, sortable, and searchable by destination number. Scoped to the org
@@ -320,11 +364,15 @@ router.get(
 )
 
 // ============================================================
-// POST /api/orgs/:orgId/calls — place an outbound call
+// POST /api/orgs/:orgId/calls — queue an outbound call
 // ============================================================
-// Writes a Call row in status "queued", then asks Twilio to dial. The row is
-// written first, inside a transaction that holds a lock on the caller's active
-// number, so two clicks arriving at once cannot both become calls: the second
+// Writes a Call row in status "queued" and returns it — nothing here asks Twilio
+// to dial. The browser does that: on success the client connects its Voice SDK
+// Device with this row's id as a param (vite/src/hooks/dialer/useCreateCall.ts),
+// Twilio fetches POST /api/twilio/voice for instructions, and THAT handler stamps
+// twilioCallSid and advances the row to "ringing" (routes/twilioVoice.ts). This
+// route's only job is the guard and the write: hold a lock on the caller's active
+// number so two clicks arriving at once cannot both become calls — the second
 // waits for the first to commit, then sees its queued row and is refused.
 router.post(
   '/',
@@ -425,49 +473,9 @@ router.post(
       throw error
     }
 
-    // --- Ask Twilio to dial ---
-    // Outside the transaction on purpose: a network round-trip must not hold a
-    // row lock open. The Call row already exists, so a failure here is cleaned up
-    // by marking it "failed" rather than leaving a phantom "queued" row nothing
-    // will ever advance. The Twilio client is injected (dependencies/twilio.ts),
-    // so tests exercise this path without a network, an account, or a cent spent.
-    try {
-      const initiated = await initiateOutboundCall({
-        to: toE164,
-        from: created.fromE164,
-        callId: created.id,
-      })
-
-      // Store the SID the status webhook will look the row up by. updateMany with
-      // orgId, never update by id: the tenant key carries the boundary.
-      await prisma.call.updateMany({
-        where: { id: created.id, orgId },
-        data: { twilioCallSid: initiated.sid },
-      })
-      // Reflect the stored SID in the row this response echoes, so what the client
-      // gets back matches what was written.
-      created.twilioCallSid = initiated.sid
-    } catch (error) {
-      // Compare-and-set on "queued", scoped by orgId, so this can only settle the
-      // row just written and only while nothing else has moved it.
-      try {
-        await prisma.call.updateMany({
-          where: { id: created.id, orgId, status: 'queued' },
-          data: { status: 'failed' },
-        })
-      } catch (cleanupError) {
-        logger.error(
-          { orgId, userId, callId: created.id, error: cleanupError },
-          'could not mark an undialed call failed',
-        )
-      }
-      // Rethrow so wrapRoute owns the log, the report, and the 500.
-      throw error
-    }
-
     // Identifiers only — never the numbers, which are PII the row id already
     // points to.
-    logger.info({ orgId, userId, callId: created.id }, 'placed an outbound call')
+    logger.info({ orgId, userId, callId: created.id }, 'queued an outbound call')
 
     // --- Return response ---
     res.status(201).json({ call: mapCallToApi(created) })

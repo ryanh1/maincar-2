@@ -13,18 +13,21 @@
  * scoped to the route rather than added globally, so nothing else starts
  * accepting form posts.
  *
- * This file owns two Twilio endpoints. POST /voice returns TwiML for the OUTBOUND
- * leg (`Direction === "outbound-api"`), which the composer's POST /calls set in
- * motion; the same URL is where purchased numbers will point their INBOUND calls
- * (a later issue), so a Direction this handler does not dial is answered with
- * empty TwiML rather than mis-dialed. POST /voice/status is the call-progress
- * status callback: it maps Twilio's CallStatus onto Call.status, records duration
- * and end time, and kicks off the recording upload/transcribe pipeline.
+ * This file owns two Twilio endpoints. POST /voice returns TwiML for a call the
+ * rep's browser Voice SDK Device originated (`Device.connect({ params: { callId }
+ * })`, vite/src/components/dialer/DialerProvider.tsx) — it is TOLD which call by
+ * the `callId` param that connect() carries, not by Twilio's `Direction`, because
+ * that param can only be present on a request WE built. The same URL is where
+ * purchased numbers point their INBOUND calls (a later issue), so a request with
+ * no `callId` — including every real inbound call — is answered with empty TwiML
+ * rather than mis-dialed. POST /voice/status is the call-progress status
+ * callback: it maps Twilio's CallStatus onto Call.status, records duration and
+ * end time, and kicks off the recording upload/transcribe pipeline.
  */
 import express, { Router, type NextFunction, type Request, type Response } from 'express'
 
 import { logger } from '../../dependencies/logger.js'
-import { buildDialTwiml, buildEmptyTwiml, verifyTwilioSignature } from '../../dependencies/twilio.js'
+import { buildBridgeTwiml, buildEmptyTwiml, verifyTwilioSignature } from '../../dependencies/twilio.js'
 import { PUBLIC_BASE_URL } from '../config.js'
 import prisma from '../db.js'
 import { queueUploadRecording } from '../jobs/uploadRecording.js'
@@ -95,63 +98,71 @@ function verifyTwilioWebhook(routeLabel: string) {
 }
 
 // ============================================================
-// POST /api/twilio/voice — TwiML for a call Twilio is placing
+// POST /api/twilio/voice — TwiML for a call the rep's browser Device placed
 // ============================================================
-// Twilio fetches this the moment it starts working one of our outbound calls.
-// The reply is TwiML telling it whom to dial; as a side effect the Call row is
-// advanced from "queued" to "ringing" and stamped with when it started.
+// Twilio fetches this the instant the rep's Voice SDK Device connects. The reply
+// is TwiML bridging that browser leg to the destination; as a side effect the
+// Call row is stamped with the CallSid Twilio just assigned and advanced from
+// "queued" to "ringing".
 router.post(
   '/voice',
   express.urlencoded({ extended: false }),
   verifyTwilioWebhook('POST /api/twilio/voice'),
   wrapRoute('POST /api/twilio/voice', async (req, res) => {
     const params = (req.body ?? {}) as Record<string, string>
-    const direction = params.Direction
+    const callId = params.callId
     const callSid = params.CallSid
 
-    // --- Outbound only ---
-    // This handler dials the destination of an outbound call. An inbound call
-    // (a purchased number ringing) reaches the same URL but is a later issue, so
-    // any Direction other than outbound-api gets valid, do-nothing TwiML rather
-    // than being mis-dialed or 500'd. No row is touched.
-    if (direction !== 'outbound-api') {
+    // --- Recognize a call WE originated ---
+    // callId is a custom param `Device.connect({ params: { callId } })` sends —
+    // nothing else can produce it, so its absence means this request is not one of
+    // our browser-originated calls (a real inbound call to a purchased number,
+    // most likely — a later issue). Valid, do-nothing TwiML rather than a mis-dial
+    // or a 500. No row is touched.
+    if (!callId) {
       logger.info(
-        { route: 'POST /api/twilio/voice', requestId: req.id, direction },
-        'twilio voice webhook for a non-outbound direction; returning empty TwiML',
+        { route: 'POST /api/twilio/voice', requestId: req.id },
+        'twilio voice webhook with no callId; returning empty TwiML',
       )
       return void res.status(200).type('text/xml').send(buildEmptyTwiml())
     }
 
     // --- Find the queued call ---
-    // By twilioCallSid alone: it is unique (server/prisma/schema.prisma → Call),
-    // and it is the only key Twilio hands us here. The POST /calls route stored
-    // it the moment Twilio accepted the call, before Twilio fetched this URL.
-    const call = await prisma.call.findFirst({ where: { twilioCallSid: callSid } })
+    // By id alone: it is the only key the browser's connect() carried, and it is
+    // unguessable without also forging Twilio's signature (verified above).
+    const call = await prisma.call.findFirst({ where: { id: callId } })
     if (!call) {
       logger.warn(
-        { route: 'POST /api/twilio/voice', requestId: req.id, callSid },
-        'twilio voice webhook for an unknown CallSid',
+        { route: 'POST /api/twilio/voice', requestId: req.id, callId },
+        'twilio voice webhook for an unknown callId',
       )
       return void res.status(404).json({ error: 'Call not found' })
     }
 
-    // --- Advance the row to ringing ---
+    // --- Advance the row to ringing, and stamp the SID ---
+    // Compare-and-set on "queued": this is the FIRST place a SID for this call
+    // exists (nothing called Twilio's REST API to create it), so this write only
+    // ever fires once. Twilio does not retry a URL it already got a 200 from, but
+    // the guard keeps a re-fetch from re-stamping a SID or re-timing startedAt.
     // updateMany scoped by orgId, never update-by-id: the tenant key carries the
-    // boundary (rules/database-and-prisma.md). startedAt is stamped now — this
-    // webhook firing is the moment the call actually began to ring.
+    // boundary (rules/database-and-prisma.md).
     await prisma.call.updateMany({
-      where: { id: call.id, orgId: call.orgId },
-      data: { status: 'ringing', startedAt: new Date() },
+      where: { id: call.id, orgId: call.orgId, status: 'queued' },
+      data: { status: 'ringing', startedAt: new Date(), twilioCallSid: callSid },
     })
 
     logger.info(
       { route: 'POST /api/twilio/voice', requestId: req.id, orgId: call.orgId, callId: call.id },
-      'outbound call ringing; returning dial TwiML',
+      'browser call ringing; returning bridge TwiML',
     )
 
     // --- Return TwiML ---
+    // Bridges the browser leg already on the line to the ONE destination number —
     // text/xml is what Twilio expects; the SDK escapes and well-forms the XML.
-    res.status(200).type('text/xml').send(buildDialTwiml(call.toE164))
+    res
+      .status(200)
+      .type('text/xml')
+      .send(buildBridgeTwiml({ toE164: call.toE164, callerId: call.fromE164 }))
   }),
 )
 
@@ -159,8 +170,9 @@ router.post(
 // POST /api/twilio/voice/status — call-progress status callback
 // ============================================================
 // Twilio POSTs here as a call moves through its lifecycle (initiated → ringing →
-// answered → completed), the URL registered by initiateOutboundCall
-// (dependencies/twilio.ts → OUTBOUND_STATUS_WEBHOOK_PATH). Each event carries the
+// answered → completed), the URL the bridged leg's <Number> carries as its own
+// statusCallback (dependencies/twilio.ts → buildBridgeTwiml,
+// OUTBOUND_STATUS_WEBHOOK_PATH). Each event carries the
 // CallSid we look the row up by, the CallStatus we map onto Call.status, and — on
 // completion — CallDuration and, when the call was recorded, a RecordingSid. The
 // reply body is ignored by Twilio; a 200 just acknowledges receipt.

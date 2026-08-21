@@ -132,6 +132,14 @@ export const S3_BUCKET = process.env.S3_BUCKET ?? ''
 // request that needed it rather than the server.
 export const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID ?? ''
 export const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN ?? ''
+// A Twilio API Key (not the account auth token) is what signs a browser Voice SDK
+// access token, and TWILIO_TWIML_APP_SID is the Application the token grants the
+// rep's browser permission to call out through (dependencies/twilio.ts →
+// mintVoiceAccessToken). Same "?? ''" reasoning as the pair above: a machine with
+// no Twilio account still has to boot.
+export const TWILIO_API_KEY_SID = process.env.TWILIO_API_KEY_SID ?? ''
+export const TWILIO_API_KEY_SECRET = process.env.TWILIO_API_KEY_SECRET ?? ''
+export const TWILIO_TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID ?? ''
 
 // --- OpenAI (call transcription) ---
 // Consumed ONLY inside server/dependencies/openai.ts, which turns a call

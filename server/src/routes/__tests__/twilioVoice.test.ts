@@ -3,13 +3,14 @@
 // This route is not authenticated by an ID token; it is authenticated by the
 // Twilio request signature. So the tests here are shaped differently from the
 // org-scoped routes: they prove the 403 on a bad signature, that a genuine
-// outbound-api request looks its Call up by CallSid and returns dial TwiML while
-// advancing the row to ringing, that an unknown CallSid is a 404, and that a
-// Direction this handler does not dial gets empty TwiML and touches no row.
+// browser-originated request (one carrying our own `callId` param) looks its Call
+// up by id and returns bridge TwiML while stamping the SID and advancing the row
+// to ringing, that an unknown callId is a 404, and that a request with no callId
+// (a real inbound call, or anything else) gets empty TwiML and touches no row.
 //
 // verifyTwilioSignature is mocked (so no real signature has to be minted), but
-// buildDialTwiml/buildEmptyTwiml are kept REAL via importActual, so the assertions
-// run against the actual TwiML the SDK produces.
+// buildBridgeTwiml/buildEmptyTwiml are kept REAL via importActual, so the
+// assertions run against the actual TwiML the SDK produces.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
@@ -94,7 +95,7 @@ describe('signature verification', () => {
   it('403s when the signature does not verify, before any lookup', async () => {
     verifySignatureMock.mockReturnValue(false)
 
-    const res = await post({ CallSid: CALL_SID, Direction: 'outbound-api' })
+    const res = await post({ CallSid: CALL_SID, callId: 'call-1' })
 
     expect(res.status).toBe(403)
     expect(res.body).toEqual({ error: 'Invalid Twilio signature' })
@@ -108,60 +109,61 @@ describe('signature verification', () => {
     // still refuses rather than skipping the check.
     verifySignatureMock.mockReturnValue(false)
 
-    const res = await post({ CallSid: CALL_SID, Direction: 'outbound-api' }, null)
+    const res = await post({ CallSid: CALL_SID, callId: 'call-1' }, null)
 
     expect(res.status).toBe(403)
     expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
   })
 
   it('verifies against the signature header and the posted params', async () => {
-    await post({ CallSid: CALL_SID, Direction: 'outbound-api' })
+    await post({ CallSid: CALL_SID, callId: 'call-1' })
 
     expect(verifySignatureMock).toHaveBeenCalledTimes(1)
     const args = verifySignatureMock.mock.calls[0][0]
     expect(args.signature).toBe(SIG)
-    expect(args.params).toMatchObject({ CallSid: CALL_SID, Direction: 'outbound-api' })
+    expect(args.params).toMatchObject({ CallSid: CALL_SID, callId: 'call-1' })
     expect(args.url).toContain(URL)
   })
 })
 
 // ============================================================
-// Outbound happy path
+// Browser-originated happy path
 // ============================================================
-describe('outbound-api', () => {
-  it('returns dial TwiML for the call’s toE164', async () => {
-    const res = await post({ CallSid: CALL_SID, Direction: 'outbound-api' })
+describe('a call the browser Device originated (carries our callId)', () => {
+  it('returns bridge TwiML dialing the call’s toE164 with its fromE164 as caller ID', async () => {
+    const res = await post({ CallSid: CALL_SID, callId: 'call-1' })
 
     expect(res.status).toBe(200)
     expect(res.type).toBe('text/xml')
-    expect(res.text).toContain('<Dial>+13035550199</Dial>')
     expect(res.text).toContain('<Response>')
+    expect(res.text).toContain('<Dial callerId="+12025550123">')
+    expect(res.text).toContain('<Number')
+    expect(res.text).toContain('+13035550199')
   })
 
-  it('looks the call up by CallSid', async () => {
-    await post({ CallSid: CALL_SID, Direction: 'outbound-api' })
+  it('looks the call up by id', async () => {
+    await post({ CallSid: CALL_SID, callId: 'call-1' })
 
-    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({
-      where: { twilioCallSid: CALL_SID },
-    })
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({ where: { id: 'call-1' } })
   })
 
-  it('advances the row to ringing and stamps startedAt, scoped by orgId', async () => {
-    await post({ CallSid: CALL_SID, Direction: 'outbound-api' })
+  it('advances the row to ringing and stamps startedAt and the SID, scoped by orgId and the queued guard', async () => {
+    await post({ CallSid: CALL_SID, callId: 'call-1' })
 
     expect(prismaMock.call.updateMany).toHaveBeenCalledTimes(1)
     const args = prismaMock.call.updateMany.mock.calls[0][0]
-    expect(args.where).toEqual({ id: 'call-1', orgId: 'org-a' })
+    expect(args.where).toEqual({ id: 'call-1', orgId: 'org-a', status: 'queued' })
     expect(args.data.status).toBe('ringing')
     expect(args.data.startedAt).toBeInstanceOf(Date)
+    expect(args.data.twilioCallSid).toBe(CALL_SID)
     // update-by-id is never used for org-scoped data.
     expect(prismaMock.call.update).not.toHaveBeenCalled()
   })
 
-  it('404s when no call matches the CallSid, and writes nothing', async () => {
+  it('404s when no call matches the callId, and writes nothing', async () => {
     prismaMock.call.findFirst.mockResolvedValue(null)
 
-    const res = await post({ CallSid: 'CAunknownSID', Direction: 'outbound-api' })
+    const res = await post({ CallSid: CALL_SID, callId: 'unknown-call' })
 
     expect(res.status).toBe(404)
     expect(res.body).toEqual({ error: 'Call not found' })
@@ -170,17 +172,17 @@ describe('outbound-api', () => {
 })
 
 // ============================================================
-// Other directions — not this handler's job yet
+// No callId — not a call we originated (real inbound, stray request, etc.)
 // ============================================================
-describe('non-outbound direction', () => {
-  it('returns empty TwiML and touches no row for an inbound call', async () => {
+describe('a request with no callId', () => {
+  it('returns empty TwiML and touches no row for a real inbound call', async () => {
     const res = await post({ CallSid: CALL_SID, Direction: 'inbound' })
 
     expect(res.status).toBe(200)
     expect(res.type).toBe('text/xml')
     expect(res.text).toContain('<Response')
-    expect(res.text).not.toContain('<Dial>')
-    // A Direction this handler does not dial neither looks up nor advances a row.
+    expect(res.text).not.toContain('<Dial')
+    // No callId means neither looking up nor advancing a row.
     expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
     expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
   })
