@@ -25,6 +25,14 @@ export const queryKeys = {
     membersAll: (orgId: string) => ['orgs', 'members', orgId] as const,
     invitations: (orgId: string) => ['orgs', 'invitations', orgId] as const,
   },
+  email: {
+    all: ['email'] as const,
+    // Keyed by org, like the member list, because a draft belongs to one org and
+    // switching orgs must read a different cache entry rather than show the
+    // previous org's half-written emails. Not keyed by user: the cache is
+    // cleared on sign-out, so one signed-in rep only ever sees their own rows.
+    drafts: (orgId: string) => ['email', 'drafts', orgId] as const,
+  },
   invitations: {
     all: ['invitations'] as const,
     // Keyed by token, not by org: the reader of this one has no org yet.
