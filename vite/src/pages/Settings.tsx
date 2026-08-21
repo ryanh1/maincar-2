@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { Building2, User as UserIcon, Users, type LucideIcon } from 'lucide-react'
+import { Building2, Phone, User as UserIcon, Users, type LucideIcon } from 'lucide-react'
 
 import { Separator } from '@/components/ui/separator'
 import { useUrlString } from '@/hooks/urlState'
@@ -9,8 +9,9 @@ import { useAuth } from '@/providers/useAuth'
 import { Settings_ProfileTab } from './Settings_ProfileTab'
 import { Settings_OrganizationTab } from './Settings_OrganizationTab'
 import { Settings_MembersTab } from './Settings_MembersTab'
+import { Settings_PhoneNumbersTab } from './Settings_PhoneNumbersTab'
 
-type TabId = 'profile' | 'organization' | 'members'
+type TabId = 'profile' | 'organization' | 'members' | 'numbers'
 
 interface TabDef {
   id: TabId
@@ -26,12 +27,14 @@ const TABS: TabDef[] = [
   { id: 'profile', label: 'Profile', icon: UserIcon },
   { id: 'organization', label: 'Organization', icon: Building2, needsOrg: true },
   { id: 'members', label: 'Members', icon: Users, needsOrg: true, adminOnly: true },
+  { id: 'numbers', label: 'Phone numbers', icon: Phone, needsOrg: true },
 ]
 
 const TAB_CONTENT: Record<TabId, ComponentType> = {
   profile: Settings_ProfileTab,
   organization: Settings_OrganizationTab,
   members: Settings_MembersTab,
+  numbers: Settings_PhoneNumbersTab,
 }
 
 /**
