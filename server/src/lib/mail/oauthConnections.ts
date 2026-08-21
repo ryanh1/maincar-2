@@ -14,8 +14,10 @@
 import prisma from '../../db.js'
 import { logger } from '../../../dependencies/logger.js'
 import { decryptToken, encryptToken } from '../tokenCrypto.js'
+import { evaluateGrant, type Provider } from '../oauthScopes.js'
+import { upsertMailAccount } from './mailAccounts.js'
 import { Prisma } from '../../generated/prisma/client.js'
-import type { OAuthConnection } from '../../generated/prisma/client.js'
+import type { OAuthConnection, PrismaClient } from '../../generated/prisma/client.js'
 
 // --- The refresh seam -------------------------------------------------------
 //
@@ -305,4 +307,126 @@ async function markError(row: OAuthConnection, errorCode: string, statusDetail: 
     data: { status: 'error', errorCode, statusDetail },
   })
   logger.warn({ connectionId: row.id, orgId: row.orgId, provider: row.provider, errorCode }, 'oauth connection marked error')
+}
+
+// --- saveConnection: the ONE writer of a completed consent ------------------
+//
+// The OAuth callback (int-oauth, IH-10) hands a finished grant here and nowhere
+// else. This function is where the grant is EVALUATED (connected vs limited) and
+// written down, and where the sendable mailbox is upserted — inside saveConnection,
+// so a route physically cannot complete a consent and forget to create the mailbox
+// (SPEC-int-oauth.md AC 9). Both token fields are encrypted at rest, bound by AAD to
+// `${provider}:${userId}`; they are never returned — the result is the token-free
+// SerializedConnection.
+
+/** A finished code-exchange, ready to store. `refreshToken` is non-null by contract. */
+export interface SaveConnectionInput {
+  orgId: string
+  userId: string
+  provider: Provider
+  /** The provider's stable account id (Google `sub`, Microsoft `id`). Never the email. */
+  providerAccountId: string
+  emailAddress: string
+  accessToken: string
+  /**
+   * The refresh token. NON-NULL by contract: the callback turns a missing refresh
+   * token into `missing_refresh_token` and never reaches here, so a stored
+   * connection always holds a grant that can outlive its first hour.
+   */
+  refreshToken: string
+  /** Absolute expiry of the access token, in UTC. */
+  expiresAt: Date
+  /** What the provider ACTUALLY granted — evaluateGrant weighs this, not the request. */
+  grantedScopes: string[]
+}
+
+/** Only what saveConnection touches: the connection upsert and the mailbox transaction. */
+type SaveConnectionDb = Pick<PrismaClient, 'oAuthConnection' | '$transaction'>
+
+/**
+ * Store a completed consent and upsert its mailbox, returning the token-free row.
+ *
+ * The write is an upsert on the natural key `(orgId, userId, provider)` — which
+ * carries the tenant boundary — so a re-consent UPDATES the one row rather than
+ * leaving a second behind (AC 8), on both the connect and the fix path. The status,
+ * errorCode, statusDetail and the GRANTED scopes are all written every time, so a
+ * later success cannot leave a stale `partial_access` from an earlier attempt, and a
+ * repair that fully succeeds clears the amber it was repairing (AC 5, the same-shape
+ * rule). `lastValidatedAt` is set because fetchIdentity just proved the grant works.
+ *
+ * `db` is injectable ONLY so the integration suite can hand in a client aimed at its
+ * isolated schema; nothing in the app passes it.
+ */
+export async function saveConnection(
+  input: SaveConnectionInput,
+  db: SaveConnectionDb = prisma,
+): Promise<SerializedConnection> {
+  const { orgId, userId, provider, providerAccountId, emailAddress } = input
+  const aad = `${provider}:${userId}`
+  const evaluation = evaluateGrant(provider, input.grantedScopes)
+  const now = new Date()
+
+  // Every column a consent writes, shared by create and update so both paths write
+  // the SAME row shape — no field an update sets can linger from a prior attempt.
+  const writable = {
+    providerAccountId,
+    emailAddress,
+    refreshToken: encryptToken(input.refreshToken, aad),
+    accessToken: encryptToken(input.accessToken, aad),
+    expiresAt: input.expiresAt,
+    scopes: input.grantedScopes,
+    status: evaluation.status,
+    errorCode: evaluation.errorCode,
+    statusDetail: evaluation.statusDetail,
+    lastValidatedAt: now,
+    lastRefreshAt: now,
+  }
+
+  const row = await db.oAuthConnection.upsert({
+    where: { orgId_userId_provider: { orgId, userId, provider } },
+    create: { orgId, userId, provider, ...writable },
+    update: writable,
+  })
+
+  // The mailbox is upserted HERE, so no route can complete a consent and forget the
+  // sendable mailbox. The first mailbox a rep connects is born primary (mailAccounts.ts).
+  await upsertMailAccount({ orgId, userId, connectionId: row.id, provider, emailAddress }, db)
+
+  return serializeConnection(row)
+}
+
+/**
+ * Stamp an EXISTING connection with a terminal error, scoped to its tenant.
+ *
+ * Used by the callback's failure path when a REPAIR (`mode: 'fix'`) fails: the row
+ * the rep was repairing must not keep reading green — or amber — from the attempt
+ * before. It writes the same three status columns saveConnection does, through
+ * `updateMany` with the tenant boundary in the `where`, so a `count` of 0 (no such
+ * row for this rep, provider and org) simply changes nothing rather than throwing.
+ * Returns how many rows were stamped (0 or 1), which the callback does not need but
+ * a test asserts.
+ */
+export async function markConnectionError(
+  params: { orgId: string; userId: string; provider: string; connectionId?: string | null },
+  errorCode: string,
+  statusDetail: string,
+  db: Pick<PrismaClient, 'oAuthConnection'> = prisma,
+): Promise<number> {
+  const where: Prisma.OAuthConnectionWhereInput = {
+    orgId: params.orgId,
+    userId: params.userId,
+    provider: params.provider,
+    ...(params.connectionId ? { id: params.connectionId } : {}),
+  }
+  const result = await db.oAuthConnection.updateMany({
+    where,
+    data: { status: 'error', errorCode, statusDetail },
+  })
+  if (result.count > 0) {
+    logger.warn(
+      { orgId: params.orgId, provider: params.provider, errorCode },
+      'oauth connection stamped error on failed callback',
+    )
+  }
+  return result.count
 }

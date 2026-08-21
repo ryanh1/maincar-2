@@ -10,12 +10,12 @@
 // missing scope and sets login_hint; another rep's connectionId is 404; the list
 // returns one card per provider with one connection null; and no response body ever
 // carries a token or an authorization code.
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
+const { prismaMock, verifyTokenMock, saveConnectionMock, markConnectionErrorMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
@@ -30,6 +30,11 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     },
   },
   verifyTokenMock: vi.fn(),
+  // The callback's two writers are stubbed so the unit suite never touches Postgres;
+  // the REAL saveConnection (connected/limited, one-row-per-address, primary) is
+  // exercised against a live schema in integrations.integration.test.ts.
+  saveConnectionMock: vi.fn(),
+  markConnectionErrorMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
@@ -38,6 +43,18 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   setFirebaseUserDisabled: vi.fn(),
   deleteFirebaseUser: vi.fn(),
 }))
+// Keep everything the authorize/list routes use (serializeConnection, the select),
+// but stub the two writers the callback calls so no unit test reaches the database.
+vi.mock('../../lib/mail/oauthConnections.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/mail/oauthConnections.js')>()
+  return { ...actual, saveConnection: saveConnectionMock, markConnectionError: markConnectionErrorMock }
+})
+
+import { googleOAuth } from '../../../dependencies/googleOAuth.js'
+import { microsoftOAuth } from '../../../dependencies/microsoftOAuth.js'
+import { OAuthProviderError } from '../../../dependencies/oauthTypes.js'
+import { WEB_ORIGIN } from '../../config.js'
+import { signState } from '../../lib/oauthState.js'
 
 import app from '../../app.js'
 
@@ -310,5 +327,214 @@ describe('GET /api/integrations/orgs/:orgId', () => {
 
     expect(res.status).toBe(404)
     expect(prismaMock.oAuthConnection.findMany).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// GET /:provider/callback — the unauthenticated OAuth callback
+// ============================================================
+// The callback is mounted at /api/integrations (not under /orgs/:orgId), so its path
+// is /api/integrations/:provider/callback. saveConnection and markConnectionError are
+// stubbed (see the module mock at the top), so these tests prove the callback's
+// CONTROL FLOW — state verification, error mapping, the never-green refresh-token
+// gate, org-from-state scoping, the failed-repair stamp, and the escaped popup page.
+// The real evaluate/store behavior lives in integrations.integration.test.ts.
+
+const CB = (provider: string) => `/api/integrations/${provider}/callback`
+
+/** A token-free connection shape, as the real saveConnection would return. */
+function serializedConn(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'conn-1',
+    provider: 'google',
+    providerAccountId: 'sub-1',
+    emailAddress: 'rep@acme.com',
+    scopes: [G_READ, G_SEND, G_CAL, G_ID],
+    status: 'connected',
+    errorCode: null,
+    statusDetail: null,
+    lastValidatedAt: NOW,
+    lastRefreshAt: NOW,
+    expiresAt: NOW,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  }
+}
+
+/** A signed, valid state for the given claims. Uses the test OAUTH_STATE_SECRET. */
+function state(overrides: Partial<{ provider: string; userId: string; orgId: string; mode: 'connect' | 'fix'; connectionId: string | null }> = {}) {
+  return signState({
+    provider: overrides.provider ?? 'google',
+    userId: overrides.userId ?? 'user-a',
+    orgId: overrides.orgId ?? ORG_A,
+    mode: overrides.mode ?? 'connect',
+    connectionId: overrides.connectionId ?? null,
+  })
+}
+
+/** A full grant a provider client would return from exchangeCode. */
+function grant(overrides: Record<string, unknown> = {}) {
+  return {
+    accessToken: 'ACCESS-1',
+    refreshToken: 'REFRESH-1',
+    expiresAt: new Date(NOW.getTime() + 3600_000),
+    grantedScopes: [G_READ, G_SEND, G_CAL, G_ID],
+    ...overrides,
+  }
+}
+
+/** The JSON object the page posts to the opener, parsed back out of the rendered HTML. */
+function postedMessage(html: string): Record<string, unknown> {
+  const m = html.match(/var result = (\{.*?\});/s)
+  if (!m) throw new Error('no posted message found in callback page')
+  return JSON.parse(m[1]) as Record<string, unknown>
+}
+
+describe('GET /api/integrations/:provider/callback', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('exchanges, stores, and renders a page that posts connected to the app origin — never *', async () => {
+    vi.spyOn(googleOAuth, 'exchangeCode').mockResolvedValue(grant())
+    vi.spyOn(googleOAuth, 'fetchIdentity').mockResolvedValue({ providerAccountId: 'sub-1', emailAddress: 'rep@acme.com' })
+    saveConnectionMock.mockResolvedValue(serializedConn())
+
+    const res = await request(app).get(CB('google')).query({ code: 'the-code', state: state() })
+
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toContain('text/html')
+    // Targeted at the app's own origin, literally, never a wildcard.
+    expect(res.text).toContain(`postMessage(result, "${WEB_ORIGIN}")`)
+    expect(res.text).not.toContain("postMessage(result, '*'")
+    expect(res.text).not.toContain('postMessage(result, "*"')
+
+    const msg = postedMessage(res.text)
+    expect(msg).toMatchObject({ type: 'maincar:oauth-result', provider: 'google', ok: true, status: 'connected', emailAddress: 'rep@acme.com' })
+    // The exchange used the PKCE verifier derived from THIS state, not the raw code alone.
+    expect(googleOAuth.exchangeCode).toHaveBeenCalledWith(expect.objectContaining({ code: 'the-code', codeVerifier: expect.any(String) }))
+  })
+
+  it('renders limited when the provider granted only some scopes', async () => {
+    vi.spyOn(googleOAuth, 'exchangeCode').mockResolvedValue(grant({ grantedScopes: [G_READ, G_CAL, G_ID] }))
+    vi.spyOn(googleOAuth, 'fetchIdentity').mockResolvedValue({ providerAccountId: 'sub-1', emailAddress: 'rep@acme.com' })
+    saveConnectionMock.mockResolvedValue(
+      serializedConn({ status: 'limited', errorCode: 'partial_access', statusDetail: 'Maincar cannot send email as you.', scopes: [G_READ, G_CAL, G_ID] }),
+    )
+
+    const res = await request(app).get(CB('google')).query({ code: 'the-code', state: state() })
+
+    const msg = postedMessage(res.text)
+    expect(msg).toMatchObject({ status: 'limited', errorCode: 'partial_access', statusDetail: 'Maincar cannot send email as you.' })
+  })
+
+  it('verifies the state BEFORE anything else — a tampered state is state_invalid and writes nothing', async () => {
+    const exchange = vi.spyOn(googleOAuth, 'exchangeCode')
+    const good = state()
+    // Flip the last character of the signature segment.
+    const tampered = good.slice(0, -1) + (good.at(-1) === 'A' ? 'B' : 'A')
+
+    const res = await request(app).get(CB('google')).query({ code: 'the-code', state: tampered })
+
+    expect(res.status).toBe(200)
+    const msg = postedMessage(res.text)
+    expect(msg).toMatchObject({ status: 'error', errorCode: 'state_invalid', ok: false })
+    expect(exchange).not.toHaveBeenCalled()
+    expect(saveConnectionMock).not.toHaveBeenCalled()
+    expect(markConnectionErrorMock).not.toHaveBeenCalled()
+  })
+
+  it('maps a Microsoft AADSTS65001 exchange failure to admin_approval_required', async () => {
+    vi.spyOn(microsoftOAuth, 'exchangeCode').mockRejectedValue(
+      new OAuthProviderError('AADSTS65001: The user or administrator has not consented to use the application.'),
+    )
+
+    const res = await request(app).get(CB('microsoft')).query({ code: 'the-code', state: state({ provider: 'microsoft' }) })
+
+    const msg = postedMessage(res.text)
+    expect(msg).toMatchObject({ status: 'error', errorCode: 'admin_approval_required', provider: 'microsoft' })
+    expect(saveConnectionMock).not.toHaveBeenCalled()
+  })
+
+  it('never writes a connection when Google returns no refresh token', async () => {
+    vi.spyOn(googleOAuth, 'exchangeCode').mockResolvedValue(grant({ refreshToken: null }))
+    vi.spyOn(googleOAuth, 'fetchIdentity').mockResolvedValue({ providerAccountId: 'sub-1', emailAddress: 'rep@acme.com' })
+
+    const res = await request(app).get(CB('google')).query({ code: 'the-code', state: state() })
+
+    const msg = postedMessage(res.text)
+    expect(msg).toMatchObject({ status: 'error', errorCode: 'missing_refresh_token', ok: false })
+    expect(saveConnectionMock).not.toHaveBeenCalled()
+  })
+
+  it('scopes the write to the org named in the SIGNED state, not the request path', async () => {
+    vi.spyOn(googleOAuth, 'exchangeCode').mockResolvedValue(grant())
+    vi.spyOn(googleOAuth, 'fetchIdentity').mockResolvedValue({ providerAccountId: 'sub-1', emailAddress: 'rep@acme.com' })
+    saveConnectionMock.mockResolvedValue(serializedConn())
+
+    await request(app).get(CB('google')).query({ code: 'the-code', state: state({ orgId: 'org-b', userId: 'user-b' }) })
+
+    expect(saveConnectionMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org-b', userId: 'user-b' }))
+  })
+
+  it('stamps the repaired row on a FAILED fix so it cannot keep reading as before', async () => {
+    vi.spyOn(googleOAuth, 'exchangeCode').mockRejectedValue(new OAuthProviderError('invalid_grant'))
+
+    const res = await request(app)
+      .get(CB('google'))
+      .query({ code: 'the-code', state: state({ mode: 'fix', connectionId: 'conn-google' }) })
+
+    const msg = postedMessage(res.text)
+    expect(msg).toMatchObject({ status: 'error', errorCode: 'token_revoked' })
+    expect(markConnectionErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: ORG_A, userId: 'user-a', provider: 'google', connectionId: 'conn-google' }),
+      'token_revoked',
+      expect.any(String),
+    )
+    expect(saveConnectionMock).not.toHaveBeenCalled()
+  })
+
+  it('does NOT stamp a row on a failed FIRST connect — there is no row to stamp', async () => {
+    vi.spyOn(googleOAuth, 'exchangeCode').mockRejectedValue(new OAuthProviderError('invalid_grant'))
+
+    await request(app).get(CB('google')).query({ code: 'the-code', state: state({ mode: 'connect' }) })
+
+    expect(markConnectionErrorMock).not.toHaveBeenCalled()
+  })
+
+  it("maps the provider's own access_denied redirect to user_cancelled without exchanging", async () => {
+    const exchange = vi.spyOn(googleOAuth, 'exchangeCode')
+
+    const res = await request(app).get(CB('google')).query({ state: state(), error: 'access_denied' })
+
+    const msg = postedMessage(res.text)
+    expect(msg).toMatchObject({ status: 'error', errorCode: 'user_cancelled' })
+    expect(exchange).not.toHaveBeenCalled()
+  })
+
+  it('escapes provider text so an email carrying </script> cannot break out of the page', async () => {
+    const evilEmail = 'x</script><script>alert(1)</script>@e.com'
+    vi.spyOn(googleOAuth, 'exchangeCode').mockResolvedValue(grant())
+    vi.spyOn(googleOAuth, 'fetchIdentity').mockResolvedValue({ providerAccountId: 'sub-1', emailAddress: evilEmail })
+    saveConnectionMock.mockResolvedValue(serializedConn({ emailAddress: evilEmail }))
+
+    const res = await request(app).get(CB('google')).query({ code: 'the-code', state: state() })
+
+    // The raw closing tag never appears in the payload; its `<` is unicode-escaped.
+    expect(res.text).not.toContain('</script><script>alert(1)')
+    expect(res.text).toContain('\\u003c/script')
+    // And it still round-trips to the intended value once parsed.
+    expect(postedMessage(res.text).emailAddress).toBe(evilEmail)
+  })
+
+  it('renders an error page (never a redirect) even for an unknown provider path', async () => {
+    const res = await request(app).get(CB('slack')).query({ code: 'x', state: state() })
+
+    expect(res.status).toBe(200)
+    expect(res.headers.location).toBeUndefined()
+    // The signed state carries provider=google, so it verifies; but the path is a
+    // browser-facing page regardless. The message still posts to the app origin.
+    expect(res.text).toContain(`postMessage(result, "${WEB_ORIGIN}")`)
   })
 })

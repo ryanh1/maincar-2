@@ -6,8 +6,9 @@ import { WEB_ORIGIN } from './config.js'
 import { requestId } from './middleware/requestId.js'
 import authRouter from './routes/auth.js'
 import callsRouter from './routes/calls.js'
+import companiesRouter from './routes/companies.js'
 import emailRouter from './routes/email.js'
-import integrationsRouter from './routes/integrations.js'
+import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import invitationsRouter from './routes/invitations.js'
 import membersRouter from './routes/members.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
@@ -58,12 +59,20 @@ app.use('/api/email', emailRouter)
 // than read from the caller's currentOrgId preference.
 app.use('/api/orgs/:orgId/phone-numbers', phoneNumbersRouter)
 app.use('/api/orgs/:orgId/calls', callsRouter)
+app.use('/api/orgs/:orgId/companies', companiesRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
 
 // The authenticated half of the Integration Hub. The org is in the path so
 // membership is re-proven per request. The OAuth callback is NOT here: it is
 // unauthenticated and not org-scoped, and mounts on its own in a later ticket.
 app.use('/api/integrations/orgs/:orgId', integrationsRouter)
+
+// The OAuth callback: the module's ONE unauthenticated route. The provider redirects
+// the rep's browser here to a fixed, org-less URI, so it mounts on its own — not under
+// /orgs/:orgId and not behind requireAuth. The signed `state` it carries is what says
+// whose consent it is (see the route's own header). Its /:provider/callback path never
+// collides with the /orgs/:orgId router above, whose third segment is literally "orgs".
+app.use('/api/integrations', integrationsCallbackRouter)
 
 // Twilio's voice webhook. Mounted at /api/twilio (the router owns /voice, and the
 // status callback /voice/status lands here later). Deliberately NOT org-scoped

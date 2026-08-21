@@ -30,11 +30,15 @@ import crypto from 'node:crypto'
 import { Router } from 'express'
 import { z } from 'zod'
 
-import { OAUTH_STATE_SECRET } from '../config.js'
+import { APP_NAME, OAUTH_STATE_SECRET, WEB_ORIGIN } from '../config.js'
 import prisma from '../db.js'
+import { OAuthProviderError } from '../../dependencies/oauthTypes.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
+import { mapProviderError, type IntegrationErrorCode } from '../lib/mail/integrationErrors.js'
 import {
   CONNECTION_PUBLIC_SELECT,
+  markConnectionError,
+  saveConnection,
   serializeConnection,
   type SerializedConnection,
 } from '../lib/mail/oauthConnections.js'
@@ -47,7 +51,7 @@ import {
   REQUIRED_SCOPES,
   type Provider,
 } from '../lib/oauthScopes.js'
-import { signState } from '../lib/oauthState.js'
+import { signState, verifyState, type StatePayload } from '../lib/oauthState.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 
 // mergeParams so `:orgId` from the mount path (/api/integrations/orgs/:orgId) reaches
@@ -220,3 +224,231 @@ router.get(
 )
 
 export default router
+
+// ============================================================
+// GET /api/integrations/:provider/callback — where the provider sends the rep back
+// ============================================================
+// This is the ONLY unauthenticated route in the module, and it is unauthenticated BY
+// NECESSITY: the provider reaches it by a top-level browser navigation from
+// Google/Microsoft, which carries no session cookie and no bearer token. It carries
+// NO secret — the signed `state` minted at authorize time is the whole of what says
+// whose consent this is, and it is verified in constant time BEFORE a single field of
+// it is read (oauthState.verifyState). A `code` and a token never appear in a log, a
+// response body, or the rendered page.
+//
+// It mounts on its own in app.ts (app.use('/api/integrations', callbackRouter)),
+// separately from the authenticated router, because it is not under /orgs/:orgId — the
+// provider redirects to a fixed, org-less URI (/api/integrations/:provider/callback).
+export const callbackRouter = Router()
+
+/** The message posted to the opener window and, minus the wire fields, rendered as text. */
+interface CallbackOutcome {
+  provider: Provider | null
+  status: 'connected' | 'limited' | 'error'
+  errorCode: string | null
+  statusDetail: string
+  emailAddress: string | null
+}
+
+// A plain-words line per error code for the popup and the stamped row. The client keys
+// its recovery UI off `errorCode`; this is the human sentence beside it.
+const FAILURE_DETAIL: Partial<Record<IntegrationErrorCode, string>> = {
+  state_invalid: 'This connection link is no longer valid. Please start again from Settings.',
+  missing_refresh_token:
+    'Google did not return the lasting permission Maincar needs. Reconnect and keep “stay signed in” selected.',
+  admin_approval_required:
+    'Your organization’s administrator must approve Maincar before this mailbox can connect.',
+  user_cancelled: 'The connection was cancelled before it finished.',
+  redirect_uri_mismatch: 'Maincar is misconfigured for this provider. Please contact support.',
+  client_secret_invalid: 'Maincar is misconfigured for this provider. Please contact support.',
+}
+
+function failureDetail(code: IntegrationErrorCode): string {
+  return FAILURE_DETAIL[code] ?? 'Maincar could not finish connecting this mailbox. Please try again.'
+}
+
+function failureOutcome(provider: Provider | null, code: IntegrationErrorCode): CallbackOutcome {
+  return { provider, status: 'error', errorCode: code, statusDetail: failureDetail(code), emailAddress: null }
+}
+
+function successOutcome(provider: Provider, connection: SerializedConnection): CallbackOutcome {
+  return {
+    provider,
+    status: connection.status === 'limited' ? 'limited' : 'connected',
+    errorCode: connection.errorCode,
+    statusDetail: connection.statusDetail ?? '',
+    emailAddress: connection.emailAddress,
+  }
+}
+
+/** Express query values are string | string[] | ParsedQs; take the first plain string. */
+function firstString(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value) && typeof value[0] === 'string') return value[0]
+  return ''
+}
+
+/** HTML-escape text placed in the visible page body. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/**
+ * JSON for embedding inside a <script> block. `<` and `>` are escaped so provider
+ * text (the mailbox address) carrying `</script>` cannot break out of the tag, and
+ * the two Unicode line separators are escaped because they are raw newlines in a JS
+ * string literal.
+ */
+function jsonForScript(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+}
+
+/**
+ * Render the popup-closing page. It posts the result to `window.opener` TARGETED AT
+ * THE APP'S OWN ORIGIN (never `*`), then closes itself. The message is JSON-escaped so
+ * it cannot break out of the script tag; the heading is HTML-escaped.
+ */
+function sendCallbackPage(res: import('express').Response, outcome: CallbackOutcome): void {
+  const message = {
+    type: 'maincar:oauth-result',
+    provider: outcome.provider,
+    ok: outcome.status !== 'error',
+    status: outcome.status,
+    errorCode: outcome.errorCode,
+    statusDetail: outcome.statusDetail,
+    emailAddress: outcome.emailAddress,
+  }
+  const heading =
+    outcome.status === 'connected'
+      ? 'Connected. You can close this window.'
+      : outcome.status === 'limited'
+        ? 'Connected with limited access. You can close this window.'
+        : 'Could not finish connecting. You can close this window.'
+
+  const html = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(APP_NAME)}</title></head>
+<body>
+<main><p>${escapeHtml(heading)}</p></main>
+<script>
+(function () {
+  var result = ${jsonForScript(message)};
+  try { if (window.opener) { window.opener.postMessage(result, ${JSON.stringify(WEB_ORIGIN)}); } } catch (e) {}
+  window.close();
+})();
+</script>
+</body>
+</html>`
+  res.status(200).type('html').send(html)
+}
+
+/**
+ * On a FAILED repair (`mode: 'fix'`), stamp the row the rep was repairing so it does
+ * not keep reading as it did before the attempt. A first connect (`mode: 'connect'`)
+ * has no row to stamp, and a grant with no refresh token cannot be stored anyway, so
+ * this is a no-op there.
+ */
+async function stampFailedRepair(payload: StatePayload, provider: Provider, code: IntegrationErrorCode): Promise<void> {
+  if (payload.mode !== 'fix' || !payload.connectionId) return
+  await markConnectionError(
+    { orgId: payload.orgId, userId: payload.userId, provider, connectionId: payload.connectionId },
+    code,
+    failureDetail(code),
+  )
+}
+
+/** Map an error thrown by a provider client to a stable code, or rethrow the unexpected. */
+function providerErrorCode(provider: Provider, err: unknown): IntegrationErrorCode {
+  if (err instanceof OAuthProviderError) return mapProviderError(provider, err.code)
+  throw err
+}
+
+callbackRouter.get(
+  '/:provider/callback',
+  wrapRoute('GET /api/integrations/:provider/callback', async (req, res) => {
+    // --- Parse & validate params ---
+    const pathProvider = String(req.params.provider)
+    const code = firstString(req.query.code)
+    const stateParam = firstString(req.query.state)
+    const providerError = firstString(req.query.error)
+    const providerErrorDescription = firstString(req.query.error_description)
+
+    // --- Verify the signed state BEFORE reading a single field from it ---
+    const verified = verifyState(stateParam)
+    if (!verified.ok) {
+      // No field of the state is trusted, so nothing is written. The path provider is
+      // only a label for the page, never a tenant decision.
+      return void sendCallbackPage(res, failureOutcome(isProvider(pathProvider) ? pathProvider : null, 'state_invalid'))
+    }
+    const { payload } = verified
+    // The provider — and the org and user — come from the SIGNED state, never the path.
+    if (!isProvider(payload.provider)) {
+      return void sendCallbackPage(res, failureOutcome(null, 'state_invalid'))
+    }
+    const provider: Provider = payload.provider
+
+    // --- The provider refused at its own consent screen ---
+    if (providerError) {
+      const mapped = mapProviderError(provider, providerErrorDescription || providerError)
+      await stampFailedRepair(payload, provider, mapped)
+      return void sendCallbackPage(res, failureOutcome(provider, mapped))
+    }
+    if (!code) {
+      await stampFailedRepair(payload, provider, 'token_exchange_failed')
+      return void sendCallbackPage(res, failureOutcome(provider, 'token_exchange_failed'))
+    }
+
+    // --- Exchange the code, then fetch identity. The code and tokens never leave here. ---
+    const client = oauthClientFor(provider)
+    let grant
+    try {
+      grant = await client.exchangeCode({ code, codeVerifier: pkceVerifierForState(stateParam) })
+    } catch (err) {
+      const mapped = providerErrorCode(provider, err)
+      await stampFailedRepair(payload, provider, mapped)
+      return void sendCallbackPage(res, failureOutcome(provider, mapped))
+    }
+
+    let identity
+    try {
+      identity = await client.fetchIdentity(grant.accessToken)
+    } catch (err) {
+      const mapped = providerErrorCode(provider, err)
+      await stampFailedRepair(payload, provider, mapped)
+      return void sendCallbackPage(res, failureOutcome(provider, mapped))
+    }
+
+    // --- A grant with no refresh token cannot outlive its first hour: never green ---
+    if (!grant.refreshToken) {
+      await stampFailedRepair(payload, provider, 'missing_refresh_token')
+      return void sendCallbackPage(res, failureOutcome(provider, 'missing_refresh_token'))
+    }
+
+    // --- Evaluate + store honestly. saveConnection upserts the mailbox itself, and
+    // scopes every write to the org from the SIGNED state, so a state naming another
+    // org can only ever write into that org. ---
+    const connection = await saveConnection({
+      orgId: payload.orgId,
+      userId: payload.userId,
+      provider,
+      providerAccountId: identity.providerAccountId,
+      emailAddress: identity.emailAddress,
+      accessToken: grant.accessToken,
+      refreshToken: grant.refreshToken,
+      expiresAt: grant.expiresAt,
+      grantedScopes: grant.grantedScopes,
+    })
+
+    return void sendCallbackPage(res, successOutcome(provider, connection))
+  }),
+)
