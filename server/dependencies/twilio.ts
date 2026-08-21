@@ -267,3 +267,29 @@ export async function initiateOutboundCall(request: OutboundCallRequest): Promis
 
   return { sid: call.sid, status: call.status }
 }
+
+/** What Twilio echoed back when it accepted the hang-up. */
+export interface HungUpCall {
+  /** The `CA…` SID of the call that was ended. */
+  sid: string
+  /** Twilio's status for the call after the update, e.g. "completed". */
+  status: string
+}
+
+/**
+ * Ask Twilio to end a call that is already up.
+ *
+ * Setting a live call's `status` to "completed" is Twilio's own verb for hanging
+ * it up — it drops whichever leg is connected. The route is responsible for
+ * deciding a call is actually hang-up-able (a non-terminal status, with a SID
+ * Twilio has accepted) before it gets here; this function is pure translation, as
+ * the rest of this module is, and returns only what Twilio confirmed.
+ *
+ * Unlike `initiateOutboundCall`, this does not itself cost money — it stops a call
+ * that is already being billed.
+ */
+export async function hangUpCall(callSid: string): Promise<HungUpCall> {
+  const call = await getTwilioClient().calls(callSid).update({ status: 'completed' })
+
+  return { sid: call.sid, status: call.status }
+}

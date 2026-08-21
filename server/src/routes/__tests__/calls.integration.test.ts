@@ -17,6 +17,7 @@ import {
 } from '../../test/integration/testPrisma.js'
 
 const IN_FLIGHT_STATUSES = ['queued', 'ringing', 'in-progress']
+const TERMINAL_STATUSES = ['completed', 'canceled', 'busy', 'failed', 'no-answer']
 
 /**
  * The route's guard body, verbatim: lock the caller's active number, refuse when
@@ -108,6 +109,30 @@ async function listCalls(
     prisma.call.findMany({ where, orderBy, skip: (page - 1) * limit, take: limit }),
   ])
   return { calls, total }
+}
+
+/**
+ * The hang-up route's DB body, verbatim: read the call by id within its org,
+ * refuse a terminal one, otherwise settle it to canceled with an endedAt under a
+ * compare-and-set on the in-flight statuses. The Twilio hang-up itself is omitted
+ * — it is network I/O proved against a mock in the unit suite; what only real
+ * Postgres can prove is that the tenant-scoped read and the racing compare-and-set
+ * behave as the route relies on.
+ */
+async function hangUp(
+  prisma: PrismaClient,
+  args: { orgId: string; id: string },
+): Promise<'not-found' | 'already-ended' | 'canceled'> {
+  const call = await prisma.call.findFirst({ where: { id: args.id, orgId: args.orgId } })
+  if (!call) return 'not-found'
+  if (TERMINAL_STATUSES.includes(call.status)) return 'already-ended'
+
+  const settled = await prisma.call.updateMany({
+    where: { id: args.id, orgId: args.orgId, status: { in: IN_FLIGHT_STATUSES } },
+    data: { status: 'canceled', endedAt: new Date() },
+  })
+  if (settled.count === 0) return 'already-ended'
+  return 'canceled'
 }
 
 function countCalls(prisma: PrismaClient, orgId: string, toE164: string): Promise<number> {
@@ -480,5 +505,120 @@ describe('single call detail (integration, real Postgres)', () => {
     // not — the 404 the route returns lives in this null.
     const call = await prisma.call.findFirst({ where: { id: seeded.id, orgId: orgA.orgId } })
     expect(call).toBeNull()
+  })
+})
+
+// The hang-up route's write against real Postgres: that an in-flight call really
+// lands in "canceled" with an endedAt, that a terminal one is left untouched, that
+// the id+orgId scope keeps one org from hanging up another's call, and — the
+// concurrency proof — that the compare-and-set on the in-flight statuses lets only
+// one of two racing hang-ups actually settle the row.
+describe('hang up an active call (integration, real Postgres)', () => {
+  let prisma: PrismaClient
+
+  beforeAll(() => {
+    prisma = createTestPrisma()
+  })
+
+  afterAll(async () => {
+    await prisma.$disconnect()
+  })
+
+  it('cancels an in-flight call and stamps endedAt', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const seeded = await seedCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035551201',
+      status: 'in-progress',
+      twilioCallSid: 'CAhangup1',
+    })
+
+    const result = await hangUp(prisma, { orgId: org.orgId, id: seeded.id })
+
+    expect(result).toBe('canceled')
+    const after = await prisma.call.findFirst({ where: { id: seeded.id, orgId: org.orgId } })
+    expect(after!.status).toBe('canceled')
+    expect(after!.endedAt).not.toBeNull()
+  })
+
+  it('cancels a queued call that never got a SID', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const seeded = await seedCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035551202',
+      status: 'queued',
+      twilioCallSid: null,
+    })
+
+    const result = await hangUp(prisma, { orgId: org.orgId, id: seeded.id })
+
+    expect(result).toBe('canceled')
+    const after = await prisma.call.findFirst({ where: { id: seeded.id, orgId: org.orgId } })
+    expect(after!.status).toBe('canceled')
+    expect(after!.endedAt).not.toBeNull()
+  })
+
+  it('refuses a call that has already ended, and leaves it untouched', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const seeded = await seedCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035551203',
+      status: 'completed',
+    })
+
+    const result = await hangUp(prisma, { orgId: org.orgId, id: seeded.id })
+
+    expect(result).toBe('already-ended')
+    const after = await prisma.call.findFirst({ where: { id: seeded.id, orgId: org.orgId } })
+    // Still completed — the terminal check wrote nothing.
+    expect(after!.status).toBe('completed')
+    expect(after!.endedAt).toBeNull()
+  })
+
+  it('does not hang up a call that belongs to another org', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+    const seeded = await seedCall(prisma, {
+      orgId: orgB.orgId,
+      userId: orgB.adminUserId,
+      toE164: '+13035551204',
+      status: 'in-progress',
+      twilioCallSid: 'CAhangup2',
+    })
+
+    // Org A asks to hang up Org B's call: id+orgId finds nothing → not-found.
+    const result = await hangUp(prisma, { orgId: orgA.orgId, id: seeded.id })
+
+    expect(result).toBe('not-found')
+    // Org B's call is untouched — still in flight.
+    const after = await prisma.call.findFirst({ where: { id: seeded.id, orgId: orgB.orgId } })
+    expect(after!.status).toBe('in-progress')
+    expect(after!.endedAt).toBeNull()
+  })
+
+  it('lets exactly one of two concurrent hang-ups settle the row', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const seeded = await seedCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035551205',
+      status: 'ringing',
+      twilioCallSid: 'CAhangup3',
+    })
+
+    const results = await Promise.all([
+      hangUp(prisma, { orgId: org.orgId, id: seeded.id }),
+      hangUp(prisma, { orgId: org.orgId, id: seeded.id }),
+    ])
+
+    // The compare-and-set means only one write finds an in-flight row to move; the
+    // other reads it already gone from the in-flight set.
+    expect(results.filter((r) => r === 'canceled')).toHaveLength(1)
+    expect(results.filter((r) => r === 'already-ended')).toHaveLength(1)
+    const after = await prisma.call.findFirst({ where: { id: seeded.id, orgId: org.orgId } })
+    expect(after!.status).toBe('canceled')
   })
 })

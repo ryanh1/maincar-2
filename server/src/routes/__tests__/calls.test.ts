@@ -10,7 +10,7 @@ import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock, initiateCallMock, presignMock } = vi.hoisted(() => ({
+const { prismaMock, verifyTokenMock, initiateCallMock, hangUpCallMock, presignMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
@@ -30,6 +30,7 @@ const { prismaMock, verifyTokenMock, initiateCallMock, presignMock } = vi.hoiste
   },
   verifyTokenMock: vi.fn(),
   initiateCallMock: vi.fn(),
+  hangUpCallMock: vi.fn(),
   presignMock: vi.fn(),
 }))
 
@@ -44,6 +45,7 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
 // only possible because the SDK is constructed in exactly one file.
 vi.mock('../../../dependencies/twilio.js', () => ({
   initiateOutboundCall: initiateCallMock,
+  hangUpCall: hangUpCallMock,
 }))
 // The S3 wrapper, not the AWS SDK. Mocking our own module is what lets the detail
 // route be tested without an object store, credentials, or a signing round-trip —
@@ -142,6 +144,7 @@ beforeEach(() => {
   // reads and writes the route makes INSIDE the transaction.
   prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock))
   initiateCallMock.mockResolvedValue({ sid: 'CA123', status: 'queued' })
+  hangUpCallMock.mockResolvedValue({ sid: 'CA123', status: 'completed' })
   // A stand-in for the URL the real presigner signs. The route's job is to call
   // this with the stored key and return what comes back, never to sign itself.
   presignMock.mockResolvedValue('https://minio.local/maincar2-local/recordings/call-1.mp3?sig=abc')
@@ -696,5 +699,146 @@ describe('POST /api/orgs/:orgId/calls — org isolation', () => {
 
     expect(res.status).toBe(404)
     expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// DELETE /:id — hang up an active call
+// ============================================================
+describe('DELETE /api/orgs/:orgId/calls/:id', () => {
+  it('hangs up through Twilio, cancels the row with an endedAt, and returns the updated call', async () => {
+    // The read finds an in-progress call with a SID; the re-read after the write
+    // sees it settled to canceled with an endedAt.
+    prismaMock.call.findFirst
+      .mockResolvedValueOnce(callRow({ id: 'call-1', status: 'in-progress', twilioCallSid: 'CA123' }))
+      .mockResolvedValueOnce(
+        callRow({ id: 'call-1', status: 'canceled', twilioCallSid: 'CA123', endedAt: NOW }),
+      )
+
+    const res = await request(app).delete(`${URL_A}/call-1`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    // Twilio was asked to drop the live leg, by the stored SID.
+    expect(hangUpCallMock).toHaveBeenCalledTimes(1)
+    expect(hangUpCallMock).toHaveBeenCalledWith('CA123')
+    // Settled with an org-scoped updateMany, canceled + endedAt, never update-by-id.
+    expect(prismaMock.call.update).not.toHaveBeenCalled()
+    const settle = prismaMock.call.updateMany.mock.calls[0][0]
+    expect(settle.where).toEqual({
+      id: 'call-1',
+      orgId: ORG_A,
+      status: { in: ['queued', 'ringing', 'in-progress'] },
+    })
+    expect(settle.data.status).toBe('canceled')
+    expect(settle.data.endedAt).toBeInstanceOf(Date)
+    // The response carries the updated call.
+    expect(res.body.call.id).toBe('call-1')
+    expect(res.body.call.status).toBe('canceled')
+    expect(res.body.call.endedAt).toBe(NOW.toISOString())
+  })
+
+  it('cancels a queued call that has no SID yet without calling Twilio', async () => {
+    prismaMock.call.findFirst
+      .mockResolvedValueOnce(callRow({ id: 'call-1', status: 'queued', twilioCallSid: null }))
+      .mockResolvedValueOnce(
+        callRow({ id: 'call-1', status: 'canceled', twilioCallSid: null, endedAt: NOW }),
+      )
+
+    const res = await request(app).delete(`${URL_A}/call-1`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    // No live leg exists to hang up, so Twilio is never called.
+    expect(hangUpCallMock).not.toHaveBeenCalled()
+    // The row is still canceled in the database.
+    expect(prismaMock.call.updateMany.mock.calls[0][0].data.status).toBe('canceled')
+    expect(res.body.call.status).toBe('canceled')
+  })
+
+  it('400s a call that has already ended, and neither hangs up nor writes', async () => {
+    prismaMock.call.findFirst.mockResolvedValueOnce(
+      callRow({ id: 'call-1', status: 'completed', twilioCallSid: 'CA123' }),
+    )
+
+    const res = await request(app).delete(`${URL_A}/call-1`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('already ended')
+    expect(hangUpCallMock).not.toHaveBeenCalled()
+    expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('400s when a racing hang-up already settled the row', async () => {
+    // The read still sees it in flight, but the compare-and-set write finds no
+    // in-flight row to move: another request beat us to it.
+    prismaMock.call.findFirst.mockResolvedValueOnce(
+      callRow({ id: 'call-1', status: 'ringing', twilioCallSid: 'CA123' }),
+    )
+    prismaMock.call.updateMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app).delete(`${URL_A}/call-1`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('already ended')
+  })
+
+  it('404s a call id that does not exist, and hangs up nothing', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).delete(`${URL_A}/nope`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Call not found')
+    expect(hangUpCallMock).not.toHaveBeenCalled()
+    expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('404s a call that belongs to another org — never a 403', async () => {
+    // The row exists, but not in this org: the id+orgId where clause finds
+    // nothing, so the caller cannot even learn the call is real.
+    prismaMock.call.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).delete(`${URL_A}/call-in-org-b`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Call not found')
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({
+      where: { id: 'call-in-org-b', orgId: ORG_A },
+    })
+    expect(hangUpCallMock).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// DELETE /:id — org isolation (mandatory — .claude/rules/testing.md)
+// ============================================================
+describe('DELETE /api/orgs/:orgId/calls/:id — org isolation', () => {
+  it('401s without auth, and reads nothing', async () => {
+    const res = await request(app).delete(`${URL_A}/call-1`)
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
+    expect(hangUpCallMock).not.toHaveBeenCalled()
+  })
+
+  it('404s for an org the caller does not belong to, before it reads any call', async () => {
+    authAs(null)
+
+    const res = await request(app)
+      .delete(`/api/orgs/${ORG_B}/calls/call-1`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Organization not found')
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
+    expect(hangUpCallMock).not.toHaveBeenCalled()
+  })
+
+  it('404s when the org is disabled, rather than admitting it exists', async () => {
+    authAs(membershipRow({ org: { id: ORG_A, name: 'Org A', enabled: false } }))
+
+    const res = await request(app).delete(`${URL_A}/call-1`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
   })
 })

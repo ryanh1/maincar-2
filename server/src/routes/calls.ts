@@ -18,7 +18,7 @@ import { z } from 'zod'
 
 import prisma from '../db.js'
 import { logger } from '../../dependencies/logger.js'
-import { initiateOutboundCall } from '../../dependencies/twilio.js'
+import { initiateOutboundCall, hangUpCall } from '../../dependencies/twilio.js'
 import { getRecordingDownloadUrl } from '../../dependencies/s3.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
@@ -185,6 +185,15 @@ const listQuerySchema = z.object({
 // absent on purpose: once a call has ended, dialing the number again is a new,
 // wanted call.
 const IN_FLIGHT_STATUSES = ['queued', 'ringing', 'in-progress']
+
+// The states in which a call has already ended. Hanging one of these up is a
+// no-op the client should be told about rather than a silent success, so the
+// hang-up route answers 400 for them. These are exactly the schema's statuses
+// that are NOT in flight (server/prisma/schema.prisma → Call.status), so the two
+// lists together partition every status a call can hold.
+const TERMINAL_STATUSES = ['completed', 'canceled', 'busy', 'failed', 'no-answer']
+
+const ALREADY_ENDED_ERROR = 'This call has already ended, so there is nothing to hang up.'
 
 // The one message for "you have no number to call from". It names what to do,
 // not which check failed.
@@ -435,6 +444,85 @@ router.post(
 
     // --- Return response ---
     res.status(201).json({ call: mapCallToApi(created) })
+  }),
+)
+
+// ============================================================
+// DELETE /api/orgs/:orgId/calls/:id — hang up an active call
+// ============================================================
+// Ends a call that is still up: tells Twilio to drop the leg, then settles the
+// row to "canceled" with an endedAt. Scoped to the org in the path, so a call in
+// another org — or one that does not exist — is answered 404 the same way, and
+// this route never confirms a row it must not reveal (MAI-29). A call that has
+// already ended is 400, not a silent success: there is nothing to hang up.
+router.delete(
+  '/:id',
+  wrapRoute('DELETE /api/orgs/:orgId/calls/:id', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const userId = authReq.user!.id
+    const id = String(req.params.id)
+
+    // --- Verify ownership ---
+    // Before any row is read: a non-member must not hang up this org's calls, and
+    // must not learn whether the org exists.
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    // id AND orgId together, never id alone: the tenant key is half the lookup, so
+    // a real id in another org matches nothing and falls to the 404 below.
+    const call = await prisma.call.findFirst({ where: { id, orgId } })
+    if (!call) {
+      return void res.status(404).json({ error: 'Call not found' })
+    }
+
+    // A call that has already ended cannot be hung up. 400 rather than a no-op
+    // success, so the client is not told it stopped a call that was never running.
+    if (TERMINAL_STATUSES.includes(call.status)) {
+      return void res.status(400).json({ error: ALREADY_ENDED_ERROR })
+    }
+
+    // --- Ask Twilio to hang up ---
+    // Only when Twilio has a call to hang up. A queued row with no SID yet has no
+    // live leg — Twilio never accepted it — so hanging up a SID that does not
+    // exist would just error. It is canceled in the database directly instead. The
+    // Twilio client is injected (dependencies/twilio.ts), so this path is exercised
+    // in tests without a network, an account, or a cent spent.
+    if (call.twilioCallSid) {
+      await hangUpCall(call.twilioCallSid)
+    }
+
+    // --- Settle the row ---
+    // updateMany with orgId, never update by id: the tenant key carries the
+    // boundary. Scoped to the in-flight statuses so two hang-ups racing cannot both
+    // stamp endedAt — the second finds count 0 and the row it already settled.
+    const endedAt = new Date()
+    const settled = await prisma.call.updateMany({
+      where: { id, orgId, status: { in: IN_FLIGHT_STATUSES } },
+      data: { status: 'canceled', endedAt },
+    })
+    if (settled.count === 0) {
+      // Another request ended this call between the read above and here. It is no
+      // longer hang-up-able, so report it the same way the terminal check does.
+      return void res.status(400).json({ error: ALREADY_ENDED_ERROR })
+    }
+
+    logger.info({ orgId, userId, callId: id }, 'hung up a call')
+
+    // --- Return response ---
+    // Re-read so the response carries the stored row, not a hand-patched copy.
+    // recordingUrl is a bare object key, signed at request time as in the detail
+    // route; a call hung up mid-flight has no recording, so this is virtually
+    // always null.
+    const updated = await prisma.call.findFirst({ where: { id, orgId } })
+    if (!updated) {
+      return void res.status(404).json({ error: 'Call not found' })
+    }
+    const recordingUrl = updated.recordingUrl
+      ? await getRecordingDownloadUrl(updated.recordingUrl)
+      : null
+    res.json({ call: mapCallToDetailApi(updated, recordingUrl) })
   }),
 )
 
