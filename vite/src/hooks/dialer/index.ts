@@ -3,7 +3,7 @@
 export { useGetCalls } from './useGetCalls'
 export { useGetCallDetail } from './useGetCallDetail'
 export { useGetVoiceToken } from './useGetVoiceToken'
-export { useCreateCall } from './useCreateCall'
+export { isAdoptableInFlightCallError, useCreateCall } from './useCreateCall'
 export { useEndCall } from './useEndCall'
 
 // What each mutation is called with. These are hook shapes, not API shapes, so

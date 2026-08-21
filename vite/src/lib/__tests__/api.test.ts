@@ -128,6 +128,16 @@ describe('jsonFetch', () => {
     expect((err as ApiError).code).toBe('send_failed')
   })
 
+  it('keeps a parsed error body available to a caller that can recover from it', async () => {
+    const body = { error: 'A call is already in progress.', call: { id: 'call-1' } }
+    fetchMock.mockResolvedValue(mockResponse({ ok: false, status: 409, body }))
+
+    const err = await jsonFetch('/api/thing').catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).body).toEqual(body)
+  })
+
   it('still throws an ApiError when the error body is not JSON', async () => {
     fetchMock.mockResolvedValue(
       mockResponse({ ok: false, status: 502, text: '<html>Bad Gateway</html>' }),

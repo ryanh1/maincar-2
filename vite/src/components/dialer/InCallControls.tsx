@@ -54,7 +54,7 @@ export interface InCallControlsProps {
  * ticks with the one interval the provider owns rather than a second clock here.
  */
 export function InCallControls({ orgId, callId, recording = false, className }: InCallControlsProps) {
-  const { phase, elapsedSeconds, muteCall } = useDialer()
+  const { phase, elapsedSeconds, canControlAudio, muteCall } = useDialer()
   const endCall = useEndCall()
 
   const [muted, setMuted] = useState(false)
@@ -99,15 +99,17 @@ export function InCallControls({ orgId, callId, recording = false, className }: 
       </div>
 
       <div className="flex items-center gap-2" role="group" aria-label="Call controls">
-        <IconButton
-          type="button"
-          variant={muted ? 'secondary' : 'outline'}
-          aria-pressed={muted}
-          tooltip={muted ? 'Unmute the call' : 'Mute the call'}
-          onClick={toggleMute}
-        >
-          {muted ? <MicOff size={16} aria-hidden /> : <Mic size={16} aria-hidden />}
-        </IconButton>
+        {canControlAudio ? (
+          <IconButton
+            type="button"
+            variant={muted ? 'secondary' : 'outline'}
+            aria-pressed={muted}
+            tooltip={muted ? 'Unmute the call' : 'Mute the call'}
+            onClick={toggleMute}
+          >
+            {muted ? <MicOff size={16} aria-hidden /> : <Mic size={16} aria-hidden />}
+          </IconButton>
+        ) : null}
 
         <IconButton
           type="button"

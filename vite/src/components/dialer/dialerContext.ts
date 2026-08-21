@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import type { CallStatus } from '@/lib/callTypes'
 
 /**
  * Kept apart from `DialerProvider.tsx` for the same reason `useAuth.ts` is kept
@@ -55,6 +56,8 @@ export interface DialerContextValue {
   elapsedSeconds: number
   /** The live call's identity, or null when none is up. Read by the in-call controls. */
   activeCall: ActiveCall | null
+  /** Whether this browser has a Voice SDK Call it can mute or send DTMF through. */
+  canControlAudio: boolean
 
   /** Open the dialer to full size. */
   expandDialer: () => void
@@ -76,6 +79,12 @@ export interface DialerContextValue {
    * real call id.
    */
   startCall: (call?: ActiveCall) => void
+  /**
+   * A call already existed before this tab tried to place one. Restore its identity
+   * and phase from the server response without asking this browser to start a
+   * second Voice SDK call.
+   */
+  adoptCall: (call: ActiveCall, status: CallStatus) => void
   /**
    * The callee answered: go to `in-progress`, and — the first time this fires for
    * the current call — reset `elapsedSeconds` to 0, so the running timer counts

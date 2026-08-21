@@ -30,6 +30,7 @@ const {
   sendDigitsMock,
   mutateMock,
   toastErrorMock,
+  isAdoptableInFlightCallErrorMock,
 } = vi.hoisted(() => ({
   useAuthMock: vi.fn(),
   useDialerMock: vi.fn(),
@@ -40,11 +41,15 @@ const {
   sendDigitsMock: vi.fn(),
   mutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
+  isAdoptableInFlightCallErrorMock: vi.fn(),
 }))
 
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }))
-vi.mock('@/hooks/dialer', () => ({ useCreateCall: useCreateCallMock }))
+vi.mock('@/hooks/dialer', () => ({
+  useCreateCall: useCreateCallMock,
+  isAdoptableInFlightCallError: isAdoptableInFlightCallErrorMock,
+}))
 vi.mock('@/hooks/phoneNumbers', () => ({ useGetNumbers: useGetNumbersMock }))
 vi.mock('@/hooks/devices', () => ({
   useGreenRoomDecision: useGreenRoomDecisionMock,
@@ -134,6 +139,7 @@ beforeEach(() => {
   useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
   useDialerMock.mockReturnValue({ dialing: false, sendDigits: sendDigitsMock })
   useCreateCallMock.mockReturnValue({ mutate: mutateMock, isPending: false })
+  isAdoptableInFlightCallErrorMock.mockReturnValue(false)
   useGetNumbersMock.mockReturnValue(numbersWithActive())
   // The common case: the rep already passed a check this session, so the Call
   // button dials straight through. Tests for the gate itself flip this.
@@ -301,6 +307,19 @@ describe('NumericKeypad', () => {
     fireEvent.keyDown(phoneInput(), { key: 'Enter' })
 
     expect(toastErrorMock).toHaveBeenCalledWith(message)
+  })
+
+  it('does not toast a 409 that restored the live call into the dialer', () => {
+    isAdoptableInFlightCallErrorMock.mockReturnValue(true)
+    mutateMock.mockImplementation((_vars, opts) =>
+      opts.onError(new ApiError('You already have a call to this number in progress.', 409)),
+    )
+    render(<NumericKeypad />)
+
+    typeNumber(NATIONAL)
+    fireEvent.keyDown(phoneInput(), { key: 'Enter' })
+
+    expect(toastErrorMock).not.toHaveBeenCalled()
   })
 
   it('falls back to a generic line when the failure is not an ApiError', () => {

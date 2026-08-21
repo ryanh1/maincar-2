@@ -47,11 +47,11 @@ vi.mock('@/dependencies/twilioVoice', () => ({
 const { toastErrorMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
 
-function queuedCall(id: string): Call {
+function queuedCall(id: string, status: Call['status'] = 'queued'): Call {
   return {
     id,
     direction: 'outbound',
-    status: 'queued',
+    status,
     fromE164: '+12025550100',
     toE164: '+12025550123',
     recordingConsent: 'granted',
@@ -72,6 +72,7 @@ function renderCreateCall(client: QueryClient = makeTestQueryClient()) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear()
   jsonFetch.mockReset()
   toastErrorMock.mockReset()
   // A Twilio Call object with a no-op `.on()` — enough for `placeDeviceCall` to
@@ -160,6 +161,34 @@ describe('useCreateCall', () => {
     expect((result.current.create.error as ApiError).message).toBe(
       'You already have a call to this number in progress.',
     )
+  })
+
+  it('adopts the live call returned with a 409 instead of trying to place another Device call', async () => {
+    const existing = queuedCall('call-existing', 'in-progress')
+    jsonFetch.mockRejectedValue(
+      new ApiError('You already have a call to this number in progress.', 409, undefined, {
+        error: 'You already have a call to this number in progress.',
+        call: existing,
+      }),
+    )
+
+    const { result } = renderCreateCall()
+    result.current.create.mutate({
+      orgId: 'org-1',
+      toE164: '+12025550123',
+      recordingConsent: 'granted',
+    })
+
+    await waitFor(() => expect(result.current.create.isError).toBe(true))
+    expect(result.current.dialer.phase).toBe('in-progress')
+    expect(result.current.dialer.dialing).toBe(true)
+    expect(result.current.dialer.view).toBe('expanded')
+    expect(result.current.dialer.activeCall).toEqual({
+      orgId: 'org-1',
+      callId: 'call-existing',
+      recording: true,
+    })
+    expect(deviceConnectMock).not.toHaveBeenCalled()
   })
 
   it('connects the browser Voice SDK Device with the queued call’s id, on success', async () => {

@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-import { jsonFetch } from '@/lib/api'
+import { ApiError, jsonFetch } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
-import type { CreateCallInput, CreateCallResponse } from '@/lib/callTypes'
+import type { Call, CreateCallInput, CreateCallResponse } from '@/lib/callTypes'
 import { useDialer } from '@/components/dialer/dialerContext'
 
 /**
@@ -13,6 +13,27 @@ import { useDialer } from '@/components/dialer/dialerContext'
  */
 export interface CreateCallVariables extends CreateCallInput {
   orgId: string
+}
+
+const IN_FLIGHT_STATUSES = new Set<Call['status']>(['queued', 'ringing', 'in-progress'])
+
+function isCall(value: unknown): value is Call {
+  if (!value || typeof value !== 'object') return false
+  const call = value as Partial<Call>
+  return (
+    typeof call.id === 'string' &&
+    typeof call.status === 'string' &&
+    IN_FLIGHT_STATUSES.has(call.status as Call['status']) &&
+    (call.recordingConsent === 'granted' || call.recordingConsent === 'declined' || call.recordingConsent === null)
+  )
+}
+
+/** True only for the 409 response that carries an existing live call to adopt. */
+export function isAdoptableInFlightCallError(error: unknown): error is ApiError & { body: { call: Call } } {
+  if (!(error instanceof ApiError) || error.status !== 409 || !error.body || typeof error.body !== 'object') {
+    return false
+  }
+  return isCall((error.body as { call?: unknown }).call)
 }
 
 /**
@@ -25,17 +46,16 @@ export interface CreateCallVariables extends CreateCallInput {
  * a bad number (400) — must never leave the dialer showing "ringing" for a call
  * that never started. The button's own pending state covers the round trip.
  *
- * The 409 carries the call already in flight, and adopting it into the dialer is
- * a later concern (the UI that shows an existing call owns that); here the
- * rejection simply surfaces through `ApiError` with the server's own sentence, so
- * the caller can toast exactly what the server said.
+ * The 409 carries the call already in flight. Adopt that server-owned call rather
+ * than treating the conflict as a failed attempt: the rep gets its controls back
+ * without this browser asking the Voice SDK to place a duplicate call.
  *
  * The history list is invalidated on success so a placed call shows up in the
  * history table without a manual refetch.
  */
 export function useCreateCall() {
   const queryClient = useQueryClient()
-  const { startCall, placeDeviceCall, reset } = useDialer()
+  const { startCall, adoptCall, placeDeviceCall, reset } = useDialer()
 
   return useMutation({
     mutationFn: ({ orgId, ...body }: CreateCallVariables) =>
@@ -72,6 +92,20 @@ export function useCreateCall() {
         )
         reset()
       })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.calls.list(variables.orgId) })
+    },
+    onError: (error, variables) => {
+      if (!isAdoptableInFlightCallError(error)) return
+
+      const { call } = error.body
+      adoptCall(
+        {
+          orgId: variables.orgId,
+          callId: call.id,
+          recording: call.recordingConsent === 'granted',
+        },
+        call.status,
+      )
       void queryClient.invalidateQueries({ queryKey: queryKeys.calls.list(variables.orgId) })
     },
   })
