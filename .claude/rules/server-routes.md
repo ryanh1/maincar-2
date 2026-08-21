@@ -20,6 +20,28 @@ paths:
   `// --- Verify ownership ---`, `// --- Execute query ---`,
   `// --- Return response ---`. Skip the ones a handler does not need.
 
+## Org-scoped writes (review checklist)
+
+Every write to an org-scoped model — `Membership`, `Invitation`, `PhoneNumber`,
+`Call`, `EmailDraft` — goes through this list before it merges. The first two are
+enforced by `G-STRUCT` in `server/src/routes/__tests__/guardrails.test.ts`; the
+rest are a reviewer's job.
+
+- **`updateMany` / `deleteMany`, never `update` / `delete` by id.** The `where`
+  clause is where the tenant boundary lives. `update({ where: { id } })` has
+  nowhere to put `orgId`, so a guessed id writes another org's row.
+- **Every such `where` carries `orgId`** (plus `isActive` for memberships), and
+  the result's `count === 0` answers **404** — never a silent success.
+- **A count-then-write guardrail lives inside ONE transaction**, and the count
+  takes a row lock (`SELECT … FOR UPDATE`). A plain count outside a transaction
+  lets two concurrent requests both read the safe number and both commit.
+- **The org id comes from the verified path**, never from the request body.
+- **A caller outside the org gets 404, not 403.** 403 confirms the org exists.
+
+The guardrails these protect are the matrix in
+`server/src/routes/__tests__/guardrails.test.ts` and its integration twin. A new
+rule is one row there.
+
 ## Logging (server)
 
 - **Use the shared `logger` (pino), never `console.*`.**
