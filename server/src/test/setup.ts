@@ -21,6 +21,15 @@ process.env.TOKEN_ENC_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
 // value back to forge validly-signed-but-malformed payloads.
 process.env.OAUTH_STATE_SECRET = 'test-oauth-state-secret-0123456789abcdef'
 
+// Fixed placeholder OAuth app credentials so config.ts boots. No test reaches a
+// provider — the HTTP is mocked (globalThis.fetch is stubbed) — so these are never
+// sent anywhere; they exist only to satisfy config.ts's `required()` at import.
+process.env.GOOGLE_OAUTH_CLIENT_ID = 'test-google-client-id.apps.googleusercontent.com'
+process.env.GOOGLE_OAUTH_CLIENT_SECRET = 'test-google-client-secret'
+process.env.MS_OAUTH_CLIENT_ID = 'test-microsoft-client-id'
+process.env.MS_OAUTH_CLIENT_SECRET = 'test-microsoft-client-secret'
+process.env.OAUTH_REDIRECT_BASE = 'https://test.example.com'
+
 // Keep log output out of the test report, and make it deterministic.
 process.env.LOG_LEVEL = 'silent'
 process.env.NODE_ENV = 'test'

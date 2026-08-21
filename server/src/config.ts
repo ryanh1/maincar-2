@@ -85,6 +85,29 @@ function requireMinLength(name: string, min: number): string {
   return value
 }
 
+// --- OAuth provider clients (Google + Microsoft) ---
+// The one shared OAuth app per provider (CAPABILITY-MAP-INTEGRATIONS.md assumption
+// 1: one app for all orgs, not per-org credentials). The client id and secret are
+// consumed ONLY inside server/dependencies/googleOAuth.ts and microsoftOAuth.ts —
+// this is the single place they are read from the environment. `required()` is the
+// `!`-with-no-fallback rule: a missing credential takes the process down here at
+// startup, naming the var, rather than surfacing as an opaque 401 at the first
+// consent. Real values are provisioned in the Google Cloud and Entra consoles;
+// until then the server still boots against placeholders and only a live consent
+// fails.
+export const GOOGLE_OAUTH_CLIENT_ID = required('GOOGLE_OAUTH_CLIENT_ID')
+export const GOOGLE_OAUTH_CLIENT_SECRET = required('GOOGLE_OAUTH_CLIENT_SECRET')
+export const MS_OAUTH_CLIENT_ID = required('MS_OAUTH_CLIENT_ID')
+export const MS_OAUTH_CLIENT_SECRET = required('MS_OAUTH_CLIENT_SECRET')
+
+// The public origin the provider redirects back to after consent. Every provider's
+// `redirect_uri` is built from it as `${OAUTH_REDIRECT_BASE}/api/integrations/
+// :provider/callback`, so the callback host is never hardcoded in a client. It must
+// match, character for character, a redirect URI registered on the OAuth app — a
+// mismatch is the `redirect_uri_mismatch` error. Trailing slashes are trimmed so
+// the joined path never doubles one.
+export const OAUTH_REDIRECT_BASE = required('OAUTH_REDIRECT_BASE').replace(/\/+$/, '')
+
 // --- Firebase Admin ---
 // Verifies the ID token on every authenticated request. In local dev the emulator
 // host is set instead, and the SDK picks it up automatically.

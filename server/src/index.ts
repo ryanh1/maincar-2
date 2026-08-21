@@ -5,8 +5,15 @@ import { APP_NAME, PORT } from './config.js'
 import { registerProvisionNumberWorker } from './jobs/provisionNumber.js'
 import { registerUploadRecordingWorker } from './jobs/uploadRecording.js'
 import { startQueue, stopQueue } from './jobs/queue.js'
+import { registerOAuthTokenRefresher } from './lib/mail/oauthProviders.js'
 
 initErrorReporter()
+
+// Wire the real Google/Microsoft refresh into oauthConnections at startup. This is
+// the seam int-schema (MAI-101) left open: withFreshAccessToken() refuses to run
+// until a refresher is registered, and this is the one production caller. It lives
+// here, not in app.ts, so the unit suite never reaches a provider through it.
+registerOAuthTokenRefresher()
 
 // An unhandled rejection kills the process silently by default. Log it first, so
 // a crash is never a mystery.
