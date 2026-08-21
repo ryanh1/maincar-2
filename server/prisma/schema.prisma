@@ -29,8 +29,10 @@ model Org {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships Membership[]
-  invitations Invitation[]
+  memberships  Membership[]
+  invitations  Invitation[]
+  phoneNumbers PhoneNumber[]
+  calls        Call[]
 }
 
 model User {
@@ -62,8 +64,10 @@ model User {
   currentOrgId String?
 
   memberships         Membership[]
-  invitationsSent     Invitation[]           @relation("InvitationSender")
-  invitationsAccepted Invitation[]           @relation("InvitationAcceptor")
+  invitationsSent     Invitation[]  @relation("InvitationSender")
+  invitationsAccepted Invitation[]  @relation("InvitationAcceptor")
+  phoneNumbers        PhoneNumber[]
+  calls               Call[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -110,7 +114,7 @@ model Invitation {
   expiresAt        DateTime
   acceptedAt       DateTime?
   acceptedByUserId String?
-  acceptedByUser   User?   @relation("InvitationAcceptor", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+  acceptedByUser   User?     @relation("InvitationAcceptor", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
 
   invitedByUserId String?
   invitedByUser   User?   @relation("InvitationSender", fields: [invitedByUserId], references: [id], onDelete: SetNull)
@@ -121,4 +125,104 @@ model Invitation {
   @@index([orgId])
   @@index([email])
   @@index([status])
+}
+
+// -----------------------------------------------------------------------------
+// Dialer
+//
+// The dialer spec (docs/specs/SPEC-DIALER-REBUILD.md) calls the tenant key
+// `workspaceId`. This schema has always called it `orgId` and points it at `Org`
+// (CLAUDE.md → Database / Prisma: "Every org-scoped model carries orgId"). One
+// name for one thing, so the dialer models use `orgId` too.
+// -----------------------------------------------------------------------------
+
+// A Twilio number an org owns and hands to one of its members. A user may hold
+// several; at most one of theirs is the caller ID for outbound calls.
+model PhoneNumber {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // The member this number belongs to. Restrict, not Cascade: releasing a number
+  // is a Twilio call, not a row delete, so a user who still holds one cannot be
+  // deleted out from under it.
+  assignedUserId String
+  assignedUser   User   @relation(fields: [assignedUserId], references: [id], onDelete: Restrict)
+
+  // E.164, e.g. "+12025550123".
+  e164 String
+
+  // Twilio's SID for the number. Null until the provisioning job has actually
+  // bought it — the row is written first, with status "searching".
+  twilioSid String?
+
+  // Allowed values: "searching", "active", "releasing", "failed".
+  status String @default("searching")
+
+  // At most one true per user. Enforced in the route, in a transaction.
+  isActiveForOutbound Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([assignedUserId])
+  @@index([e164])
+}
+
+// One call, inbound or outbound, and everything learned about it afterwards.
+model Call {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // The member who placed or received the call. Restrict so call history is
+  // never destroyed as a side effect of deleting a user.
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  // E.164 both sides. fromE164 is the caller ID actually used.
+  fromE164 String
+  toE164   String
+
+  // Allowed values: "outbound", "inbound".
+  direction String
+
+  // Allowed values: "queued", "ringing", "in-progress", "completed", "busy",
+  // "failed", "no-answer", "canceled".
+  status String @default("queued")
+
+  // Twilio's SID for the call. Null until Twilio accepts it. Unique so the
+  // status and recording webhooks can look the row up by SID alone; Postgres
+  // allows many NULLs under a unique index, so queued rows do not collide.
+  twilioCallSid String? @unique
+
+  // Allowed values: "granted", "declined", or null if never asked.
+  recordingConsent String?
+
+  // True once recording actually started. Null before the call connects.
+  recordingEnabled Boolean?
+
+  // Presigned S3 URL for the MP3, written by the upload job.
+  recordingUrl String?
+
+  // Allowed values: "pending", "done", "failed", "skipped-not-recorded".
+  transcriptStatus String  @default("pending")
+  transcript       String?
+
+  // Billed duration in whole seconds, from Twilio's status callback.
+  durationS Int?
+
+  startedAt DateTime?
+  endedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([userId])
+  @@index([toE164])
+  @@index([createdAt])
 }
