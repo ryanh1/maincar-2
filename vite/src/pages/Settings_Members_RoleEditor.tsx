@@ -1,17 +1,8 @@
 import { useState } from 'react'
-import { ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { RoleMultiSelect, type AssignableRole } from '@/components/ui/RoleMultiSelect'
 import {
   Tooltip,
   TooltipContent,
@@ -22,8 +13,6 @@ import { useUpdateMemberRoles } from '@/hooks/orgs'
 import type { OrgMember } from '@/hooks/orgs'
 import { ApiError } from '@/lib/api'
 import {
-  ASSIGNABLE_ROLES,
-  getRoleDescription,
   getRoleLabel,
   isAdmin,
   isOwner,
@@ -41,10 +30,12 @@ interface Props {
 }
 
 /**
- * The role cell: badges when it is read-only, a checkbox menu when it is not.
+ * The role cell: badges when it is read-only, the shared multi-select when it
+ * is not.
  *
  * A multi-select, not a single-value dropdown — one person can hold more than
- * one role, and forcing a choice would silently drop the other one.
+ * one role, and forcing a choice would silently drop the other one. The same
+ * control runs the invite form, so the two cannot drift.
  */
 export function Settings_Members_RoleEditor({
   member,
@@ -62,24 +53,22 @@ export function Settings_Members_RoleEditor({
   const isLastAdmin = isAdmin(roles) && activeAdminCount <= 1
   const canEdit = viewerIsAdmin && !memberIsOwner
 
-  const badges = (
-    <span className="flex flex-wrap items-center gap-1">
-      {roles.map((role) => (
-        <Badge key={role} variant="secondary">
-          {getRoleLabel(role)}
-        </Badge>
-      ))}
-    </span>
-  )
-
   if (!canEdit) {
+    // Chips are right here: nothing in this cell is interactive, so they cannot
+    // pick up a control's hover or press state.
     // The provider is local because the app mounts none at the root. Radix allows
     // nesting, so adding one here cannot fight a future global provider.
     return (
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="inline-flex h-8 items-center">{badges}</span>
+            <span className="inline-flex h-8 flex-wrap items-center gap-1">
+              {roles.map((role) => (
+                <Badge key={role} variant="secondary">
+                  {getRoleLabel(role)}
+                </Badge>
+              ))}
+            </span>
           </TooltipTrigger>
           <TooltipContent>
             {memberIsOwner
@@ -92,13 +81,6 @@ export function Settings_Members_RoleEditor({
   }
 
   const selected = draft ?? roles
-
-  function toggle(role: MembershipRole, checked: boolean): void {
-    const next = checked
-      ? sortRoles([...selected.filter((r) => r !== role), role])
-      : sortRoles(selected.filter((r) => r !== role))
-    setDraft(next as MembershipRole[])
-  }
 
   function commit(open: boolean): void {
     if (open) {
@@ -132,43 +114,17 @@ export function Settings_Members_RoleEditor({
   }
 
   return (
-    <DropdownMenu onOpenChange={commit}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={updateRoles.isPending}
-          aria-label={`Change the role of ${member.email}`}
-        >
-          {badges}
-          <ChevronDown size={16} aria-hidden />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuLabel>Roles</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {ASSIGNABLE_ROLES.map((role) => {
-          const blocked = role === 'admin' && isLastAdmin && selected.includes(role)
-          return (
-            <DropdownMenuCheckboxItem
-              key={role}
-              checked={selected.includes(role)}
-              disabled={blocked}
-              onSelect={(event) => event.preventDefault()}
-              onCheckedChange={(checked) => toggle(role, checked)}
-            >
-              <span className="flex flex-col gap-0.5">
-                <span className="font-medium">{getRoleLabel(role)}</span>
-                <span className="text-xs text-muted-foreground">
-                  {blocked
-                    ? 'Promote someone else to admin first.'
-                    : getRoleDescription(role)}
-                </span>
-              </span>
-            </DropdownMenuCheckboxItem>
-          )
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <RoleMultiSelect
+      value={selected}
+      onChange={(next) => setDraft(next as MembershipRole[])}
+      onOpenChange={commit}
+      disabled={updateRoles.isPending}
+      label={`Change the role of ${member.email}`}
+      blockedRoles={
+        isLastAdmin && selected.includes('admin' as AssignableRole)
+          ? { admin: 'Promote someone else to admin first.' }
+          : undefined
+      }
+    />
   )
 }

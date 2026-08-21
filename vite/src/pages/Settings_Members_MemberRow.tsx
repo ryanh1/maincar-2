@@ -72,7 +72,7 @@ export function Settings_Members_MemberRow({
 
   return (
     <tr className="border-b border-border last:border-b-0">
-      <td className="px-3 py-2">
+      <td className="px-4 py-2">
         <div className="flex items-center gap-3">
           <Settings_Members_Avatar
             name={name === member.email ? null : name}
@@ -90,10 +90,10 @@ export function Settings_Members_MemberRow({
           </span>
         </div>
       </td>
-      <td className="px-3 py-2">
+      <td className="px-4 py-2">
         <span className="block truncate text-sm text-muted-foreground">{member.email}</span>
       </td>
-      <td className="px-3 py-2">
+      <td className="px-4 py-2">
         <Settings_Members_RoleEditor
           member={member}
           orgId={orgId}
@@ -101,12 +101,12 @@ export function Settings_Members_MemberRow({
           activeAdminCount={activeAdminCount}
         />
       </td>
-      <td className="px-3 py-2">
+      <td className="px-4 py-2">
         <span className="text-sm tabular-nums text-muted-foreground">
           {formatDate(member.joinedAt, timeZone)}
         </span>
       </td>
-      <td className="px-3 py-2 text-right">
+      <td className="px-2 py-2 text-right">
         {viewerIsAdmin && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

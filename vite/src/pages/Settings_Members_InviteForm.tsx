@@ -4,24 +4,22 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { RoleMultiSelect, type AssignableRole } from '@/components/ui/RoleMultiSelect'
 import { useCreateInvitation } from '@/hooks/orgs'
 import { ApiError } from '@/lib/api'
-import { ASSIGNABLE_ROLES, getRoleLabel, type MembershipRole } from '@/lib/roles'
 
-type AssignableRole = Exclude<MembershipRole, 'owner'>
-
-/** Invite someone by email. The link is copied from the pending list below. */
+/**
+ * Invite someone by email. The link is copied from the pending list below.
+ *
+ * The role control is the SAME multi-select the member list uses, because an
+ * invite grants the roles a membership will hold, and a membership can hold more
+ * than one. A single-value select here would make the invite unable to express
+ * what the list can.
+ */
 export function Settings_Members_InviteForm({ orgId }: { orgId: string }) {
   const createInvitation = useCreateInvitation()
   const [email, setEmail] = useState('')
-  const [role, setRole] = useState<AssignableRole>('basic')
+  const [roles, setRoles] = useState<AssignableRole[]>(['basic'])
 
   async function invite(event: FormEvent): Promise<void> {
     event.preventDefault()
@@ -30,10 +28,16 @@ export function Settings_Members_InviteForm({ orgId }: { orgId: string }) {
       toast.error('Enter an email address to send an invite.')
       return
     }
+    // Refused rather than defaulted, the same way the member list refuses it.
+    // An invite carrying no role would land someone in the org with no access.
+    if (roles.length === 0) {
+      toast.error('Pick at least one role.')
+      return
+    }
     try {
-      await createInvitation.mutateAsync({ orgId, email: trimmed, roles: [role] })
+      await createInvitation.mutateAsync({ orgId, email: trimmed, roles })
       setEmail('')
-      setRole('basic')
+      setRoles(['basic'])
       toast.success('Invite created. Copy the link to send it.')
     } catch (error) {
       toast.error(
@@ -60,19 +64,13 @@ export function Settings_Members_InviteForm({ orgId }: { orgId: string }) {
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="inviteRole">Role</Label>
-          <Select value={role} onValueChange={(next) => setRole(next as AssignableRole)}>
-            <SelectTrigger id="inviteRole" size="sm" className="w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ASSIGNABLE_ROLES.map((value) => (
-                <SelectItem key={value} value={value}>
-                  {getRoleLabel(value)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label htmlFor="inviteRoles">Roles</Label>
+          <RoleMultiSelect
+            id="inviteRoles"
+            value={roles}
+            onChange={setRoles}
+            label="Roles"
+          />
         </div>
         <Button type="submit" size="sm" disabled={createInvitation.isPending}>
           {createInvitation.isPending ? 'Creating…' : 'Create invite'}

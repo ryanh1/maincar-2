@@ -56,13 +56,16 @@ export function Settings() {
   const ActiveTabContent = TAB_CONTENT[activeTab]
 
   return (
-    <div className="mx-auto w-full max-w-2xl">
+    // Wide enough for the Members table (Loadwire's settings shell is the same
+    // 1024px). The Profile and Organization forms carry their own `max-w-sm`, so
+    // widening the shell does not stretch them.
+    <div className="mx-auto w-full max-w-5xl">
       <h1 className="text-base font-semibold">Settings</h1>
 
       <Separator className="my-8" />
 
       <div className="flex flex-col gap-6 md:flex-row md:gap-8">
-        <nav className="flex shrink-0 gap-1 overflow-x-auto md:w-40 md:flex-col" aria-label="Settings">
+        <nav className="flex shrink-0 gap-1 overflow-x-auto md:w-48 md:flex-col" aria-label="Settings">
           {visibleTabs.map((tab) => {
             const Icon = tab.icon
             const isActive = activeTab === tab.id

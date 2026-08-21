@@ -1,6 +1,5 @@
 import { ArrowDown, ArrowUp, ChevronDown, Search, X } from 'lucide-react'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -29,10 +28,13 @@ import { Settings_Members_PendingInvites } from './Settings_Members_PendingInvit
 
 const PAGE_SIZE = 25
 
+// Proportions, not guesses: name and email share what is left after the two
+// fixed columns, so the table fills the wider settings shell instead of huddling
+// in the middle of it. Matches Loadwire's user table.
 const COLUMNS: { label: string; sort: MemberSortColumn | null; className?: string }[] = [
-  { label: 'Name', sort: 'name' },
-  { label: 'Email', sort: 'email' },
-  { label: 'Role', sort: null },
+  { label: 'Name', sort: 'name', className: 'w-[34%]' },
+  { label: 'Email', sort: 'email', className: 'w-[34%]' },
+  { label: 'Role', sort: null, className: 'w-44' },
   { label: 'Joined', sort: 'joinedAt', className: 'w-32' },
 ]
 
@@ -105,7 +107,7 @@ export function Settings_MembersTab() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-56 flex-1">
+          <div className="relative min-w-56 max-w-sm flex-1">
             <Search
               size={16}
               aria-hidden
@@ -122,10 +124,18 @@ export function Settings_MembersTab() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
+              {/* Plain text, not a Badge: a chip inside a button takes the
+                  button's hover and press states and reads as a second control. */}
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label={`Filter by role${roleFilter.length > 0 ? `, ${roleFilter.length} selected` : ''}`}
+              >
                 Role
                 {roleFilter.length > 0 && (
-                  <Badge variant="secondary">{roleFilter.length}</Badge>
+                  <span className="tabular-nums text-muted-foreground">
+                    {roleFilter.length}
+                  </span>
                 )}
                 <ChevronDown size={16} aria-hidden />
               </Button>
@@ -179,7 +189,7 @@ export function Settings_MembersTab() {
 
         {data && (
           <div className="overflow-x-auto rounded-md border border-border">
-            <table className="w-full">
+            <table className="w-full table-fixed text-sm">
               <caption className="sr-only">Members of {org.name}</caption>
               <thead>
                 <tr className="border-b border-border bg-muted/60">
@@ -188,7 +198,7 @@ export function Settings_MembersTab() {
                       key={column.label}
                       scope="col"
                       className={cn(
-                        'px-3 py-2 text-left text-xs font-medium text-muted-foreground',
+                        'px-4 py-2 text-left text-xs font-medium text-muted-foreground',
                         column.className,
                       )}
                     >
@@ -212,7 +222,7 @@ export function Settings_MembersTab() {
                       )}
                     </th>
                   ))}
-                  <th scope="col" className="w-12 px-3 py-2">
+                  <th scope="col" className="w-12 px-2 py-2">
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
@@ -230,7 +240,7 @@ export function Settings_MembersTab() {
                 ))}
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-sm">
+                    <td colSpan={5} className="px-4 py-6 text-center text-sm">
                       {hasFilters
                         ? 'No member matches this search. Clear the filters to see everyone.'
                         : 'Invite someone to work with you.'}
