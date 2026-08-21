@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { Route, Routes } from 'react-router-dom'
 
 import type { BrokenConnection } from '@/lib/integrationTypes'
 import { renderWithProviders } from '@/test/utils'
@@ -22,6 +24,7 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { Sidebar } from '@/components/Sidebar'
+import { CrmGrid } from '@/pages/CrmGrid'
 
 /** One broken (status='error') connection, the slim shape GET …/health returns. */
 function brokenConnection(n: number): BrokenConnection {
@@ -65,6 +68,65 @@ describe('Sidebar', () => {
     renderSidebar()
 
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument()
+  })
+
+  it('lists every visible object and active list as keyboard-reachable grid links', async () => {
+    withOrg()
+    jsonFetchMock.mockImplementation((input: string) => {
+      if (input.endsWith('/objects')) {
+        return Promise.resolve({
+          objects: [
+            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false },
+            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false },
+            { id: 'hidden', slug: 'hidden', namePlural: 'Hidden', isHidden: true, isArchived: false },
+          ],
+        })
+      }
+      if (input.includes('/lists')) {
+        return Promise.resolve({
+          lists: [{ id: 'list-1', name: 'Q3 targets', isArchived: false }],
+          total: 1,
+          page: 1,
+          limit: 25,
+        })
+      }
+      return Promise.resolve({ broken: [] })
+    })
+    renderSidebar()
+
+    expect(await screen.findByRole('link', { name: 'People' })).toHaveAttribute('href', '/records/person')
+    expect(screen.getByRole('link', { name: 'Companies' })).toHaveAttribute('href', '/records/company')
+    expect(screen.getByRole('link', { name: 'Q3 targets' })).toHaveAttribute('href', '/lists/list-1')
+    expect(screen.queryByRole('link', { name: 'Hidden' })).not.toBeInTheDocument()
+    expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/objects')
+    expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/lists')
+  })
+
+  it('switches the grid when a record link is selected', async () => {
+    withOrg()
+    jsonFetchMock.mockImplementation((input: string) => {
+      if (input.endsWith('/objects')) {
+        return Promise.resolve({
+          objects: [
+            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false },
+            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false },
+          ],
+        })
+      }
+      if (input.includes('/lists')) return Promise.resolve({ lists: [], total: 0, page: 1, limit: 25 })
+      return Promise.resolve({ broken: [] })
+    })
+    const user = userEvent.setup()
+    renderWithProviders(
+      <Routes>
+        <Route path="/records/:objectSlug" element={<><Sidebar open={false} onClose={vi.fn()} /><CrmGrid /></>} />
+      </Routes>,
+      { initialEntries: ['/records/company'] },
+    )
+
+    await user.click(await screen.findByRole('link', { name: 'People' }))
+
+    expect(await screen.findByRole('grid', { name: 'People grid' })).toBeInTheDocument()
   })
 })
 
