@@ -2,14 +2,23 @@
 
 > Module `composer-mailbox` of [CAPABILITY-MAP-EMAIL-COMPOSER.md](CAPABILITY-MAP-EMAIL-COMPOSER.md).
 >
-> **Decision (2026-08-20): out of scope for the composer initiative.** Ryan is
-> running the mailbox OAuth as its own project, starting next. This file is the
-> brief for that project and the contract the composer will code against.
-> **Gmail only.** Microsoft Graph is a later implementation behind the same
-> interface, not part of this.
+> **SUPERSEDED (2026-08-20) by [CAPABILITY-MAP-INTEGRATIONS.md](CAPABILITY-MAP-INTEGRATIONS.md).**
+> That initiative is the OAuth project this file was the brief for. It is now
+> specified in six modules and its issues live in the Linear project
+> **Integration Hub**. Read the capability map first; this file is kept because
+> the composer codes against the contract below.
 >
-> `composer-send` is blocked until this project ships a working
-> `getMailProvider()`. Nothing else in the composer initiative depends on it.
+> **What changed from this brief:**
+> - **Google AND Microsoft**, not Gmail alone. Both ship together, behind one seam.
+> - **Full scopes** — read, send, and calendar — not send-only. Google restricted-
+>   scope verification is submitted at the start of `int-oauth` and is the long pole.
+> - **`getMailProvider(mailAccountId, orgId)`** takes the org too, so the lookup is
+>   org-scoped like every other query in this app. The return type is unchanged.
+> - `MailProvider` gains `listMessagesSince`, `getMessage`, `listEventsSince`, and
+>   `createEvent`. **`sendEmail` is unchanged**, so nothing in `composer-send` moves.
+>
+> `composer-send` is blocked until `int-seam` ships `getMailProvider()`.
+> Nothing else in the composer initiative depends on it.
 
 ## Objective
 
