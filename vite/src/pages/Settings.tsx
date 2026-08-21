@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { Building2, FileText, Phone, User as UserIcon, Users, type LucideIcon } from 'lucide-react'
+import { Building2, FileText, Phone, Plug, User as UserIcon, Users, type LucideIcon } from 'lucide-react'
 
 import { Separator } from '@/components/ui/separator'
 import { useUrlString } from '@/hooks/urlState'
@@ -11,8 +11,9 @@ import { Settings_OrganizationTab } from './Settings_OrganizationTab'
 import { Settings_MembersTab } from './Settings_MembersTab'
 import { Settings_PhoneNumbersTab } from './Settings_PhoneNumbersTab'
 import { Settings_EmailTemplatesTab } from './Settings_EmailTemplatesTab'
+import { Settings_IntegrationsTab } from './Settings_IntegrationsTab'
 
-type TabId = 'profile' | 'organization' | 'members' | 'numbers' | 'email-templates'
+type TabId = 'profile' | 'organization' | 'members' | 'numbers' | 'email-templates' | 'integrations'
 
 interface TabDef {
   id: TabId
@@ -32,6 +33,9 @@ const TABS: TabDef[] = [
   // Not adminOnly: a template belongs to the ORG and any member may write, edit,
   // or delete any of them (SPEC-composer-templates.md § 2).
   { id: 'email-templates', label: 'Email templates', icon: FileText, needsOrg: true },
+  // Hidden for a user with no org, like Organization and Members: connections belong to
+  // an org, so there is nothing to show without one.
+  { id: 'integrations', label: 'Integrations', icon: Plug, needsOrg: true },
 ]
 
 const TAB_CONTENT: Record<TabId, ComponentType> = {
@@ -40,6 +44,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
   members: Settings_MembersTab,
   numbers: Settings_PhoneNumbersTab,
   'email-templates': Settings_EmailTemplatesTab,
+  integrations: Settings_IntegrationsTab,
 }
 
 /**
