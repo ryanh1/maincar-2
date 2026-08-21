@@ -26,10 +26,23 @@ Every time-of-day shown to a person MUST render in an explicit timezone and carr
 
 **Never let a model draft ahead of its data.** Any value a model states to a user must be known to it *before* it drafts — read from the input, or handed in via the prompt or a tool result. Never compute a user-facing value *after* the draft and store it without feeding the SAME value into the draft, or the text and the stored record disagree.
 
+## Before you commit
+
+**Green tests are the gate.** Run all three at the repo root, and read the output, before every `git commit` and every `git push`:
+
+```bash
+npm test && npm run typecheck && npm run lint
+```
+
+- **Red blocks the commit.** A failing test, a type error, or a lint error stops you. Fix it, or stop and report exactly what is broken. Never commit or push over it.
+- **Never skip, delete, or `.skip()` a test to reach green.** A failing test is reporting a real disagreement between the code and the rule that test encodes. Change the code, or change the rule on purpose and say so.
+- **A feature commit carries its own tests.** Write the tests while you build the feature and commit them together — never as a follow-up. [testing.md](.claude/rules/testing.md) says where they live and what each kind must cover. **That rule holds even when the files you touched do not load testing.md.**
+- **If you cannot run the tests**, say so in your report and in the commit message body. Never let silence imply they passed.
+
 ## Verification before finishing
 
 - **After editing UI**, run `npm run typecheck` and `npm run lint` at the repo root. TypeScript does not always report an undefined JSX component; the build does.
-- **Run `npm test`** before calling anything done.
+- **Run `npm test`** before calling anything done, and again before you commit — see [Before you commit](#before-you-commit).
 - **Walk the journey in a browser** for anything user-facing. Parts passing in isolation is not evidence the journey works. A route path is a string, so `tsc` cannot verify a rename — click it.
 - **Never leave a feature half-wired.** If a control cannot be finished, do not render it, or render it visibly disabled with an honest label. Never ship a live-looking control that does nothing.
 - **Report what you could not verify**, at the step where it applies.
