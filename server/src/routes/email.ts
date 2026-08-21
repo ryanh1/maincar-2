@@ -12,6 +12,17 @@
  * A draft is org-scoped AND private to its author, so every read and every
  * write filters on `userId` as well as `orgId`. Another member's draft is a
  * 404, never a 403: a 403 would confirm that it exists.
+ *
+ * A TEMPLATE is the deliberate inverse (SPEC-composer-templates.md § 2): it is
+ * org-scoped and NOT private to its author, so every query filters on `orgId`
+ * ALONE and any member may read, edit, or delete any of them. "A template a
+ * teammate cannot use is a note to self." `createdById` is attribution and
+ * nothing else — never a filter — and it is nullable, so a null author means
+ * the rep who wrote it has left, not that anything is wrong.
+ *
+ * The 404-never-403 rule is the same for both, and comes from the same
+ * `requireMembership` gate: a caller outside the org is told the org does not
+ * exist.
  */
 import { Router } from 'express'
 import { z } from 'zod'
@@ -19,9 +30,9 @@ import { z } from 'zod'
 import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
-import { sanitizeOptionalRichTextHtml } from '../lib/sanitizeHtml.js'
+import { sanitizeOptionalRichTextHtml, sanitizeRichTextHtml } from '../lib/sanitizeHtml.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
-import type { EmailDraft, Prisma } from '../generated/prisma/client.js'
+import type { EmailDraft, EmailTemplate, Prisma } from '../generated/prisma/client.js'
 
 const router = Router()
 
@@ -343,6 +354,262 @@ router.delete(
     // The id comes back so the client can drop exactly that card, without
     // having to trust the request it just sent.
     res.json({ draft: { id: draftId } })
+  }),
+)
+
+// ============================================================
+// Templates (SPEC-composer-templates.md)
+// ============================================================
+// Everything below is ORG-SHARED. Read the module header before changing a
+// where clause here: the absence of `userId` is the design, not an omission.
+
+// A settings screen lists every template at once, so there is no page to ask
+// for. The cap is the same runaway guard the draft list carries — one org that
+// scripts ten thousand templates must not turn the Templates screen into a full
+// table scan.
+export const TEMPLATE_LIST_LIMIT = 200
+
+// Long enough for "Follow-up after a discovery call — enterprise", short enough
+// that the list stays readable.
+export const TEMPLATE_NAME_MAX = 200
+
+// The same 998 the draft subject uses, which is RFC 5322's line limit.
+export const TEMPLATE_SUBJECT_MAX = 998
+
+// A body cap the draft body does not have. A draft is one rep's unsent email; a
+// template is loaded by every member on every composer open, so an unbounded
+// one is everyone's problem. 100 KB is far past any email a person writes.
+export const TEMPLATE_BODY_MAX = 100_000
+
+// --- Input ---
+
+// `name` is the one field a template cannot do without: it is what the dropdown
+// shows, and an unnamed template is unpickable. Subject and body may be blank —
+// a rep saving a shell to fill in later is not an error — but they are never
+// null, because the columns are not nullable.
+//
+// The `error` on the string itself answers a MISSING name, not just a blank
+// one: zod's default there is "expected string, received undefined", which
+// tells a rep nothing.
+const templateNameSchema = z
+  .string({ error: 'A template needs a name.' })
+  .trim()
+  .min(1, 'A template needs a name.')
+  .max(TEMPLATE_NAME_MAX, `A template name can be at most ${TEMPLATE_NAME_MAX} characters.`)
+
+const templateSubjectSchema = z
+  .string()
+  .max(TEMPLATE_SUBJECT_MAX, `A subject can be at most ${TEMPLATE_SUBJECT_MAX} characters.`)
+
+// Shape and size only. As with a draft body, markup SAFETY is not a validation
+// question — a body containing a `<script>` is stripped by the allow-list on the
+// way in, never refused, because refusing would throw away the rep's writing.
+const templateBodySchema = z
+  .string()
+  .max(TEMPLATE_BODY_MAX, `A template body can be at most ${TEMPLATE_BODY_MAX} characters.`)
+
+/**
+ * What POST accepts.
+ *
+ * `fieldsJson` is deliberately absent, here and on the patch schema. It is
+ * DERIVED — recomputed server-side from the stored text on every write once
+ * merge fields land — so a client-supplied value must not reach the column.
+ * zod strips unknown keys, which is what makes "ignored" true rather than
+ * merely intended.
+ */
+export const templateInputSchema = z.object({
+  name: templateNameSchema,
+  subject: templateSubjectSchema.optional(),
+  bodyHtml: templateBodySchema.optional(),
+})
+
+/** What PATCH accepts: the same fields, with the name optional but never blank. */
+export const templatePatchSchema = z.object({
+  name: templateNameSchema.optional(),
+  subject: templateSubjectSchema.optional(),
+  bodyHtml: templateBodySchema.optional(),
+})
+
+// --- Mappers: database row → API shape ---
+
+// `orgId` is absent for the same reason it is absent from a draft: the caller
+// named the org in the path. `createdById` IS returned — the list can say who
+// wrote one — and a null means the author has left the org. That is a fact
+// about the template, not an error.
+function mapTemplateToApi(template: EmailTemplate) {
+  return {
+    id: template.id,
+    name: template.name,
+    subject: template.subject,
+    bodyHtml: template.bodyHtml,
+    createdById: template.createdById,
+    fieldsJson: template.fieldsJson,
+    createdAt: template.createdAt.toISOString(),
+    updatedAt: template.updatedAt.toISOString(),
+  }
+}
+
+// ============================================================
+// GET /api/email/orgs/:orgId/templates — every template in this org
+// ============================================================
+router.get(
+  '/orgs/:orgId/templates',
+  wrapRoute('GET /api/email/orgs/:orgId/templates', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    // `orgId` alone, and alphabetically, which is both what the screen shows
+    // (SPEC-composer-templates.md § 1) and exactly the @@index([orgId, name]).
+    // `id` breaks a tie so two templates with the same name keep a stable order.
+    const rows = await prisma.emailTemplate.findMany({
+      where: { orgId },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      take: TEMPLATE_LIST_LIMIT,
+    })
+
+    // --- Return response ---
+    const templates = rows.map(mapTemplateToApi)
+    res.json({ templates, total: templates.length })
+  }),
+)
+
+// ============================================================
+// POST /api/email/orgs/:orgId/templates — save a new one
+// ============================================================
+router.post(
+  '/orgs/:orgId/templates',
+  wrapRoute('POST /api/email/orgs/:orgId/templates', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+
+    // --- Verify ownership ---
+    // Before the body is read, so a non-member cannot write a row into this org
+    // and cannot learn whether it exists.
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = templateInputSchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // --- Execute query ---
+    // `orgId` comes from the verified path and `createdById` from the verified
+    // caller, never from the body. `fieldsJson` is not written at all: the
+    // column stays null until merge fields land, and the client never gets a
+    // say in it.
+    const template = await prisma.emailTemplate.create({
+      data: {
+        orgId,
+        createdById: authReq.user!.id,
+        name: parsed.data.name,
+        subject: parsed.data.subject ?? '',
+        bodyHtml: sanitizeRichTextHtml(parsed.data.bodyHtml ?? ''),
+      },
+    })
+
+    // --- Return response ---
+    res.status(201).json({ template: mapTemplateToApi(template) })
+  }),
+)
+
+// ============================================================
+// PATCH /api/email/orgs/:orgId/templates/:templateId — edit one
+// ============================================================
+// Any member may edit any template in the org, including one they did not
+// write. Editing a template never touches a draft that was made from it: a
+// template is copied into a card at pick time, and there is no link back
+// (SPEC-composer-templates.md § Boundaries).
+router.patch(
+  '/orgs/:orgId/templates/:templateId',
+  wrapRoute('PATCH /api/email/orgs/:orgId/templates/:templateId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const templateId = String(req.params.templateId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = templatePatchSchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // --- Build filters ---
+    // Key by key, only the keys that are present — the editor may save the name
+    // alone, and defaulting the absent ones would blank the body.
+    const body = parsed.data
+    const data: Prisma.EmailTemplateUpdateManyMutationInput = {}
+    if ('name' in body) data.name = body.name
+    if ('subject' in body) data.subject = body.subject
+    // The one key not stored verbatim, for the same reason a draft body is not:
+    // a template body is rendered again in the composer and in the sent email,
+    // so unsanitised HTML in this column is stored XSS.
+    if ('bodyHtml' in body) data.bodyHtml = sanitizeRichTextHtml(body.bodyHtml ?? '')
+
+    if (Object.keys(data).length === 0) {
+      return void res.status(400).json({ error: 'Name a field to save.' })
+    }
+
+    // --- Execute query ---
+    // updateMany filtered on `orgId`, never `update({ where: { id } })`: the
+    // where clause IS the tenant boundary, so another org's template comes back
+    // as count 0 even if the gate above were bypassed. Count 0 is a 404, never
+    // a 403 — a 403 would confirm the caller had guessed a real id.
+    const result = await prisma.emailTemplate.updateMany({
+      where: { id: templateId, orgId },
+      data,
+    })
+    if (result.count === 0) {
+      return void res.status(404).json({ error: 'Template not found' })
+    }
+
+    // Read the row back through the same key, because updateMany returns a count.
+    const template = await prisma.emailTemplate.findFirst({ where: { id: templateId, orgId } })
+    if (!template) {
+      return void res.status(404).json({ error: 'Template not found' })
+    }
+
+    // --- Return response ---
+    res.json({ template: mapTemplateToApi(template) })
+  }),
+)
+
+// ============================================================
+// DELETE /api/email/orgs/:orgId/templates/:templateId — remove one
+// ============================================================
+// Behind an AlertDialog on the client (SPEC-composer-templates.md § 9). Drafts
+// written from this template are untouched — the body was copied into the card,
+// so there is no row to cascade to and nothing here to clean up.
+router.delete(
+  '/orgs/:orgId/templates/:templateId',
+  wrapRoute('DELETE /api/email/orgs/:orgId/templates/:templateId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const templateId = String(req.params.templateId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    // deleteMany with the tenant key, for the same reason PATCH uses updateMany.
+    const result = await prisma.emailTemplate.deleteMany({ where: { id: templateId, orgId } })
+    if (result.count === 0) {
+      return void res.status(404).json({ error: 'Template not found' })
+    }
+
+    // --- Return response ---
+    // The id comes back so the client can drop exactly that row.
+    res.json({ template: { id: templateId } })
   }),
 )
 

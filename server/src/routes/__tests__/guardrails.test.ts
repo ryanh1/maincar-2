@@ -843,7 +843,7 @@ runMatrix('invitation hygiene', [
 // where clause. `updateMany`/`deleteMany` can, and their `count` is what turns a
 // miss into a 404 instead of a silent success.
 describe('structural', () => {
-  const ORG_SCOPED_MODELS = ['membership', 'invitation', 'phoneNumber', 'call', 'emailDraft']
+  const ORG_SCOPED_MODELS = ['membership', 'invitation', 'phoneNumber', 'call', 'emailDraft', 'emailTemplate']
   const routesDir = path.resolve(import.meta.dirname, '..')
 
   it('G-STRUCT — no route writes an org-scoped model with update() or delete() by id', () => {
