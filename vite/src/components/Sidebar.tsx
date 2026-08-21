@@ -3,6 +3,7 @@ import { Link, NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
 import { Button } from '@/components/ui/button'
+import { useKeyboardSystemOptional } from '@/components/keyboard/keyboardContext'
 import { OrgSwitcher } from '@/components/OrgSwitcher'
 import { useGetLists, useGetObjects } from '@/hooks/crm'
 import { useGetIntegrationHealth } from '@/hooks/integrations'
@@ -33,6 +34,7 @@ function brokenBadgeLabel(count: number): string {
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, signOut, org } = useAuth()
+  const keyboard = useKeyboardSystemOptional()
   const displayName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.email
 
   // Only genuinely broken (status='error') connections — the health endpoint already
@@ -144,6 +146,20 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </nav>
 
         <div className="border-t border-sidebar-border p-3">
+          {keyboard ? (
+            <button
+              type="button"
+              onClick={keyboard.openPalette}
+              className="mb-3 flex h-8 w-full items-center justify-between rounded-md border border-sidebar-border px-2 text-xs text-sidebar-foreground transition-colors hover:bg-white/5"
+            >
+              <span>Find</span>
+              <span className="flex items-center gap-1 text-sidebar-foreground/70">
+                <kbd>⌘K</kbd>
+                <span aria-hidden>/</span>
+                <kbd>?</kbd>
+              </span>
+            </button>
+          ) : null}
           <p className="truncate px-1 pb-2 text-xs text-sidebar-foreground/70">{displayName}</p>
           <Button
             variant="ghost"
