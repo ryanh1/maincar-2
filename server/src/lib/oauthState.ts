@@ -27,7 +27,7 @@ export interface StatePayload {
   userId: string
   orgId: string
   mode: OAuthMode
-  /** The connection being repaired on `mode: 'fix'`; null on a first connect. */
+  /** The connection being repaired or reconnected; null when adding a new account. */
   connectionId: string | null
   /** Random per-state, so two states minted in the same second are still distinct. */
   nonce: string

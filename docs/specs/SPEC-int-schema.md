@@ -107,8 +107,9 @@ model OAuthConnection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // One grant per provider per rep. Reconnecting updates rather than duplicates.
-  @@unique([orgId, userId, provider])
+  // One grant per provider identity per rep. Multiple Google or Microsoft accounts
+  // may coexist; reconnecting one stable identity updates rather than duplicates.
+  @@unique([orgId, userId, provider, providerAccountId])
   @@index([orgId, userId])
 }
 
@@ -200,6 +201,8 @@ No test reaches a provider. The refresh call is mocked at the
 - **`serializeConnection` output contains no substring of either token.** Assert on
   the serialized JSON, not on the field list — a future field cannot sneak past it.
 - Promoting the second of two mailboxes leaves exactly one `isPrimary`.
+- Two stable identities from the same provider create two grants and two mailboxes.
+- Reconnecting one provider identity updates its existing grant.
 - Deleting an `OAuthConnection` cascades the `MailAccount` away.
 - A connection id from another org returns null rather than throwing a leaky error.
 

@@ -1,34 +1,18 @@
-// What this card must never get wrong, and what these tests hold it to:
-//
-//   - GREEN MEANS EVERY PERMISSION. A partially-granted connection is amber and says
-//     which capability it costs; a withheld scope never renders as a green check.
-//   - Every unhealthy card pairs its status with a recovery block — even for an error
-//     code the client has never seen, which falls back to `unknown`.
-//   - One primary action per card, by status: Connect · Fix permissions · Reconnect · Test.
-//   - Status is carried by a WORD and an ICON, never a colour alone, so no assertion here
-//     is on colour: each checks the status word or the lucide icon class.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
+import type { IntegrationCard, IntegrationConnection } from '@/hooks/integrations'
+import type { Mailbox } from '@/lib/mailboxTypes'
 import { renderWithProviders } from '@/test/utils'
-import {
-  ERROR_CODE_RECOVERY,
-  INTEGRATION_ERROR_CODES,
-  type IntegrationCard,
-  type IntegrationConnection,
-  type TestConnectionResponse,
-} from '@/hooks/integrations'
 
-const jsonFetch = vi.hoisted(() => vi.fn())
-vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-  return { ...actual, jsonFetch }
+const useGetMailboxes = vi.hoisted(() => vi.fn())
+
+vi.mock('@/hooks/mailboxes', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/mailboxes')>()
+  return { ...actual, useGetMailboxes }
 })
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
-vi.mock('@/hooks/mailboxes', () => ({
-  useGetMailboxes: vi.fn(() => ({ data: { mailboxes: [] }, isLoading: false, isError: false })),
-}))
 
 import { Settings_Integrations_ProviderCard } from './Settings_Integrations_ProviderCard'
 
@@ -39,16 +23,15 @@ const REQUIRED = [
   'Know which account this is',
 ]
 
-const CONNECTED: IntegrationConnection = {
-  id: 'conn-1',
+const GOOGLE_CONNECTION: IntegrationConnection = {
+  id: 'conn-google',
   provider: 'google',
-  providerAccountId: 'acct-1',
-  emailAddress: 'rep@acme.com',
+  providerAccountId: 'acct-google',
+  emailAddress: 'google@acme.com',
   scopes: [],
   status: 'connected',
   errorCode: null,
   statusDetail: null,
-  // Two minutes ago, so the card reads "Verified 2m ago".
   lastValidatedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
   lastRefreshAt: null,
   expiresAt: null,
@@ -56,209 +39,112 @@ const CONNECTED: IntegrationConnection = {
   updatedAt: '2026-08-01T00:00:00.000Z',
 }
 
-function makeCard(connection: IntegrationConnection | null): IntegrationCard {
+const GOOGLE_MAILBOX: Mailbox = {
+  id: 'mailbox-google',
+  provider: 'google',
+  providerLabel: 'Google',
+  emailAddress: 'google@acme.com',
+  displayName: null,
+  isPrimary: true,
+  status: 'connected',
+  statusDetail: '',
+  errorCode: null,
+  lastValidatedAt: GOOGLE_CONNECTION.lastValidatedAt,
+  connectionId: GOOGLE_CONNECTION.id,
+  connectedAt: GOOGLE_CONNECTION.createdAt,
+}
+
+const MICROSOFT_MAILBOX: Mailbox = {
+  ...GOOGLE_MAILBOX,
+  id: 'mailbox-microsoft',
+  provider: 'microsoft',
+  providerLabel: 'Microsoft',
+  emailAddress: 'microsoft@acme.com',
+  connectionId: 'conn-microsoft',
+}
+
+function makeCard(connections: IntegrationConnection[]): IntegrationCard {
   return {
     provider: 'google',
     providerLabel: 'Google Workspace',
     providerShortName: 'Google',
     requiredPermissions: REQUIRED,
-    connection,
+    connections,
+    connection: connections[0] ?? null,
   }
 }
 
-function renderCard(connection: IntegrationConnection | null, onConnect = vi.fn()) {
+function renderCard(connections: IntegrationConnection[] = [], onConnect = vi.fn()) {
   const result = renderWithProviders(
-    <Settings_Integrations_ProviderCard card={makeCard(connection)} orgId="org-1" onConnect={onConnect} />,
+    <Settings_Integrations_ProviderCard
+      card={makeCard(connections)}
+      orgId="org-1"
+      onConnect={onConnect}
+      onMailboxOpenSettings={vi.fn()}
+      onMailboxReconnect={vi.fn()}
+    />,
   )
   return { ...result, onConnect }
 }
 
 beforeEach(() => {
-  jsonFetch.mockReset()
-  jsonFetch.mockResolvedValue(undefined)
+  vi.clearAllMocks()
+  useGetMailboxes.mockReturnValue({
+    data: { mailboxes: [] },
+    isPending: false,
+    isError: false,
+  })
 })
 
-describe('a provider that is not connected', () => {
-  it('reads "Not connected" and offers exactly one Connect action', async () => {
-    const { onConnect } = renderCard(null)
+describe('provider-level copy and controls', () => {
+  it('uses the approved product description and removes the permission checklist', () => {
+    renderCard()
+
+    expect(screen.getByText('Read and send from Google Workspace')).toBeInTheDocument()
+    for (const permission of REQUIRED) {
+      expect(screen.queryByText(permission)).not.toBeInTheDocument()
+    }
+  })
+
+  it('shows Not connected and Connect only when this provider has no connections', async () => {
+    const { onConnect } = renderCard()
 
     expect(screen.getByText('Not connected')).toBeInTheDocument()
     const connect = screen.getByRole('button', { name: 'Connect' })
-    expect(connect).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Disconnect' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Test' })).not.toBeInTheDocument()
-
     await userEvent.click(connect)
     expect(onConnect).toHaveBeenCalledWith('connect')
   })
 
-  it('shows the full product name in the title and its own logo, not the monogram', () => {
-    renderCard(null)
-
-    expect(screen.getByText('Google Workspace')).toBeInTheDocument()
-    expect(screen.getByAltText('Google Workspace logo')).toBeInTheDocument()
-    expect(screen.getByText('Read and send from Gmail mailboxes.')).toBeInTheDocument()
-  })
-
-  it('keeps "Before you connect" collapsed until it is opened', async () => {
-    renderCard(null)
-
-    const googleWarning = /Google warns that this app is not verified/
-    expect(screen.queryByText(googleWarning)).not.toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole('button', { name: /Before you connect/ }))
-    expect(screen.getByText(googleWarning)).toBeInTheDocument()
-  })
-})
-
-describe('a healthy connection', () => {
-  it('shows Connected with a check, the address, and when it was verified', () => {
-    const { container } = renderCard(CONNECTED)
-
-    expect(screen.getByText('Connected')).toBeInTheDocument()
-    expect(container.querySelector('.lucide-check')).not.toBeNull()
-    expect(screen.getByText('rep@acme.com')).toBeInTheDocument()
-    expect(screen.getByText('Verified 2m ago')).toBeInTheDocument()
-    // Test is the one primary action on a healthy card.
-    expect(screen.getByRole('button', { name: 'Test' })).toBeInTheDocument()
-  })
-
-  it('shows no timestamp when the connection was never validated', () => {
-    renderCard({ ...CONNECTED, lastValidatedAt: null })
-    expect(screen.queryByText(/Verified/)).not.toBeInTheDocument()
-  })
-})
-
-describe('a partially-granted connection — the whole point of the card', () => {
-  const LIMITED: IntegrationConnection = {
-    ...CONNECTED,
-    status: 'limited',
-    errorCode: 'partial_access',
-    statusDetail: 'Maincar cannot send email as you.',
-    lastValidatedAt: null,
-  }
-
-  it('is amber, names the missing permission, and its primary button reads "Fix permissions"', async () => {
-    const { container, onConnect } = renderCard(LIMITED)
-
-    // The word carries the status, not the colour — and it is never the green word.
-    expect(screen.getByText('Limited — missing permission')).toBeInTheDocument()
-    expect(screen.queryByText('Connected')).not.toBeInTheDocument()
-    // The missing capability is named in the server's plain words.
-    expect(screen.getByText('Maincar cannot send email as you.')).toBeInTheDocument()
-
-    // A withheld scope is NEVER shown as a granted (green check): at rest nothing on a
-    // limited card is marked granted, so no check icon is present at all.
-    expect(container.querySelector('.lucide-check')).toBeNull()
-
-    const fix = screen.getByRole('button', { name: 'Fix permissions' })
-    await userEvent.click(fix)
-    expect(onConnect).toHaveBeenCalledWith('fix')
-  })
-
-  it('renders a recovery block for the partial grant', () => {
-    renderCard(LIMITED)
-    expect(screen.getByText(ERROR_CODE_RECOVERY.partial_access.title)).toBeInTheDocument()
-    expect(
-      screen.getByText(ERROR_CODE_RECOVERY.partial_access.fixes[0]!),
-    ).toBeInTheDocument()
-  })
-})
-
-describe('a broken connection', () => {
-  const ERRORED: IntegrationConnection = {
-    ...CONNECTED,
-    status: 'error',
-    errorCode: 'token_revoked',
-    statusDetail: 'The grant was revoked.',
-  }
-
-  it('is red with an alert icon and a Reconnect action', async () => {
-    const { container, onConnect } = renderCard(ERRORED)
-
-    expect(screen.getByText('Reconnect needed')).toBeInTheDocument()
-    expect(container.querySelector('.lucide-circle-alert')).not.toBeNull()
-
-    await userEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
-    expect(onConnect).toHaveBeenCalledWith('connect')
-  })
-
-  it.each(INTEGRATION_ERROR_CODES)('renders the recovery block for "%s"', (code) => {
-    const { unmount } = renderCard({ ...ERRORED, errorCode: code })
-    expect(screen.getByText(ERROR_CODE_RECOVERY[code].title)).toBeInTheDocument()
-    expect(screen.getByText(ERROR_CODE_RECOVERY[code].fixes[0]!)).toBeInTheDocument()
-    unmount()
-  })
-
-  it('still renders a recovery block for an error code the client has never seen', () => {
-    // A code outside the closed set falls back to `unknown` rather than a blank card.
-    renderCard({ ...ERRORED, errorCode: 'brand_new_code' as IntegrationConnection['errorCode'] })
-    expect(screen.getByText(ERROR_CODE_RECOVERY.unknown.title)).toBeInTheDocument()
-  })
-})
-
-describe('the Test result', () => {
-  it('lists every capability, with the failed one named — never a bare "Test failed"', async () => {
-    const response: TestConnectionResponse = {
-      result: {
-        ok: false,
-        detail: 'One capability failed.',
-        errorCode: 'partial_access',
-        capabilities: [
-          { capability: 'read_email', label: 'Read your email', ok: true, reason: '', errorCode: null },
-          {
-            capability: 'send_email',
-            label: 'Send email as you',
-            ok: false,
-            reason: 'Google refused the send permission.',
-            errorCode: 'partial_access',
-          },
-          {
-            capability: 'calendar',
-            label: 'See and add calendar events',
-            ok: true,
-            reason: '',
-            errorCode: null,
-          },
-        ],
-        connection: null,
-      },
-    }
-    jsonFetch.mockResolvedValue(response)
-
-    renderCard(CONNECTED)
-    await userEvent.click(screen.getByRole('button', { name: 'Test' }))
-
-    const panel = (await screen.findByText('Test result')).closest('div')!
-    const list = within(panel)
-    // All three capabilities are named, not a single flat verdict.
-    expect(list.getByText('Read your email')).toBeInTheDocument()
-    expect(list.getByText('See and add calendar events')).toBeInTheDocument()
-    // The failed one carries its reason.
-    expect(
-      list.getByText(/Send email as you — Google refused the send permission\./),
-    ).toBeInTheDocument()
-  })
-})
-
-describe('disconnecting', () => {
-  it('does nothing until the confirm dialog is accepted', async () => {
-    renderCard(CONNECTED)
-
-    // The dialog is not there until Disconnect is clicked.
-    expect(screen.queryByText('Disconnect Google?')).not.toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
-    expect(screen.getByText('Disconnect Google?')).toBeInTheDocument()
-    expect(screen.getByText(/Maincar stops reading rep@acme\.com\./)).toBeInTheDocument()
-    // No request has gone out yet — the destructive call waits for confirmation.
-    expect(jsonFetch).not.toHaveBeenCalled()
-
-    await userEvent.click(
-      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Disconnect' }),
-    )
-    expect(jsonFetch).toHaveBeenCalledWith('/api/integrations/orgs/org-1/conn-1', {
-      method: 'DELETE',
+  it('removes provider-level connection status, account identity, verification, Test, and Disconnect', () => {
+    useGetMailboxes.mockReturnValue({
+      data: { mailboxes: [GOOGLE_MAILBOX] },
+      isPending: false,
+      isError: false,
     })
+    renderCard([GOOGLE_CONNECTION])
+
+    expect(screen.queryByText('Not connected')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Connected')).toHaveLength(1)
+    expect(screen.getAllByText('google@acme.com')).toHaveLength(1)
+    expect(screen.getAllByText('Verified 2m ago')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Test' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect another' })).toBeInTheDocument()
+  })
+})
+
+describe('provider mailbox scoping', () => {
+  it('shows only Google mailboxes under the Google card and has no divider above them', () => {
+    useGetMailboxes.mockReturnValue({
+      data: { mailboxes: [GOOGLE_MAILBOX, MICROSOFT_MAILBOX] },
+      isPending: false,
+      isError: false,
+    })
+
+    const { container } = renderCard([GOOGLE_CONNECTION])
+
+    expect(screen.getByText('google@acme.com')).toBeInTheDocument()
+    expect(screen.queryByText('microsoft@acme.com')).not.toBeInTheDocument()
+    expect(container.querySelector('.border-t')).toBeNull()
   })
 })

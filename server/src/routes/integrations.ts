@@ -82,10 +82,13 @@ interface IntegrationCard {
   requiredPermissions: string[]
   /** The rep's connection for this provider, token-free — or null when none exists. */
   connection: SerializedConnection | null
+  /** Every connection for this provider, oldest first. */
+  connections: SerializedConnection[]
 }
 
-// The authorize body. `mode: 'fix'` is an incremental re-consent for a connection the
-// rep already has, so it names one; `mode: 'connect'` is a first grant and names none.
+// The authorize body. `mode: 'fix'` is incremental re-consent and must name a
+// connection. `mode: 'connect'` asks for all scopes; it may name an existing
+// connection for a targeted reconnect or omit it when adding another account.
 const authorizeBody = z.object({
   mode: z.enum(['connect', 'fix']),
   connectionId: z.string().min(1).optional(),
@@ -149,10 +152,11 @@ router.post(
     let loginHint: string | undefined
     let connectionId: string | null = null
 
-    if (mode === 'fix') {
-      if (!parsed.data.connectionId) {
-        return void res.status(400).json({ error: 'A repair needs a connectionId.' })
-      }
+    if (mode === 'fix' && !parsed.data.connectionId) {
+      return void res.status(400).json({ error: 'A repair needs a connectionId.' })
+    }
+
+    if (parsed.data.connectionId) {
       // Scoped to (id, orgId, userId, provider): another rep's connection — or one
       // for a different provider — is simply not found, and the answer is 404. A
       // mailbox belongs to a rep, so userId is part of the boundary, not just orgId.
@@ -164,13 +168,17 @@ router.post(
         return void res.status(404).json({ error: 'Connection not found' })
       }
 
-      const missing = missingScopeParams(provider, connection.scopes)
-      if (missing.length === 0) {
-        // Nothing is missing, so there is nothing to re-consent to. Building a URL
-        // with an empty scope set would be rejected by the provider anyway.
-        return void res.status(400).json({ error: 'This connection has every permission already.' })
+      if (mode === 'fix') {
+        const missing = missingScopeParams(provider, connection.scopes)
+        if (missing.length === 0) {
+          // Nothing is missing, so there is nothing to re-consent to. Building a URL
+          // with an empty scope set would be rejected by the provider anyway.
+          return void res.status(400).json({ error: 'This connection has every permission already.' })
+        }
+        scopes = missing
+      } else {
+        scopes = allRequestedScopes(provider)
       }
-      scopes = missing
       loginHint = connection.emailAddress
       connectionId = connection.id
     } else {
@@ -213,23 +221,30 @@ router.get(
 
     // --- Execute query ---
     // This rep's connections, in this org, in the token-free public shape. A mailbox
-    // belongs to a rep (orgId, userId), and the model is unique on
-    // (orgId, userId, provider), so there is at most one row per provider.
+    // belongs to a rep (orgId, userId); multiple provider identities may coexist.
     const rows = await prisma.oAuthConnection.findMany({
       where: { orgId, userId },
+      orderBy: { createdAt: 'asc' },
       select: CONNECTION_PUBLIC_SELECT,
     })
-    const byProvider = new Map(rows.map((row) => [row.provider, row]))
+    const byProvider = new Map<Provider, SerializedConnection[]>()
+    for (const row of rows) {
+      if (!isProvider(row.provider)) continue
+      const connections = byProvider.get(row.provider) ?? []
+      connections.push(serializeConnection(row))
+      byProvider.set(row.provider, connections)
+    }
 
     // --- Return response ---
     const integrations: IntegrationCard[] = PROVIDERS.map((provider) => {
-      const row = byProvider.get(provider)
+      const connections = byProvider.get(provider) ?? []
       return {
         provider,
         providerLabel: providerLabel(provider),
         providerShortName: providerShortName(provider),
         requiredPermissions: REQUIRED_SCOPES[provider].map((scope) => scope.label),
-        connection: row ? serializeConnection(row) : null,
+        connection: connections[0] ?? null,
+        connections,
       }
     })
 
@@ -496,6 +511,7 @@ interface CallbackOutcome {
 // its recovery UI off `errorCode`; this is the human sentence beside it.
 const FAILURE_DETAIL: Partial<Record<IntegrationErrorCode, string>> = {
   state_invalid: 'This connection link is no longer valid. Please start again from Settings.',
+  account_mismatch: 'Sign in to the same mailbox shown on the row you are reconnecting.',
   missing_refresh_token:
     'Google did not return the lasting permission Maincar needs. Reconnect and keep “stay signed in” selected.',
   admin_approval_required:
@@ -595,13 +611,12 @@ function sendCallbackPage(res: import('express').Response, outcome: CallbackOutc
 }
 
 /**
- * On a FAILED repair (`mode: 'fix'`), stamp the row the rep was repairing so it does
- * not keep reading as it did before the attempt. A first connect (`mode: 'connect'`)
- * has no row to stamp, and a grant with no refresh token cannot be stored anyway, so
- * this is a no-op there.
+ * On a FAILED targeted attempt, stamp the named row so it does not keep reading as
+ * it did before the attempt. Adding a new account has no row to stamp, so this is a
+ * no-op there.
  */
-async function stampFailedRepair(payload: StatePayload, provider: Provider, code: IntegrationErrorCode): Promise<void> {
-  if (payload.mode !== 'fix' || !payload.connectionId) return
+async function stampFailedConnection(payload: StatePayload, provider: Provider, code: IntegrationErrorCode): Promise<void> {
+  if (!payload.connectionId) return
   await markConnectionError(
     { orgId: payload.orgId, userId: payload.userId, provider, connectionId: payload.connectionId },
     code,
@@ -642,11 +657,11 @@ callbackRouter.get(
     // --- The provider refused at its own consent screen ---
     if (providerError) {
       const mapped = mapProviderError(provider, providerErrorDescription || providerError)
-      await stampFailedRepair(payload, provider, mapped)
+      await stampFailedConnection(payload, provider, mapped)
       return void sendCallbackPage(res, failureOutcome(provider, mapped))
     }
     if (!code) {
-      await stampFailedRepair(payload, provider, 'token_exchange_failed')
+      await stampFailedConnection(payload, provider, 'token_exchange_failed')
       return void sendCallbackPage(res, failureOutcome(provider, 'token_exchange_failed'))
     }
 
@@ -657,7 +672,7 @@ callbackRouter.get(
       grant = await client.exchangeCode({ code, codeVerifier: pkceVerifierForState(stateParam) })
     } catch (err) {
       const mapped = providerErrorCode(provider, err)
-      await stampFailedRepair(payload, provider, mapped)
+      await stampFailedConnection(payload, provider, mapped)
       return void sendCallbackPage(res, failureOutcome(provider, mapped))
     }
 
@@ -666,14 +681,37 @@ callbackRouter.get(
       identity = await client.fetchIdentity(grant.accessToken)
     } catch (err) {
       const mapped = providerErrorCode(provider, err)
-      await stampFailedRepair(payload, provider, mapped)
+      await stampFailedConnection(payload, provider, mapped)
       return void sendCallbackPage(res, failureOutcome(provider, mapped))
     }
 
     // --- A grant with no refresh token cannot outlive its first hour: never green ---
     if (!grant.refreshToken) {
-      await stampFailedRepair(payload, provider, 'missing_refresh_token')
+      await stampFailedConnection(payload, provider, 'missing_refresh_token')
       return void sendCallbackPage(res, failureOutcome(provider, 'missing_refresh_token'))
+    }
+
+    // A targeted reconnect must authenticate as the SAME stable provider identity.
+    // The signed state scopes the lookup to the intended org, rep, and provider; a
+    // stale target or a different selected account never overwrites or creates a
+    // mailbox under the wrong row.
+    if (payload.connectionId) {
+      const target = await prisma.oAuthConnection.findFirst({
+        where: {
+          id: payload.connectionId,
+          orgId: payload.orgId,
+          userId: payload.userId,
+          provider,
+        },
+        select: { providerAccountId: true },
+      })
+      if (!target) {
+        return void sendCallbackPage(res, failureOutcome(provider, 'state_invalid'))
+      }
+      if (target.providerAccountId !== identity.providerAccountId) {
+        await stampFailedConnection(payload, provider, 'account_mismatch')
+        return void sendCallbackPage(res, failureOutcome(provider, 'account_mismatch'))
+      }
     }
 
     // --- Evaluate + store honestly. saveConnection upserts the mailbox itself, and

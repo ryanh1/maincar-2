@@ -166,7 +166,7 @@ function Settings_Integrations_MailboxDrawerBody({ mailbox, orgId, timeZone, onC
                 disabled={setPrimary.isPending}
                 onClick={promote}
               >
-                {setPrimary.isPending ? 'Setting…' : 'Send from this'}
+                {setPrimary.isPending ? 'Setting…' : 'Make primary'}
               </Button>
             </div>
           )}
@@ -199,7 +199,7 @@ function DrawerDisconnect({
       {
         onSuccess: () => {
           setOpen(false)
-          toast.success(`Maincar can no longer send from ${mailbox.emailAddress}.`)
+          toast.success(`Disconnected ${mailbox.emailAddress}.`)
           onDisconnected()
         },
         onError: (error) =>
@@ -222,7 +222,7 @@ function DrawerDisconnect({
           <AlertDialogHeader>
             <AlertDialogTitle>Disconnect {mailbox.emailAddress}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Maincar can no longer send from this address.
+              Maincar can no longer read or send from this address.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

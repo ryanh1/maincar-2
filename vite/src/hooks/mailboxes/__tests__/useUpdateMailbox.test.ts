@@ -25,6 +25,8 @@ function mailbox(displayName: string | null): Mailbox {
     isPrimary: true,
     status: 'connected',
     statusDetail: '',
+    errorCode: null,
+    lastValidatedAt: null,
     connectionId: 'conn-mb-1',
     connectedAt: '2026-08-20T12:00:00.000Z',
   }

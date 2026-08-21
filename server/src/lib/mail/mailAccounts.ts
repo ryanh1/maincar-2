@@ -39,9 +39,11 @@ export interface MailboxUpsertInput {
 }
 
 /**
- * Create or update exactly one mailbox for an address. Keyed on the mailbox's own
- * unique `(orgId, emailAddress)`, so a reconnect updates the existing row rather
- * than duplicating it. The first mailbox for an `(orgId, userId)` is born primary.
+ * Create or update exactly one mailbox for a grant. A reconnect first matches the
+ * stable `connectionId`, so an address change updates that mailbox rather than
+ * colliding with the one-to-one relation. The address is the fallback for legacy
+ * reconnects. Both lookups include `(orgId, userId)`; one rep can never rebind
+ * another rep's mailbox. The first mailbox for an `(orgId, userId)` is born primary.
  *
  * A reconnect never clobbers `isPrimary` (the rep's choice of primary survives a
  * token refresh) and never wipes `displayName` unless a new one was passed.
@@ -53,19 +55,29 @@ export async function upsertMailAccount(
   const { orgId, userId, connectionId, provider, emailAddress } = connection
 
   return db.$transaction(async (tx) => {
-    const existing = await tx.mailAccount.findFirst({
-      where: { orgId, emailAddress },
+    const byConnection = await tx.mailAccount.findFirst({
+      where: { connectionId, orgId, userId },
       select: { id: true },
     })
+    const existing =
+      byConnection ??
+      (await tx.mailAccount.findFirst({
+        where: { orgId, userId, emailAddress },
+        select: { id: true },
+      }))
 
     if (existing) {
-      // Reconnect: rebind to the refreshed grant, leave isPrimary and the owner
-      // alone. displayName is written only when the caller actually supplied one,
-      // so a token refresh never wipes a name the rep set.
-      const data: Prisma.MailAccountUncheckedUpdateManyInput = { connectionId, provider }
+      // Reconnect: keep the mailbox row and the rep's primary choice, while updating
+      // the grant, provider, and provider-reported address. displayName is written
+      // only when the caller supplied one, so a refresh never wipes a private label.
+      const data: Prisma.MailAccountUncheckedUpdateManyInput = {
+        connectionId,
+        provider,
+        emailAddress,
+      }
       if (connection.displayName !== undefined) data.displayName = connection.displayName
-      await tx.mailAccount.updateMany({ where: { orgId, emailAddress }, data })
-      return tx.mailAccount.findFirstOrThrow({ where: { orgId, emailAddress } })
+      await tx.mailAccount.updateMany({ where: { id: existing.id, orgId, userId }, data })
+      return tx.mailAccount.findFirstOrThrow({ where: { id: existing.id, orgId, userId } })
     }
 
     // First connect: this is the primary if the rep has no other mailbox yet.

@@ -33,6 +33,9 @@ export function useDisconnectMailbox() {
       }),
     onSuccess: (data, variables) => {
       queryClient.setQueryData(queryKeys.mailboxes.list(variables.orgId), data)
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.integrations.all(variables.orgId),
+      })
     },
   })
 }

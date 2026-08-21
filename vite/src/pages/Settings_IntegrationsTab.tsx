@@ -67,6 +67,7 @@ export function Settings_IntegrationsTab() {
     // `all(orgId)` is a prefix of both the card list and the health badge, so one call
     // refreshes both after consent lands.
     void queryClient.invalidateQueries({ queryKey: queryKeys.integrations.all(orgId) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.mailboxes.all(orgId) })
   }
 
   // Stop watching a popup: clear the poll and drop the handle. Idempotent, so the
@@ -112,7 +113,11 @@ export function Settings_IntegrationsTab() {
   // an effect), so it needs its own unmount cleanup or it would outlive the tab.
   useEffect(() => () => stopWatching(), [])
 
-  async function handleConnect(card: IntegrationCard, mode: ConnectMode): Promise<void> {
+  async function handleConnect(
+    card: IntegrationCard,
+    mode: ConnectMode,
+    connectionId?: string,
+  ): Promise<void> {
     if (!orgId) return
 
     // The popup is opened SYNCHRONOUSLY inside the click, before any await. Opening it
@@ -141,7 +146,7 @@ export function Settings_IntegrationsTab() {
         orgId,
         provider: card.provider,
         mode,
-        connectionId: card.connection?.id,
+        connectionId,
       })
       popup.location.href = url
     } catch (error) {
@@ -197,6 +202,13 @@ export function Settings_IntegrationsTab() {
               onConnect={(mode) => void handleConnect(card, mode)}
               connectBusy={busyProvider === card.provider}
               onMailboxOpenSettings={setMailboxId}
+              onMailboxReconnect={(mailbox) =>
+                void handleConnect(
+                  card,
+                  mailbox.status === 'limited' ? 'fix' : 'connect',
+                  mailbox.connectionId,
+                )
+              }
             />
           ))}
         </div>

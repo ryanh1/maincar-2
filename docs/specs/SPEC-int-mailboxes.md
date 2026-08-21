@@ -12,8 +12,9 @@ listed, marks the work one primary, and the composer sends from it.
 
 ### Acceptance criteria
 
-1. Each provider card lists the mailboxes that grant reaches, under the card
-   header. One mailbox per address.
+1. Each provider card lists only its own provider's mailboxes under the card
+   header. One mailbox per address; Google rows never appear under Microsoft and
+   Microsoft rows never appear under Google.
 2. Exactly one mailbox per `(orgId, userId)` is **Primary**, across both providers.
    The flag is the composer's default sender.
 3. Promoting a mailbox is **atomic** — there is never an instant with zero
@@ -29,14 +30,19 @@ listed, marks the work one primary, and the composer sends from it.
    drawer rather than leaving the page. It uses the existing
    `vite/src/hooks/urlState/` helpers.
 8. Management actions on a mailbox row are an **icon toolbar with tooltips** —
-   Settings, Reconnect, Disconnect — not a stack of equal-weight buttons.
+   Settings, Test, Reconnect, Disconnect — not a stack of equal-weight buttons.
+   Test sits after Settings and before Disconnect, and its per-capability result
+   renders inside that mailbox's sub-card.
    Reconnect appears **only** when that mailbox needs it, so its presence is itself
    the signal.
 9. Disconnect is a neutral icon that takes a destructive tint **on hover only**,
    never a filled destructive button. The confirm dialog is the real guard.
 10. Every mailbox action is scoped to `(orgId, userId)`. A mailbox id from another
     rep returns 404, not someone else's mailbox.
-11. **No sync control, no import-past-messages control, and no per-mailbox
+11. Disconnecting a mailbox deletes its `OAuthConnection`; the cascade removes the
+    mailbox and prevents an orphaned grant. If it was primary, the newest remaining
+    mailbox is promoted in the same transaction.
+12. **No sync control, no import-past-messages control, and no per-mailbox
     automation switch ships here.** Loadwire has all three. maincar-2 has no
     pipeline behind them, and a live-looking control that does nothing is what
     [CLAUDE.md](../../CLAUDE.md) forbids. They arrive with the sync initiative.
@@ -97,6 +103,8 @@ export interface Mailbox {
   /** Mirrors the parent connection, so a row can show its own trouble. */
   status: 'connected' | 'limited' | 'error'
   statusDetail: string
+  errorCode: IntegrationErrorCode | null
+  lastValidatedAt: string | null
   connectionId: string
   connectedAt: string
 }
@@ -109,12 +117,11 @@ render two primaries between responses.
 ## Code style
 
 ```ts
-// Removing the primary promotes the newest remaining mailbox, in the same
-// transaction as the delete. A rep who disconnects their primary and is left with
-// a mailbox and no sender is a rep who cannot send, from a click that said nothing
-// about sending.
+// Disconnect the grant, not only the mailbox. The cascade removes the mailbox;
+// the same transaction promotes the newest remaining row when the removed mailbox
+// was primary.
 await prisma.$transaction(async (tx) => {
-  await tx.mailAccount.deleteMany({ where: { id, orgId, userId } })
+  await tx.oAuthConnection.deleteMany({ where: { id: connectionId, orgId, userId } })
   const remaining = await tx.mailAccount.findFirst({
     where: { orgId, userId }, orderBy: { createdAt: 'desc' }, select: { id: true },
   })
@@ -136,12 +143,12 @@ const [mailboxId, setMailboxId] = useUrlString('mailbox')
 | Where | String |
 |---|---|
 | Primary badge | `Primary` |
-| Promote action | `Send from this` |
-| Tooltip | `Mailbox settings` / `Reconnect` / `Disconnect` |
+| Promote action | `Make primary` |
+| Tooltip | `Open settings for {address}` / `Test {address}` / `Reconnect {address}` / `Disconnect {address}` |
 | Drawer title | `{address}` |
 | Display-name field | `Name this mailbox` |
 | Display-name help | `Only you see this name.` |
-| Disconnect dialog | `Disconnect {address}?` / `Maincar can no longer send from this address.` |
+| Disconnect dialog | `Disconnect {address}?` / `Maincar can no longer read or send from this address.` |
 | Empty state | `Connect an account to send email from Maincar.` |
 
 ## Testing strategy
@@ -159,7 +166,8 @@ const [mailboxId, setMailboxId] = useUrlString('mailbox')
 
 **Client**
 - Two mailboxes render with exactly one `Primary` badge.
-- Clicking "Send from this" on the non-primary moves the badge.
+- Clicking "Make primary" on the non-primary moves the badge.
+- Clicking Test probes that connection and renders the checkmarks in only its row.
 - **Reconnect is absent on a healthy row and present on a `needs reconnect` row.**
 - Disconnect opens the dialog and deletes nothing until confirmed.
 - `?mailbox=<id>` opens the drawer on that mailbox on first render.
@@ -179,7 +187,7 @@ mailbox.
 
 ## Success criteria
 
-- [ ] All 11 acceptance criteria hold.
+- [ ] All 12 acceptance criteria hold.
 - [ ] A rep connects two addresses, promotes the second, and the composer's sender
       follows.
 - [ ] `?mailbox=<id>` opens the drawer; Back closes it.

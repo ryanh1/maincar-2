@@ -7,8 +7,8 @@
 //
 // What it guards is the set of decisions that are easy to undo by accident:
 // the token fields staying `@db.Text` with the never-logged comment, provider
-// and status staying plain Strings (no Prisma enum), the two unique keys that
-// make reconnecting an update rather than a duplicate, and the three cascades
+// and status staying plain Strings (no Prisma enum), the identity/address unique
+// keys that make reconnecting an update rather than a duplicate, and the cascades
 // that stop a deleted org, user, or grant leaving orphans behind.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -94,8 +94,8 @@ describe('OAuthConnection schema', () => {
     expect(connection).toContain('never in a response body')
   })
 
-  it('allows one grant per provider per rep — reconnecting updates', () => {
-    expect(connection).toContain('@@unique([orgId, userId, provider])')
+  it('allows multiple provider accounts while reconnecting one identity updates', () => {
+    expect(connection).toContain('@@unique([orgId, userId, provider, providerAccountId])')
   })
 
   it('indexes the tenant lookup', () => {

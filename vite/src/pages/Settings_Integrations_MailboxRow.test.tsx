@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, fireEvent } from '@testing-library/react'
+import { screen, fireEvent, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/utils'
 import {
   Settings_Integrations_MailboxRow,
@@ -7,6 +8,12 @@ import {
 } from './Settings_Integrations_MailboxRow'
 import type { Mailbox } from '@/lib/mailboxTypes'
 import * as mailboxHooks from '@/hooks/mailboxes'
+
+const jsonFetch = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  return { ...actual, jsonFetch }
+})
 
 // Mock the mailboxes hooks
 vi.mock('@/hooks/mailboxes', () => ({
@@ -33,6 +40,8 @@ const connectedMailbox: Mailbox = {
   isPrimary: true,
   status: 'connected',
   statusDetail: '',
+  errorCode: null,
+  lastValidatedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
   connectionId: 'conn-1',
   connectedAt: '2026-08-21T00:00:00Z',
 }
@@ -46,7 +55,7 @@ const secondMailbox: Mailbox = {
   isPrimary: false,
   status: 'connected',
   statusDetail: '',
-  connectionId: 'conn-1',
+  connectionId: 'conn-2',
   connectedAt: '2026-08-21T01:00:00Z',
 }
 
@@ -59,7 +68,9 @@ const needsReconnect: Mailbox = {
   isPrimary: false,
   status: 'error',
   statusDetail: 'Needs reconnection',
-  connectionId: 'conn-2',
+  errorCode: 'token_revoked',
+  lastValidatedAt: null,
+  connectionId: 'conn-3',
   connectedAt: '2026-08-21T02:00:00Z',
 }
 
@@ -71,6 +82,7 @@ describe('Settings_Integrations_MailboxRow', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    jsonFetch.mockResolvedValue(undefined)
     vi.mocked(mailboxHooks.useSetPrimaryMailbox).mockReturnValue({
       mutate: mockSetPrimary,
       isPending: false,
@@ -119,7 +131,7 @@ describe('Settings_Integrations_MailboxRow', () => {
       expect(screen.getByText('Primary')).toBeInTheDocument()
     })
 
-    it('shows "Send from this" button on non-primary mailbox', () => {
+    it('shows the compact "Make primary" button on a non-primary mailbox', () => {
       renderWithProviders(
         <Settings_Integrations_MailboxRow
           mailbox={secondMailbox}
@@ -128,7 +140,9 @@ describe('Settings_Integrations_MailboxRow', () => {
           onReconnect={mockOnReconnect}
         />,
       )
-      expect(screen.getByRole('button', { name: /Send from this/i })).toBeInTheDocument()
+      const button = screen.getByRole('button', { name: 'Make primary' })
+      expect(button).toBeInTheDocument()
+      expect(button).toHaveAttribute('data-size', 'xs')
     })
 
     it('shows connected status', () => {
@@ -141,6 +155,20 @@ describe('Settings_Integrations_MailboxRow', () => {
         />,
       )
       expect(screen.getByText('Connected')).toBeInTheDocument()
+    })
+
+    it('shows the verification time within this mailbox sub-card', () => {
+      renderWithProviders(
+        <Settings_Integrations_MailboxRow
+          mailbox={connectedMailbox}
+          orgId={mockOrgId}
+          onOpenSettings={mockOnOpenSettings}
+          onReconnect={mockOnReconnect}
+        />,
+      )
+
+      const mailboxCard = screen.getByRole('article', { name: 'Mailbox user@gmail.com' })
+      expect(within(mailboxCard).getByText('Verified 2m ago')).toBeInTheDocument()
     })
 
     it('shows reconnect needed status', () => {
@@ -166,7 +194,7 @@ describe('Settings_Integrations_MailboxRow', () => {
           onReconnect={mockOnReconnect}
         />,
       )
-      const settingsButton = screen.getByRole('button', { name: /Mailbox settings/i })
+      const settingsButton = screen.getByRole('button', { name: 'Open settings for user@gmail.com' })
       expect(settingsButton).toBeInTheDocument()
     })
 
@@ -179,7 +207,7 @@ describe('Settings_Integrations_MailboxRow', () => {
           onReconnect={mockOnReconnect}
         />,
       )
-      const settingsButton = screen.getByRole('button', { name: /Mailbox settings/i })
+      const settingsButton = screen.getByRole('button', { name: 'Open settings for user@gmail.com' })
       fireEvent.click(settingsButton)
       expect(mockOnOpenSettings).toHaveBeenCalledWith('mailbox-1')
     })
@@ -233,13 +261,53 @@ describe('Settings_Integrations_MailboxRow', () => {
           onReconnect={mockOnReconnect}
         />,
       )
-      const disconnectButton = screen.getByRole('button', { name: /Disconnect/i })
+      const disconnectButton = screen.getByRole('button', { name: 'Disconnect user@gmail.com' })
       expect(disconnectButton).toBeInTheDocument()
+    })
+
+    it('tests this mailbox from the icon between Settings and Disconnect', async () => {
+      jsonFetch.mockResolvedValue({
+        result: {
+          ok: true,
+          detail: '',
+          errorCode: null,
+          capabilities: [
+            { capability: 'read_email', label: 'Read your email', ok: true, reason: '', errorCode: null },
+            { capability: 'send_email', label: 'Send email as you', ok: true, reason: '', errorCode: null },
+            { capability: 'calendar', label: 'See and add calendar events', ok: true, reason: '', errorCode: null },
+          ],
+          connection: null,
+        },
+      })
+
+      renderWithProviders(
+        <Settings_Integrations_MailboxRow
+          mailbox={connectedMailbox}
+          orgId={mockOrgId}
+          onOpenSettings={mockOnOpenSettings}
+          onReconnect={mockOnReconnect}
+        />,
+      )
+
+      const mailboxCard = screen.getByRole('article', { name: 'Mailbox user@gmail.com' })
+      const buttons = within(mailboxCard).getAllByRole('button')
+      const settingsIndex = buttons.findIndex((button) => button.getAttribute('aria-label') === 'Open settings for user@gmail.com')
+      const testIndex = buttons.findIndex((button) => button.getAttribute('aria-label') === 'Test user@gmail.com')
+      const disconnectIndex = buttons.findIndex((button) => button.getAttribute('aria-label') === 'Disconnect user@gmail.com')
+      expect(settingsIndex).toBeLessThan(testIndex)
+      expect(testIndex).toBeLessThan(disconnectIndex)
+
+      await userEvent.click(within(mailboxCard).getByRole('button', { name: 'Test user@gmail.com' }))
+      expect(jsonFetch).toHaveBeenCalledWith('/api/integrations/orgs/org-123/conn-1/test', {
+        method: 'POST',
+      })
+      expect(await within(mailboxCard).findByText('Test result')).toBeInTheDocument()
+      expect(within(mailboxCard).getByText('Read your email')).toBeInTheDocument()
     })
   })
 
   describe('Promote to primary', () => {
-    it('calls useSetPrimaryMailbox when "Send from this" clicked', () => {
+    it('calls useSetPrimaryMailbox when "Make primary" is clicked', () => {
       renderWithProviders(
         <Settings_Integrations_MailboxRow
           mailbox={secondMailbox}
@@ -248,7 +316,7 @@ describe('Settings_Integrations_MailboxRow', () => {
           onReconnect={mockOnReconnect}
         />,
       )
-      const promoteButton = screen.getByRole('button', { name: /Send from this/i })
+      const promoteButton = screen.getByRole('button', { name: 'Make primary' })
       fireEvent.click(promoteButton)
       expect(mockSetPrimary).toHaveBeenCalledWith(
         { orgId: mockOrgId, mailboxId: 'mailbox-2' },
@@ -285,7 +353,7 @@ describe('Settings_Integrations_MailboxRow', () => {
           onReconnect={mockOnReconnect}
         />,
       )
-      const disconnectButton = screen.getByRole('button', { name: /Disconnect/i })
+      const disconnectButton = screen.getByRole('button', { name: 'Disconnect user@gmail.com' })
       fireEvent.click(disconnectButton)
       expect(screen.getByRole('heading', { name: /Disconnect/ })).toBeInTheDocument()
     })
@@ -299,7 +367,7 @@ describe('Settings_Integrations_MailboxRow', () => {
           onReconnect={mockOnReconnect}
         />,
       )
-      const disconnectButton = screen.getByRole('button', { name: /Disconnect/i })
+      const disconnectButton = screen.getByRole('button', { name: 'Disconnect user@gmail.com' })
       fireEvent.click(disconnectButton)
 
       const confirmButton = screen.getByRole('button', { name: /Disconnect/ })
@@ -320,7 +388,7 @@ describe('Settings_Integrations_MailboxRow', () => {
           onReconnect={mockOnReconnect}
         />,
       )
-      const disconnectButton = screen.getByRole('button', { name: /Disconnect/i })
+      const disconnectButton = screen.getByRole('button', { name: 'Disconnect user@gmail.com' })
       fireEvent.click(disconnectButton)
 
       const cancelButton = screen.getByRole('button', { name: /Cancel/i })
@@ -337,6 +405,7 @@ describe('Settings_Integrations_MailboxList', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    jsonFetch.mockResolvedValue(undefined)
     vi.mocked(mailboxHooks.useSetPrimaryMailbox).mockReturnValue({
       mutate: vi.fn(),
       isPending: false,

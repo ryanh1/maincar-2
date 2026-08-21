@@ -12,8 +12,9 @@
  * "Exactly one mailbox is primary" is an invariant of the SET, not of any one row, so
  * the two routes that can change it (promote, delete) return the WHOLE list. Returning
  * the single changed row would let the client render two primaries between responses.
- * The atomic flag move lives in mailAccounts.ts (`setPrimaryMailbox` / `deleteMailbox`);
- * these routes only prove ownership and hand back the token-free public shape.
+ * The atomic flag move lives in mailAccounts.ts (`setPrimaryMailbox`) and
+ * oauthConnections.ts (`disconnectConnection`); these routes only prove ownership
+ * and hand back the token-free public shape.
  *
  * No token can ride along in a response: MailAccount holds no credential, and the one
  * relation read here (`connection`) is selected down to its status columns, never its
@@ -26,7 +27,8 @@ import { logger } from '../../dependencies/logger.js'
 import prisma from '../db.js'
 import { Prisma } from '../generated/prisma/client.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
-import { deleteMailbox, setPrimaryMailbox } from '../lib/mail/mailAccounts.js'
+import { setPrimaryMailbox } from '../lib/mail/mailAccounts.js'
+import { disconnectConnection } from '../lib/mail/oauthConnections.js'
 import { isProvider } from '../lib/mail/oauthProviders.js'
 import { requireMembership } from '../lib/membership.js'
 import { providerShortName } from '../lib/oauthScopes.js'
@@ -50,6 +52,8 @@ export interface Mailbox {
   /** Mirrors the parent connection, so a row can show its own trouble. */
   status: 'connected' | 'limited' | 'error'
   statusDetail: string
+  errorCode: string | null
+  lastValidatedAt: string | null
   connectionId: string
   connectedAt: string
 }
@@ -75,7 +79,9 @@ const MAILBOX_PUBLIC_SELECT = {
   isPrimary: true,
   connectionId: true,
   createdAt: true,
-  connection: { select: { status: true, statusDetail: true } },
+  connection: {
+    select: { status: true, statusDetail: true, errorCode: true, lastValidatedAt: true },
+  },
 } satisfies Prisma.MailAccountSelect
 
 type MailboxRow = Prisma.MailAccountGetPayload<{ select: typeof MAILBOX_PUBLIC_SELECT }>
@@ -95,6 +101,8 @@ function serializeMailbox(row: MailboxRow): Mailbox {
     isPrimary: row.isPrimary,
     status: (row.connection?.status ?? 'error') as Mailbox['status'],
     statusDetail: row.connection?.statusDetail ?? '',
+    errorCode: row.connection?.errorCode ?? null,
+    lastValidatedAt: row.connection?.lastValidatedAt?.toISOString() ?? null,
     connectionId: row.connectionId,
     connectedAt: row.createdAt.toISOString(),
   }
@@ -230,8 +238,8 @@ router.post(
 // Removes the mailbox and, when it was the primary, promotes the newest remaining one
 // in the SAME transaction, so the rep is never left with mailboxes and no sender. The
 // whole list comes back for the same reason a promote returns it. All of the delete +
-// promote lives in deleteMailbox; this route proves ownership, logs, and answers. A
-// foreign id deletes nothing and is 404.
+// promote lives in disconnectConnection; this route maps the mailbox id to its grant,
+// proves ownership, logs, and answers. A foreign id deletes nothing and is 404.
 router.delete(
   '/:mailboxId',
   wrapRoute('DELETE /api/mailboxes/orgs/:orgId/:mailboxId', async (req, res) => {
@@ -245,12 +253,15 @@ router.delete(
     const userId = authReq.user!.id
 
     // --- Execute delete ---
-    // deleteMailbox scopes the lookup and the delete to (id, orgId, userId); a foreign
-    // or stale id removes nothing and returns null → 404.
-    const remaining = await deleteMailbox(mailboxId, orgId, userId)
-    if (!remaining) {
+    // First resolve the mailbox to its grant inside this tenant boundary. Deleting
+    // only MailAccount would leave an orphaned OAuth grant; disconnecting the grant
+    // cascades the row away and atomically promotes a replacement primary.
+    const mailbox = await loadMailbox(mailboxId, orgId, userId)
+    if (!mailbox) {
       return void res.status(404).json({ error: 'Mailbox not found' })
     }
+    const removed = await disconnectConnection(mailbox.connectionId, orgId, userId)
+    if (!removed) return void res.status(404).json({ error: 'Mailbox not found' })
 
     // No address, no token — just the tenant and the rep.
     logger.info({ orgId, userId }, 'disconnected a mailbox')

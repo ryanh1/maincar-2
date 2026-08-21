@@ -36,6 +36,9 @@ export function useTestIntegration() {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.integrations.all(variables.orgId),
       })
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.mailboxes.all(variables.orgId),
+      })
     },
   })
 }

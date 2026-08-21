@@ -1,8 +1,8 @@
 # Capability Map: Integration Hub
 
-Connect a rep's Google or Microsoft mailbox to Maincar, once, in Settings. After
-that the app can **send as them**, **read their mail**, and **read and write their
-calendar**, through one internal contract that hides every provider difference.
+Connect a rep's Google or Microsoft mailboxes to Maincar in Settings. After that
+the app can **send as them**, **read their mail**, and **read and write their
+calendar** through one internal contract that hides every provider difference.
 
 Reference implementations, both read before this was written:
 
@@ -40,6 +40,10 @@ Reference implementations, both read before this was written:
    codes against this seam and needs no change here.
 4. **Popup consent, not a full-page redirect.** The rep keeps the page they were
    on. maincar's approach; loadwire redirects and has to reconstruct `returnTo`.
+5. **Multiple accounts per provider; one primary sender.** A rep may connect any
+   number of Google and Microsoft identities for ingestion through the provider
+   seam. Exactly one mailbox per `(orgId, userId)` is primary, and that is the
+   composer's default sender. Reconnecting one identity updates that identity.
 
 ## Module dependencies
 
@@ -49,7 +53,7 @@ Reference implementations, both read before this was written:
 | `int-oauth` | Consent URL, signed `state`, callback, scope grant evaluation, partial-grant repair | `int-schema` | **Core** |
 | `int-seam` | `MailProvider` — the published interface — plus the Google and Microsoft implementations | `int-schema` | **Core** |
 | `int-health` | Per-capability Test, refresh, and the org-wide broken-connection signal | `int-oauth`, `int-seam` | **Core** |
-| `int-hub-ui` | Settings → Integrations: one card per provider, status, recovery, connect/fix/test/disconnect | `int-oauth`, `int-health` | **Core** |
+| `int-hub-ui` | Settings → Integrations: one card per provider with mailbox-scoped status, recovery, test, and disconnect | `int-oauth`, `int-health` | **Core** |
 | `int-mailboxes` | The mailbox list under each card, the primary mailbox, and the per-mailbox settings drawer | `int-hub-ui` | **Enhancement** |
 
 No cycles. `int-oauth` and `int-seam` share only `int-schema`.
@@ -82,7 +86,8 @@ nothing half-wired is visible before then.
   No caller handles a 401 itself.
 - **int-oauth → int-hub-ui**: `GET /api/integrations/orgs/:orgId` returns one entry
   per **provider**, not per connection, so the page renders both cards without
-  owning the provider list or the copy.
+  owning the provider list or the copy. Each entry contains every connection for
+  that provider, oldest first.
 - **int-seam → composer-send**: `getMailProvider(mailAccountId)` returns a
   `MailProvider`, or throws `MailboxNotFoundError`. **This signature is the
   contract with the Email Composer Dock project** and is published in

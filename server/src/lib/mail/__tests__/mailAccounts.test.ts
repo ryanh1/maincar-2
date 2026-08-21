@@ -2,8 +2,8 @@
 //
 // What these protect:
 //   - the first mailbox a rep connects is primary; a later one is not
-//   - re-upserting the same address updates the one row rather than duplicating it,
-//     and never clobbers isPrimary or a display name the rep set
+//   - re-upserting the same stable connection updates the one row even if its email
+//     changed, and never clobbers isPrimary or a display name the rep set
 //   - setPrimaryMailbox clears and sets inside ONE $transaction, in that order
 //   - a mailbox id from another rep returns null rather than a leaky error
 //   - every mail error carries its stable `name`, and RateLimitedError its retryAfterMs
@@ -122,7 +122,7 @@ describe('upsertMailAccount', () => {
     expect(mailAccount.create).not.toHaveBeenCalled()
     expect(mailAccount.updateMany).toHaveBeenCalledTimes(1)
     const call = mailAccount.updateMany.mock.calls[0][0]
-    expect(call.where).toEqual({ orgId: ORG_ID, emailAddress: 'rep@example.com' })
+    expect(call.where).toEqual({ id: 'box-1', orgId: ORG_ID, userId: USER_ID })
     // isPrimary is never in a reconnect's update — the rep's choice survives.
     expect(call.data).not.toHaveProperty('isPrimary')
     // No displayName was passed, so a name the rep set is not wiped.
@@ -143,6 +143,30 @@ describe('upsertMailAccount', () => {
     })
 
     expect(mailAccount.updateMany.mock.calls[0][0].data.displayName).toBe('Work')
+  })
+
+  it('updates the mailbox address when the stable connection identity is unchanged', async () => {
+    mailAccount.findFirst.mockResolvedValueOnce({ id: 'box-1' })
+    mailAccount.findFirstOrThrow.mockResolvedValue(
+      mailboxRow({ emailAddress: 'renamed@example.com' }),
+    )
+
+    await upsertMailAccount({
+      orgId: ORG_ID,
+      userId: USER_ID,
+      connectionId: CONN_ID,
+      provider: 'google',
+      emailAddress: 'renamed@example.com',
+    })
+
+    expect(mailAccount.updateMany).toHaveBeenCalledWith({
+      where: { id: 'box-1', orgId: ORG_ID, userId: USER_ID },
+      data: {
+        connectionId: CONN_ID,
+        provider: 'google',
+        emailAddress: 'renamed@example.com',
+      },
+    })
   })
 })
 
