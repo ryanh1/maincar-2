@@ -338,6 +338,127 @@ describe('RichTextEditor', () => {
       await waitFor(() => expect(lastHtml(onChange)).not.toContain('<a'))
       expect(onRequestLink).not.toHaveBeenCalled()
     })
+
+    it('hands the host the words the rep selected', async () => {
+      const seen: LinkRequest[] = []
+      const user = userEvent.setup()
+      render(
+        <RichTextEditor
+          label="Message"
+          initialHtml="<p>Acme pricing</p>"
+          onRequestLink={(request) => seen.push(request)}
+        />,
+      )
+
+      await selectAll(user)
+      await user.click(screen.getByRole('button', { name: 'Add link' }))
+
+      expect(seen[0].text).toBe('Acme pricing')
+      expect(seen[0].href).toBeNull()
+    })
+
+    it('hands the host the whole link when the caret sits inside one', async () => {
+      const seen: LinkRequest[] = []
+      const user = userEvent.setup()
+      render(
+        <RichTextEditor
+          label="Message"
+          initialHtml='<p><a href="https://acme.example">Acme pricing</a></p>'
+          onRequestLink={(request) => seen.push(request)}
+        />,
+      )
+
+      // No selection at all. `Cmd/Ctrl+K` rather than the button, because inside
+      // a link the button's job is to remove it.
+      bodyOf().focus()
+      await user.keyboard('{Control>}k{/Control}')
+
+      expect(seen[0].href).toBe('https://acme.example')
+      expect(seen[0].text).toBe('Acme pricing')
+    })
+
+    it('inserts the text as a link when the caret has nothing to mark', async () => {
+      const onChange = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <RichTextEditor
+          label="Message"
+          onChange={onChange}
+          onRequestLink={(request) => request.apply('https://acme.example', 'Acme pricing')}
+        />,
+      )
+
+      bodyOf().focus()
+      await user.keyboard('{Control>}k{/Control}')
+
+      await waitFor(() => {
+        const html = lastHtml(onChange)
+        expect(html).toContain('href="https://acme.example"')
+        expect(html).toContain('>Acme pricing</a>')
+      })
+    })
+
+    it('falls back to the URL when the host sends no text at all', async () => {
+      const onChange = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <RichTextEditor
+          label="Message"
+          onChange={onChange}
+          onRequestLink={(request) => request.apply('https://acme.example', '')}
+        />,
+      )
+
+      bodyOf().focus()
+      await user.keyboard('{Control>}k{/Control}')
+
+      // Never an empty `<a>`, which is invisible and unclickable.
+      await waitFor(() => expect(lastHtml(onChange)).toContain('>https://acme.example</a>'))
+    })
+
+    it('replaces the selection when the host changes the text', async () => {
+      const onChange = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <RichTextEditor
+          label="Message"
+          initialHtml="<p>Acme</p>"
+          onChange={onChange}
+          onRequestLink={(request) => request.apply('https://acme.example', 'Acme pricing')}
+        />,
+      )
+
+      await selectAll(user)
+      await user.click(screen.getByRole('button', { name: 'Add link' }))
+
+      await waitFor(() => {
+        const html = lastHtml(onChange)
+        expect(html).toContain('>Acme pricing</a>')
+        expect(html).not.toContain('>Acme</a>')
+      })
+    })
+
+    it('marks the selection in place when the text is unchanged, keeping its bold', async () => {
+      const onChange = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <RichTextEditor
+          label="Message"
+          initialHtml="<p><strong>Acme</strong></p>"
+          onChange={onChange}
+          onRequestLink={(request) => request.apply('https://acme.example', request.text)}
+        />,
+      )
+
+      await selectAll(user)
+      await user.click(screen.getByRole('button', { name: 'Add link' }))
+
+      await waitFor(() => {
+        const html = lastHtml(onChange)
+        expect(html).toContain('href="https://acme.example"')
+        expect(html).toContain('<strong>')
+      })
+    })
   })
 
   describe('hasAllowedScheme', () => {

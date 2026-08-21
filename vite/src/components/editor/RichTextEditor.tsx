@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { getMarkRange } from '@tiptap/core'
 import { EditorContent, useEditor } from '@tiptap/react'
 
 import { cn } from '@/lib/utils'
@@ -16,8 +17,23 @@ import './richTextEditor.css'
 export interface LinkRequest {
   /** The href already on the selection, or `null` when there is no link yet. */
   href: string | null
-  /** Set (or with `null`, clear) the link on the selection the rep had. */
-  apply: (href: string | null) => void
+  /**
+   * The text the link sits on: the rep's selection, or — with a collapsed caret
+   * inside an existing link — that whole link's text. `''` when the caret is
+   * collapsed and not on a link, which is the host's signal that there is
+   * nothing to mark and it must supply the text as well as the URL.
+   */
+  text: string
+  /**
+   * Set (or with `null`, clear) the link on the selection the rep had.
+   *
+   * `text` is what the link should read. Leave it out, or pass the same string
+   * the request arrived with, and the existing text is marked in place, keeping
+   * whatever bold or italic is inside it. Pass a different string — including
+   * on a collapsed caret, where there is no text to mark — and the range is
+   * replaced by that text carrying the link.
+   */
+  apply: (href: string | null, text?: string) => void
 }
 
 export interface RichTextEditorProps {
@@ -171,14 +187,56 @@ export function RichTextEditor({
     if (!handler || !editor) return false
 
     const href: string | null = editor.getAttributes('link').href ?? null
+
+    // What the link reads today. A non-empty selection is the rep's own choice;
+    // a collapsed caret sitting inside a link means the whole link, which is
+    // what `extendMarkRange` will act on and therefore what the dialog has to
+    // show. Anything else is a caret in open text, and there is no text at all.
+    const { state } = editor
+    const linkRange = state.schema.marks.link
+      ? getMarkRange(state.selection.$from, state.schema.marks.link)
+      : null
+    const range = state.selection.empty
+      ? linkRange
+      : { from: state.selection.from, to: state.selection.to }
+    const text = range ? state.doc.textBetween(range.from, range.to, ' ') : ''
+
     handler({
       href,
-      apply: (next) => {
+      text,
+      apply: (next, nextText) => {
         if (next === null) {
-          editor.chain().focus().unsetLink().run()
+          editor.chain().focus().extendMarkRange('link').unsetLink().run()
           return
         }
-        editor.chain().focus().extendMarkRange('link').setLink({ href: next }).run()
+
+        // An empty text field means the rep only gave a URL, so the URL is what
+        // the link reads. Never an empty `<a>`, which is invisible and
+        // unclickable — a live-looking control that does nothing.
+        const wanted = (nextText ?? text).trim() === '' ? next : (nextText ?? text)
+
+        if (wanted === text && text !== '') {
+          // Unchanged text: mark it in place so the bold inside it survives.
+          editor.chain().focus().extendMarkRange('link').setLink({ href: next }).run()
+          return
+        }
+
+        // Changed text, or no text at all. `extendMarkRange` first so editing a
+        // link's words replaces the whole link rather than splicing into it;
+        // with a collapsed caret in open text it is a no-op and this inserts.
+        // `target` and `rel` are not passed: the Link extension stamps them on
+        // from `EDITOR_LINK_ATTRIBUTES` at render time, so passing them here
+        // would be a second copy of the same rule.
+        editor
+          .chain()
+          .focus()
+          .extendMarkRange('link')
+          .insertContent({
+            type: 'text',
+            text: wanted,
+            marks: [{ type: 'link', attrs: { href: next } }],
+          })
+          .run()
       },
     })
     return true
