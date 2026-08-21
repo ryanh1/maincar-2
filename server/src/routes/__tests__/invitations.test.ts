@@ -187,7 +187,9 @@ describe('POST /api/invitations/:token/accept', () => {
       expect.objectContaining({
         where: { userId_orgId: { userId: 'user-invitee', orgId: 'org-a' } },
         create: { userId: 'user-invitee', orgId: 'org-a', roles: ['admin', 'basic'] },
-        update: { roles: ['admin', 'basic'] },
+        // isActive: re-inviting someone who was removed REACTIVATES their row
+        // rather than leaving a dead seat under @@unique([userId, orgId]).
+        update: { roles: ['admin', 'basic'], isActive: true },
       }),
     )
     expect(prismaMock.user.update).toHaveBeenCalledWith({

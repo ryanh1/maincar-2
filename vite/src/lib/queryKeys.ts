@@ -17,7 +17,12 @@ export const queryKeys = {
     detail: (orgId: string) => ['orgs', 'detail', orgId] as const,
     // Members and invitations are keyed BY ORG, so switching orgs reads a
     // different cache entry instead of showing the previous org's people.
-    members: (orgId: string) => ['orgs', 'members', orgId] as const,
+    // The member list also keys on its query, because paging, sorting, and
+    // searching happen on the SERVER: two different pages are two different
+    // answers, and sharing one cache entry would show page 1 while page 2 loads.
+    members: (orgId: string, query?: Record<string, unknown>) =>
+      ['orgs', 'members', orgId, query ?? {}] as const,
+    membersAll: (orgId: string) => ['orgs', 'members', orgId] as const,
     invitations: (orgId: string) => ['orgs', 'invitations', orgId] as const,
   },
   invitations: {

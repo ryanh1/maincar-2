@@ -12,7 +12,8 @@ const { prismaMock, verifyTokenMock, listNumbersMock, getPriceMock } = vi.hoiste
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
-    phoneNumber: { findMany: vi.fn() },
+    phoneNumber: { findMany: vi.fn(), findFirst: vi.fn(), updateMany: vi.fn() },
+    $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
   listNumbersMock: vi.fn(),
@@ -108,6 +109,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   authAs()
   prismaMock.phoneNumber.findMany.mockResolvedValue([])
+  prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow())
+  prismaMock.phoneNumber.updateMany.mockResolvedValue({ count: 1 })
+  // Runs the callback against the same mock, so the assertions below see the
+  // writes the route makes INSIDE the transaction.
+  prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock))
   listNumbersMock.mockResolvedValue([])
   getPriceMock.mockResolvedValue({ amount: '1.15', currency: 'USD' })
 })
@@ -520,5 +526,276 @@ describe('POST /api/orgs/:orgId/phone-numbers/search — org isolation', () => {
     expect(prismaMock.membership.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId: 'user-a', orgId: ORG_B, isActive: true } }),
     )
+  })
+})
+
+// ============================================================
+// PATCH /api/orgs/:orgId/phone-numbers/:id
+// ============================================================
+const PATCH_A = `${URL_A}/num-1`
+
+describe('PATCH /api/orgs/:orgId/phone-numbers/:id', () => {
+  it('activates the number and returns it keyed, as active', async () => {
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(200)
+    expect(res.body.number.id).toBe('num-1')
+    expect(res.body.number.isActiveForOutbound).toBe(true)
+  })
+
+  it('returns exactly the fields the list route returns, and no others', async () => {
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(Object.keys(res.body.number).sort()).toEqual([
+      'createdAt',
+      'e164',
+      'id',
+      'isActiveForOutbound',
+      'status',
+      'twilioSid',
+    ])
+  })
+
+  // The un-picking is the whole point: one active number per user, so choosing
+  // one has to clear the others in the same breath.
+  it('clears every other active number of this caller in this org', async () => {
+    await request(app).patch(PATCH_A).set('Authorization', AUTH).send({ isActiveForOutbound: true })
+
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith({
+      where: {
+        orgId: ORG_A,
+        assignedUserId: 'user-a',
+        isActiveForOutbound: true,
+        id: { not: 'num-1' },
+      },
+      data: { isActiveForOutbound: false },
+    })
+  })
+
+  it('activates through updateMany carrying the tenant keys, never update-by-id', async () => {
+    await request(app).patch(PATCH_A).set('Authorization', AUTH).send({ isActiveForOutbound: true })
+
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith({
+      where: { id: 'num-1', orgId: ORG_A, assignedUserId: 'user-a' },
+      data: { isActiveForOutbound: true },
+    })
+  })
+
+  // Both writes, or neither. A crash between them would otherwise leave the
+  // caller with no active number, or with two.
+  it('does both writes inside ONE transaction', async () => {
+    await request(app).patch(PATCH_A).set('Authorization', AUTH).send({ isActiveForOutbound: true })
+
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledTimes(2)
+
+    const txOrder = prismaMock.$transaction.mock.invocationCallOrder[0]!
+    for (const call of prismaMock.phoneNumber.updateMany.mock.invocationCallOrder) {
+      expect(call).toBeGreaterThan(txOrder)
+    }
+  })
+
+  // Reading inside the transaction is what makes the status check and the write
+  // see the same instant.
+  it('reads the row inside the transaction, before it writes anything', async () => {
+    await request(app).patch(PATCH_A).set('Authorization', AUTH).send({ isActiveForOutbound: true })
+
+    const readOrder = prismaMock.phoneNumber.findFirst.mock.invocationCallOrder[0]!
+    expect(readOrder).toBeGreaterThan(prismaMock.$transaction.mock.invocationCallOrder[0]!)
+    expect(readOrder).toBeLessThan(prismaMock.phoneNumber.updateMany.mock.invocationCallOrder[0]!)
+  })
+
+  // A number the provisioning job lost a race on: gone between the read and the
+  // write. Better a 404 than a 200 reporting a change that did not happen.
+  it('404s when the activating write turns out to touch no row', async () => {
+    prismaMock.phoneNumber.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 })
+
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Phone number not found')
+  })
+})
+
+// ============================================================
+// PATCH — a number that is not ready to call from
+// ============================================================
+describe('PATCH /api/orgs/:orgId/phone-numbers/:id — not provisioned yet', () => {
+  it('400s a number still being bought, and names "searching" so the wait makes sense', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      numberRow({ status: 'searching', twilioSid: null }),
+    )
+
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('searching')
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('400s a number whose purchase failed, and names "failed"', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow({ status: 'failed' }))
+
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('failed')
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('400s a number on its way out, rather than making it the caller ID', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow({ status: 'releasing' }))
+
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('releasing')
+  })
+})
+
+// ============================================================
+// PATCH — invalid input, and the deliberate answer to `false`
+// ============================================================
+describe('PATCH /api/orgs/:orgId/phone-numbers/:id — invalid input', () => {
+  it('400s an empty body, and writes nothing', async () => {
+    const res = await request(app).patch(PATCH_A).set('Authorization', AUTH).send({})
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Send isActiveForOutbound as true or false.')
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('400s a string where a boolean belongs, without a raw zod dump', async () => {
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: 'yes' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).not.toContain('ZodError')
+    expect(Object.keys(res.body)).toEqual(['error'])
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
+  // Deliberate: `false` is refused, not silently ignored. Switching the active
+  // number off would leave the caller with no caller ID and no way to dial, and
+  // no screen would explain why. The way out of a number is into another one.
+  it('400s `false` with a message saying what to do instead, and writes nothing', async () => {
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: false })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe(
+      'To stop calling from this number, make a different one active instead. Switching this one off would leave you with no caller ID and no way to place a call.',
+    )
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// PATCH — org isolation (mandatory — .claude/rules/testing.md)
+// ============================================================
+describe('PATCH /api/orgs/:orgId/phone-numbers/:id — org isolation', () => {
+  it('401s without auth, and writes nothing', async () => {
+    const res = await request(app).patch(PATCH_A).send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(401)
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('404s for an org the caller does not belong to, before it reads any number', async () => {
+    authAs(null)
+
+    const res = await request(app)
+      .patch(`/api/orgs/${ORG_B}/phone-numbers/num-1`)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Organization not found')
+    expect(prismaMock.phoneNumber.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('404s when the org is disabled, rather than admitting it exists', async () => {
+    authAs(membershipRow({ org: { id: ORG_A, name: 'Org A', enabled: false } }))
+
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
+  // A colleague's number is not a 403: saying "forbidden" would confirm the id
+  // is real and tell the caller whose it is not.
+  it('404s a number that belongs to a colleague, and looks it up scoped to the caller', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+
+    const res = await request(app)
+      .patch(PATCH_A)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Phone number not found')
+    expect(prismaMock.phoneNumber.findFirst).toHaveBeenCalledWith({
+      where: { id: 'num-1', orgId: ORG_A, assignedUserId: 'user-a' },
+    })
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  // The caller is a real member of Org B; the number lives in Org A. The orgId
+  // in the where clause is what makes that a 404 instead of a cross-tenant write.
+  it('404s a number that lives in another org, scoping the lookup to the PATH org', async () => {
+    authAs(membershipRow({ orgId: ORG_B, org: { id: ORG_B, name: 'Org B', enabled: true } }))
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+
+    const res = await request(app)
+      .patch(`/api/orgs/${ORG_B}/phone-numbers/num-1`)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: true })
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.phoneNumber.findFirst).toHaveBeenCalledWith({
+      where: { id: 'num-1', orgId: ORG_B, assignedUserId: 'user-a' },
+    })
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('404s a non-member even when the body is invalid, so 400 cannot map the orgs', async () => {
+    authAs(null)
+
+    const res = await request(app)
+      .patch(`/api/orgs/${ORG_B}/phone-numbers/num-1`)
+      .set('Authorization', AUTH)
+      .send({ isActiveForOutbound: 'nope' })
+
+    expect(res.status).toBe(404)
   })
 })

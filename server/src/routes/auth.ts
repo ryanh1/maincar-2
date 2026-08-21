@@ -86,8 +86,10 @@ type ResolvedActiveOrg =
  * that into the same 403 a disabled account has always produced.
  */
 async function resolveActiveOrg(user: User): Promise<ResolvedActiveOrg> {
+  // isActive, so an offboarded person is never landed back inside an org they
+  // can no longer open. A deactivated membership is the same as no membership.
   const memberships = await prisma.membership.findMany({
-    where: { userId: user.id },
+    where: { userId: user.id, isActive: true },
     include: { org: true },
     orderBy: { createdAt: 'asc' },
   })
@@ -255,7 +257,7 @@ router.patch(
     // be on an older client.
     if (orgName !== undefined && user.currentOrgId) {
       const membership = await prisma.membership.findFirst({
-        where: { userId: authUser.id, orgId: user.currentOrgId },
+        where: { userId: authUser.id, orgId: user.currentOrgId, isActive: true },
       })
       if (isAdmin((membership?.roles ?? []) as UserRole[])) {
         // Scoped by orgId as well as id, so a stale currentOrgId can never write

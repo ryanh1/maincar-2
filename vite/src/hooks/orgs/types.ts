@@ -1,7 +1,7 @@
 // Request/response shapes for the org hooks. They mirror the server's keyed
 // responses in server/src/routes/team.ts.
 import type { Membership, Org, User } from '@/providers/authTypes'
-import type { UserRole } from '@/lib/roles'
+import type { MembershipRole, UserRole } from '@/lib/roles'
 
 /** An org in the switcher list, carrying the caller's roles in that org. */
 export interface OrgSummary extends Org {
@@ -42,28 +42,61 @@ export interface SwitchOrgResponse {
 }
 
 export interface OrgMember {
-  id: string
+  userId: string
   email: string
   firstName: string | null
   lastName: string | null
   title: string | null
   imageUrl: string | null
   enabled: boolean
-  roles: UserRole[]
+  roles: MembershipRole[]
   joinedAt: string
+  /** True for the row that is the person reading the table. */
+  isSelf: boolean
 }
+
+/** What the member table asks the server for. Every field lives in the URL. */
+export interface GetMembersParams {
+  page?: number
+  limit?: number
+  sort?: MemberSortColumn
+  dir?: 'asc' | 'desc'
+  q?: string
+  role?: string[]
+}
+
+export const MEMBER_SORT_COLUMNS = ['name', 'email', 'roles', 'joinedAt'] as const
+export type MemberSortColumn = (typeof MEMBER_SORT_COLUMNS)[number]
 
 export interface GetMembersResponse {
   members: OrgMember[]
   total: number
   page: number
   limit: number
+  /** `activeAdminCount` lets the table grey out the last-admin actions early. */
+  meta: { activeAdminCount: number }
+  viewerRoles: MembershipRole[]
+}
+
+export interface UpdateMemberRolesInput {
+  orgId: string
+  userId: string
+  roles: MembershipRole[]
+}
+
+export interface UpdateMemberRolesResponse {
+  member: { userId: string; roles: MembershipRole[] }
+}
+
+export interface RemoveMemberInput {
+  orgId: string
+  userId: string
 }
 
 export interface Invitation {
   id: string
   email: string
-  roles: UserRole[]
+  roles: MembershipRole[]
   status: string
   expiresAt: string
   inviteUrl: string
@@ -78,7 +111,8 @@ export interface GetInvitationsResponse {
 export interface CreateInvitationInput {
   orgId: string
   email: string
-  roles?: UserRole[]
+  /** Assignable roles only — the server refuses "owner" and every platform role. */
+  roles?: Exclude<MembershipRole, 'owner'>[]
 }
 
 export interface CreateInvitationResponse {
@@ -110,7 +144,7 @@ export interface AcceptInvitationResponse {
 }
 
 /** The display name for a member, falling back to the email when unnamed. */
-export function memberDisplayName(member: OrgMember): string {
+export function memberDisplayName(member: Pick<OrgMember, 'firstName' | 'lastName' | 'email'>): string {
   const name = [member.firstName, member.lastName].filter(Boolean).join(' ')
   return name || member.email
 }

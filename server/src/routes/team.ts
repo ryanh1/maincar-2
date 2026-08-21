@@ -13,7 +13,6 @@ import { WEB_ORIGIN } from '../config.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { logger } from '../../dependencies/logger.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
-import { buildPaginationParams } from '../lib/queryHelpers.js'
 import { requireMembership } from '../lib/membership.js'
 import { assignableRolesSchema, type OrgRole, type UserRole } from '../lib/roles.js'
 import type { Invitation, Org, User } from '../generated/prisma/client.js'
@@ -128,7 +127,7 @@ router.get(
     const authReq = req as unknown as AuthenticatedRequest
 
     const memberships = await prisma.membership.findMany({
-      where: { userId: authReq.user!.id, org: { enabled: true } },
+      where: { userId: authReq.user!.id, isActive: true, org: { enabled: true } },
       include: { org: true },
       orderBy: { createdAt: 'asc' },
     })
@@ -269,66 +268,6 @@ router.post(
 )
 
 // ============================================================
-// GET /api/team/orgs/:orgId/members — the org's members
-// ============================================================
-router.get(
-  '/orgs/:orgId/members',
-  wrapRoute('GET /api/team/orgs/:orgId/members', async (req, res) => {
-    const authReq = req as unknown as AuthenticatedRequest
-    const orgId = String(req.params.orgId)
-
-    // --- Verify ownership ---
-    const membership = await requireMembership(authReq, res, orgId)
-    if (!membership) return
-
-    // --- Parse & validate params ---
-    const { page, limit, offset } = buildPaginationParams(req.query)
-
-    // --- Execute query ---
-    const [total, rows] = await Promise.all([
-      prisma.membership.count({ where: { orgId } }),
-      prisma.membership.findMany({
-        where: { orgId },
-        include: {
-          user: {
-            select: {
-              id: true,
-              email: true,
-              firstName: true,
-              lastName: true,
-              title: true,
-              imageUrl: true,
-              enabled: true,
-            },
-          },
-        },
-        orderBy: { createdAt: 'asc' },
-        skip: offset,
-        take: limit,
-      }),
-    ])
-
-    // --- Return response ---
-    res.json({
-      members: rows.map((m) => ({
-        id: m.user.id,
-        email: m.user.email,
-        firstName: m.user.firstName,
-        lastName: m.user.lastName,
-        title: m.user.title,
-        imageUrl: m.user.imageUrl,
-        enabled: m.user.enabled,
-        roles: m.roles as UserRole[],
-        joinedAt: m.createdAt.toISOString(),
-      })),
-      total,
-      page,
-      limit,
-    })
-  }),
-)
-
-// ============================================================
 // Invitations
 // ============================================================
 // The token is 256 bits of CSPRNG, stored in full rather than hashed: the
@@ -401,8 +340,10 @@ router.post(
     const roles = parsed.data.roles ?? ['basic']
 
     // --- Verify the invite is worth sending ---
+    // isActive, so someone who was removed can be invited back rather than being
+    // told they are already here by a row that no longer grants anything.
     const alreadyMember = await prisma.membership.findFirst({
-      where: { orgId, user: { email } },
+      where: { orgId, isActive: true, user: { email } },
     })
     if (alreadyMember) {
       return void res.status(409).json({ error: 'That person is already a member.' })

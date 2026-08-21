@@ -192,7 +192,7 @@ describe('GET /api/team/orgs', () => {
 
     expect(prismaMock.membership.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { userId: 'user-a', org: { enabled: true } },
+        where: { userId: 'user-a', isActive: true, org: { enabled: true } },
       }),
     )
   })
@@ -591,7 +591,7 @@ describe('org isolation', () => {
     await request(app).get('/api/team/orgs/org-b').set('Authorization', AUTH)
 
     expect(prismaMock.membership.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { userId: 'user-a', orgId: 'org-b' } }),
+      expect.objectContaining({ where: { userId: 'user-a', orgId: 'org-b', isActive: true } }),
     )
   })
 })

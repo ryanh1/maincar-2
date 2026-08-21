@@ -1,240 +1,281 @@
-import { useState, type FormEvent } from 'react'
-import { Check, Copy, RefreshCw, Trash2 } from 'lucide-react'
-import { toast } from 'sonner'
+import { ArrowDown, ArrowUp, ChevronDown, Search, X } from 'lucide-react'
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Separator } from '@/components/ui/separator'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
-  memberDisplayName,
-  useCreateInvitation,
-  useGetInvitations,
-  useGetMembers,
-  useRegenerateInvitation,
-  useRevokeInvitation,
-} from '@/hooks/orgs'
-import { ApiError } from '@/lib/api'
-import { formatDateTime } from '@/lib/datetime'
-import { getRoleLabel } from '@/lib/roles'
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
+import { useGetMembers } from '@/hooks/orgs'
+import type { MemberSortColumn } from '@/hooks/orgs'
+import {
+  toggleArrayValue,
+  useSetUrlParams,
+  useUrlArray,
+  useUrlInt,
+  useUrlString,
+} from '@/hooks/urlState'
+import { ASSIGNABLE_ROLES, getRoleLabel, isAdmin } from '@/lib/roles'
+import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
 
-/** How long the copied-checkmark stays up, per CLAUDE.md → Copy Button Feedback. */
-const COPIED_MS = 1500
+import { Settings_Members_InviteForm } from './Settings_Members_InviteForm'
+import { Settings_Members_MemberRow } from './Settings_Members_MemberRow'
+import { Settings_Members_PendingInvites } from './Settings_Members_PendingInvites'
 
+const PAGE_SIZE = 25
+
+const COLUMNS: { label: string; sort: MemberSortColumn | null; className?: string }[] = [
+  { label: 'Name', sort: 'name' },
+  { label: 'Email', sort: 'email' },
+  { label: 'Role', sort: null },
+  { label: 'Joined', sort: 'joinedAt', className: 'w-32' },
+]
+
+/**
+ * Settings → Members: who is in this organization, what they hold, and how an
+ * admin changes or ends it.
+ *
+ * Search, role filter, sort, and page all live in the QUERY STRING, so a reload
+ * or a pasted link restores the same view. The list itself is paged, sorted, and
+ * searched on the server — the browser never holds more than one page.
+ *
+ * Every disabled control here is a courtesy. The server re-checks all of it.
+ */
 export function Settings_MembersTab() {
-  const { user, org, isAdmin } = useAuth()
+  const { user, org } = useAuth()
+
+  // Everything the table is showing lives in the URL, so a reload or a pasted
+  // link restores the same view. `setUrlParams` writes several of them at once —
+  // two single-key setters in one handler would clobber each other.
+  const setUrlParams = useSetUrlParams()
+  const [search] = useUrlString('q', '')
+  const [sort] = useUrlString('sort', 'joinedAt')
+  const [dir] = useUrlString('dir', 'asc')
+  const [roleFilter] = useUrlArray('role')
+  const [page, setPage] = useUrlInt('page', 1)
+
   const orgId = org?.id ?? null
+  const sortColumn = (COLUMNS.find((c) => c.sort === sort)?.sort ?? 'joinedAt') as MemberSortColumn
+  const sortDir = dir === 'desc' ? 'desc' : 'asc'
 
-  const membersQuery = useGetMembers(orgId)
-  const invitationsQuery = useGetInvitations(orgId, isAdmin)
-  const createInvitation = useCreateInvitation()
-  const revokeInvitation = useRevokeInvitation()
-  const regenerateInvitation = useRegenerateInvitation()
+  const membersQuery = useGetMembers(orgId, {
+    page,
+    limit: PAGE_SIZE,
+    sort: sortColumn,
+    dir: sortDir,
+    q: search || undefined,
+    role: roleFilter,
+  })
 
-  const [email, setEmail] = useState('')
-  const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [revoking, setRevoking] = useState<{ id: string; email: string } | null>(null)
+  if (!org || !orgId) return null
 
-  if (!org) return null
+  const data = membersQuery.data
+  const viewerIsAdmin = isAdmin(data?.viewerRoles ?? [])
+  const activeAdminCount = data?.meta.activeAdminCount ?? 0
 
-  async function invite(e: FormEvent) {
-    e.preventDefault()
-    const trimmed = email.trim()
-    if (!trimmed) {
-      toast.error('Enter an email address to send an invite.')
-      return
-    }
-    try {
-      await createInvitation.mutateAsync({ orgId: org!.id, email: trimmed })
-      setEmail('')
-      toast.success('Invite created. Copy the link to send it.')
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Could not create the invite. Try again.')
-    }
+  const rows = data?.members ?? []
+
+  const total = data?.total ?? 0
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  function clickHeader(column: MemberSortColumn | null): void {
+    if (!column) return
+    const nextDir = column === sortColumn && sortDir === 'asc' ? 'desc' : 'asc'
+    // A new sort sends the reader back to page 1: page 4 of the old order is not
+    // a place they asked to be.
+    setUrlParams({ sort: column, dir: nextDir, page: null })
   }
 
-  async function copyLink(id: string, url: string) {
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopiedId(id)
-      setTimeout(() => setCopiedId((current) => (current === id ? null : current)), COPIED_MS)
-    } catch {
-      toast.error('Could not copy the link. Copy it from the address bar instead.')
-    }
-  }
-
-  async function regenerate(invitationId: string) {
-    try {
-      await regenerateInvitation.mutateAsync({ orgId: org!.id, invitationId })
-      toast.success('New link created. The old link no longer works.')
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Could not create a new link. Try again.')
-    }
-  }
-
-  async function confirmRevoke() {
-    if (!revoking) return
-    const target = revoking
-    setRevoking(null)
-    try {
-      await revokeInvitation.mutateAsync({ orgId: org!.id, invitationId: target.id })
-      toast.success('Invite revoked.')
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Could not revoke the invite. Try again.')
-    }
-  }
+  const hasFilters = search !== '' || roleFilter.length > 0
 
   return (
-    <div className="flex flex-col gap-8">
-      <section>
-        <h2 className="text-base font-semibold">Members</h2>
+    <div className="flex flex-col gap-6">
+      {viewerIsAdmin && <Settings_Members_InviteForm orgId={orgId} />}
+
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold">
+            Members{total > 0 && <span className="ml-2 text-muted-foreground">{total}</span>}
+          </h2>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-56 flex-1">
+            <Search
+              size={16}
+              aria-hidden
+              className="absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              className="h-8 pl-8"
+              placeholder="Search name or email"
+              aria-label="Search members"
+              value={search}
+              onChange={(event) => setUrlParams({ q: event.target.value, page: null })}
+            />
+          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                Role
+                {roleFilter.length > 0 && (
+                  <Badge variant="secondary">{roleFilter.length}</Badge>
+                )}
+                <ChevronDown size={16} aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48 p-1">
+              {ASSIGNABLE_ROLES.map((role) => (
+                <label
+                  key={role}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50"
+                >
+                  <Checkbox
+                    checked={roleFilter.includes(role)}
+                    onCheckedChange={() =>
+                      setUrlParams({ role: toggleArrayValue(roleFilter, role), page: null })
+                    }
+                  />
+                  {getRoleLabel(role)}
+                </label>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {hasFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setUrlParams({ q: null, role: [], page: null })}
+            >
+              <X size={16} aria-hidden />
+              Clear
+            </Button>
+          )}
+        </div>
 
         {membersQuery.isPending && (
-          <div className="mt-4 flex flex-col gap-2">
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
           </div>
         )}
 
         {membersQuery.isError && (
-          <p className="mt-4 text-sm text-destructive">Could not load members. Refresh to retry.</p>
+          <div className="flex items-center gap-3 rounded-md border border-border p-3">
+            <p className="text-sm text-destructive">Could not load members.</p>
+            <Button variant="secondary" size="sm" onClick={() => void membersQuery.refetch()}>
+              Try again
+            </Button>
+          </div>
         )}
 
-        {membersQuery.data && (
-          <ul className="mt-4 flex flex-col">
-            {membersQuery.data.members.map((member) => (
-              <li
-                key={member.id}
-                className="flex items-center justify-between gap-4 border-b border-border py-3 last:border-b-0"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{memberDisplayName(member)}</p>
-                  <p className="truncate text-xs text-muted-foreground">{member.email}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {member.roles.map((role) => (
-                    <Badge key={role} variant="secondary">
-                      {getRoleLabel(role)}
-                    </Badge>
+        {data && (
+          <div className="overflow-x-auto rounded-md border border-border">
+            <table className="w-full">
+              <caption className="sr-only">Members of {org.name}</caption>
+              <thead>
+                <tr className="border-b border-border bg-muted/60">
+                  {COLUMNS.map((column) => (
+                    <th
+                      key={column.label}
+                      scope="col"
+                      className={cn(
+                        'px-3 py-2 text-left text-xs font-medium text-muted-foreground',
+                        column.className,
+                      )}
+                    >
+                      {column.sort ? (
+                        <button
+                          type="button"
+                          className="inline-flex cursor-pointer items-center gap-1 hover:text-foreground"
+                          onClick={() => clickHeader(column.sort)}
+                          aria-label={`Sort by ${column.label}`}
+                        >
+                          {column.label}
+                          {sortColumn === column.sort &&
+                            (sortDir === 'asc' ? (
+                              <ArrowUp size={14} aria-hidden />
+                            ) : (
+                              <ArrowDown size={14} aria-hidden />
+                            ))}
+                        </button>
+                      ) : (
+                        column.label
+                      )}
+                    </th>
                   ))}
-                </div>
-              </li>
-            ))}
-          </ul>
+                  <th scope="col" className="w-12 px-3 py-2">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((member) => (
+                  <Settings_Members_MemberRow
+                    key={member.userId}
+                    member={member}
+                    orgId={orgId}
+                    viewerIsAdmin={viewerIsAdmin}
+                    activeAdminCount={activeAdminCount}
+                    timeZone={user?.timeZone}
+                  />
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-sm">
+                      {hasFilters
+                        ? 'No member matches this search. Clear the filters to see everyone.'
+                        : 'Invite someone to work with you.'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {total > PAGE_SIZE && (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs tabular-nums text-muted-foreground">
+              Page {page} of {lastPage}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage(page - 1)}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={page >= lastPage}
+                onClick={() => setPage(page + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
         )}
       </section>
 
-      {isAdmin && (
-        <>
-          <Separator />
-
-          <section>
-            <h2 className="text-base font-semibold">Invite someone</h2>
-
-            <form onSubmit={invite} className="mt-4 flex max-w-sm flex-col gap-4">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="inviteEmail">Email</Label>
-                <Input
-                  id="inviteEmail"
-                  type="email"
-                  required
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
-              <Button type="submit" className="self-start" disabled={createInvitation.isPending}>
-                {createInvitation.isPending ? 'Creating…' : 'Create invite'}
-              </Button>
-            </form>
-
-            {/* No mail is sent yet, so the link is shown for the admin to pass on.
-                Saying "invite sent" here would be a lie. */}
-            <p className="mt-3 max-w-sm text-sm text-muted-foreground">
-              Maincar does not send the email yet. Copy the link and send it yourself.
-            </p>
-
-            {invitationsQuery.data && invitationsQuery.data.length > 0 && (
-              <ul className="mt-6 flex flex-col">
-                {invitationsQuery.data.map((invitation) => (
-                  <li
-                    key={invitation.id}
-                    className="flex items-center justify-between gap-4 border-b border-border py-3 last:border-b-0"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{invitation.email}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {invitation.roles.map(getRoleLabel).join(', ')} &middot; expires{' '}
-                        {formatDateTime(invitation.expiresAt, user?.timeZone)}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => void copyLink(invitation.id, invitation.inviteUrl)}
-                      >
-                        {copiedId === invitation.id ? <Check size={16} /> : <Copy size={16} />}
-                        Copy link
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={regenerateInvitation.isPending}
-                        aria-label={`Create a new link for ${invitation.email}`}
-                        onClick={() => void regenerate(invitation.id)}
-                      >
-                        <RefreshCw size={16} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={`Revoke the invite for ${invitation.email}`}
-                        onClick={() => setRevoking({ id: invitation.id, email: invitation.email })}
-                      >
-                        <Trash2 size={16} />
-                      </Button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </>
+      {viewerIsAdmin && (
+        <Settings_Members_PendingInvites
+          orgId={orgId}
+          enabled={viewerIsAdmin}
+          timeZone={user?.timeZone}
+        />
       )}
-
-      <AlertDialog open={!!revoking} onOpenChange={(open) => !open && setRevoking(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Revoke this invite?</AlertDialogTitle>
-            <AlertDialogDescription>
-              The link stops working. {revoking?.email} cannot join with it.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            {/* `variant`, not a buttonVariants() className: this AlertDialogAction
-                renders a Button internally, so a className would fight the
-                variant classes it already applies and the default would win. */}
-            <AlertDialogAction variant="destructive" onClick={() => void confirmRevoke()}>
-              Revoke
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   )
 }

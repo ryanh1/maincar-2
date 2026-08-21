@@ -87,15 +87,24 @@ model Membership {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   org  Org  @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
-  // Allowed values: "basic", "admin". Per-org role set (different from global roles).
-  // A String[] rather than an enum, per rule 2 in the schema header.
+  // Allowed values: "owner", "admin", "basic". Per-org role set (different from
+  // global roles). A String[] rather than an enum, per rule 2 in the schema
+  // header. "owner" is never granted from the member list — ownership moves by
+  // transfer — so it is absent from `assignableRolesSchema`.
   roles String[] @default(["basic"])
+
+  // Offboarding flips this to false. The row stays so re-inviting the same person
+  // reactivates it under @@unique([userId, orgId]) instead of colliding, and so a
+  // departure is still visible in the record. EVERY membership read filters on it:
+  // an inactive membership is the same as no membership.
+  isActive Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([userId, orgId])
   @@index([orgId])
+  @@index([orgId, isActive])
 }
 
 // Member invitations to orgs.

@@ -145,11 +145,12 @@ router.post(
 
       // upsert, not create: this person may have been a member before and been
       // removed, in which case the row still exists and @@unique([userId, orgId])
-      // would reject a second one. Their roles become the invited roles either way.
+      // would reject a second one. Re-adding REACTIVATES that row rather than
+      // creating a second seat, and their roles become the invited roles either way.
       await tx.membership.upsert({
         where: { userId_orgId: { userId: user.id, orgId: invitation.orgId } },
         create: { userId: user.id, orgId: invitation.orgId, roles: roles.data },
-        update: { roles: roles.data },
+        update: { roles: roles.data, isActive: true },
       })
 
       // Land them inside the org they just joined, not wherever they were.

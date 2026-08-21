@@ -5,16 +5,23 @@ export { useCreateOrg } from './useCreateOrg'
 export { useUpdateOrg } from './useUpdateOrg'
 export { useSwitchOrg } from './useSwitchOrg'
 export { useGetMembers } from './useGetMembers'
+export { useUpdateMemberRoles } from './useUpdateMemberRoles'
+export { useRemoveMember } from './useRemoveMember'
 export { useGetInvitations } from './useGetInvitations'
 export { useCreateInvitation } from './useCreateInvitation'
 export { useRevokeInvitation } from './useRevokeInvitation'
 export { useRegenerateInvitation } from './useRegenerateInvitation'
 export { useGetPublicInvitation } from './useGetPublicInvitation'
 export { useAcceptInvitation } from './useAcceptInvitation'
-export { memberDisplayName } from './types'
+export { memberDisplayName, MEMBER_SORT_COLUMNS } from './types'
 export type {
   OrgSummary,
   OrgMember,
+  GetMembersParams,
+  MemberSortColumn,
+  UpdateMemberRolesInput,
+  UpdateMemberRolesResponse,
+  RemoveMemberInput,
   Invitation,
   GetOrgsResponse,
   GetMembersResponse,

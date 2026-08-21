@@ -61,3 +61,13 @@ export async function setFirebaseUserDisabled(uid: string, disabled: boolean): P
 export async function deleteFirebaseUser(uid: string): Promise<void> {
   await getAuth(getAdminApp()).deleteUser(uid)
 }
+
+/**
+ * Invalidates every refresh token the account holds, so live sessions stop
+ * minting new ID tokens. Called after an offboard; access is already gone (every
+ * membership read filters `isActive`), so this cuts the session rather than
+ * granting the removal its effect.
+ */
+export async function revokeFirebaseRefreshTokens(uid: string): Promise<void> {
+  await getAuth(getAdminApp()).revokeRefreshTokens(uid)
+}
