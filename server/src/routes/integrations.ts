@@ -34,6 +34,7 @@ import { APP_NAME, OAUTH_STATE_SECRET, WEB_ORIGIN } from '../config.js'
 import prisma from '../db.js'
 import { OAuthProviderError } from '../../dependencies/oauthTypes.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
+import { listBrokenConnections } from '../lib/mail/connectionHealth.js'
 import { testConnection, type CapabilityResult } from '../lib/mail/connectionTest.js'
 import { getMailProvider } from '../lib/mail/getMailProvider.js'
 import { mapProviderError, type IntegrationErrorCode } from '../lib/mail/integrationErrors.js'
@@ -226,6 +227,35 @@ router.get(
     })
 
     res.json({ integrations })
+  }),
+)
+
+// ============================================================
+// GET /api/integrations/orgs/:orgId/health — the broken-connection signal
+// ============================================================
+// What the app-wide badge (IH-26) counts and the hub cards deep-link from. It returns
+// ONLY connections stamped `error`, deliberately never the merely-`limited` ones: a
+// `limited` connection usually reflects a scope the rep withheld ON PURPOSE, and a
+// permanent alarm the rep cannot silence for their own choice teaches them to ignore
+// the badge — and then it stops warning about the `error` that actually needs them.
+// The slim shape (id, provider, label, address, errorCode, detail) is enough to count
+// and to deep-link to the fix, and nothing more. An empty list is `{ broken: [] }`, a
+// healthy answer — never a 404. All of that lives in listBrokenConnections; this route
+// only proves ownership and hands the result back.
+router.get(
+  '/health',
+  wrapRoute('GET /api/integrations/orgs/:orgId/health', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+    const userId = authReq.user!.id
+
+    // --- Execute query & return response ---
+    const broken = await listBrokenConnections(orgId, userId)
+    res.json({ broken })
   }),
 )
 

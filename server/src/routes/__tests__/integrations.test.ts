@@ -365,6 +365,115 @@ describe('GET /api/integrations/orgs/:orgId', () => {
 })
 
 // ============================================================
+// GET /:orgId/health — the broken-connection signal (the badge)
+// ============================================================
+// This is what the app-wide badge counts. The suite mocks prisma, so at this layer the
+// honest proof that a `limited` (or `connected`) connection never reaches the badge is
+// that the query filters to `status: 'error'` — the row-level filtering is the DB's job,
+// and the where clause is where it is enforced. The rest proves the HTTP contract: the
+// slim mapped shape, newest-broken-first, an empty list is `{ broken: [] }` not a 404,
+// tenant scoping in the where, no token in the body, and 401/404 before any query runs.
+
+const HEALTH_URL = `${URL_A}/health`
+
+/** A broken row as connectionHealth's select returns it (token-free by construction). */
+function brokenRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'conn-google',
+    provider: 'google',
+    emailAddress: 'rep@acme.com',
+    errorCode: 'token_revoked',
+    statusDetail: 'Access was revoked; reconnect the mailbox.',
+    ...overrides,
+  }
+}
+
+describe('GET /api/integrations/orgs/:orgId/health', () => {
+  it("returns the rep's error connections as slim BrokenConnection rows, newest-broken first", async () => {
+    prismaMock.oAuthConnection.findMany.mockResolvedValue([
+      brokenRow({ id: 'conn-ms', provider: 'microsoft', errorCode: 'token_revoked', statusDetail: 'Access was revoked; reconnect the mailbox.' }),
+      brokenRow({ id: 'conn-google', provider: 'google', errorCode: 'admin_approval_required', statusDetail: 'Ask your administrator to approve Maincar.' }),
+    ])
+
+    const res = await request(app).get(HEALTH_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    // Order is preserved from the query (newest-broken first), and each row is the slim
+    // shape the badge needs — connectionId, provider, providerLabel, address, code, detail.
+    expect(res.body.broken).toEqual([
+      {
+        connectionId: 'conn-ms',
+        provider: 'microsoft',
+        providerLabel: 'Microsoft',
+        emailAddress: 'rep@acme.com',
+        errorCode: 'token_revoked',
+        detail: 'Access was revoked; reconnect the mailbox.',
+      },
+      {
+        connectionId: 'conn-google',
+        provider: 'google',
+        providerLabel: 'Google',
+        emailAddress: 'rep@acme.com',
+        errorCode: 'admin_approval_required',
+        detail: 'Ask your administrator to approve Maincar.',
+      },
+    ])
+  })
+
+  it('queries ONLY error rows for this rep in this org, newest-broken first — so a limited or connected connection can never be in the badge', async () => {
+    await request(app).get(HEALTH_URL).set('Authorization', AUTH)
+
+    expect(prismaMock.oAuthConnection.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { orgId: ORG_A, userId: 'user-a', status: 'error' },
+        orderBy: { updatedAt: 'desc' },
+      }),
+    )
+  })
+
+  it('an empty result is { broken: [] }, never a 404', async () => {
+    prismaMock.oAuthConnection.findMany.mockResolvedValue([])
+
+    const res = await request(app).get(HEALTH_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ broken: [] })
+  })
+
+  it('coalesces a null statusDetail to an empty string so detail is always a string', async () => {
+    prismaMock.oAuthConnection.findMany.mockResolvedValue([brokenRow({ errorCode: 'unknown', statusDetail: null })])
+
+    const res = await request(app).get(HEALTH_URL).set('Authorization', AUTH)
+
+    expect(res.body.broken[0].detail).toBe('')
+  })
+
+  it('carries no token in the response body', async () => {
+    prismaMock.oAuthConnection.findMany.mockResolvedValue([brokenRow()])
+
+    const res = await request(app).get(HEALTH_URL).set('Authorization', AUTH)
+
+    const body = JSON.stringify(res.body)
+    expect(body).not.toContain('refreshToken')
+    expect(body).not.toContain('accessToken')
+  })
+
+  it('401s an unauthenticated caller', async () => {
+    const res = await request(app).get(HEALTH_URL)
+    expect(res.status).toBe(401)
+  })
+
+  it('404s an org the caller does not belong to — never a 403 — and never queries', async () => {
+    authAs(null)
+
+    const res = await request(app).get(HEALTH_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.oAuthConnection.findMany).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
 // POST /:connectionId/test — the Test button
 // ============================================================
 // testConnection and getMailProvider are mocked (see the module mocks up top), so
