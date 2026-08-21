@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# Creates a Prisma migration whose timestamp cannot collide with another session's.
+#
+# Two sessions once generated the same timestamp within the same minute. Both got
+# applied to the shared dev database, and an applied migration can never be renamed.
+# So the collision has to be prevented, not repaired.
+#
+#   mc-migrate add_saved_view_policy
+#
+# --after <stamp> forces the migration to sort after a future-dated one another
+# branch already holds — the case a clock stamp would sort BEFORE.
+set -euo pipefail
+source "$(dirname "$0")/mc-common.sh"
+trap 'echo "mc-migrate: failed at line $LINENO (exit $?)" >&2' ERR
+
+usage() { echo "usage: mc-migrate [--after <YYYYMMDDHHMMSS>] <descriptive_name>" >&2; exit 2; }
+
+AFTER=""
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --after) [ $# -ge 2 ] || { echo "mc-migrate: --after needs a timestamp." >&2; usage; }
+             AFTER="$2"; shift 2 ;;
+    --after=*) AFTER="${1#--after=}"; shift ;;
+    --) shift; while [ $# -gt 0 ]; do POSITIONAL+=("$1"); shift; done ;;
+    -*) echo "mc-migrate: unknown option $1" >&2; usage ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+NAME="${POSITIONAL[0]:-}"; [ -z "$NAME" ] && usage
+WT="$(mc_worktree)"; cd "$WT"
+
+LOCK="$STATE/locks/migrate.lock"
+mc_lock_acquire "$LOCK" 900 || { echo "mc-migrate: lock busy. Tell the coordinator." >&2; exit 1; }
+trap 'mc_lock_release "$LOCK"' EXIT
+
+# Every timestamp git knows about, from every branch, plus every worktree on disk.
+if [ "${MC_SKIP_SCAN:-}" != "1" ]; then
+  git fetch origin --quiet 2>/dev/null || true
+  {
+    git log --all --name-only --pretty=format: -- 'server/prisma/migrations/*' 2>/dev/null \
+      | sed -n 's#.*migrations/\([0-9]\{14\}\)_.*#\1#p'
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      ls "$d/server/prisma/migrations" 2>/dev/null | sed -n 's#^\([0-9]\{14\}\)_.*#\1#p'
+    done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
+  } | sort -u > "$STATE/known-migration-timestamps.txt"
+fi
+
+# The next whole hour after $1, in the hand-stamped style.
+next_hour_stamp() {
+  STAMP_IN="$1" node -e '
+    const h = process.env.STAMP_IN;
+    const d = new Date(Date.UTC(+h.slice(0,4), +h.slice(4,6)-1, +h.slice(6,8), +h.slice(8,10)));
+    d.setUTCHours(d.getUTCHours() + 1);
+    const p = (n) => String(n).padStart(2, "0");
+    console.log(`${d.getUTCFullYear()}${p(d.getUTCMonth()+1)}${p(d.getUTCDate())}${p(d.getUTCHours())}0000`);
+  '
+}
+
+# The highest timestamp any branch or worktree is known to hold.
+HIGHEST="$(grep -E '^[0-9]{14}$' "$STATE/known-migration-timestamps.txt" | sort | tail -1 || true)"
+
+if [ -n "$AFTER" ]; then
+  if ! printf '%s' "$AFTER" | grep -qxE '[0-9]{14}'; then
+    echo "mc-migrate: --after $AFTER is not a 14-digit timestamp (YYYYMMDDHHMMSS)." >&2
+    exit 2
+  fi
+  if [ -n "$HIGHEST" ] && ! [ "$AFTER" \> "$HIGHEST" ]; then
+    echo "mc-migrate: --after $AFTER does not sort after every known migration." >&2
+    echo "            The highest known timestamp is $HIGHEST; choose a stamp above it." >&2
+    exit 1
+  fi
+  STAMP="$AFTER"
+  echo "[mc-migrate] --after: stamping $STAMP so it sorts after ${HIGHEST:-(nothing known)}."
+else
+  STAMP="$(date -u +%Y%m%d%H%M%S)"
+  if [ -n "$HIGHEST" ] && [ "$STAMP" \< "$HIGHEST" ]; then
+    STAMP="$(next_hour_stamp "$HIGHEST")"
+    echo "[mc-migrate] Future migration exists: stamping $STAMP so it sorts after $HIGHEST."
+  fi
+
+  while grep -qx "$STAMP" "$STATE/known-migration-timestamps.txt"; do
+    echo "[mc-migrate] $STAMP is already taken by another branch — waiting a second."
+    sleep 1; STAMP="$(date -u +%Y%m%d%H%M%S)"
+  done
+fi
+
+if [ "${MC_PRINT_STAMP:-}" = "1" ]; then
+  echo "$STAMP"
+  exit 0
+fi
+echo "[mc-migrate] timestamp $STAMP is free across $(wc -l < "$STATE/known-migration-timestamps.txt") known migrations."
+mc_log "migrate create $STAMP $NAME"
+
+# ---------------------------------------------------------------------------
+# Author against a THROWAWAY database, never the shared one.
+#
+# `prisma migrate dev` diffs the migrations directory against whatever
+# DATABASE_URL points at. The repo .env points at the shared maincar2 database,
+# and other sessions have applied their branch migrations to it. Those migrations
+# exist in the database and not in your branch's directory, so migrate dev calls
+# it drift and offers exactly one remedy: reset (destroying all data).
+#
+# So: create an empty database, replay the committed migrations into it, author
+# against that, and drop it. No drift to report, and no reset is proposed.
+# ---------------------------------------------------------------------------
+
+SHARED_ENV="/Users/ryanhollander/Documents/Coding/My Projects/maincar-2/.env"
+ELEVATED="${MC_MIGRATE_URL:-}"
+if [ -z "$ELEVATED" ]; then
+  for envfile in "$WT/.env" "$SHARED_ENV"; do
+    [ -r "$envfile" ] || continue
+    ELEVATED="$(grep -E '^MIGRATE_DATABASE_URL=' "$envfile" | head -1 | cut -d= -f2-)"
+    [ -n "$ELEVATED" ] && { echo "[mc-migrate] credentials from $envfile"; break; }
+  done
+fi
+[ -z "$ELEVATED" ] && {
+  echo "mc-migrate: no MIGRATE_DATABASE_URL found in $WT/.env or $SHARED_ENV." >&2
+  echo "            Set MC_MIGRATE_URL, or copy .env into your worktree." >&2
+  exit 1
+}
+
+PROBE="maincar2_authoring_$$"
+# Swap only the database name; keep host, credentials and query string.
+PROBE_URL="$(ELEVATED="$ELEVATED" PROBE="$PROBE" node -e '
+  const u = new URL(process.env.ELEVATED);
+  u.pathname = "/" + process.env.PROBE;
+  console.log(u.toString());
+')"
+
+PG_CONTAINER="${MC_PG_CONTAINER:-maincar2-postgres}"
+
+echo "[mc-migrate] creating throwaway database $PROBE"
+docker exec "$PG_CONTAINER" psql -U postgres -q -c "CREATE DATABASE \"$PROBE\"" \
+  || { echo "mc-migrate: could not create $PROBE on $PG_CONTAINER" >&2; exit 1; }
+
+drop_probe() {
+  echo "[mc-migrate] dropping throwaway database $PROBE"
+  docker exec "$PG_CONTAINER" psql -U postgres -q -c "DROP DATABASE IF EXISTS \"$PROBE\" WITH (FORCE)" >/dev/null 2>&1 || true
+  mc_lock_release "$LOCK"
+}
+trap drop_probe EXIT
+
+export DATABASE_URL="$PROBE_URL"
+export MIGRATE_DATABASE_URL="$PROBE_URL"
+
+echo "[mc-migrate] replaying committed migrations into the throwaway"
+( cd "$WT/server" && npx prisma migrate deploy )
+
+echo "[mc-migrate] authoring $NAME"
+( cd "$WT/server" && npx prisma migrate dev --create-only --name "$NAME" )
+
+# If we specified a stamp (RLS or --after), rename the migration to it.
+if [ -n "$AFTER" ]; then
+  CREATED="$(ls -d "$WT/server/prisma/migrations/"*_"$NAME" 2>/dev/null | sort | tail -1)"
+  WANTED="$WT/server/prisma/migrations/${STAMP}_${NAME}"
+  if [ -n "$CREATED" ] && [ "$CREATED" != "$WANTED" ]; then
+    mv "$CREATED" "$WANTED"
+    echo "[mc-migrate] renamed to $(basename "$WANTED") so it carries the chosen stamp."
+  fi
+fi
+
+echo
+echo "[mc-migrate] written. Review the SQL, then apply it only to a throwaway or via the"
+echo "             test harness. Do NOT run migrate deploy against the shared maincar2."

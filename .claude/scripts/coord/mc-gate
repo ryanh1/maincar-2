@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Runs the test gate while holding one of a small number of global slots.
+# This prevents CPU thrashing when many sessions run tests at once.
+#
+#   mc-gate                       # run full gate (typecheck, lint, test, test:integration)
+#   mc-gate --classify            # print the scope decision and changed files, run nothing
+#   mc-gate npm test              # just that command, still queued
+#   MC_MAX_JOBS=2 mc-gate         # tighten the limit
+#   MC_GATE_FULL=1 mc-gate        # force the full gate, ignore the classifier
+#
+# SCOPE-AWARE GATE. With no arguments, mc-gate looks at what the diff actually
+# changed and runs only the checks that change could affect:
+#   docs-only   -> skip typecheck/lint/build/tests
+#   server-only -> skip the WEB test suite
+#   web-only    -> skip the SERVER test suite
+#   anything else (schema, deps, mixed, unknown path) -> the full gate
+set -euo pipefail
+source "$(dirname "$0")/mc-common.sh"
+
+# --classify: print the decision and the files behind it, then stop. No slot, no
+# checks. This is the window into the classifier.
+if [ "${1:-}" = "--classify" ]; then
+  cd "$(mc_worktree)"
+  if files="$(mc_changed_files)" && [ -n "$files" ]; then
+    scope="$(printf '%s\n' "$files" | mc_classify_files)"
+  else
+    scope="full"; files=""
+  fi
+  echo "scope: $scope"
+  echo "changed files (vs merge-base with origin/main, plus working tree):"
+  if [ -n "$files" ]; then printf '%s\n' "$files" | sed 's/^/  /'
+  else echo "  (none / could not determine — defaulting to full)"; fi
+  exit 0
+fi
+
+MAX="${MC_MAX_JOBS:-4}"
+SEM="$STATE/locks/gate"
+mkdir -p "$SEM"
+
+acquire() {
+  local waited=0 timeout=3600
+  while :; do
+    for n in $(seq 1 "$MAX"); do
+      local d="$SEM/slot-$n"
+      if mkdir "$d" 2>/dev/null; then echo $$ > "$d/pid"; SLOT_DIR="$d"; return 0; fi
+      local owner; owner=$(cat "$d/pid" 2>/dev/null || echo "")
+      if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then rm -rf "$d"; fi
+    done
+    if [ "$waited" -eq 0 ]; then echo "[mc-gate] $MAX runners busy — queued. Waiting..."; fi
+    [ "$waited" -ge "$timeout" ] && { echo "[mc-gate] waited an hour, giving up" >&2; return 1; }
+    sleep 5; waited=$((waited+5))
+  done
+}
+
+SLOT_DIR=""
+acquire || { echo "[mc-gate] could not get a runner slot." >&2; exit 1; }
+trap '[ -n "$SLOT_DIR" ] && rm -rf "$SLOT_DIR"' EXIT
+echo "[mc-gate] running (slot $(basename "$SLOT_DIR"), limit $MAX)"
+mc_log "gate acquire $(basename "$SLOT_DIR")"
+
+cd "$(mc_worktree)"
+
+# Ensure Prisma client is in sync. A rebase that pulls a schema change from another
+# session leaves a stale Prisma client, and typecheck then fails with "column does not exist"
+# errors that read like broken code. Regenerate it upfront.
+if [ -f server/scripts/ensurePrismaClient.mjs ]; then
+  if ! node server/scripts/ensurePrismaClient.mjs; then
+    echo "[mc-gate] Could not bring the Prisma client in sync — see the error above." >&2
+    mc_log "gate refused (prisma client regenerate failed)"
+    exit 3
+  fi
+fi
+
+# Decide the scope BEFORE running anything, and ONLY for the no-argument gate.
+SCOPE="full"
+if [ $# -eq 0 ] && [ -z "${MC_GATE_FULL:-}" ]; then
+  if cf="$(mc_changed_files)" && [ -n "$cf" ]; then
+    SCOPE="$(printf '%s\n' "$cf" | mc_classify_files)"
+  fi
+fi
+mc_log "gate scope=$SCOPE"
+
+# set +e around the run: with `set -e` a failing gate exits right here,
+# so rc= and the log line below never execute and events.tsv only ever records rc=0.
+set +e
+if [ $# -gt 0 ]; then
+  # Explicit command: run verbatim, still queued.
+  "$@"
+elif [ "$SCOPE" = "docs" ]; then
+  echo "[mc-gate] SCOPE=docs — only markdown/docs changed."
+  echo "[mc-gate] SKIPPING typecheck, lint, build, and tests."
+  echo "[mc-gate] (Force the full gate with: MC_GATE_FULL=1 mc-gate)"
+  exit 0
+elif [ "$SCOPE" = "server" ]; then
+  echo "[mc-gate] SCOPE=server — only server code changed. SKIPPING the WEB test suite."
+  echo "[mc-gate] (test:integration still runs — CLAUDE.md: 'not an extra')"
+  echo "[mc-gate] (Force the full gate with: MC_GATE_FULL=1 mc-gate)"
+  npm run typecheck && npm run lint && npm run build && npm run test:server && npm run test:integration
+elif [ "$SCOPE" = "web" ]; then
+  echo "[mc-gate] SCOPE=web — only web code changed. SKIPPING the SERVER test suite."
+  echo "[mc-gate] (test:integration still runs — CLAUDE.md: 'not an extra')"
+  echo "[mc-gate] (Force the full gate with: MC_GATE_FULL=1 mc-gate)"
+  npm run typecheck && npm run lint && npm run build && npm run test:web && npm run test:integration
+else
+  echo "[mc-gate] SCOPE=full — running every check."
+  npm run verify
+fi
+rc=$?
+set -e
+mc_log "gate release rc=$rc"
+[ "$rc" -ne 0 ] && echo "[mc-gate] FAILED rc=$rc — before you debug: does the failing file fail on its own? Under load it probably will not."
+exit $rc

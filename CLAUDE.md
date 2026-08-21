@@ -30,10 +30,37 @@ Every time-of-day shown to a person MUST render in an explicit timezone and carr
 
 ## Git and branching
 
-**Do not branch. Work on the current branch.** Another session may be working in the same tree at the same time.
+**Use a worktree per issue.** Multiple sessions work this repo at once. Give each
+one its own checkout and branch instead of sharing the main tree:
 
-- Preserve all existing changes. Make your changes, then commit only the files and hunks you changed.
-- Do not touch, revert, stash, or commit the other session's changes.
+```bash
+cd ~/code/maincar-2-worktrees
+git clone /path/to/maincar-2 mai-123-short-title
+cd mai-123-short-title
+git checkout -b mai-123-short-title
+```
+
+Then use the coordination scripts in [`.claude/scripts/coord/`](.claude/scripts/coord/README.md)
+(full picture in its README):
+
+- `eval "$(./scripts/coord/mc-slot --env)"` — stable ports for this worktree; no
+  collisions with other sessions' dev servers.
+- `./scripts/coord/mc-gate` — run the test gate through a shared queue instead of
+  calling `npm run verify` directly. It still runs everything `verify` runs — it is
+  a queue, not a shortcut.
+- `./scripts/coord/mc-merge -m "MAI-123: ..."` — merge and push under a lock, so
+  two sessions can't push over each other.
+- `./scripts/coord/mc-doctor` — check machine health (stuck locks, load, leftover
+  test databases) if something feels stuck.
+
+**No worktree, or working solo in the main checkout?** That still works:
+
+- Preserve all existing changes. Make your changes, then commit only the files and
+  hunks you changed — `git commit -- <paths>`, never a bare `git add -A` (see
+  [committing.md](.claude/rules/committing.md) → **The index is shared**).
+- Do not touch, revert, stash, or commit another session's changes.
+- Run `npm run verify` yourself instead of `mc-gate`, and `git merge`/`git push`
+  instead of `mc-merge`.
 
 ## Before you commit
 

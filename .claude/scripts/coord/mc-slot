@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Assigns this worktree a stable slot number, and prints the port block that goes
+# with it. Run it from inside your worktree. Same worktree always gets the same
+# slot, so ports are stable across restarts, and no two worktrees ever share one.
+#
+#   eval "$(mc-slot --env)"    # exports API_PORT, VITE_PORT, FB_* for this shell
+#   mc-slot                    # just show the assignment
+set -euo pipefail
+source "$(dirname "$0")/mc-common.sh"
+
+WT="$(mc_worktree)"
+KEY="$(printf '%s' "$WT" | shasum | cut -c1-12)"
+REG="$STATE/ports/registry.tsv"
+LOCK="$STATE/locks/slot.lock"
+touch "$REG"
+
+mc_lock_acquire "$LOCK" 60 || { echo "mc-slot: could not lock registry" >&2; exit 1; }
+trap 'mc_lock_release "$LOCK"' EXIT
+
+# Drop registrations whose worktree folder is gone.
+awk -F'\t' 'system("test -d \"" $3 "\"")==0' "$REG" > "$REG.tmp" 2>/dev/null || : > "$REG.tmp"
+mv "$REG.tmp" "$REG"
+
+SLOT="$(awk -F'\t' -v k="$KEY" '$2==k{print $1; exit}' "$REG")"
+if [ -z "$SLOT" ]; then
+  for n in $(seq 0 39); do
+    if ! awk -F'\t' -v n="$n" '$1==n{found=1} END{exit !found}' "$REG"; then SLOT="$n"; break; fi
+  done
+  [ -z "${SLOT:-}" ] && { echo "mc-slot: all 40 slots taken" >&2; exit 1; }
+  printf '%s\t%s\t%s\t%s\t%s\n' "$SLOT" "$KEY" "$WT" "$(mc_branch)" "$(mc_now)" >> "$REG"
+  mc_log "slot assigned $SLOT"
+fi
+
+# maincar-2 defaults: API=3010, VITE=5183, FB_AUTH=9140, FB_UI=4140.
+# Offset by slot to avoid collisions. API gets +10*SLOT (spacing), others +SLOT.
+API=$((3010 + SLOT * 10)); WEB=$((5183 + SLOT))
+FB_AUTH=$((9140 + SLOT)); FB_UI=$((4140 + SLOT))
+FB_HUB=$((8140 + SLOT)); FB_LOG=$((9240 + SLOT))
+
+if [ "${1:-}" = "--env" ]; then
+  cat <<ENV
+export MC_SLOT=$SLOT
+export API_PORT=$API
+export VITE_PORT=$WEB
+export FB_AUTH_PORT=$FB_AUTH
+export FB_UI_PORT=$FB_UI
+export FB_HUB_PORT=$FB_HUB
+export FB_LOG_PORT=$FB_LOG
+export VITE_FIREBASE_AUTH_EMULATOR_HOST=http://127.0.0.1:$FB_AUTH
+export FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:$FB_AUTH
+export VITE_API_URL=http://localhost:$API
+ENV
+else
+  echo "worktree : $WT"
+  echo "branch   : $(mc_branch)"
+  echo "slot     : $SLOT"
+  echo "api      : $API"
+  echo "vite     : $WEB"
+  echo "fb auth  : $FB_AUTH   ui: $FB_UI   hub: $FB_HUB   log: $FB_LOG"
+fi

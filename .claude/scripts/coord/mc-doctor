@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Health of the shared machine. Run it when something feels wrong.
+source "$(dirname "$0")/mc-common.sh"
+cd "$(mc_worktree)" 2>/dev/null || cd "/Users/ryanhollander/Documents/Coding/My Projects/maincar-2"
+
+echo "=== load (check if >8 — higher means tests will fail at random) ==="; uptime
+echo; echo "=== gate runners busy ==="; ls "$STATE/locks/gate" 2>/dev/null | wc -l | tr -d ' '
+echo; echo "=== merge lock ==="
+[ -d "$STATE/locks/merge.lock" ] && echo "HELD by pid $(cat "$STATE/locks/merge.lock/pid" 2>/dev/null)" || echo free
+echo; echo "=== concurrent vitest processes ==="; pgrep -fl vitest 2>/dev/null | wc -l | tr -d ' '
+
+echo; echo "=== WORKTREES STUCK MID-MERGE OR MID-REBASE ==="
+found=0
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  gd="$(git -C "$d" rev-parse --git-dir 2>/dev/null)" || continue
+  [ -e "$gd/MERGE_HEAD" ]        && { echo "  MERGE unresolved : $d"; found=1; }
+  [ -d "$gd/rebase-merge" ]      && { echo "  REBASE in progress: $d"; found=1; }
+  [ -d "$gd/rebase-apply" ]      && { echo "  REBASE in progress: $d"; found=1; }
+  [ -e "$gd/CHERRY_PICK_HEAD" ]  && { echo "  CHERRY-PICK stuck : $d"; found=1; }
+done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
+[ "$found" = 0 ] && echo "  none"
+
+echo; echo "=== firebase emulators ==="
+pgrep -f 'firebase.*emulators:start' 2>/dev/null | while read -r p; do
+  ports=$(lsof -nP -p "$p" -iTCP -sTCP:LISTEN 2>/dev/null | awk '{print $9}' | sed 's/.*://' | sort -n | tr '\n' ' ')
+  echo "  pid $p  ports: $ports"
+done
+[ -z "$(pgrep -f 'firebase.*emulators:start' 2>/dev/null)" ] && echo "  none running"
+
+echo; echo "=== docker ==="; docker ps --format '{{.Names}}\t{{.Status}}' 2>&1 | grep maincar2 || echo "  (maincar2 containers not found)"
+echo; echo "=== postgres ==="; docker exec maincar2-postgres pg_isready -U postgres 2>&1 | head -1 || echo "  (container not running)"
+echo -n "  connections in use: "; docker exec maincar2-postgres psql -U postgres -tAc "select count(*)||'/'||current_setting('max_connections') from pg_stat_activity" 2>&1 || echo "  (failed)"
+echo -n "  leftover test databases: "; docker exec maincar2-postgres psql -U postgres -tAc "select count(*) from pg_database where datname like 'maincar2_authoring_%'" 2>&1 || echo "  (failed)"
+
+echo; echo "=== duplicate migration timestamps (never renumber; write a new one) ==="
+dupes=$(ls server/prisma/migrations 2>/dev/null | sed -n 's#^\([0-9]\{14\}\)_.*#\1#p' | sort | uniq -d)
+[ -n "$dupes" ] && echo "$dupes" || echo "  none on this branch"
