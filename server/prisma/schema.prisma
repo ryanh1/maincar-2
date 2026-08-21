@@ -43,6 +43,14 @@ model Org {
   people       Person[]
   personPhones PersonPhone[]
   personEmails PersonEmail[]
+
+  // Deal spine (MAI-131 T3). Back-relations so a deleted org cascades its deals,
+  // pipelines, stages, and per-deal roles away — the same onDelete: Cascade the
+  // rest of the CRM spine already uses.
+  pipelines       Pipeline[]
+  pipelineStages  PipelineStage[]
+  deals           Deal[]
+  dealPersonRoles DealPersonRole[]
 }
 
 model User {
@@ -463,6 +471,9 @@ model Company {
   // The people who work here (Person.companyId → Company). SetNull on that side,
   // so trashing/deleting a company does not delete its people.
   people Person[]
+  // The deals for this account (Deal.companyId → Company). SetNull on that side
+  // too, so trashing/deleting a company does not delete its deals (MAI-131 T3).
+  deals Deal[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -535,6 +546,9 @@ model Person {
 
   phones    PersonPhone[]
   addresses PersonEmail[] // the person's own email addresses, each with a status
+  // This person's role on each deal they are on. A person can hold DIFFERENT roles
+  // on DIFFERENT deals — champion on one, influencer on another (MAI-131 T3).
+  dealRoles DealPersonRole[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -626,4 +640,152 @@ model PersonEmail {
   @@unique([personId, address]) // re-adding the same address is idempotent
   @@index([orgId])
   @@index([orgId, address])
+}
+
+// -----------------------------------------------------------------------------
+// CRM — Deal spine (MAI-131, Phase 1 / T3). A Deal is one possible sale: pipeline,
+// forecast, and the reason to call. Pipeline / PipelineStage configure the stages
+// a deal moves through; DealPersonRole is the buying committee (multi-threading).
+//
+// Spec: docs/specs/SPEC-CRM-SCHEMA.md (§5.4 typed FKs + a named join for an edge
+// that carries data, §5.8 money as integer minor units). Plan: T3.
+//
+// Two rules the database CANNOT enforce, so they live in routes/deals.ts:
+//   1. A Deal's stage must belong to the Deal's pipeline. stageId and pipelineId
+//      are each a valid FK on their own, but "this stage is in that pipeline" is a
+//      cross-row relationship no single FK can state.
+//   2. Money is stored in integer minor units (BigInt), never a float — the route
+//      accepts and returns it as an exact integer string so it round-trips with no
+//      drift (§5.8).
+//
+// ownerUserId is a plain String, for the same reason it is on Company/Person:
+// wiring it to User would add a back-relation to the protected model, and a
+// nullable owner pointer needs no cascade.
+// -----------------------------------------------------------------------------
+
+// The ordered list of stages a deal moves through (e.g. "New Business": New →
+// Qualified → Proposal → Won). Exactly one Pipeline per org is seeded later (T6);
+// the model already supports a second (e.g. "Renewals") with no migration.
+model Pipeline {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  name      String
+  isDefault Boolean @default(false)
+
+  stages PipelineStage[]
+  deals  Deal[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+}
+
+// One step in a Pipeline. winProbability weights the forecast; outcome tells the
+// board which columns end the deal.
+model PipelineStage {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  pipelineId String
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+
+  name           String
+  color          String @default("#94a3b8")
+  sortOrder      Int
+  winProbability Int    @default(0) // 0..100, weights the forecast
+
+  // open | won | lost — a fixed system enum. Which columns end the deal.
+  outcome String @default("open")
+
+  deals Deal[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([pipelineId, sortOrder])
+}
+
+model Deal {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  name String
+
+  // SetNull, not Cascade: trashing a company must not delete its deals.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  // Which of the org's pipelines this ONE deal runs through. Restrict: a pipeline
+  // still carrying a deal cannot be deleted out from under it.
+  pipelineId String
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Restrict)
+
+  // The deal's current stage. Restrict for the same reason. App code guarantees
+  // this stage belongs to `pipeline` — the DB cannot express that cross-row rule.
+  stageId String
+  stage   PipelineStage @relation(fields: [stageId], references: [id], onDelete: Restrict)
+
+  // Integer minor units (cents; JPY = whole yen), never a float (§5.8). Nullable
+  // until a deal is sized. currency is ISO-4217.
+  amountMinor BigInt?
+  currency    String  @default("USD")
+
+  closeDate DateTime?
+
+  // open | won | lost — a fixed system enum (§5.6a).
+  status     String  @default("open")
+  lostReason String? // a user picklist; free text for now
+
+  ownerUserId String?
+
+  customJson Json @default("{}")
+
+  mergedIntoId String? // tombstone → survivor after a merge (5.3c)
+  deletedById  String? // who soft-deleted it (Trash + audit)
+  isArchived   Boolean   @default(false)
+  deletedAt    DateTime?
+
+  personRoles DealPersonRole[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([orgId, companyId])
+  @@index([orgId, stageId])
+  @@index([orgId, ownerUserId])
+  @@index([orgId, closeDate])
+}
+
+// Salesforce's OpportunityContactRole: the buying committee. Named *Person*Role to
+// match "Person" as the object name everywhere in this schema (§5.4). The
+// @@unique([dealId, personId]) means a person appears at most ONCE per deal — but
+// the SAME person can hold DIFFERENT roles on DIFFERENT deals (multi-threading).
+model DealPersonRole {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  dealId String
+  deal   Deal   @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  personId String
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  // champion | decision_maker | economic_buyer | influencer | blocker | user | other
+  role      String
+  isPrimary Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dealId, personId])
+  @@index([orgId])
+  @@index([personId])
 }

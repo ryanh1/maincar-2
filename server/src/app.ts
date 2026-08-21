@@ -7,6 +7,7 @@ import { requestId } from './middleware/requestId.js'
 import authRouter from './routes/auth.js'
 import callsRouter from './routes/calls.js'
 import companiesRouter from './routes/companies.js'
+import dealsRouter from './routes/deals.js'
 import emailRouter from './routes/email.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import invitationsRouter from './routes/invitations.js'
@@ -62,6 +63,7 @@ app.use('/api/orgs/:orgId/phone-numbers', phoneNumbersRouter)
 app.use('/api/orgs/:orgId/calls', callsRouter)
 app.use('/api/orgs/:orgId/companies', companiesRouter)
 app.use('/api/orgs/:orgId/people', peopleRouter)
+app.use('/api/orgs/:orgId/deals', dealsRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
 
 // The authenticated half of the Integration Hub. The org is in the path so
