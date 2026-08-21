@@ -35,6 +35,10 @@ export function DialerProvider({ children }: { children: ReactNode }) {
   // The live call's identity, so the in-call controls can hang it up. Set when a
   // call is placed, cleared at reset.
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null)
+  // The live Voice SDK Call object placeDeviceCall connected, so mute/DTMF can
+  // reach it directly (MAI-195). Set once `device.connect()` resolves; cleared by
+  // endCall and reset, which run on every path off a live call.
+  const callRef = useRef<TwilioVoiceCall | null>(null)
 
   const expandDialer = useCallback(() => setView('expanded'), [])
   const collapseDialer = useCallback(() => setView('collapsed'), [])
@@ -63,6 +67,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     // rep still sees how long the call ran.
     setPhase('completed')
     setDialing(false)
+    callRef.current = null
   }, [])
 
   const reset = useCallback(() => {
@@ -70,6 +75,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     setDialing(false)
     setElapsedSeconds(0)
     setActiveCall(null)
+    callRef.current = null
   }, [])
 
   // The call timer. One interval, alive only while a call is up, and always torn
@@ -136,6 +142,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
         throw new Error('The dialer is still starting up. Wait a moment and try again.')
       }
       const call: TwilioVoiceCall = await device.connect({ params })
+      callRef.current = call
       call.on('accept', () => connectCall())
       call.on('disconnect', () => endCall())
       call.on('cancel', () => endCall())
@@ -144,6 +151,16 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     },
     [connectCall, endCall],
   )
+
+  // Mute/DTMF: forward straight to the live Call object callRef holds. See the
+  // context doc on each for the no-call-up behavior.
+  const muteCall = useCallback((next: boolean) => {
+    callRef.current?.mute(next)
+  }, [])
+
+  const sendDigits = useCallback((digit: string) => {
+    callRef.current?.sendDigits(digit)
+  }, [])
 
   const value = useMemo<DialerContextValue>(
     () => ({
@@ -161,6 +178,8 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       endCall,
       reset,
       placeDeviceCall,
+      muteCall,
+      sendDigits,
     }),
     [
       view,
@@ -177,6 +196,8 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       endCall,
       reset,
       placeDeviceCall,
+      muteCall,
+      sendDigits,
     ],
   )
 

@@ -1,50 +1,26 @@
 import { useCallback, useState, type KeyboardEvent } from 'react'
-import { Phone } from 'lucide-react'
+import { Headphones, Phone } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { cn } from '@/lib/utils'
 import { ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { BuyNumberBanner } from '@/components/BuyNumberBanner'
+import { GreenRoom } from '@/components/GreenRoom'
+import type { DeviceSelection } from '@/components/DeviceCheck'
 import type { RecordingConsent } from '@/lib/callTypes'
 import { useAuth } from '@/providers/useAuth'
 import { useCreateCall } from '@/hooks/dialer'
 import { useGetNumbers } from '@/hooks/phoneNumbers'
+import { clearGreenRoomCheckInStore, useGreenRoomDecision } from '@/hooks/devices'
 import { useDialer } from '@/components/dialer/dialerContext'
-
-/**
- * The DTMF seam.
- *
- * Pressing a key while a call is live is meant to play that tone INTO the call —
- * "press 1 for sales". Real DTMF over Twilio needs the browser Voice SDK
- * (`@twilio/voice-sdk` → `Twilio.Device.activeConnection().sendDigits()`), and
- * that device is NOT in the app yet (nothing imports the SDK). So the default is
- * an honest no-op, not a fake "tone sent".
- *
- * This is deliberately not a dead control: the key press still appends to the
- * visible number above, so the rep sees the press land. Once a Device is wired,
- * pass a real `sendDigit` that forwards to `sendDigits(digit)` and the tones go
- * out for free — the keypad already calls this on every in-call press.
- *
- * TODO(MAI): replace the default with the Twilio.js Device once the browser Voice
- * SDK is added under `vite/src/dependencies/`.
- */
-export type SendDigit = (digit: string) => void
-
-// A stable identity so the default prop does not change between renders.
-const noopSendDigit: SendDigit = () => {}
 
 /** The phone layout, row by row: 1-9, then * 0 #. Twelve keys, no more. */
 const KEYPAD_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'] as const
 
 export interface NumericKeypadProps {
-  /**
-   * DTMF seam. Called with each key pressed while a call is live. Defaults to a
-   * documented no-op because the browser Voice SDK is not wired yet — see
-   * {@link SendDigit}.
-   */
-  sendDigit?: SendDigit
   /**
    * Consent to place the call with. This keypad captures no consent of its own,
    * so the safe default is `declined`: never record without an explicit yes.
@@ -58,23 +34,36 @@ export interface NumericKeypadProps {
  *
  * Two jobs, chosen by whether a call is live (read from `useDialer().dialing`):
  *  - No call: the keys build up a number, and Enter places the call through
- *    `useCreateCall`. The keys are a convenience over typing into the field.
- *  - Call live: each key sends a DTMF tone through the `sendDigit` seam AND
- *    appends to the field, so the press is visible even before real tones ship.
+ *    `useCreateCall` — gated behind the greenroom on the first call of a session
+ *    (MAI-193). The keys are a convenience over typing into the field.
+ *  - Call live: each key sends a real DTMF tone through `useDialer().sendDigits`,
+ *    which forwards to the live browser Voice SDK Call's `sendDigits()`
+ *    (MAI-195) — the callee's phone system hears it — AND appends to the field,
+ *    so the press is visible too.
  *
  * Enter dials only when idle; Backspace/Delete drops the last character. Both are
  * handled on the field, which is where a rep's focus sits while entering a
  * number.
+ *
+ * ## The greenroom gate
+ *
+ * `useGreenRoomDecision().shouldShow` decides whether `dial()` opens `GreenRoom`
+ * instead of calling straight through — the same pattern `GreenRoom`'s own
+ * docstring documents and `GreenRoom.integration.test.tsx` proves end to end.
+ * `gatingCall` tells `GreenRoom`'s `onConfirm` whether there is a call waiting on
+ * the other side of it: set when the gate opens it, left false when the
+ * headphones button opens it on demand, so confirming an on-demand check closes
+ * the dialog without dialing.
  */
-export function NumericKeypad({
-  sendDigit = noopSendDigit,
-  recordingConsent = 'declined',
-  className,
-}: NumericKeypadProps) {
+export function NumericKeypad({ recordingConsent = 'declined', className }: NumericKeypadProps) {
   const [value, setValue] = useState('')
   const { org } = useAuth()
-  const { dialing } = useDialer()
+  const { dialing, sendDigits } = useDialer()
   const createCall = useCreateCall()
+  const { shouldShow: shouldShowGreenRoom } = useGreenRoomDecision()
+
+  const [greenRoomOpen, setGreenRoomOpen] = useState(false)
+  const [gatingCall, setGatingCall] = useState(false)
 
   // The org's numbers, so the rep sees which line the call goes out on and cannot
   // reach a Call button when there is no line to call from. The active number's
@@ -88,16 +77,32 @@ export function NumericKeypad({
   const press = useCallback(
     (key: string) => {
       setValue((current) => current + key)
-      if (dialing) sendDigit(key)
+      if (dialing) sendDigits(key)
     },
-    [dialing, sendDigit],
+    [dialing, sendDigits],
   )
 
   const removeLast = useCallback(() => setValue((current) => current.slice(0, -1)), [])
 
-  // Place the call. Guarded so a blank number or an in-flight call is a no-op
-  // rather than a bad request, and so a member with no active org gets told what
-  // is missing instead of a silent nothing.
+  const placeCall = useCallback(
+    (toE164: string) => {
+      if (!org) return
+      createCall.mutate(
+        { orgId: org.id, toE164, recordingConsent },
+        {
+          onError: (err) =>
+            toast.error(err instanceof ApiError ? err.message : 'Could not place the call. Try again.'),
+        },
+      )
+    },
+    [org, createCall, recordingConsent],
+  )
+
+  // Place the call, or gate it behind the greenroom first. Guarded so a blank
+  // number or an in-flight call is a no-op rather than a bad request, and so a
+  // member with no active org gets told what is missing instead of a silent
+  // nothing. `shouldShowGreenRoom` is checked LAST, after every other reason to
+  // bail, so the greenroom never opens for a call that was never going out anyway.
   const dial = useCallback(() => {
     if (dialing || createCall.isPending) return
     const toE164 = value.trim()
@@ -106,14 +111,40 @@ export function NumericKeypad({
       toast.error('Select an organization to call from.')
       return
     }
-    createCall.mutate(
-      { orgId: org.id, toE164, recordingConsent },
-      {
-        onError: (err) =>
-          toast.error(err instanceof ApiError ? err.message : 'Could not place the call. Try again.'),
-      },
-    )
-  }, [dialing, createCall, value, org, recordingConsent])
+    if (shouldShowGreenRoom) {
+      setGatingCall(true)
+      setGreenRoomOpen(true)
+      return
+    }
+    placeCall(toE164)
+  }, [dialing, createCall.isPending, value, org, shouldShowGreenRoom, placeCall])
+
+  // The headphones button: check devices on demand, independent of whether a call
+  // is waiting. Clearing the recorded check first is what makes GreenRoom open at
+  // all for a rep who already passed this session — its own decision hook would
+  // otherwise read 'retry' and render nothing, by design (see its docstring).
+  const openDeviceCheck = useCallback(() => {
+    clearGreenRoomCheckInStore()
+    setGatingCall(false)
+    setGreenRoomOpen(true)
+  }, [])
+
+  const handleGreenRoomOpenChange = useCallback((open: boolean) => {
+    setGreenRoomOpen(open)
+    if (!open) setGatingCall(false)
+  }, [])
+
+  // Confirming records the check (GreenRoom does that itself, before this runs)
+  // and, only when the greenroom was gating a call the rep already asked to
+  // place, places it. An on-demand check has nothing waiting to place.
+  const handleGreenRoomConfirm = useCallback(
+    (_selection: DeviceSelection) => {
+      setGreenRoomOpen(false)
+      if (gatingCall) placeCall(value.trim())
+      setGatingCall(false)
+    },
+    [gatingCall, placeCall, value],
+  )
 
   // The field owns the keyboard: Enter dials when idle, Backspace/Delete trims the
   // last character. Digits still type normally through `onChange`, so the field
@@ -142,11 +173,19 @@ export function NumericKeypad({
 
   return (
     <div className={cn('flex flex-col gap-3', className)}>
-      {activeNumber ? (
-        <p className="text-center text-xs tabular-nums text-muted-foreground">
-          From {activeNumber.e164}
+      <div className="flex items-center gap-2">
+        <p className="flex-1 text-center text-xs tabular-nums text-muted-foreground">
+          {activeNumber ? `From ${activeNumber.e164}` : null}
         </p>
-      ) : null}
+        <IconButton
+          type="button"
+          variant="outline"
+          tooltip="Check your microphone and speaker"
+          onClick={openDeviceCheck}
+        >
+          <Headphones size={16} aria-hidden="true" />
+        </IconButton>
+      </div>
       <Input
         aria-label="Phone number"
         inputMode="tel"
@@ -185,6 +224,12 @@ export function NumericKeypad({
           Call
         </Button>
       )}
+      <GreenRoom
+        open={greenRoomOpen}
+        onOpenChange={handleGreenRoomOpenChange}
+        onConfirm={handleGreenRoomConfirm}
+        confirmLabel={gatingCall ? undefined : 'Done'}
+      />
     </div>
   )
 }

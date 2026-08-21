@@ -105,6 +105,20 @@ export interface DialerContextValue {
    * never reaches Twilio either.
    */
   placeDeviceCall: (params: Record<string, string>) => Promise<void>
+
+  /**
+   * Mute seam: forwards to the live Voice SDK Call's `mute()`, so pressing Mute
+   * actually stops the rep's audio reaching the callee (MAI-195). A no-op if
+   * pressed with no call up — the controls that call this render only while one
+   * is live, but a silent no-op is safer than a throw if that ever races.
+   */
+  muteCall: (next: boolean) => void
+  /**
+   * DTMF seam: forwards to the live Voice SDK Call's `sendDigits()`, so a keypad
+   * press during a call sends a real tone the callee's phone system responds to
+   * (MAI-195). Same no-op-when-idle behavior as {@link muteCall}.
+   */
+  sendDigits: (digit: string) => void
 }
 
 export const DialerContext = createContext<DialerContextValue | null>(null)

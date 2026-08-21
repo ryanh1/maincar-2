@@ -6,14 +6,16 @@ import { renderWithProviders, withProviders } from '@/test/utils'
 import { InCallControls } from './InCallControls'
 
 /**
- * The controls read two seams — the shared dialer state (phase + elapsed time)
- * and the end-call mutation — so both are mocked. That keeps each assertion about
- * ONE thing: what the view shows for a given state, or which seam a press reaches,
- * never the network underneath it.
+ * The controls read two seams — the shared dialer state (phase, elapsed time,
+ * and the mute forward to the live Voice SDK Call) and the end-call mutation —
+ * so both are mocked. That keeps each assertion about ONE thing: what the view
+ * shows for a given state, or which seam a press reaches, never the network or
+ * the Voice SDK underneath it.
  */
-const { useDialerMock, useEndCallMock, mutateMock, toastErrorMock } = vi.hoisted(() => ({
+const { useDialerMock, useEndCallMock, muteCallMock, mutateMock, toastErrorMock } = vi.hoisted(() => ({
   useDialerMock: vi.fn(),
   useEndCallMock: vi.fn(),
+  muteCallMock: vi.fn(),
   mutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
 }))
@@ -27,7 +29,7 @@ vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 0 })
+  useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 0, muteCall: muteCallMock })
   useEndCallMock.mockReturnValue({ mutate: mutateMock, isPending: false })
 })
 
@@ -37,29 +39,28 @@ function renderControls(props: Partial<Parameters<typeof InCallControls>[0]> = {
 
 describe('InCallControls', () => {
   it('renders the elapsed time from context as mm:ss', () => {
-    useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 75 })
+    useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 75, muteCall: muteCallMock })
     renderControls()
 
     expect(screen.getByLabelText('Call duration')).toHaveTextContent('01:15')
   })
 
   it('shows status text derived from the phase', () => {
-    useDialerMock.mockReturnValue({ phase: 'ringing', elapsedSeconds: 0 })
+    useDialerMock.mockReturnValue({ phase: 'ringing', elapsedSeconds: 0, muteCall: muteCallMock })
     const { rerender } = renderControls()
     expect(screen.getByText('Ringing')).toBeInTheDocument()
 
-    useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 0 })
+    useDialerMock.mockReturnValue({ phase: 'in-progress', elapsedSeconds: 0, muteCall: muteCallMock })
     rerender(withProviders(<InCallControls orgId="org-1" callId="call-1" />))
     expect(screen.getByText('Connected')).toBeInTheDocument()
 
-    useDialerMock.mockReturnValue({ phase: 'completed', elapsedSeconds: 0 })
+    useDialerMock.mockReturnValue({ phase: 'completed', elapsedSeconds: 0, muteCall: muteCallMock })
     rerender(withProviders(<InCallControls orgId="org-1" callId="call-1" />))
     expect(screen.getByText('Call ended')).toBeInTheDocument()
   })
 
-  it('toggles mute: flips the visible state and calls the seam', () => {
-    const onToggleMute = vi.fn()
-    renderControls({ onToggleMute })
+  it('toggles mute: flips the visible state and forwards to the live Call', () => {
+    renderControls()
 
     // Starts unmuted — the control offers to mute.
     const muteButton = screen.getByRole('button', { name: 'Mute the call' })
@@ -67,32 +68,16 @@ describe('InCallControls', () => {
 
     fireEvent.click(muteButton)
 
-    // The seam heard the new state, and the button now offers to unmute.
-    expect(onToggleMute).toHaveBeenCalledWith(true)
+    // The Device heard the new state, and the button now offers to unmute.
+    expect(muteCallMock).toHaveBeenCalledWith(true)
     const unmuteButton = screen.getByRole('button', { name: 'Unmute the call' })
     expect(unmuteButton).toHaveAttribute('aria-pressed', 'true')
 
     fireEvent.click(unmuteButton)
-    expect(onToggleMute).toHaveBeenLastCalledWith(false)
+    expect(muteCallMock).toHaveBeenLastCalledWith(false)
     expect(screen.getByRole('button', { name: 'Mute the call' })).toHaveAttribute(
       'aria-pressed',
       'false',
-    )
-  })
-
-  it('toggles hold: flips the visible state and calls the seam', () => {
-    const onToggleHold = vi.fn()
-    renderControls({ onToggleHold })
-
-    const holdButton = screen.getByRole('button', { name: 'Hold the call' })
-    expect(holdButton).toHaveAttribute('aria-pressed', 'false')
-
-    fireEvent.click(holdButton)
-
-    expect(onToggleHold).toHaveBeenCalledWith(true)
-    expect(screen.getByRole('button', { name: 'Resume the call' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
     )
   })
 
@@ -143,6 +128,12 @@ describe('InCallControls', () => {
     expect(screen.getByText('Recording')).toBeInTheDocument()
   })
 
+  it('renders no hold control — the Voice SDK Call has no hold method to wire it to', () => {
+    renderControls()
+
+    expect(screen.queryByRole('button', { name: 'Hold the call' })).not.toBeInTheDocument()
+  })
+
   it('gives every icon-only control a verb-and-object accessible name', () => {
     renderControls({ recording: true })
 
@@ -151,7 +142,6 @@ describe('InCallControls', () => {
     // The name comes from IconButton's required `tooltip`, so the visible
     // tooltip and the accessible name are the same string.
     expect(screen.getByRole('button', { name: 'Mute the call' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Hold the call' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'End the call' })).toBeInTheDocument()
     expect(screen.getByLabelText('Call duration')).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Call controls' })).toBeInTheDocument()

@@ -285,4 +285,64 @@ describe('DialerProvider', () => {
       expect(deviceDestroyMock).toHaveBeenCalledTimes(1)
     })
   })
+
+  // MAI-195: mute and DTMF used to be honest no-ops (the Device did not exist).
+  // Now that placeDeviceCall connects one, muteCall/sendDigits must reach the
+  // live Call object's own `mute`/`sendDigits` — not just flip UI state.
+  describe('mute and DTMF forward to the live Call', () => {
+    function connectedCall() {
+      const muteMock = vi.fn()
+      const sendDigitsMock = vi.fn()
+      const fakeCall = { on: vi.fn(), mute: muteMock, sendDigits: sendDigitsMock }
+      deviceConnectMock.mockResolvedValue(fakeCall)
+      return { muteMock, sendDigitsMock }
+    }
+
+    beforeEach(() => {
+      useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'fake-token', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+    })
+
+    it('muteCall forwards to the live Call once a call is connected', async () => {
+      const { muteMock } = connectedCall()
+      const { result } = renderDialer()
+      await act(() => result.current.placeDeviceCall({ callId: 'call-1' }))
+
+      act(() => result.current.muteCall(true))
+      expect(muteMock).toHaveBeenCalledWith(true)
+
+      act(() => result.current.muteCall(false))
+      expect(muteMock).toHaveBeenLastCalledWith(false)
+    })
+
+    it('sendDigits forwards to the live Call once a call is connected', async () => {
+      const { sendDigitsMock } = connectedCall()
+      const { result } = renderDialer()
+      await act(() => result.current.placeDeviceCall({ callId: 'call-1' }))
+
+      act(() => result.current.sendDigits('5'))
+      expect(sendDigitsMock).toHaveBeenCalledWith('5')
+    })
+
+    it('muteCall and sendDigits are no-ops with no call connected', () => {
+      const { result } = renderDialer()
+
+      expect(() => act(() => result.current.muteCall(true))).not.toThrow()
+      expect(() => act(() => result.current.sendDigits('5'))).not.toThrow()
+    })
+
+    it('stops forwarding to a call that already ended', async () => {
+      const { muteMock } = connectedCall()
+      const { result } = renderDialer()
+      await act(() => result.current.placeDeviceCall({ callId: 'call-1' }))
+
+      act(() => result.current.endCall())
+      act(() => result.current.muteCall(true))
+
+      expect(muteMock).not.toHaveBeenCalled()
+    })
+  })
 })
