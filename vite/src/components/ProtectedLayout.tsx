@@ -8,6 +8,7 @@ import { ComposerDock } from '@/components/composer/ComposerDock'
 import { ComposerProvider } from '@/components/composer/ComposerProvider'
 import { DialerDock } from '@/components/dialer/DialerDock'
 import { DialerProvider } from '@/components/dialer/DialerProvider'
+import { KeyboardProvider } from '@/components/keyboard/KeyboardProvider'
 import { PageLoader } from '@/components/PageLoader'
 import { Sidebar } from '@/components/Sidebar'
 import { IconButton } from '@/components/ui/icon-button'
@@ -59,7 +60,8 @@ export function ProtectedLayout() {
   return (
     <DialerProvider>
       <ComposerProvider>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <KeyboardProvider>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <header className="flex h-14 shrink-0 items-center border-b border-border bg-background/85 px-4 backdrop-blur lg:hidden">
             <IconButton
               tooltip="Open the navigation menu"
@@ -73,13 +75,14 @@ export function ProtectedLayout() {
 
           <div className="flex min-h-0 flex-1">
             <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-            <main className="flex min-h-0 min-w-0 flex-1 flex-col lg:ml-56">
+            <main id="app-main" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none lg:ml-56">
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-6 lg:px-8 lg:py-8">
                 <Outlet />
               </div>
             </main>
           </div>
-        </div>
+          </div>
+        </KeyboardProvider>
 
         <ComposerDock renderCard={(draft) => <ComposerCard draft={draft} />} />
       </ComposerProvider>
