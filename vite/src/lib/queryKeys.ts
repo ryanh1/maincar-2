@@ -45,6 +45,15 @@ export const queryKeys = {
     // the cache entry does too.
     detail: (orgId: string, callId: string) => ['calls', 'detail', orgId, callId] as const,
   },
+  phoneNumbers: {
+    all: ['phoneNumbers'] as const,
+    // Keyed by org only, not by any query: the list is not paginated (the route
+    // returns every number the caller owns so the caller-ID picker can show them
+    // all), so there is one answer per org. Switching orgs reads a different
+    // entry rather than showing the previous org's numbers. Searching Twilio's
+    // for-sale numbers is a mutation, not a cached read, so it has no key here.
+    list: (orgId: string) => ['phoneNumbers', 'list', orgId] as const,
+  },
   invitations: {
     all: ['invitations'] as const,
     // Keyed by token, not by org: the reader of this one has no org yet.
