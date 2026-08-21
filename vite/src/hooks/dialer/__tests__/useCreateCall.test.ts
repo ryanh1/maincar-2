@@ -83,6 +83,13 @@ describe('useCreateCall', () => {
     expect(result.current.dialer.dialing).toBe(true)
     expect(result.current.dialer.view).toBe('expanded')
     expect(result.current.dialer.mode).toBe('call')
+    // The queued call's identity is handed to the dialer so the in-call controls
+    // can hang it up. Consent was granted, so recording is on.
+    expect(result.current.dialer.activeCall).toEqual({
+      orgId: 'org-1',
+      callId: 'call-1',
+      recording: true,
+    })
   })
 
   it('invalidates the call history so the placed call shows up in it', async () => {

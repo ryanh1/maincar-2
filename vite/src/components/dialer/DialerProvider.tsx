@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 
 import {
   DialerContext,
+  type ActiveCall,
   type CallPhase,
   type DialerContextValue,
   type DialerMode,
@@ -26,14 +27,22 @@ export function DialerProvider({ children }: { children: ReactNode }) {
   // phase they move to.
   const [dialing, setDialing] = useState(false)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  // The live call's identity, so the in-call controls can hang it up. Set when a
+  // call is placed, cleared at reset.
+  const [activeCall, setActiveCall] = useState<ActiveCall | null>(null)
 
   const expandDialer = useCallback(() => setView('expanded'), [])
   const collapseDialer = useCallback(() => setView('collapsed'), [])
+  const toggleView = useCallback(
+    () => setView((v) => (v === 'expanded' ? 'collapsed' : 'expanded')),
+    [],
+  )
 
-  const startCall = useCallback(() => {
+  const startCall = useCallback((call?: ActiveCall) => {
     // Reset the timer FIRST, so a second call started right after the first ends
     // begins at 0 rather than inheriting the previous call's count.
     setElapsedSeconds(0)
+    setActiveCall(call ?? null)
     setPhase('ringing')
     setDialing(true)
     // Show the call the moment it is placed — a call ringing behind a collapsed
@@ -55,6 +64,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     setPhase('idle')
     setDialing(false)
     setElapsedSeconds(0)
+    setActiveCall(null)
   }, [])
 
   // The call timer. One interval, alive only while a call is up, and always torn
@@ -81,8 +91,10 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       mode,
       dialing,
       elapsedSeconds,
+      activeCall,
       expandDialer,
       collapseDialer,
+      toggleView,
       startCall,
       connectCall,
       endCall,
@@ -94,8 +106,10 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       mode,
       dialing,
       elapsedSeconds,
+      activeCall,
       expandDialer,
       collapseDialer,
+      toggleView,
       startCall,
       connectCall,
       endCall,

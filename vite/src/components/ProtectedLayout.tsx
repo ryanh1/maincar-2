@@ -6,6 +6,8 @@ import { APP_NAME } from '@/config'
 import { ComposerCard } from '@/components/composer/ComposerCard'
 import { ComposerDock } from '@/components/composer/ComposerDock'
 import { ComposerProvider } from '@/components/composer/ComposerProvider'
+import { DialerDock } from '@/components/dialer/DialerDock'
+import { DialerProvider } from '@/components/dialer/DialerProvider'
 import { PageLoader } from '@/components/PageLoader'
 import { Sidebar } from '@/components/Sidebar'
 import { useAuth } from '@/providers/useAuth'
@@ -48,27 +50,35 @@ export function ProtectedLayout() {
   // The dock takes the card through `renderCard` rather than importing it, so
   // the corner's arithmetic and the card's autosave stay testable apart. This is
   // the only place the two meet.
+  // DialerProvider wraps the tree for the same reason ComposerProvider does: a
+  // call in progress survives navigation only because the state holding it never
+  // unmounts when the route under it changes. DialerDock sits out here beside the
+  // composer dock, both `fixed` to the bottom-right corner — the dialer owns the
+  // corner (z-100) and the composer reserves its width, so the two never overlap.
   return (
-    <ComposerProvider>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <header className="flex h-14 shrink-0 items-center border-b border-border bg-background/85 px-4 backdrop-blur lg:hidden">
-          <button type="button" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
-            <Menu size={20} />
-          </button>
-          <span className="display ml-3 font-bold tracking-tight">{APP_NAME}</span>
-        </header>
+    <DialerProvider>
+      <ComposerProvider>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <header className="flex h-14 shrink-0 items-center border-b border-border bg-background/85 px-4 backdrop-blur lg:hidden">
+            <button type="button" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
+              <Menu size={20} />
+            </button>
+            <span className="display ml-3 font-bold tracking-tight">{APP_NAME}</span>
+          </header>
 
-        <div className="flex min-h-0 flex-1">
-          <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-          <main className="flex min-h-0 min-w-0 flex-1 flex-col lg:ml-56">
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-6 lg:px-8 lg:py-8">
-              <Outlet />
-            </div>
-          </main>
+          <div className="flex min-h-0 flex-1">
+            <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+            <main className="flex min-h-0 min-w-0 flex-1 flex-col lg:ml-56">
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-6 lg:px-8 lg:py-8">
+                <Outlet />
+              </div>
+            </main>
+          </div>
         </div>
-      </div>
 
-      <ComposerDock renderCard={(draft) => <ComposerCard draft={draft} />} />
-    </ComposerProvider>
+        <ComposerDock renderCard={(draft) => <ComposerCard draft={draft} />} />
+      </ComposerProvider>
+      <DialerDock />
+    </DialerProvider>
   )
 }

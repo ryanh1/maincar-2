@@ -41,8 +41,15 @@ export function useCreateCall() {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    onSuccess: (_data, variables) => {
-      startCall()
+    onSuccess: (data, variables) => {
+      // Hand the queued call's identity to the dialer so the in-call controls can
+      // hang it up. Recording is on only when the caller granted consent — the
+      // POST echo carries the consent, not a separate recording flag.
+      startCall({
+        orgId: variables.orgId,
+        callId: data.call.id,
+        recording: data.call.recordingConsent === 'granted',
+      })
       void queryClient.invalidateQueries({ queryKey: queryKeys.calls.list(variables.orgId) })
     },
   })

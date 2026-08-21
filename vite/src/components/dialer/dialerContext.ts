@@ -27,6 +27,21 @@ export type CallPhase = 'idle' | 'ringing' | 'in-progress' | 'completed'
  */
 export type DialerMode = 'keypad' | 'call'
 
+/**
+ * The identity of the call currently up, held here so the in-call controls can
+ * hang it up. The state layer owns it because `useCreateCall` learns the id on the
+ * POST response, and the dock — which renders far from that hook — needs it to
+ * render `InCallControls`. Null whenever no call is live.
+ */
+export interface ActiveCall {
+  /** Org the call belongs to — the DELETE that ends it is org-scoped. */
+  orgId: string
+  /** The live call's id. */
+  callId: string
+  /** Whether the call is being recorded, driving the in-call recording dot. */
+  recording: boolean
+}
+
 export interface DialerContextValue {
   /** The widget's size. */
   view: DialerView
@@ -38,11 +53,15 @@ export interface DialerContextValue {
   dialing: boolean
   /** Whole seconds since the live call started. 0 when idle; frozen once it ends. */
   elapsedSeconds: number
+  /** The live call's identity, or null when none is up. Read by the in-call controls. */
+  activeCall: ActiveCall | null
 
   /** Open the dialer to full size. */
   expandDialer: () => void
   /** Shrink the dialer back to its pill. */
   collapseDialer: () => void
+  /** Flip between collapsed and expanded — the title-bar click and the ⌘⇧D hotkey. */
+  toggleView: () => void
 
   // --- Call-lifecycle transitions, driven by the data hooks ---
   // These move the shared dialer state so `useCreateCall`/`useEndCall` update one
@@ -51,10 +70,12 @@ export interface DialerContextValue {
 
   /**
    * A call has been placed: go to `ringing`, mark the dialer live, reset the
-   * timer to 0, and expand the widget so the rep sees the call. `useCreateCall`
-   * calls this once the POST succeeds.
+   * timer to 0, store the call's identity, and expand the widget so the rep sees
+   * the call. `useCreateCall` calls this with the queued call once the POST
+   * succeeds; the argument is optional so a test can walk the lifecycle without a
+   * real call id.
    */
-  startCall: () => void
+  startCall: (call?: ActiveCall) => void
   /** The callee answered: go to `in-progress`. Wired for the status webhook to drive. */
   connectCall: () => void
   /**

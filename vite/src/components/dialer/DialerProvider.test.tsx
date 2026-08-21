@@ -29,6 +29,27 @@ describe('DialerProvider', () => {
     expect(result.current.view).toBe('collapsed')
   })
 
+  it('toggleView flips between collapsed and expanded', () => {
+    const { result } = renderDialer()
+
+    act(() => result.current.toggleView())
+    expect(result.current.view).toBe('expanded')
+
+    act(() => result.current.toggleView())
+    expect(result.current.view).toBe('collapsed')
+  })
+
+  it('stores the placed call, and reset clears it', () => {
+    const { result } = renderDialer()
+    expect(result.current.activeCall).toBeNull()
+
+    act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: true }))
+    expect(result.current.activeCall).toEqual({ orgId: 'org-1', callId: 'call-1', recording: true })
+
+    act(() => result.current.reset())
+    expect(result.current.activeCall).toBeNull()
+  })
+
   it('walks a call through ringing, in-progress, and completed', () => {
     const { result } = renderDialer()
 
