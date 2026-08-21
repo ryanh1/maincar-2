@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MoreHorizontal, PhoneOff } from 'lucide-react'
+import { Loader2, MoreHorizontal, PhoneOff } from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -22,6 +22,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { useReleaseNumber, useSetActiveNumber } from '@/hooks/phoneNumbers'
 import type { PhoneNumber } from '@/hooks/phoneNumbers'
 import { ApiError } from '@/lib/api'
+import { formatDate } from '@/lib/datetime'
 import { getPhoneNumberStatusLabel } from '@/lib/phoneNumberLabels'
 
 interface Props {
@@ -34,10 +35,16 @@ interface Props {
    * costs.
    */
   hasOtherActiveNumber: boolean
+  timeZone: string | null | undefined
 }
 
 /** One row of the phone numbers table: the number, its status, the caller-ID radio, and its actions. */
-export function Settings_PhoneNumbers_Row({ number, orgId, hasOtherActiveNumber }: Props) {
+export function Settings_PhoneNumbers_Row({
+  number,
+  orgId,
+  hasOtherActiveNumber,
+  timeZone,
+}: Props) {
   const setActive = useSetActiveNumber()
   const releaseNumber = useReleaseNumber()
   const [confirmRelease, setConfirmRelease] = useState(false)
@@ -77,7 +84,19 @@ export function Settings_PhoneNumbers_Row({ number, orgId, hasOtherActiveNumber 
   return (
     <tr className="border-b border-border last:border-0">
       <td className="px-3 py-1 text-sm tabular-nums">{number.e164}</td>
-      <td className="px-3 py-1 text-sm">{getPhoneNumberStatusLabel(number)}</td>
+      <td className="px-3 py-1 text-sm">
+        <span className="inline-flex items-center gap-1.5">
+          {/* Read as "still in progress" rather than a bare status word — the
+              word alone left a reader unsure whether the screen was stuck. */}
+          {isBuying && (
+            <Loader2 size={14} aria-hidden className="animate-spin text-muted-foreground" />
+          )}
+          {getPhoneNumberStatusLabel(number)}
+        </span>
+      </td>
+      <td className="px-3 py-1 text-sm tabular-nums text-muted-foreground">
+        {formatDate(number.createdAt, timeZone)}
+      </td>
       <td className="px-3 py-1 text-sm">
         <label className="inline-flex items-center gap-2">
           <input

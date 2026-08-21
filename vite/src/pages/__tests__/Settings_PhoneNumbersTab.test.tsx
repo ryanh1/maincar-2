@@ -2,9 +2,12 @@
 //
 // What these protect:
 //   - the status is shown as a label, never the raw enum
+//   - a provisioning row shows a spinner, not just a word
+//   - the "Bought on" column renders a timezone-resolved date
+//   - search, sort, and pagination all work over the fetched list
 //   - the empty state invites the buy rather than explaining emptiness
 //   - the buy dialog searches through the hook and lists results with a price
-//   - buying sends the chosen number's e164
+//   - buying confirms the monthly cost first, then sends the chosen number's e164
 //   - picking a caller ID sends that number's id
 //   - loading and error both have honest states
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -54,6 +57,8 @@ vi.mock('sonner', () => ({ toast: { error: toastErrorMock, success: toastSuccess
 import { Settings_PhoneNumbersTab } from '@/pages/Settings_PhoneNumbersTab'
 
 const ORG = { id: 'org-a', name: 'Acme' }
+// Fixed so "Bought on" assertions do not depend on the machine's local zone.
+const USER = { timeZone: 'America/New_York' }
 
 function number(overrides: Record<string, unknown> = {}) {
   return {
@@ -72,7 +77,13 @@ function numbersResponse(overrides: Record<string, unknown> = {}) {
     numbers: [
       number(),
       number({ id: 'num-ready', e164: '+12025550122', isActiveForOutbound: false }),
-      number({ id: 'num-searching', e164: '+12025550133', status: 'searching', twilioSid: null, isActiveForOutbound: false }),
+      number({
+        id: 'num-searching',
+        e164: '+12025550133',
+        status: 'searching',
+        twilioSid: null,
+        isActiveForOutbound: false,
+      }),
     ],
     total: 3,
     activeCount: 1,
@@ -105,7 +116,7 @@ function searchState(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useAuthMock.mockReturnValue({ org: ORG })
+  useAuthMock.mockReturnValue({ org: ORG, user: USER, isAdmin: false })
   useGetNumbersMock.mockReturnValue(listState())
   useSetActiveNumberMock.mockReturnValue({ mutate: setActiveMutateMock, isPending: false })
   useReleaseNumberMock.mockReturnValue({ mutate: releaseMutateMock, isPending: false })
@@ -127,6 +138,20 @@ describe('the numbers list', () => {
     // The raw enum values never reach the screen.
     expect(screen.queryByText('active')).not.toBeInTheDocument()
     expect(screen.queryByText('searching')).not.toBeInTheDocument()
+  })
+
+  it('shows a spinner beside a row that is still provisioning', () => {
+    const { container } = renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    // Only the "searching" row gets one — active and ready rows do not.
+    expect(container.querySelectorAll('.animate-spin')).toHaveLength(1)
+  })
+
+  it('renders a "Bought on" column, timezone-resolved', () => {
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    // 2026-08-01T12:00:00Z in America/New_York is still the morning of Aug 1.
+    expect(screen.getAllByText('Aug 1, 2026').length).toBeGreaterThan(0)
   })
 
   it('lets a dialable number be made the caller ID, and disables the rest', () => {
@@ -172,6 +197,88 @@ describe('the numbers list', () => {
     await user.click(screen.getByRole('button', { name: 'Try again' }))
 
     expect(refetch).toHaveBeenCalled()
+  })
+})
+
+describe('search', () => {
+  it('filters the list by number as the search box is typed into', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.type(screen.getByRole('textbox', { name: 'Search phone numbers' }), '0122')
+
+    expect(screen.queryByText('+12025550111')).not.toBeInTheDocument()
+    expect(screen.getByText('+12025550122')).toBeInTheDocument()
+  })
+
+  it('says so, and offers to clear, when nothing matches', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.type(screen.getByRole('textbox', { name: 'Search phone numbers' }), 'nope')
+
+    expect(
+      screen.getByText('No number matches this search. Clear the search to see them all.'),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }))
+
+    expect(screen.getByText('+12025550111')).toBeInTheDocument()
+  })
+})
+
+describe('sort', () => {
+  it('reorders the rows and flips direction on a second click', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    const rowsInOrder = () => screen.getAllByRole('row').slice(1).map((row) => within(row).getAllByRole('cell')[0].textContent)
+
+    // Default sort is "Bought on" (createdAt) descending — all three fixtures
+    // share a createdAt, so the natural array order holds.
+    expect(rowsInOrder()).toEqual(['+12025550111', '+12025550122', '+12025550133'])
+
+    await user.click(screen.getByRole('button', { name: 'Sort by Number' }))
+    expect(rowsInOrder()).toEqual(['+12025550111', '+12025550122', '+12025550133'])
+
+    await user.click(screen.getByRole('button', { name: 'Sort by Number' }))
+    expect(rowsInOrder()).toEqual(['+12025550133', '+12025550122', '+12025550111'])
+  })
+})
+
+describe('pagination', () => {
+  function manyNumbers(count: number) {
+    return Array.from({ length: count }, (_, i) =>
+      number({
+        id: `num-${i}`,
+        e164: `+1202555${String(i).padStart(4, '0')}`,
+        createdAt: new Date(2026, 0, i + 1).toISOString(),
+      }),
+    )
+  }
+
+  it('shows 25 rows a page, and pages through the rest', async () => {
+    useGetNumbersMock.mockReturnValue(
+      listState({ data: numbersResponse({ numbers: manyNumbers(30), total: 30 }) }),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument()
+    expect(screen.getAllByRole('row')).toHaveLength(26) // header + 25 rows
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument()
+    expect(screen.getAllByRole('row')).toHaveLength(6) // header + 5 remaining rows
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+  })
+
+  it('shows no pager at all under 25 numbers', () => {
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    expect(screen.queryByText(/Page \d+ of \d+/)).not.toBeInTheDocument()
   })
 })
 
@@ -323,7 +430,36 @@ describe('the buy dialog', () => {
     })
   })
 
-  it('buys the chosen number by its e164', async () => {
+  it('confirms the monthly cost before buying, and does not buy on cancel', async () => {
+    useSearchAvailableNumbersMock.mockReturnValue(
+      searchState({
+        isSuccess: true,
+        data: {
+          numbers: [{ e164: '+13235550111', friendly: '(323) 555-0111', priceMonthly: '1.15' }],
+          total: 1,
+          priceUnit: 'USD',
+        },
+      }),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.click(screen.getByRole('button', { name: 'Buy a number' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Buy +13235550111' }))
+
+    const confirm = screen.getByRole('alertdialog')
+    expect(within(confirm).getByText('Buy (323) 555-0111?')).toBeInTheDocument()
+    expect(within(confirm).getByText(/\$1\.15\/mo/)).toBeInTheDocument()
+
+    // Buying has not happened yet — only the confirm is open.
+    expect(buyMutateAsyncMock).not.toHaveBeenCalled()
+
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }))
+    expect(buyMutateAsyncMock).not.toHaveBeenCalled()
+  })
+
+  it('buys the chosen number by its e164 once the confirm is accepted', async () => {
     buyMutateAsyncMock.mockResolvedValue({ number: number() })
     useSearchAvailableNumbersMock.mockReturnValue(
       searchState({
@@ -341,6 +477,9 @@ describe('the buy dialog', () => {
     await user.click(screen.getByRole('button', { name: 'Buy a number' }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Buy +13235550111' }))
+
+    const confirm = screen.getByRole('alertdialog')
+    await user.click(within(confirm).getByRole('button', { name: 'Buy' }))
 
     await waitFor(() =>
       expect(buyMutateAsyncMock).toHaveBeenCalledWith({ orgId: 'org-a', e164: '+13235550111' }),
