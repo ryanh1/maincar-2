@@ -502,3 +502,75 @@ export async function markConnectionError(
   }
   return result.count
 }
+
+// --- disconnectConnection: the Disconnect button ----------------------------
+//
+// Deleting the grant deletes the mailbox with it — a mailbox with no token to send
+// from is not a mailbox. The delete is scoped to the tenant boundary and, when it
+// removes the primary, promotes the newest remaining mailbox in the SAME transaction.
+
+/**
+ * Disconnect a rep's connection: delete the `OAuthConnection` — scoped to
+ * `(id, orgId, userId)`, because a mailbox belongs to a rep — and, by the
+ * `onDelete: Cascade` FK, its `MailAccount` with it. Any `Email` rows that referenced
+ * that mailbox are `SetNull`'d by the database (Email.mailAccountId is nullable), so
+ * the org's message history SURVIVES a disconnected mailbox rather than being
+ * destroyed with it.
+ *
+ * When the removed mailbox was the primary, the newest remaining mailbox for this rep
+ * is promoted in the SAME transaction — the way {@link setPrimaryMailbox} keeps
+ * "exactly one primary" atomic — so a rep who disconnects the address they send from
+ * is never left with mailboxes and no sender.
+ *
+ * Returns the deleted connection's provider (for the route's log line), or `null` when
+ * no connection with that id belongs to this rep in this org. The route answers that
+ * `null` with 404 — never a 403 that would confirm the id names a real row in some
+ * other tenant.
+ *
+ * `db` is injectable ONLY so the integration suite can hand in a client aimed at its
+ * isolated schema; nothing in the app passes it.
+ */
+export async function disconnectConnection(
+  connectionId: string,
+  orgId: string,
+  userId: string,
+  db: Pick<PrismaClient, '$transaction'> = prisma,
+): Promise<{ provider: string } | null> {
+  return db.$transaction(async (tx) => {
+    // Read the provider and whether the mailbox was primary BEFORE the delete removes
+    // them. Scoped to (id, orgId, userId): another rep's connection is simply not found.
+    const connection = await tx.oAuthConnection.findFirst({
+      where: { id: connectionId, orgId, userId },
+      select: { provider: true, mailAccount: { select: { isPrimary: true } } },
+    })
+    if (!connection) return null
+
+    const removedPrimary = connection.mailAccount?.isPrimary ?? false
+
+    // deleteMany with the tenant boundary in the `where`, never delete-by-id
+    // (rules/database-and-prisma.md). A count of 0 means nothing was ours to delete.
+    const result = await tx.oAuthConnection.deleteMany({ where: { id: connectionId, orgId, userId } })
+    if (result.count === 0) return null
+
+    // The removed mailbox was the sender. Promote the newest remaining one so the rep
+    // is not left able to receive but not send, from a click that said nothing about
+    // sending. Same transaction as the delete, so the set never lands with two
+    // primaries or none.
+    if (removedPrimary) {
+      const remaining = await tx.mailAccount.findFirst({
+        where: { orgId, userId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      })
+      if (remaining) {
+        await tx.mailAccount.updateMany({ where: { orgId, userId }, data: { isPrimary: false } })
+        await tx.mailAccount.updateMany({
+          where: { id: remaining.id, orgId, userId },
+          data: { isPrimary: true },
+        })
+      }
+    }
+
+    return { provider: connection.provider }
+  })
+}

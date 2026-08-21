@@ -22,6 +22,7 @@ const {
   markConnectionErrorMock,
   getConnectionMock,
   refreshConnectionMock,
+  disconnectConnectionMock,
   testConnectionMock,
   getMailProviderMock,
 } = vi.hoisted(() => ({
@@ -51,6 +52,10 @@ const {
   // oauthConnections unit + integration suites.
   getConnectionMock: vi.fn(),
   refreshConnectionMock: vi.fn(),
+  // disconnectConnection deletes the grant (mailbox cascades) and promotes the next
+  // primary; stubbed here so the DELETE route tests never touch Postgres. Its real
+  // delete/cascade/promote behavior lives in oauthConnection.integration.test.ts.
+  disconnectConnectionMock: vi.fn(),
   // The per-capability probes and the seam factory, stubbed: this suite tests the
   // ROUTE (auth, org-scoping, aggregation, write-back, response), not the probes,
   // which are proven in connectionTest.test.ts against a fake provider.
@@ -76,6 +81,7 @@ vi.mock('../../lib/mail/oauthConnections.js', async (importOriginal) => {
     markConnectionError: markConnectionErrorMock,
     getConnection: getConnectionMock,
     refreshConnection: refreshConnectionMock,
+    disconnectConnection: disconnectConnectionMock,
   }
 })
 vi.mock('../../lib/mail/connectionTest.js', () => ({ testConnection: testConnectionMock }))
@@ -668,6 +674,55 @@ describe('POST /api/integrations/orgs/:orgId/:connectionId/refresh', () => {
 
     expect(res.status).toBe(404)
     expect(refreshConnectionMock).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// DELETE /:connectionId — the Disconnect button
+// ============================================================
+// disconnectConnection (the delete + cascade + primary-promotion) is mocked here; its
+// real behavior against a live schema — the row and its mailbox gone, the primary
+// promoted, an Email row SetNull'd rather than blocking — lives in
+// oauthConnection.integration.test.ts. These tests prove the ROUTE: ownership re-proven
+// from the path, the scoped call, a 204 with no body on success, another rep's id → 404
+// deleting nothing, and no token in any reply.
+
+const DISCONNECT_URL = `${URL_A}/conn-google`
+
+describe('DELETE /api/integrations/orgs/:orgId/:connectionId', () => {
+  it('disconnects scoped to (connectionId, org, rep) and answers 204 with no body', async () => {
+    disconnectConnectionMock.mockResolvedValue({ provider: 'google' })
+
+    const res = await request(app).delete(DISCONNECT_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(204)
+    expect(res.text).toBe('')
+    expect(disconnectConnectionMock).toHaveBeenCalledWith('conn-google', ORG_A, 'user-a')
+  })
+
+  it("404s another rep's connectionId and deletes nothing (the scoped delete finds nothing)", async () => {
+    disconnectConnectionMock.mockResolvedValue(null)
+
+    const res = await request(app).delete(DISCONNECT_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Connection not found' })
+  })
+
+  it('401s an unauthenticated caller and never deletes', async () => {
+    const res = await request(app).delete(DISCONNECT_URL)
+
+    expect(res.status).toBe(401)
+    expect(disconnectConnectionMock).not.toHaveBeenCalled()
+  })
+
+  it('404s an org the caller does not belong to — never a 403 — and never deletes', async () => {
+    authAs(null)
+
+    const res = await request(app).delete(DISCONNECT_URL).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(disconnectConnectionMock).not.toHaveBeenCalled()
   })
 })
 

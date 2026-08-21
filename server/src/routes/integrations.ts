@@ -32,6 +32,7 @@ import { z } from 'zod'
 
 import { APP_NAME, OAUTH_STATE_SECRET, WEB_ORIGIN } from '../config.js'
 import prisma from '../db.js'
+import { logger } from '../../dependencies/logger.js'
 import { OAuthProviderError } from '../../dependencies/oauthTypes.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { listBrokenConnections } from '../lib/mail/connectionHealth.js'
@@ -40,6 +41,7 @@ import { getMailProvider } from '../lib/mail/getMailProvider.js'
 import { mapProviderError, type IntegrationErrorCode } from '../lib/mail/integrationErrors.js'
 import {
   CONNECTION_PUBLIC_SELECT,
+  disconnectConnection,
   getConnection,
   markConnectionError,
   refreshConnection,
@@ -415,6 +417,46 @@ router.post(
       }
       throw err
     }
+  }),
+)
+
+// ============================================================
+// DELETE /api/integrations/orgs/:orgId/:connectionId — the Disconnect button
+// ============================================================
+// Removes a rep's connection to a provider. The grant is deleted and its MailAccount
+// goes with it by cascade — a mailbox with no token to send from is not a mailbox —
+// and if that mailbox was the primary, the newest remaining one is promoted in the
+// same transaction so the rep is never left able to receive but not send. Email rows
+// that referenced the mailbox are SetNull'd by the DB, so the org's message history
+// survives the disconnect rather than being destroyed with it. All of that lives in
+// disconnectConnection (oauthConnections.ts); this route only proves ownership, logs,
+// and answers. A body-free 204 on success; another rep's id is 404 and deletes nothing.
+router.delete(
+  '/:connectionId',
+  wrapRoute('DELETE /api/integrations/orgs/:orgId/:connectionId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const connectionId = String(req.params.connectionId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+    const userId = authReq.user!.id
+
+    // --- Execute delete ---
+    // Scoped to (id, orgId, userId) inside disconnectConnection. Another rep's — or
+    // another org's — id is not found and answered 404, never a 403 that would
+    // confirm the id names a real row.
+    const removed = await disconnectConnection(connectionId, orgId, userId)
+    if (!removed) {
+      return void res.status(404).json({ error: 'Connection not found' })
+    }
+
+    // No token, and no address either — just the tenant, the rep, and which provider.
+    logger.info({ orgId, userId, provider: removed.provider }, 'disconnected an integration')
+
+    // --- Return response ---
+    res.status(204).send()
   }),
 )
 

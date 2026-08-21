@@ -10,6 +10,7 @@
 // Run it with `npm run test:integration`, with Docker up.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { disconnectConnection } from '../lib/mail/oauthConnections.js'
 import type { PrismaClient } from '../generated/prisma/client.js'
 import { createTestPrisma, seedMember, seedOrgWithAdmin } from '../test/integration/testPrisma.js'
 
@@ -267,5 +268,135 @@ describe('OAuthConnection + MailAccount (integration, real Postgres)', () => {
     expect(await prisma.oAuthConnection.findUnique({ where: { id: conn.id } })).toBeNull()
     expect(await prisma.mailAccount.findUnique({ where: { id: box.id } })).toBeNull()
     expect(await prisma.org.findUnique({ where: { id: org.orgId } })).not.toBeNull()
+  })
+
+  // --- disconnectConnection (IH-25) ------------------------------------------
+  //
+  // The route mocks disconnectConnection, so the unit suite only proves the shape of
+  // the call. These prove the properties that shape exists to protect against a live
+  // schema: the row and its mailbox actually leave, scoped to the rep; a disconnected
+  // primary promotes the newest remaining mailbox; another rep's id changes nothing;
+  // and an Email that pointed at the mailbox survives with a null pointer rather than
+  // blocking the delete or being destroyed with it.
+
+  /** Create a connection and its mailbox for a rep, with an explicit primary flag. */
+  async function connect(
+    orgId: string,
+    userId: string,
+    opts: { provider: string; providerAccountId: string; emailAddress: string; isPrimary?: boolean; createdAt?: Date },
+  ): Promise<{ connectionId: string; mailboxId: string }> {
+    const conn = await prisma.oAuthConnection.create({
+      data: {
+        orgId,
+        userId,
+        provider: opts.provider,
+        providerAccountId: opts.providerAccountId,
+        emailAddress: opts.emailAddress,
+        refreshToken: 'v1.a.b.c',
+      },
+    })
+    const box = await prisma.mailAccount.create({
+      data: {
+        orgId,
+        userId,
+        connectionId: conn.id,
+        provider: opts.provider,
+        emailAddress: opts.emailAddress,
+        isPrimary: opts.isPrimary ?? false,
+        ...(opts.createdAt ? { createdAt: opts.createdAt } : {}),
+      },
+    })
+    return { connectionId: conn.id, mailboxId: box.id }
+  }
+
+  it('deletes the connection and its mailbox, returning the provider', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const { connectionId, mailboxId } = await connect(org.orgId, org.adminUserId, {
+      provider: 'google',
+      providerAccountId: 'sub_dc',
+      emailAddress: 'dc@example.com',
+      isPrimary: true,
+    })
+
+    const result = await disconnectConnection(connectionId, org.orgId, org.adminUserId, prisma)
+
+    expect(result).toEqual({ provider: 'google' })
+    expect(await prisma.oAuthConnection.findUnique({ where: { id: connectionId } })).toBeNull()
+    expect(await prisma.mailAccount.findUnique({ where: { id: mailboxId } })).toBeNull()
+  })
+
+  it('promotes the newest remaining mailbox when the disconnected one was primary', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const primary = await connect(org.orgId, org.adminUserId, {
+      provider: 'google',
+      providerAccountId: 'sub_primary',
+      emailAddress: 'primary@example.com',
+      isPrimary: true,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    })
+    const older = await connect(org.orgId, org.adminUserId, {
+      provider: 'microsoft',
+      providerAccountId: 'oid_older',
+      emailAddress: 'older@example.com',
+      createdAt: new Date('2026-02-01T00:00:00.000Z'),
+    })
+    const newest = await connect(org.orgId, org.adminUserId, {
+      provider: 'imap',
+      providerAccountId: 'imap_newest',
+      emailAddress: 'newest@example.com',
+      createdAt: new Date('2026-03-01T00:00:00.000Z'),
+    })
+
+    await disconnectConnection(primary.connectionId, org.orgId, org.adminUserId, prisma)
+
+    // The newest remaining mailbox is the new primary, and it is the ONLY primary.
+    const primaries = await prisma.mailAccount.findMany({
+      where: { orgId: org.orgId, userId: org.adminUserId, isPrimary: true },
+      select: { id: true },
+    })
+    expect(primaries.map((p) => p.id)).toEqual([newest.mailboxId])
+    expect(
+      (await prisma.mailAccount.findUniqueOrThrow({ where: { id: older.mailboxId } })).isPrimary,
+    ).toBe(false)
+  })
+
+  it("returns null for another rep's connectionId, deleting nothing", async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const colleague = await seedMember(prisma, org.orgId)
+    const { connectionId, mailboxId } = await connect(org.orgId, colleague.userId, {
+      provider: 'google',
+      providerAccountId: 'sub_colleague',
+      emailAddress: colleague.email,
+      isPrimary: true,
+    })
+
+    // The admin cannot disconnect the colleague's connection.
+    const result = await disconnectConnection(connectionId, org.orgId, org.adminUserId, prisma)
+
+    expect(result).toBeNull()
+    expect(await prisma.oAuthConnection.findUnique({ where: { id: connectionId } })).not.toBeNull()
+    expect(await prisma.mailAccount.findUnique({ where: { id: mailboxId } })).not.toBeNull()
+  })
+
+  it('orphans a synced Email rather than blocking the delete or destroying it', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const { connectionId, mailboxId } = await connect(org.orgId, org.adminUserId, {
+      provider: 'google',
+      providerAccountId: 'sub_email',
+      emailAddress: 'mailbox@example.com',
+      isPrimary: true,
+    })
+    const email = await prisma.email.create({
+      data: { orgId: org.orgId, mailAccountId: mailboxId, direction: 'inbound', subject: 'kept' },
+    })
+
+    await disconnectConnection(connectionId, org.orgId, org.adminUserId, prisma)
+
+    // The grant and the mailbox are gone; the message survives with a null pointer.
+    expect(await prisma.oAuthConnection.findUnique({ where: { id: connectionId } })).toBeNull()
+    expect(await prisma.mailAccount.findUnique({ where: { id: mailboxId } })).toBeNull()
+    const survivor = await prisma.email.findUniqueOrThrow({ where: { id: email.id } })
+    expect(survivor.mailAccountId).toBeNull()
+    expect(survivor.subject).toBe('kept')
   })
 })
