@@ -23,6 +23,9 @@ const { prismaMock, verifyTokenMock, filterMock } = vi.hoisted(() => ({
       delete: vi.fn(),
     },
     recordLink: { findMany: vi.fn(), deleteMany: vi.fn(), create: vi.fn() },
+    // Field history (MAI-136): a values change writes its history rows inside the
+    // same transaction as the update.
+    fieldHistory: { createMany: vi.fn() },
     $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
@@ -104,6 +107,7 @@ beforeEach(() => {
   prismaMock.recordLink.findMany.mockResolvedValue([])
   prismaMock.recordLink.deleteMany.mockResolvedValue({ count: 0 })
   prismaMock.recordLink.create.mockResolvedValue({})
+  prismaMock.fieldHistory.createMany.mockResolvedValue({ count: 1 })
   filterMock.mockResolvedValue([])
 })
 
@@ -340,6 +344,49 @@ describe('PATCH /api/orgs/:orgId/records/:id', () => {
     expect(call.where).toEqual({ id: 'rec-1', orgId: ORG_A, deletedAt: null })
     // count survives, title changes — the merge, not a replace.
     expect(call.data.valuesJson).toEqual({ title: 'New', count: 1 })
+  })
+
+  // --- Field history (MAI-136 T8, spec §5.7) ---
+  it('writes a FieldHistory row per changed value, in the same transaction', async () => {
+    prismaMock.record.findFirst
+      .mockResolvedValueOnce(recordRow({ id: 'rec-1', valuesJson: { title: 'Old', count: 1 } }))
+      .mockResolvedValueOnce(recordRow({ id: 'rec-1', valuesJson: { title: 'New', count: 1 } }))
+
+    const res = await request(app)
+      .patch(`${URL_A}/rec-1`)
+      .set('Authorization', AUTH)
+      .send({ values: { title: 'New' } })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.$transaction).toHaveBeenCalled()
+    // Only `title` moved — `count` was merged unchanged and writes no history row.
+    expect(prismaMock.fieldHistory.createMany.mock.calls[0][0].data).toEqual([
+      {
+        orgId: ORG_A,
+        objectSlug: 'project',
+        recordId: 'rec-1',
+        attribute: 'title',
+        oldJson: 'Old',
+        newJson: 'New',
+        changedByUserId: 'user-a',
+        changeSource: 'user',
+        reason: null,
+      },
+    ])
+  })
+
+  it('writes no history when only the archive flag changes', async () => {
+    prismaMock.record.findFirst
+      .mockResolvedValueOnce(recordRow({ id: 'rec-1', valuesJson: { title: 'Old' } }))
+      .mockResolvedValueOnce(recordRow({ id: 'rec-1', valuesJson: { title: 'Old' }, isArchived: true }))
+
+    const res = await request(app)
+      .patch(`${URL_A}/rec-1`)
+      .set('Authorization', AUTH)
+      .send({ isArchived: true })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.fieldHistory.createMany).not.toHaveBeenCalled()
   })
 
   it('404s an update to a record in another org', async () => {

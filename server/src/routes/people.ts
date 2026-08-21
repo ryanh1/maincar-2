@@ -34,6 +34,11 @@ import { logger } from '../../dependencies/logger.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import {
+  diffFieldValues,
+  loadHistoryAttributes,
+  recordFieldHistoryInTx,
+} from '../crm/fieldHistory.js'
 import type { Person, PersonPhone, PersonEmail, Prisma } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
@@ -721,9 +726,43 @@ router.patch(
     }
     if (body.customJson !== undefined) data.customJson = body.customJson
 
-    // --- Execute query ---
-    const result = await prisma.person.updateMany({ where: { id, orgId, deletedAt: null }, data })
-    if (result.count === 0) {
+    // --- Execute query, with its field history in the SAME transaction ---
+    // Spec §5.7 / MAI-136: a field change and its FieldHistory rows commit or roll
+    // back together, so the two can never disagree. History is append-only and is
+    // never the source of truth — the current value is still the plain column read
+    // in the response below.
+    const changedCount = await prisma.$transaction(async (tx) => {
+      const result = await tx.person.updateMany({ where: { id, orgId, deletedAt: null }, data })
+      if (result.count === 0) return 0
+
+      const { customJson: nextCustom, ...columns } = data
+      // Columns are PATCH-shaped: only the keys the caller sent are in `data`.
+      const changes = diffFieldValues(existing as unknown as Record<string, unknown>, columns)
+      if (nextCustom !== undefined) {
+        // customJson is replaced wholesale by this route, so a key that vanished is a
+        // cleared field — the `full` diff.
+        changes.push(
+          ...diffFieldValues(
+            (existing.customJson ?? {}) as Record<string, unknown>,
+            (nextCustom ?? {}) as Record<string, unknown>,
+            { mode: 'full' },
+          ),
+        )
+      }
+      if (changes.length > 0) {
+        await recordFieldHistoryInTx(tx, {
+          orgId,
+          objectSlug: 'person',
+          recordId: id,
+          changes,
+          changeSource: 'user',
+          changedByUserId: userId,
+          attributes: await loadHistoryAttributes(tx, orgId, 'person'),
+        })
+      }
+      return result.count
+    })
+    if (changedCount === 0) {
       return void res.status(404).json({ error: 'Person not found' })
     }
 

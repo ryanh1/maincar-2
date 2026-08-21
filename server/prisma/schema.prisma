@@ -71,6 +71,12 @@ model Org {
   // of the CRM spine already uses.
   records     Record[]
   recordLinks RecordLink[]
+
+  // Field history + the trust seam (MAI-136 T8). Back-relations so a deleted org
+  // cascades its history and provenance rows away — the same onDelete: Cascade the
+  // rest of the CRM spine already uses.
+  fieldHistory FieldHistory[]
+  provenance   Provenance[]
 }
 
 model User {
@@ -1047,4 +1053,81 @@ model RecordLink {
 
   @@index([orgId, fromObject, fromId])
   @@index([orgId, toObject, toId])
+}
+
+// -----------------------------------------------------------------------------
+// Field history and provenance (MAI-136 T8) — spec §5.7, impacts §D.
+//
+// FieldHistory answers "who changed what, when", and is written INSIDE the same
+// transaction as the field change itself, so a value and its history can never
+// disagree. It is append-only and is NEVER the source of truth: the current value
+// stays a plain column read (that is 99% of queries, spec §5.7).
+//
+// Provenance is the TRUST seam for AI/enriched values: one row per written value,
+// carrying source + confidence + evidence + the value it overwrote. It is what
+// lets a scalar column carry "where did this come from / is it stale" without a
+// per-field status column on every table (impacts B5/D1). Schema now; enrichment
+// and the AI surfaces fill it in Phase 2.
+// -----------------------------------------------------------------------------
+
+model FieldHistory {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Which record the change landed on. Slug + id rather than a foreign key, so one
+  // table covers every object — typed tables (person/company/deal) and custom
+  // objects (Record rows) alike.
+  objectSlug String // person | company | deal | <custom>
+  recordId   String
+  attribute  String // the AttributeDef slug that changed
+
+  // A compact {old, new} pair, NOT a snapshot of the row (spec §5.7). Both are
+  // nullable: a first write has no old value, a cleared field has no new one.
+  // Shape is validated in app code against the attribute's declared type
+  // (server/src/crm/fieldHistory.ts) — the database will not.
+  oldJson Json?
+  newJson Json?
+
+  // Who/what made the change. changedByUserId is NULL for non-human changes;
+  // changeSource then names the process (enrichment, an AI field, an import, a
+  // workflow, a system job). TS union: ChangeSource in server/src/crm/fieldHistory.ts.
+  changedByUserId String?
+  changeSource    String  @default("user") // user | enrichment | ai | import | workflow | system
+  reason          String? // optional why, e.g. "moved to Beta after the acquisition"
+
+  changedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The one read this table exists for: "show me this record's history, newest first".
+  @@index([orgId, objectSlug, recordId, changedAt])
+}
+
+model Provenance {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  objectSlug String // person | company | deal | <custom>
+  recordId   String
+  attribute  String // which field this value is for
+
+  value         Json?
+  previousValue Json? // kept so rejecting an AI value can revert it
+
+  source          String // enrichment_provider | transcript_line | web_citation | chat | ai_field
+  sourceRef       Json? // {url} | {callId,startMs} | {provider}
+  evidenceSnippet String?
+  confidence      Float?
+
+  status   String    @default("unverified") // unverified | verified | rejected
+  statusBy String?
+  statusAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, objectSlug, recordId, attribute])
 }

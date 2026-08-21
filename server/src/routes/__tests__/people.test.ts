@@ -50,6 +50,11 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => {
     },
     personPhone: phone,
     personEmail: email,
+    // Field history (MAI-136): the PATCH writes its history rows in the same
+    // transaction as the update, and reads the attribute defs to shape-check them.
+    objectDef: { findFirst: vi.fn() },
+    attributeDef: { findMany: vi.fn() },
+    fieldHistory: { createMany: vi.fn() },
   }
   return {
     prismaMock: {
@@ -224,6 +229,11 @@ beforeEach(() => {
   prismaMock.personEmail.upsert.mockResolvedValue(emailRow())
   prismaMock.personEmail.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.personEmail.deleteMany.mockResolvedValue({ count: 1 })
+  // Field history (MAI-136). No seeded ObjectDef by default, so the shape check
+  // finds no definitions and the history rows are written unvalidated.
+  prismaMock.objectDef.findFirst.mockResolvedValue(null)
+  prismaMock.attributeDef.findMany.mockResolvedValue([])
+  prismaMock.fieldHistory.createMany.mockResolvedValue({ count: 1 })
 })
 
 // ============================================================
@@ -479,6 +489,55 @@ describe('PATCH /api/orgs/:orgId/people/:id', () => {
     const call = prismaMock.person.updateMany.mock.calls[0][0]
     expect(call.where).toEqual({ id: 'p-1', orgId: ORG_A, deletedAt: null })
     expect(call.data.title).toBe('VP Sales')
+  })
+
+  // --- Field history (MAI-136 T8, spec §5.7) ---
+  it('writes a FieldHistory row for a changed title, inside the update transaction', async () => {
+    prismaMock.person.findFirst
+      .mockResolvedValueOnce({
+        ...personRow({ id: 'p-1', title: 'SDR' }),
+        _count: { phones: 0, addresses: 0 },
+      })
+      .mockResolvedValueOnce(personRow({ id: 'p-1', title: 'VP Sales' }))
+
+    const res = await request(app)
+      .patch(`${URL_A}/p-1`)
+      .set('Authorization', AUTH)
+      .send({ title: 'VP Sales' })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.$transaction).toHaveBeenCalled()
+    expect(prismaMock.fieldHistory.createMany).toHaveBeenCalledTimes(1)
+    expect(prismaMock.fieldHistory.createMany.mock.calls[0][0].data).toEqual([
+      {
+        orgId: ORG_A,
+        objectSlug: 'person',
+        recordId: 'p-1',
+        attribute: 'title',
+        oldJson: 'SDR',
+        newJson: 'VP Sales',
+        changedByUserId: 'user-a',
+        changeSource: 'user',
+        reason: null,
+      },
+    ])
+  })
+
+  it('writes no history when the submitted value matches what is already stored', async () => {
+    prismaMock.person.findFirst
+      .mockResolvedValueOnce({
+        ...personRow({ id: 'p-1', title: 'SDR' }),
+        _count: { phones: 0, addresses: 0 },
+      })
+      .mockResolvedValueOnce(personRow({ id: 'p-1', title: 'SDR' }))
+
+    const res = await request(app)
+      .patch(`${URL_A}/p-1`)
+      .set('Authorization', AUTH)
+      .send({ title: 'SDR' })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.fieldHistory.createMany).not.toHaveBeenCalled()
   })
 
   it('422s an update that would clear the last identity anchor (no children)', async () => {

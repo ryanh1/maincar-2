@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  checkValueShape,
   validateRecordValues,
   type ValidatorAttribute,
 } from '../valuesValidator.js'
@@ -278,5 +279,43 @@ describe('validateRecordValues — uniqueness (injected checker)', () => {
     })
     expect(res.ok).toBe(true)
     expect(checkUnique).not.toHaveBeenCalled()
+  })
+})
+
+// The shape half of the validator on its own — what field history validates
+// oldJson/newJson with (MAI-136, spec §5.7).
+describe('checkValueShape', () => {
+  it('accepts a well-typed value and refuses a wrongly-typed one', () => {
+    const title = attr({ slug: 'title', type: 'text' })
+    expect(checkValueShape(title, 'VP Sales')).toBeNull()
+    expect(checkValueShape(title, 42)).toContain('must be text')
+  })
+
+  it('treats an empty value as fine — a field can always be cleared', () => {
+    const count = attr({ slug: 'count', type: 'number' })
+    expect(checkValueShape(count, null)).toBeNull()
+    expect(checkValueShape(count, undefined)).toBeNull()
+    expect(checkValueShape(count, '   ')).toBeNull()
+    expect(checkValueShape(count, [])).toBeNull()
+  })
+
+  it('checks every element of a multi value, and refuses a list for a single field', () => {
+    const tags = attr({ slug: 'tags', type: 'text', isMulti: true })
+    expect(checkValueShape(tags, ['a', 'b'])).toBeNull()
+    expect(checkValueShape(tags, ['a', 3])).toContain('must be text')
+    expect(checkValueShape(tags, 'a')).toContain('must be a list')
+    expect(checkValueShape(attr({ slug: 'title', type: 'text' }), ['a'])).toContain(
+      'does not take a list',
+    )
+  })
+
+  it('enforces option membership for a select', () => {
+    const stage = attr({
+      slug: 'stage',
+      type: 'select',
+      optionsJson: [{ value: 'new' }, { value: 'old', isArchived: true }],
+    })
+    expect(checkValueShape(stage, 'new')).toBeNull()
+    expect(checkValueShape(stage, 'old')).toContain('is not an option')
   })
 })

@@ -7,6 +7,7 @@
 import { PrismaPg } from '@prisma/adapter-pg'
 import { inject } from 'vitest'
 
+import { seedOrgInTx } from '../../crm/seedOrg.js'
 import { PrismaClient } from '../../generated/prisma/client.js'
 
 // Tell TypeScript what globalSetup provides.
@@ -45,15 +46,25 @@ export interface SeededOrg {
  *
  * Multi-org: the user is joined to the org through a Membership, and the org is
  * set as their `currentOrgId`. The per-org role lives on the Membership.
+ *
+ * `seed: true` additionally runs the REAL standard-schema seed (seedOrgInTx, the
+ * same code org creation runs), so the org has its ObjectDefs, AttributeDefs, and
+ * the default pipeline — i.e. it is shaped like a production org. It is OPT-IN and
+ * defaults to OFF: the bare org is what most route tests want, and seeding every
+ * one of them would slow the whole suite down for no gain. Ask for it in a test
+ * that reads or writes through the schema-as-data layer.
  */
 export async function seedOrgWithAdmin(
   prisma: PrismaClient,
-  opts: { orgName?: string } = {},
+  opts: { orgName?: string; seed?: boolean } = {},
 ): Promise<SeededOrg> {
   const suffix = uid()
   const orgName = opts.orgName ?? `Test Org ${suffix}`
 
   const org = await prisma.org.create({ data: { name: orgName } })
+  if (opts.seed) {
+    await prisma.$transaction((tx) => seedOrgInTx(tx, org.id))
+  }
   const admin = await prisma.user.create({
     data: {
       firebaseUid: `fb_${suffix}`,

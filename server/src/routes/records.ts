@@ -33,6 +33,7 @@ import {
   type ValidatorAttribute,
   type RecordValues,
 } from '../crm/valuesValidator.js'
+import { diffFieldValues, recordFieldHistoryInTx } from '../crm/fieldHistory.js'
 import { filterRecordsByContainment } from '../crm/recordFilter.js'
 import type { AttributeDef, Prisma, Record as RecordRow } from '../generated/prisma/client.js'
 
@@ -333,7 +334,17 @@ router.patch(
       return void res.status(422).json({ error: missingRef })
     }
 
+    // --- The object's slug, for the history rows (org-scoped) ---
+    const objectDef = await prisma.objectDef.findFirst({
+      where: { id: existing.objectId, orgId },
+      select: { slug: true },
+    })
+
     // --- Execute the write atomically ---
+    // The FieldHistory rows are written in this SAME transaction as the value change
+    // (spec §5.7, MAI-136): both commit or both roll back, so a value and its history
+    // can never disagree. History is append-only and is never read back as the
+    // current value — that stays the plain valuesJson read below.
     await prisma.$transaction(async (tx) => {
       const data: Prisma.RecordUpdateManyMutationInput = {}
       if (body.values !== undefined) data.valuesJson = nextValues as Prisma.InputJsonValue
@@ -342,6 +353,24 @@ router.patch(
       if (result.count === 0) throw new Error('record vanished mid-update')
       if (body.values !== undefined) {
         await syncRecordLinks(tx, orgId, id, attributes, nextValues, refTargets)
+
+        // `full` mode: valuesJson is the whole post-write bag, and a cleared field is
+        // stored ABSENT (§5.14), so a key that vanished is a change to null.
+        const changes = diffFieldValues(
+          (existing.valuesJson ?? {}) as RecordValues,
+          nextValues,
+          { mode: 'full' },
+        )
+        await recordFieldHistoryInTx(tx, {
+          orgId,
+          objectSlug: objectDef?.slug ?? existing.objectId,
+          recordId: id,
+          changes,
+          changeSource: 'user',
+          changedByUserId: userId,
+          // The attributes are already loaded, so the shape check costs no extra query.
+          attributes: attributes.map(toValidatorAttribute),
+        })
       }
     })
 

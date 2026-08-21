@@ -170,6 +170,43 @@ function checkOptionMembership(attr: ValidatorAttribute, value: string): string 
   return allowed.has(value) ? null : `${value} is not an option for ${attr.name}.`
 }
 
+/**
+ * Type-checks ONE value against ONE attribute, with no merge, no required check, and
+ * no uniqueness check — the shape half of the validator on its own.
+ *
+ * Field history needs exactly this (spec §5.7): `oldJson`/`newJson` are schemaless,
+ * so their shape is validated in app code against the attribute's declared type,
+ * through the SAME checks a normal field write goes through. Returns an error string
+ * or null. An empty value is always fine — a field can be cleared, and a first write
+ * has no old value.
+ */
+export function checkValueShape(attr: ValidatorAttribute, value: unknown): string | null {
+  if (isEmpty(value)) return null
+
+  if (attr.isMulti) {
+    if (!Array.isArray(value)) return `${attr.name} must be a list of values.`
+    for (const element of value) {
+      const norm = normalizeScalar(element)
+      if (norm === undefined) continue
+      const typeError = checkScalarType(attr, norm)
+      if (typeError) return typeError
+      if (typeof norm === 'string') {
+        const optionError = checkOptionMembership(attr, norm)
+        if (optionError) return optionError
+      }
+    }
+    return null
+  }
+
+  if (Array.isArray(value)) return `${attr.name} does not take a list of values.`
+  const norm = normalizeScalar(value)
+  if (norm === undefined) return null
+  const typeError = checkScalarType(attr, norm)
+  if (typeError) return typeError
+  if (typeof norm === 'string') return checkOptionMembership(attr, norm)
+  return null
+}
+
 // --- The validator ------------------------------------------------------------
 
 export async function validateRecordValues(args: ValidateArgs): Promise<ValidateResult> {
