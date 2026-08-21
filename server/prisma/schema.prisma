@@ -253,11 +253,17 @@ model PhoneNumber {
   orgId String
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
-  // The member this number belongs to. Restrict, not Cascade: releasing a number
-  // is a Twilio call, not a row delete, so a user who still holds one cannot be
-  // deleted out from under it.
-  assignedUserId String
-  assignedUser   User   @relation(fields: [assignedUserId], references: [id], onDelete: Restrict)
+  // The member this number belongs to, or null when the org holds it and nobody
+  // has it yet. Nullable since MAI-197: an admin can take a number back from a
+  // departing rep, and the number keeps costing the org its monthly rental in the
+  // gap before someone else gets it — so "held by nobody" has to be storable.
+  // An unassigned number is never `isActiveForOutbound`: a caller ID with no
+  // caller cannot place a call.
+  //
+  // Restrict, not Cascade: releasing a number is a Twilio call, not a row delete,
+  // so a user who still holds one cannot be deleted out from under it.
+  assignedUserId String?
+  assignedUser   User?   @relation(fields: [assignedUserId], references: [id], onDelete: Restrict)
 
   // E.164, e.g. "+12025550123".
   e164 String

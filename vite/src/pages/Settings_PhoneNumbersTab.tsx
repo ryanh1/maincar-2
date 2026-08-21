@@ -10,6 +10,7 @@ import { getPhoneNumberStatusLabel } from '@/lib/phoneNumberLabels'
 import { useAuth } from '@/providers/useAuth'
 
 import { Settings_PhoneNumbers_BuyDialog } from './Settings_PhoneNumbers_BuyDialog'
+import { Settings_PhoneNumbers_OrgTable } from './Settings_PhoneNumbers_OrgTable'
 
 /**
  * Settings → Phone numbers: the numbers this organization owns, and the caller ID
@@ -21,7 +22,7 @@ import { Settings_PhoneNumbers_BuyDialog } from './Settings_PhoneNumbers_BuyDial
  * server re-checks all of it — every disabled control here is a courtesy.
  */
 export function Settings_PhoneNumbersTab() {
-  const { org } = useAuth()
+  const { org, isAdmin } = useAuth()
   const orgId = org?.id ?? null
 
   const numbersQuery = useGetNumbers(orgId)
@@ -136,6 +137,8 @@ export function Settings_PhoneNumbersTab() {
       )}
 
       <Settings_PhoneNumbers_BuyDialog orgId={orgId} open={buyOpen} onOpenChange={setBuyOpen} />
+
+      {isAdmin && <Settings_PhoneNumbers_OrgTable orgId={orgId} />}
     </section>
   )
 }

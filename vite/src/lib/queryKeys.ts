@@ -61,6 +61,10 @@ export const queryKeys = {
     // entry rather than showing the previous org's numbers. Searching Twilio's
     // for-sale numbers is a mutation, not a cached read, so it has no key here.
     list: (orgId: string) => ['phoneNumbers', 'list', orgId] as const,
+    // The admin-only org-wide view. A separate key from `list` above: they are
+    // different server routes with different shapes (every number vs. mine
+    // alone), so a write to one must not be mistaken for satisfying the other.
+    orgList: (orgId: string) => ['phoneNumbers', 'orgList', orgId] as const,
   },
   invitations: {
     all: ['invitations'] as const,
