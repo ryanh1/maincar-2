@@ -21,6 +21,30 @@ while IFS= read -r d; do
 done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
 [ "$found" = 0 ] && echo "  none"
 
+echo; echo "=== ORPHANED WORKTREES (commits not on origin/main) ==="
+# Sub-agent waves (Agent tool isolation:"worktree", or /linear-execute-project)
+# land under .claude/worktrees/*. A wave that never got "landed" leaves one of
+# these behind indefinitely — fully coded, tested, and reviewed, but not
+# merged, not pushed, and easy to mistake for still-active work. This differs
+# from the mid-merge check above: that one catches a merge caught mid-flight,
+# this one catches a merge that never started at all.
+git fetch origin --quiet 2>/dev/null
+found=0
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  [ "$d" = "$(mc_worktree)" ] && continue
+  case "$d" in */.claude/worktrees/*) ;; *) continue ;; esac
+  br="$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)" || continue
+  [ "$br" = "HEAD" ] && continue  # detached, not a branch to track
+  sha="$(git -C "$d" rev-parse HEAD 2>/dev/null)" || continue
+  if ! git -C "$d" merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
+    dirty="$(git -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+    echo "  $d  (branch: $br, dirty files: $dirty) — NOT on origin/main"
+    found=1
+  fi
+done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
+[ "$found" = 0 ] && echo "  none — every worktree's commits are on origin/main"
+
 echo; echo "=== firebase emulators ==="
 pgrep -f 'firebase.*emulators:start' 2>/dev/null | while read -r p; do
   ports=$(lsof -nP -p "$p" -iTCP -sTCP:LISTEN 2>/dev/null | awk '{print $9}' | sed 's/.*://' | sort -n | tr '\n' ' ')
