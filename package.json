@@ -12,7 +12,7 @@
     "docker:up": "docker compose --project-directory docker -f docker/docker-compose.yml up -d",
     "docker:down": "docker compose --project-directory docker -f docker/docker-compose.yml down",
     "docker:logs": "docker compose --project-directory docker -f docker/docker-compose.yml logs -f",
-    "tunnel": "zrok share public localhost:3010 --headless -n public:maincar2-api",
+    "tunnel": "zrok share public localhost:3010 --headless -n public:maincar-api",
     "install:all": "npm install && npm --prefix server install && npm --prefix vite install && npm --prefix firebase install",
     "build": "npm --prefix server run build && npm --prefix vite run build",
     "typecheck": "npm --prefix server run typecheck && npm --prefix vite run typecheck",

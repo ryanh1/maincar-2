@@ -64,7 +64,7 @@ other stacks on this machine (loadwire, maincar, lita, bari).
 Webhooks from outside need a public URL. Reserve the zrok share once:
 
 ```bash
-zrok reserve public localhost:3010 --unique-name maincar2-api
+zrok reserve public localhost:3010 --unique-name maincar-api
 ```
 
 Then `npm run tunnel` (or `npm run dev:tunnel`) serves it, and `PUBLIC_BASE_URL`
