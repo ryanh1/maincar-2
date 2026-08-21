@@ -1,7 +1,6 @@
 // Route tests for /api/orgs/:orgId/phone-numbers.
 //
-// The org-isolation block at the bottom is the mandatory one
-// (.claude/rules/testing.md): the route proves that a caller from Org A cannot
+// The org-isolation block at the bottom proves that a caller from Org A cannot
 // read Org B's numbers, that an unauthenticated caller is rejected, and that the
 // tenant key really is in the where clause rather than only in the path.
 import { beforeEach, describe, expect, it, vi } from 'vitest'

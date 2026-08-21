@@ -15,6 +15,3 @@ paths:
   cover (`server/src/routes/__tests__/auth.test.ts` for `server/src/routes/auth.ts`). Client tests sit beside the file they cover
   (`SomeComponent.test.tsx` next to `SomeComponent.tsx`); shared render helpers and mocks live
   in `vite/src/test/utils`.
-- **Org-isolation tests are mandatory** for any route touching org-scoped data:
-  own org 200, other org 404, unauthenticated 401, scoped mutation
-  includes `orgId` in the where clause. See the patterns in `server/src/routes/__tests__/orgIsolation.test.ts`.

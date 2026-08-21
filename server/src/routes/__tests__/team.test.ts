@@ -1,8 +1,7 @@
 // Route tests for /api/team — profile, org CRUD, members, invitations.
 //
-// The org-isolation block at the bottom is the mandatory one
-// (.claude/rules/testing.md): every org-scoped route proves that a caller from
-// Org A cannot reach Org B, and that an unauthenticated caller is rejected.
+// The org-isolation block at the bottom proves that a caller from Org A cannot
+// reach Org B, and that an unauthenticated caller is rejected.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
