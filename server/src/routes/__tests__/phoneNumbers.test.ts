@@ -8,13 +8,15 @@ import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
+const { prismaMock, verifyTokenMock, listNumbersMock, getPriceMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
     phoneNumber: { findMany: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
+  listNumbersMock: vi.fn(),
+  getPriceMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
@@ -22,6 +24,19 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   verifyFirebaseIdToken: verifyTokenMock,
   setFirebaseUserDisabled: vi.fn(),
   deleteFirebaseUser: vi.fn(),
+}))
+// The Twilio wrapper, not the SDK. Mocking our own module is what makes the
+// route testable without a network, an account, or a cent of spend — and it is
+// only possible because the SDK is constructed in exactly one file.
+vi.mock('../../../dependencies/twilio.js', () => ({
+  listAvailableLocalNumbers: listNumbersMock,
+  getLocalNumberMonthlyPrice: getPriceMock,
+  // Not mocked away: the real predicate is what decides 400-vs-500 below, and a
+  // stub of it would test the stub.
+  twilioErrorStatus: (error: unknown) => {
+    const status = (error as { status?: unknown } | null)?.status
+    return typeof status === 'number' ? status : null
+  },
 }))
 
 import app from '../../app.js'
@@ -31,6 +46,7 @@ const AUTH = 'Bearer fake-token'
 const ORG_A = 'org-a'
 const ORG_B = 'org-b'
 const URL_A = `/api/orgs/${ORG_A}/phone-numbers`
+const SEARCH_A = `${URL_A}/search`
 
 function userRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -92,7 +108,19 @@ beforeEach(() => {
   vi.clearAllMocks()
   authAs()
   prismaMock.phoneNumber.findMany.mockResolvedValue([])
+  listNumbersMock.mockResolvedValue([])
+  getPriceMock.mockResolvedValue({ amount: '1.15', currency: 'USD' })
 })
+
+/** What the Twilio wrapper hands back for one number Twilio has for sale. */
+function availableRow(overrides: Record<string, unknown> = {}) {
+  return { e164: '+14155550123', friendly: '(415) 555-0123', ...overrides }
+}
+
+/** A Twilio REST failure, which carries an HTTP status the route reads. */
+function twilioError(status: number) {
+  return Object.assign(new Error('Twilio said no'), { status })
+}
 
 describe('GET /api/orgs/:orgId/phone-numbers', () => {
   it('returns the caller’s numbers keyed, with total and activeCount', async () => {
@@ -226,10 +254,271 @@ describe('GET /api/orgs/:orgId/phone-numbers — org isolation', () => {
     await request(app).get(`/api/orgs/${ORG_B}/phone-numbers`).set('Authorization', AUTH)
 
     expect(prismaMock.membership.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { userId: 'user-a', orgId: ORG_B } }),
+      expect.objectContaining({ where: { userId: 'user-a', orgId: ORG_B, isActive: true } }),
     )
     expect(prismaMock.phoneNumber.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { orgId: ORG_B, assignedUserId: 'user-a' } }),
+    )
+  })
+})
+
+// ============================================================
+// POST /api/orgs/:orgId/phone-numbers/search
+// ============================================================
+describe('POST /api/orgs/:orgId/phone-numbers/search', () => {
+  it('returns the numbers Twilio offered, keyed, with a total', async () => {
+    listNumbersMock.mockResolvedValue([
+      availableRow({ e164: '+14155550123', friendly: '(415) 555-0123' }),
+      availableRow({ e164: '+14155550124', friendly: '(415) 555-0124' }),
+    ])
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({ areaCode: '415' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.total).toBe(2)
+    expect(res.body.numbers).toEqual([
+      { e164: '+14155550123', friendly: '(415) 555-0123', priceMonthly: '1.15' },
+      { e164: '+14155550124', friendly: '(415) 555-0124', priceMonthly: '1.15' },
+    ])
+  })
+
+  it('returns exactly the three fields per number, and no others', async () => {
+    listNumbersMock.mockResolvedValue([availableRow()])
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
+
+    expect(Object.keys(res.body.numbers[0]).sort()).toEqual(['e164', 'friendly', 'priceMonthly'])
+  })
+
+  // The price is Twilio's country-level figure for a local number. It is fetched
+  // once and stamped on every row, so the row and the quote cannot disagree.
+  it('carries the price as the decimal string Twilio quoted, plus its currency', async () => {
+    getPriceMock.mockResolvedValue({ amount: '3.00', currency: 'GBP' })
+    listNumbersMock.mockResolvedValue([availableRow()])
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({ country: 'GB' })
+
+    expect(res.body.numbers[0].priceMonthly).toBe('3.00')
+    expect(res.body.priceUnit).toBe('GBP')
+    expect(getPriceMock).toHaveBeenCalledWith('GB')
+  })
+
+  // Better a visibly missing price than a made-up one: the buy screen can say
+  // "price unavailable" and still let someone see which numbers are free.
+  it('passes a null price through rather than inventing a figure', async () => {
+    getPriceMock.mockResolvedValue({ amount: null, currency: 'USD' })
+    listNumbersMock.mockResolvedValue([availableRow()])
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
+
+    expect(res.body.numbers[0].priceMonthly).toBeNull()
+  })
+
+  it('defaults to US and a 20-number limit when the body is empty', async () => {
+    await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
+
+    expect(listNumbersMock).toHaveBeenCalledWith({
+      country: 'US',
+      areaCode: undefined,
+      contains: undefined,
+      limit: 20,
+    })
+  })
+
+  it('uppercases the country, so "us" is not a different search from "US"', async () => {
+    await request(app).post(SEARCH_A).set('Authorization', AUTH).send({ country: 'us' })
+
+    expect(listNumbersMock).toHaveBeenCalledWith(expect.objectContaining({ country: 'US' }))
+  })
+
+  // A form posts "" for a field nobody touched. That is "no filter", not an error.
+  it('treats an empty areaCode as no filter instead of a 400', async () => {
+    const res = await request(app)
+      .post(SEARCH_A)
+      .set('Authorization', AUTH)
+      .send({ areaCode: '', contains: '' })
+
+    expect(res.status).toBe(200)
+    expect(listNumbersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ areaCode: undefined, contains: undefined }),
+    )
+  })
+
+  it('answers an empty result with zero and an empty list, not an error', async () => {
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
+
+    expect(res.status).toBe(200)
+    expect(res.body.numbers).toEqual([])
+    expect(res.body.total).toBe(0)
+  })
+})
+
+// ============================================================
+// POST /search — invalid input
+// ============================================================
+describe('POST /api/orgs/:orgId/phone-numbers/search — invalid input', () => {
+  it('400s on a country that is not two letters, and calls Twilio not at all', async () => {
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({ country: 'USA' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Country must be a two-letter code, like US or CA.')
+    expect(listNumbersMock).not.toHaveBeenCalled()
+    expect(getPriceMock).not.toHaveBeenCalled()
+  })
+
+  it('400s on an area code that is not three digits', async () => {
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({ areaCode: '41' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Area code must be three digits, like 415.')
+    expect(listNumbersMock).not.toHaveBeenCalled()
+  })
+
+  // Twilio applies areaCode to the NANP only. Sent for GB it is ignored, and the
+  // caller gets numbers that do not match what they asked for.
+  it('400s on an area code outside the US and Canada, rather than ignoring it', async () => {
+    const res = await request(app)
+      .post(SEARCH_A)
+      .set('Authorization', AUTH)
+      .send({ country: 'GB', areaCode: '415' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Area code search works for US and Canada numbers only.')
+    expect(listNumbersMock).not.toHaveBeenCalled()
+  })
+
+  it('400s on a contains pattern with characters Twilio does not accept', async () => {
+    const res = await request(app)
+      .post(SEARCH_A)
+      .set('Authorization', AUTH)
+      .send({ contains: 'ca$h!!' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('Use * to stand for any one character.')
+    expect(listNumbersMock).not.toHaveBeenCalled()
+  })
+
+  it('400s on a limit above the cap, so one request cannot list a thousand numbers', async () => {
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({ limit: 500 })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Ask for at most 50 numbers at a time.')
+    expect(listNumbersMock).not.toHaveBeenCalled()
+  })
+
+  it('sends an error message a person can act on, never a raw zod dump', async () => {
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({ country: '1' })
+
+    expect(typeof res.body.error).toBe('string')
+    expect(res.body.error).not.toContain('ZodError')
+    expect(Object.keys(res.body)).toEqual(['error'])
+  })
+})
+
+// ============================================================
+// POST /search — Twilio failures
+// ============================================================
+describe('POST /api/orgs/:orgId/phone-numbers/search — Twilio failures', () => {
+  it('500s with a non-leaky message when Twilio throws', async () => {
+    listNumbersMock.mockRejectedValue(twilioError(503))
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
+
+    expect(res.status).toBe(500)
+    expect(res.body).toEqual({ error: 'Internal server error' })
+  })
+
+  it('500s when the pricing call is the one that fails', async () => {
+    getPriceMock.mockRejectedValue(new Error('pricing unavailable'))
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
+
+    expect(res.status).toBe(500)
+    expect(res.body).toEqual({ error: 'Internal server error' })
+  })
+
+  it('500s, not 200-with-nothing, when Twilio is unconfigured', async () => {
+    listNumbersMock.mockRejectedValue(
+      new Error('Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in .env'),
+    )
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
+
+    expect(res.status).toBe(500)
+    // The var names are for the log, never for the caller.
+    expect(res.body.error).not.toContain('TWILIO')
+  })
+
+  // Twilio answers 404 for a country it does not sell in. That is the caller's
+  // mistake, so it reads as a 400 they can fix — not a 500 that blames us.
+  it('turns Twilio’s 404 for an unsold country into a 400 naming the country', async () => {
+    listNumbersMock.mockRejectedValue(twilioError(404))
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({ country: 'AQ' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Twilio does not sell phone numbers in AQ.')
+  })
+})
+
+// ============================================================
+// POST /search — org isolation (mandatory — .claude/rules/testing.md)
+// ============================================================
+describe('POST /api/orgs/:orgId/phone-numbers/search — org isolation', () => {
+  it('401s without auth, and never reaches Twilio', async () => {
+    const res = await request(app).post(SEARCH_A).send({})
+
+    expect(res.status).toBe(401)
+    expect(listNumbersMock).not.toHaveBeenCalled()
+  })
+
+  // Membership is checked BEFORE the body is parsed, so a stranger cannot spend
+  // this org's Twilio quota — or learn the org exists — with any body at all.
+  it('404s for an org the caller does not belong to, and never reaches Twilio', async () => {
+    authAs(null)
+
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_B}/phone-numbers/search`)
+      .set('Authorization', AUTH)
+      .send({ areaCode: '415' })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Organization not found')
+    expect(listNumbersMock).not.toHaveBeenCalled()
+    expect(getPriceMock).not.toHaveBeenCalled()
+  })
+
+  it('404s for a non-member even when the body is invalid, so 400 cannot map the orgs', async () => {
+    authAs(null)
+
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_B}/phone-numbers/search`)
+      .set('Authorization', AUTH)
+      .send({ country: 'NOPE' })
+
+    expect(res.status).toBe(404)
+  })
+
+  it('404s when the org is disabled, rather than admitting it exists', async () => {
+    authAs(membershipRow({ org: { id: ORG_A, name: 'Org A', enabled: false } }))
+
+    const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
+
+    expect(res.status).toBe(404)
+    expect(listNumbersMock).not.toHaveBeenCalled()
+  })
+
+  it('checks membership in the org from the PATH, not the caller’s currentOrgId', async () => {
+    authAs(membershipRow({ orgId: ORG_B, org: { id: ORG_B, name: 'Org B', enabled: true } }))
+
+    const res = await request(app)
+      .post(`/api/orgs/${ORG_B}/phone-numbers/search`)
+      .set('Authorization', AUTH)
+      .send({})
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.membership.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'user-a', orgId: ORG_B, isActive: true } }),
     )
   })
 })

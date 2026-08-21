@@ -60,3 +60,12 @@ export const S3_REGION = process.env.S3_REGION ?? 'us-east-1'
 export const S3_ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID ?? ''
 export const S3_SECRET_ACCESS_KEY = process.env.S3_SECRET_ACCESS_KEY ?? ''
 export const S3_BUCKET = process.env.S3_BUCKET ?? ''
+
+// --- Twilio ---
+// Deliberately NOT required(): `/api/health` and the whole unit suite have to
+// boot on a machine with no Twilio account, and required() would take the
+// process down at import. dependencies/twilio.ts throws a named error when a
+// route actually calls Twilio instead, so a missing credential fails the one
+// request that needed it rather than the server.
+export const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID ?? ''
+export const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN ?? ''
