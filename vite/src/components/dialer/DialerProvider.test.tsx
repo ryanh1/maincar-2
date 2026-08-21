@@ -53,6 +53,7 @@ function renderDialer() {
 
 describe('DialerProvider', () => {
   beforeEach(() => {
+    sessionStorage.clear()
     useAuthMock.mockReturnValue({ org: null })
     useGetVoiceTokenMock.mockReturnValue({ data: undefined, refetch: vi.fn() })
     useGetCallDetailMock.mockReturnValue({ data: undefined })
@@ -102,6 +103,24 @@ describe('DialerProvider', () => {
 
     act(() => result.current.reset())
     expect(result.current.activeCall).toBeNull()
+  })
+
+  it('adopts an in-progress server call and keeps its controls available', () => {
+    const { result } = renderDialer()
+
+    act(() =>
+      result.current.adoptCall(
+        { orgId: 'org-1', callId: 'call-1', recording: true },
+        'in-progress',
+      ),
+    )
+
+    expect(result.current.phase).toBe('in-progress')
+    expect(result.current.mode).toBe('call')
+    expect(result.current.dialing).toBe(true)
+    expect(result.current.view).toBe('expanded')
+    expect(result.current.activeCall).toEqual({ orgId: 'org-1', callId: 'call-1', recording: true })
+    expect(result.current.canControlAudio).toBe(false)
   })
 
   it('walks a call through ringing, in-progress, and completed', () => {
@@ -246,8 +265,8 @@ describe('DialerProvider', () => {
   })
 
   describe('the server-status poll (MAI-190)', () => {
-    function detail(status: string, durationS: number | null = null) {
-      return { data: { call: { status, durationS } } }
+    function detail(status: string, durationS: number | null = null, startedAt: string | null = null) {
+      return { data: { call: { status, durationS, startedAt } } }
     }
 
     it('polls with the live call identity only while dialing', () => {
@@ -275,6 +294,23 @@ describe('DialerProvider', () => {
       rerender()
 
       await waitFor(() => expect(result.current.phase).toBe('in-progress'))
+    })
+
+    it('uses the server startedAt when an adopted in-progress call has already been running', async () => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-20T12:03:00.000Z'))
+      const { result, rerender } = renderDialer()
+      act(() =>
+        result.current.adoptCall(
+          { orgId: 'org-1', callId: 'call-1', recording: false },
+          'in-progress',
+        ),
+      )
+
+      useGetCallDetailMock.mockReturnValue(detail('in-progress', null, '2026-08-20T12:00:00.000Z'))
+      rerender()
+
+      await waitFor(() => expect(result.current.elapsedSeconds).toBe(180))
+      nowSpy.mockRestore()
     })
 
     it('catches a remote hang-up the dialer never otherwise sees, and shows the billed duration', async () => {
@@ -314,6 +350,31 @@ describe('DialerProvider', () => {
       await act(() => Promise.resolve())
       expect(result.current.elapsedSeconds).toBe(5)
     })
+  })
+
+  it('restores a live call after a same-tab refresh', async () => {
+    useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+    const first = renderDialer()
+    act(() =>
+      first.result.current.adoptCall(
+        { orgId: 'org-1', callId: 'call-1', recording: true },
+        'in-progress',
+      ),
+    )
+    first.unmount()
+
+    const recovered = renderDialer()
+
+    await waitFor(() => expect(recovered.result.current.activeCall).toEqual({
+      orgId: 'org-1',
+      callId: 'call-1',
+      recording: true,
+    }))
+    expect(recovered.result.current.phase).toBe('in-progress')
+    expect(recovered.result.current.mode).toBe('call')
+    expect(recovered.result.current.dialing).toBe(true)
+    expect(recovered.result.current.view).toBe('expanded')
+    expect(recovered.result.current.canControlAudio).toBe(false)
   })
 
   describe('the browser Voice SDK Device', () => {
