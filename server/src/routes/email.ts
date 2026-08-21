@@ -31,6 +31,8 @@ import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { sanitizeOptionalRichTextHtml, sanitizeRichTextHtml } from '../lib/sanitizeHtml.js'
+import { MailApiError, MailAuthError, MailboxNotFoundError, RateLimitedError } from '../lib/mail/mailErrors.js'
+import { BadRecipientError, NoMailboxError, sendDraftEmail } from '../lib/mail/sendEmail.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import type { EmailDraft, EmailTemplate, Prisma } from '../generated/prisma/client.js'
 
@@ -393,6 +395,65 @@ router.patch(
 
     // --- Return response ---
     res.json({ draft: mapDraftToApi(draft) })
+  }),
+)
+
+// ============================================================
+// POST /api/email/orgs/:orgId/drafts/:draftId/send — send it
+// ============================================================
+// Takes the draft id only, never a payload (docs/specs/SPEC-composer-send.md →
+// API): the server sends exactly what was autosaved, so there is no second
+// copy of the truth and no window where the body in flight differs from the
+// body on screen.
+//
+// Every failure below leaves the draft row untouched — `sendDraftEmail` does
+// not delete it until the provider has confirmed the send. Deleting the draft
+// is the LAST step of a successful send, never the first step of an attempt.
+router.post(
+  '/orgs/:orgId/drafts/:draftId/send',
+  wrapRoute('POST /api/email/orgs/:orgId/drafts/:draftId/send', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const draftId = String(req.params.draftId)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    const draft = await prisma.emailDraft.findFirst({ where: { id: draftId, orgId, userId } })
+    if (!draft) {
+      return void res.status(404).json({ error: 'Draft not found' })
+    }
+
+    try {
+      const sent = await sendDraftEmail(orgId, userId, draft)
+
+      // --- Return response ---
+      res.json({
+        message: {
+          id: sent.id,
+          providerMsgId: sent.providerMsgId,
+          threadId: sent.threadId,
+          sentAt: sent.sentAt.toISOString(),
+        },
+      })
+    } catch (err) {
+      if (err instanceof NoMailboxError || err instanceof MailboxNotFoundError) {
+        return void res.status(409).json({ error: err.message, code: 'no_mailbox' })
+      }
+      if (err instanceof BadRecipientError) {
+        return void res.status(400).json({ error: err.message, code: 'bad_recipient' })
+      }
+      if (err instanceof MailApiError || err instanceof MailAuthError || err instanceof RateLimitedError) {
+        return void res.status(502).json({
+          error: 'Your mail provider would not accept the message. Nothing was sent.',
+          code: 'provider_error',
+        })
+      }
+      throw err
+    }
   }),
 )
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileText, Minus, Trash2, X } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { RichTextEditor, type LinkRequest } from '@/components/editor/RichTextEditor'
 import { RichTextEditorUrlDialog } from '@/components/editor/RichTextEditor_UrlDialog'
@@ -24,8 +25,10 @@ import {
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useGetEmailTemplates } from '@/hooks/email'
+import { useGetEmailTemplates, useSendEmailDraft } from '@/hooks/email'
 import type { EmailTemplate } from '@/hooks/email'
+import { useGetMailboxes } from '@/hooks/mailboxes'
+import { ApiError } from '@/lib/api'
 import type { EmailDraft, EmailDraftPatch, RecipientChip } from '@/lib/emailTypes'
 import { useAuth } from '@/providers/useAuth'
 import { useComposer } from './composerContext'
@@ -43,11 +46,14 @@ const AUTOSAVE_DELAY_MS = 1200
 
 /**
  * Why Send cannot be pressed, said next to it rather than hidden in a tooltip a
- * disabled control would never fire. Sending arrives with `composer-send`; until
- * then this is a visibly disabled control with an honest label, which is the
- * only allowed shape for an unfinished one (CLAUDE.md → Verification).
+ * disabled control would never fire (design-system.md → Icon-only buttons — the
+ * same rule applies to any disabled control whose reason matters). Send is
+ * enabled only with a connected mailbox AND at least one To address
+ * (SPEC-composer-send.md → Acceptance criteria, 1); disabled, it names whichever
+ * of the two is missing.
  */
-const SEND_DISABLED_REASON = 'Connect a mailbox in Settings → Integrations to send.'
+const SEND_DISABLED_NO_MAILBOX_REASON = 'Connect a mailbox in Settings → Integrations to send.'
+const SEND_DISABLED_NO_RECIPIENT_REASON = 'Add a recipient to send.'
 
 /**
  * The draft stores plain strings; the field wants chips.
@@ -139,6 +145,14 @@ export function ComposerCard({ draft }: ComposerCardProps) {
   // card costs nothing once the list is warm.
   const templatesQuery = useGetEmailTemplates(org?.id ?? null)
   const templates = templatesQuery.data?.templates ?? []
+
+  // The same list Settings → Integrations reads. Exactly one is ever primary
+  // (schema.prisma → MailAccount), and that is the mailbox Send uses: there is
+  // no picker in the composer yet, so a rep sends from their own default
+  // address, the way SPEC-composer-send.md's Objective describes it.
+  const mailboxesQuery = useGetMailboxes(org?.id ?? null)
+  const primaryMailbox = mailboxesQuery.data?.mailboxes?.find((mailbox) => mailbox.isPrimary) ?? null
+  const hasConnectedMailbox = primaryMailbox?.status === 'connected'
 
   // Seeded ONCE. `useState` reads its initial value on the first render only, so
   // a later `draft` prop carrying the server's copy of this same text cannot
@@ -264,6 +278,39 @@ export function ComposerCard({ draft }: ComposerCardProps) {
     // and the row that comes back should hold what the rep actually typed.
     await flush()
     await discardDraft(draftId)
+  }
+
+  const { mutateAsync: sendEmailDraft, isPending: isSending } = useSendEmailDraft()
+  const toAddrs = addressesOf(toChips)
+  const sendDisabledReason = !hasConnectedMailbox
+    ? SEND_DISABLED_NO_MAILBOX_REASON
+    : toAddrs.length === 0
+      ? SEND_DISABLED_NO_RECIPIENT_REASON
+      : null
+
+  /**
+   * Send this draft. `flush()` first, because the route sends exactly what was
+   * last autosaved (SPEC-composer-send.md → API) — a rep who just typed the
+   * last line of the email must not have it sent without.
+   *
+   * On success the server has already deleted the draft row, so `discardDraft`
+   * here is not a second delete of a live row: it drops the card from the dock
+   * and issues a DELETE that 404s on the row that is already gone, which
+   * `useDeleteEmailDraft` treats as the success it is (MAI-88) — no toast, no
+   * resync. On failure the card stays open with everything intact
+   * (SPEC-composer-send.md → Acceptance criteria, 6): nothing here removes it.
+   */
+  async function send() {
+    if (!org?.id || sendDisabledReason) return
+
+    await flush()
+    try {
+      await sendEmailDraft({ orgId: org.id, draftId })
+      toast.success('Email sent.')
+      await discardDraft(draftId)
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not send the email. Try again.')
+    }
   }
 
   /**
@@ -412,11 +459,16 @@ export function ComposerCard({ draft }: ComposerCardProps) {
       <RichTextEditorUrlDialog request={linkRequest} onClose={() => setLinkRequest(null)} />
 
       <footer className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
-        <Button type="button" size="sm" disabled>
-          Send
+        <Button
+          type="button"
+          size="sm"
+          disabled={sendDisabledReason !== null || isSending}
+          onClick={() => void send()}
+        >
+          {isSending ? 'Sending…' : 'Send'}
         </Button>
         <p className="min-w-0 flex-1 text-xs leading-tight text-muted-foreground">
-          {SEND_DISABLED_REASON}
+          {sendDisabledReason ?? ''}
         </p>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

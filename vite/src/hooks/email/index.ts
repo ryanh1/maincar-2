@@ -4,6 +4,7 @@ export { useGetEmailDrafts } from './useGetEmailDrafts'
 export { useCreateEmailDraft } from './useCreateEmailDraft'
 export { useUpdateEmailDraft } from './useUpdateEmailDraft'
 export { useDeleteEmailDraft } from './useDeleteEmailDraft'
+export { useSendEmailDraft } from './useSendEmailDraft'
 export { useGetEmailTemplates } from './useGetEmailTemplates'
 export { useSaveEmailTemplate } from './useSaveEmailTemplate'
 export { useDeleteEmailTemplate } from './useDeleteEmailTemplate'
@@ -13,6 +14,11 @@ export { useDeleteEmailTemplate } from './useDeleteEmailTemplate'
 export type { CreateEmailDraftVariables } from './useCreateEmailDraft'
 export type { UpdateEmailDraftVariables } from './useUpdateEmailDraft'
 export type { DeleteEmailDraftVariables } from './useDeleteEmailDraft'
+export type {
+  SendEmailDraftVariables,
+  SendEmailDraftResponse,
+  SentEmailMessage,
+} from './useSendEmailDraft'
 export type { SaveEmailTemplateVariables } from './useSaveEmailTemplate'
 export type { DeleteEmailTemplateVariables } from './useDeleteEmailTemplate'
 // The shapes themselves live in lib/emailTypes.ts, because the recipient fields
