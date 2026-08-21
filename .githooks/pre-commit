@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+#
+# The commit gate. CLAUDE.md says green tests block a red commit; this is what
+# makes that true rather than a request. It runs the SAME four checks a session
+# is told to run by hand, so the rule cannot be forgotten or reported falsely.
+#
+# It checks the WORKING TREE, not the staged snapshot. That is deliberate:
+# more than one session works in this clone at a time, and testing a synthetic
+# staged-only tree would tell you about a state nobody will ever run.
+#
+# Installed by `npm run hooks:install`, which points core.hooksPath here. The
+# hook lives in the repo rather than .git/hooks so it is version-controlled and
+# every clone gets the same gate.
+#
+# To bypass in a genuine emergency: `git commit --no-verify`. If you do, say so
+# in the commit message body. Never let silence imply the checks passed.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+fail() {
+  echo ""
+  echo "  ✗ COMMIT BLOCKED — $1"
+  echo ""
+  exit 1
+}
+
+# --- Is Postgres up? -----------------------------------------------------------
+# The integration suite needs real Postgres. If it is down we STOP rather than
+# skip: a silent skip is how the one suite that proves concurrency stops running.
+if ! node --input-type=module -e '
+  import net from "node:net"
+  import fs from "node:fs"
+  const env = fs.readFileSync(".env", "utf8")
+  const line = env.split("\n").find((l) => l.startsWith("DATABASE_URL="))
+  if (!line) process.exit(2)
+  const u = new URL(line.slice("DATABASE_URL=".length).trim().replace(/^["\x27]|["\x27]$/g, ""))
+  const s = net.connect({ host: u.hostname, port: Number(u.port) || 5432 })
+  s.on("connect", () => { s.end(); process.exit(0) })
+  s.on("error", () => process.exit(1))
+  s.setTimeout(3000, () => { s.destroy(); process.exit(1) })
+' 2>/dev/null; then
+  fail "cannot reach Postgres, so the integration tests cannot run.
+    Start it, then commit again:
+
+      npm run docker:up
+"
+fi
+
+# --- The four checks -----------------------------------------------------------
+echo "pre-commit: typecheck…"        && npm run typecheck --silent  || fail "typecheck failed."
+echo "pre-commit: lint…"             && npm run lint --silent       || fail "lint failed."
+echo "pre-commit: tests…"            && npm test --silent           || fail "tests failed."
+echo "pre-commit: integration tests…" && npm run test:integration --silent \
+  || fail "integration tests failed.
+    These are the only tests that prove the concurrency guardrails
+    (two admins cannot both quit at once). Do not skip them."
+
+echo "pre-commit: all green."

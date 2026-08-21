@@ -11,6 +11,7 @@ Claude Code auto-loads the rules for what you're touching.
 - **Frontend work** → [copy.md](.claude/rules/copy.md), [design-system.md](.claude/rules/design-system.md), [frontend.md](.claude/rules/frontend.md)
 - **Server work** → [server-routes.md](.claude/rules/server-routes.md), [database-and-prisma.md](.claude/rules/database-and-prisma.md), [dependencies-and-config.md](.claude/rules/dependencies-and-config.md)
 - **Testing** → [testing.md](.claude/rules/testing.md)
+- **Linear workflow** → [linear-workflow.md](.claude/rules/linear-workflow.md) — Issue status transitions, commit messages, branching
 
 ## Dates & Times (Timezones)
 
@@ -26,13 +27,24 @@ Every time-of-day shown to a person MUST render in an explicit timezone and carr
 
 **Never let a model draft ahead of its data.** Any value a model states to a user must be known to it *before* it drafts — read from the input, or handed in via the prompt or a tool result. Never compute a user-facing value *after* the draft and store it without feeding the SAME value into the draft, or the text and the stored record disagree.
 
+## Git and branching
+
+**Do not branch. Work on the current branch.** Another session may be working in the same tree at the same time.
+
+- Preserve all existing changes. Make your changes, then commit only the files and hunks you changed.
+- Do not touch, revert, stash, or commit the other session's changes.
+
 ## Before you commit
 
-**Green tests are the gate.** Run all three at the repo root, and read the output, before every `git commit` and every `git push`:
+**Green tests are the gate.** Run all four at the repo root, and read the output, before every `git commit` and every `git push`:
 
 ```bash
-npm test && npm run typecheck && npm run lint
+npm run verify
 ```
+
+That is `typecheck`, `lint`, `test`, and `test:integration`. **The integration suite is part of the gate, not an extra.** `npm test` does not include it, and it is the only suite that proves the concurrency guardrails — that two admins cannot both quit at once and leave the org locked out. It needs Postgres, so run `npm run docker:up` first.
+
+A `pre-commit` hook runs the same four and refuses a red commit. Install it once per clone with `npm run hooks:install`. Running `npm run verify` by hand first is still the habit — the hook is the backstop, not the plan. It checks the working tree, not the staged snapshot, because more than one session works in this clone at a time.
 
 - **Red blocks the commit.** A failing test, a type error, or a lint error stops you. Fix it, or stop and report exactly what is broken. Never commit or push over it.
 - **Never skip, delete, or `.skip()` a test to reach green.** A failing test is reporting a real disagreement between the code and the rule that test encodes. Change the code, or change the rule on purpose and say so.
