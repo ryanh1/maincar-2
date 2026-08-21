@@ -3,6 +3,8 @@ import { Menu } from 'lucide-react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
+import { ComposerCard } from '@/components/composer/ComposerCard'
+import { ComposerDock } from '@/components/composer/ComposerDock'
 import { ComposerProvider } from '@/components/composer/ComposerProvider'
 import { PageLoader } from '@/components/PageLoader'
 import { Sidebar } from '@/components/Sidebar'
@@ -38,7 +40,14 @@ export function ProtectedLayout() {
 
   // ComposerProvider wraps everything and sits OUTSIDE <Outlet />, which is the
   // whole point of it: a half-written email survives navigation only because the
-  // state holding it never unmounts when the route under it changes.
+  // state holding it never unmounts when the route under it changes. The dock is
+  // out here with it, for the same reason and one more: it is `fixed` to the
+  // bottom-right corner, so nesting it inside the scrolling <Outlet /> would let
+  // a page's own scroll container clip it.
+  //
+  // The dock takes the card through `renderCard` rather than importing it, so
+  // the corner's arithmetic and the card's autosave stay testable apart. This is
+  // the only place the two meet.
   return (
     <ComposerProvider>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -58,6 +67,8 @@ export function ProtectedLayout() {
           </main>
         </div>
       </div>
+
+      <ComposerDock renderCard={(draft) => <ComposerCard draft={draft} />} />
     </ComposerProvider>
   )
 }
