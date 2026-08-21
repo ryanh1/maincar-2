@@ -13,6 +13,7 @@ import emailsRouter from './routes/emails.js'
 import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import invitationsRouter from './routes/invitations.js'
+import meetingsRouter from './routes/meetings.js'
 import membersRouter from './routes/members.js'
 import messagesRouter from './routes/messages.js'
 import objectsRouter from './routes/objects.js'
@@ -82,6 +83,13 @@ app.use('/api/orgs/:orgId/emails', emailsRouter)
 // "messages" rather than "sms" because the table is a superset — MMS today, RCS
 // and WhatsApp on the same rows later, told apart by `channel`.
 app.use('/api/orgs/:orgId/messages', messagesRouter)
+
+// Logged calendar activity (MAI-139 T11). READ ONLY for the same reason:
+// scheduling, and the Google Calendar / Microsoft Graph sync that will write
+// these rows, are a later spec. A meeting's physical `location` and its `joinUrl`
+// are two separate fields all the way out to the client — a room is not a video
+// link (spec §6).
+app.use('/api/orgs/:orgId/meetings', meetingsRouter)
 
 // Schema-as-data (MAI-133 T5): ObjectDef + AttributeDef describe every object and
 // field. Both org-scoped; the org is in the path so the tenant boundary is checked

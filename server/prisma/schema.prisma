@@ -90,6 +90,12 @@ model Org {
   // the CRM spine already uses.
   smsMessages  SmsMessage[]
   messageMedia MessageMedia[]
+
+  // Calendar activity (MAI-139 T11). Back-relations so a deleted org cascades its
+  // meetings and their attendees away — the same onDelete: Cascade the rest of the
+  // CRM spine already uses.
+  meetings         Meeting[]
+  meetingAttendees MeetingAttendee[]
 }
 
 model User {
@@ -598,6 +604,9 @@ model Company {
   // Texts rolled up to this account (SmsMessage.companyId → Company). SetNull on
   // that side too, for the same reason (MAI-138 T10).
   smsMessages SmsMessage[]
+  // Meetings rolled up to this account (Meeting.companyId → Company). SetNull on
+  // that side too, for the same reason (MAI-139 T11).
+  meetings    Meeting[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -683,6 +692,14 @@ model Person {
   // Texts with this person (SmsMessage.personId → Person). SetNull on that side,
   // so deleting a person never destroys text history (MAI-138 T10).
   smsMessages         SmsMessage[]
+  // Every meeting this person was invited to (MeetingAttendee.personId → Person).
+  // SetNull on that side, exactly as EmailParticipant is: deleting a person leaves
+  // the attendee row and its RAW email intact, so the invite still reads
+  // correctly (MAI-139 T11).
+  meetingAttendances  MeetingAttendee[]
+  // Meetings this person organised (Meeting.organizerPersonId → Person). SetNull
+  // on that side too — Meeting.organizerEmail is what the row falls back to.
+  organizedMeetings   Meeting[]          @relation("MeetingOrganizer")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -895,6 +912,9 @@ model Deal {
   // Texts logged against this deal (SmsMessage.dealId → Deal). SetNull on that
   // side too, for the same reason (MAI-138 T10).
   smsMessages SmsMessage[]
+  // Meetings logged against this deal (Meeting.dealId → Deal). SetNull on that
+  // side too, for the same reason (MAI-139 T11).
+  meetings    Meeting[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1474,4 +1494,200 @@ model MessageMedia {
   updatedAt DateTime @updatedAt
 
   @@index([orgId, smsMessageId])
+}
+
+// -----------------------------------------------------------------------------
+// Activities — Meeting + MeetingAttendee (MAI-139, Phase 3 / T11).
+//
+// Spec: docs/specs/SPEC-CRM-SCHEMA.md §6. Plan: tasks/plan-crm-schema.md (T11).
+//
+// Same shape as Call, Email, and SmsMessage: real tables, first-class from day 1,
+// with nullable spine links so a meeting with people nobody has ever added to the
+// CRM still logs. Calendar sync — the Google Calendar and Microsoft Graph pull
+// that will WRITE these rows — is a LATER spec; this ticket lands the tables and
+// the read routes over them (server/src/routes/meetings.ts).
+//
+// THE CREDENTIAL BOUNDARY, again. Calendar auth is OAuthConnection's (the
+// encrypted grant), owned by the Integration Hub, and NOTHING here duplicates it:
+// no refresh token, no access token, no scope, no secret. A Meeting does not even
+// carry an account foreign key — see the note on `provider` below for why the
+// dedupe key deliberately stops at (org, provider, event).
+// -----------------------------------------------------------------------------
+
+// Meeting — a superset of Google Calendar's Event and Microsoft Graph's event,
+// plus a seam for meeting-intelligence providers (recall.ai / Gong).
+//
+// THE POINT OF THIS MODEL, and an explicit acceptance criterion: `location` and
+// `joinUrl` are TWO COLUMNS. A physical room is not a video link. Collapsing them
+// into one "where" string is the mistake every calendar integration makes once:
+// it makes "which meetings are in person?" unanswerable, it puts a URL in the
+// field a map would render, and it loses the room the moment a Meet link is
+// added. Google keeps them apart too (`location` vs `hangoutLink` /
+// `conferenceData`), and so does Graph (`location` vs `onlineMeeting.joinUrl`).
+// A meeting can have BOTH (a room with a dial-in), EITHER, or NEITHER.
+//
+// Like Email, the record does NOT carry a single personId: a meeting has MANY
+// attendees, stored as MeetingAttendee rows. `organizerPersonId` is the one
+// person link, because a meeting has exactly one organizer. companyId/dealId ARE
+// here — they are the account-level roll-ups the feed reads, mirroring Call,
+// Email, and SmsMessage (nullable, onDelete: SetNull, so trashing a Company or
+// Deal never destroys meeting history).
+model Meeting {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  title       String
+  description String?
+
+  // WHERE IT HAPPENS — two facts, two columns, on purpose (see above).
+  location           String? // free-text physical location, e.g. "HQ, Room 4"
+  joinUrl            String? // the video link: Meet hangoutLink / Zoom / Teams joinUrl
+  // Allowed values: "google_meet", "zoom", "teams", "other". Null when there is
+  // no video link at all — an in-person meeting is not a conference with an
+  // unknown provider.
+  conferenceProvider String?
+
+  // WHEN IT HAPPENS. isAllDay is the switch between two genuinely different
+  // things, and it is why this is a boolean and not an inference from the times:
+  //
+  //   - A TIMED meeting is an instant. startsAt/endsAt are stored in UTC (Prisma
+  //     writes UTC) and `timeZone` carries the IANA zone the event was BOOKED in,
+  //     so a client can render "Jun 24, 2026, 6:00 PM EDT" with a real zone label
+  //     rather than guessing (CLAUDE.md → Dates & Times).
+  //   - An ALL-DAY meeting is a CALENDAR DATE, not an instant. Google sends
+  //     `start.date` = "2026-08-25" with no time and no zone; Graph sends
+  //     isAllDay with midnight boundaries. We store the UTC midnight of that
+  //     date, and the date is read back off the UTC parts — which is exactly why
+  //     an all-day value must be rendered with NO time and NO zone. Rendering it
+  //     in a viewer's zone is what turns "Aug 25" into "Aug 24, 8:00 PM" for
+  //     anyone west of UTC. server/src/crm/meetingActivity.ts holds that rule at
+  //     the API boundary so no client has to remember it.
+  //
+  // endsAt is EXCLUSIVE for an all-day event, matching Google: a one-day meeting
+  // on the 25th ends on the 26th.
+  isAllDay Boolean  @default(false)
+  startsAt DateTime
+  endsAt   DateTime
+  timeZone String? // IANA, e.g. "America/New_York". Null on an all-day event.
+
+  // Allowed values: "confirmed", "tentative", "cancelled". A cancelled meeting is
+  // KEPT, not deleted: "they cancelled" is a fact about the account.
+  status String @default("confirmed")
+
+  // The organizer. The RAW email is always kept, for the same reason
+  // EmailParticipant.address is: it is who actually convened the meeting, and a
+  // personId is a link we drew later. SetNull, so deleting the Person unlinks
+  // without erasing who called the meeting.
+  organizerEmail    String?
+  organizerPersonId String?
+  organizerPerson   Person? @relation("MeetingOrganizer", fields: [organizerPersonId], references: [id], onDelete: SetNull)
+
+  // Calendar-sync bookkeeping. All of it non-secret: ids, a link, a change
+  // marker. No token ever lands here.
+  //
+  // Allowed values for `provider`: "google", "m365", "manual".
+  provider         String?
+  providerEventId  String? // Google event id / Graph event id
+  iCalUid          String? // the stable cross-provider id, shared by every attendee's copy
+  recurringEventId String? // the series this instance belongs to
+  syncCursor       String? // Google etag / Graph changeKey, for delta sync
+  webLink          String? // htmlLink — "open in Google Calendar / Outlook"
+
+  // Meeting-intelligence seam (recall.ai / Gong) — PHASE 2 fill. recordingUrl
+  // holds a bare S3 object KEY, not a link a browser can open, exactly as
+  // Call.recordingUrl, EmailAttachment.storageUrl, and MessageMedia.storageUrl
+  // do; the read route presigns it when the bytes are ours.
+  //
+  // Allowed values for `recordingProvider`: "recall_ai", "gong", "zoom".
+  // Allowed values for `transcriptStatus`: "pending", "done", "failed".
+  recordingUrl        String?
+  recordingProvider   String?
+  transcriptStatus    String?
+  externalRecordingId String?
+
+  attendees MeetingAttendee[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // IDEMPOTENT RE-SYNC — the acceptance criterion. Re-reading the same calendar
+  // event hits this key and updates instead of inserting a second copy.
+  //
+  // Keyed on (org, provider, event) and deliberately NOT on a connected account:
+  // when two reps in one org are both on the same meeting, Google hands each of
+  // their calendars the SAME event id, and that is ONE meeting, not two. Email is
+  // keyed the other way (per mailbox) because two mailboxes receiving one message
+  // genuinely are two received messages. Postgres allows many NULLs under a
+  // unique index, so hand-created meetings — provider "manual" with no event id,
+  // or no provider at all — never collide with each other.
+  @@unique([orgId, provider, providerEventId])
+  @@index([orgId])
+  // The hot paths: the org's calendar in a date window, and the same window
+  // narrowed to one account or one deal — a Company/Deal feed in one indexed
+  // round-trip.
+  @@index([orgId, startsAt])
+  @@index([orgId, companyId, startsAt])
+  @@index([orgId, dealId, startsAt])
+  // "Is this the same event we already have from the other provider?" — the
+  // cross-provider dedupe path.
+  @@index([orgId, iCalUid])
+}
+
+// One invitee on a meeting. THE EMAIL IS ALWAYS KEPT RAW, and personId is
+// NULLABLE — that pair IS the acceptance criterion, and it is the same rule
+// EmailParticipant holds to (§5.12).
+//
+// An external attendee is a real, common case: a customer's lawyer forwarded the
+// invite, a candidate's partner joined, a vendor's SE was added by the customer.
+// None of them should be conjured into the org's People list — that would flood
+// it with one-off invitees, and "who are our contacts" would stop meaning
+// anything. The record-creation setting (spec §5.3a) decides IF and WHEN an
+// attendee becomes a Person; until then this row still holds their email, which
+// is everything a later match or enrichment needs.
+//
+// onDelete: SetNull on the person side, for the same reason: deleting a Person
+// unlinks, it does not erase who was in the room.
+model MeetingAttendee {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  meetingId String
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  name  String?
+  email String // the RAW address, exactly as it appeared on the invite
+
+  personId String?
+  person   Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  // Allowed values: "needs_action", "accepted", "declined", "tentative" — Google's
+  // responseStatus vocabulary, which Graph's response types map onto.
+  responseStatus String  @default("needs_action")
+  isOrganizer    Boolean @default(false)
+  // Optional attendee vs required. Google marks it on the attendee; Graph has a
+  // "optional" attendee type. It is not a nicety: "the decision maker was
+  // optional" is a different meeting from "the decision maker was required".
+  isOptional     Boolean @default(false)
+  // A room or a piece of equipment, not a person. Both providers put rooms in the
+  // attendee list, and a room that accepted is a booked room — but it must never
+  // be counted as a human, matched to a Person, or emailed.
+  isResource     Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One row per address per meeting. Re-syncing the same event updates each
+  // attendee in place instead of appending a second copy of everyone.
+  @@unique([meetingId, email])
+  @@index([orgId, meetingId])
+  // The match path: "which unlinked attendees have this address?"
+  @@index([orgId, email])
+  @@index([personId])
 }
