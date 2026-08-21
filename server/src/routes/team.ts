@@ -14,12 +14,14 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { logger } from '../../dependencies/logger.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { buildPaginationParams } from '../lib/queryHelpers.js'
-import { isAdmin, type UserRole } from '../lib/roles.js'
-import type { Membership, Org, User } from '../generated/prisma/client.js'
+import { assignableRolesSchema, isAdmin, type OrgRole, type UserRole } from '../lib/roles.js'
+import type { Invitation, Membership, Org, User } from '../generated/prisma/client.js'
 
 const router = Router()
 
-const INVITE_EXPIRY_DAYS = 7
+// 14 days, not 7: an invite sent on the Friday before a week off is still live
+// when the person comes back.
+const INVITE_EXPIRY_DAYS = 14
 
 // --- Mappers: database row → API shape ---
 
@@ -51,7 +53,7 @@ function mapOrgToApi(org: Org) {
 }
 
 function buildInviteUrl(token: string): string {
-  return `${WEB_ORIGIN.replace(/\/+$/, '')}/auth/join/${encodeURIComponent(token)}`
+  return `${WEB_ORIGIN.replace(/\/+$/, '')}/join/${encodeURIComponent(token)}`
 }
 
 /**
@@ -362,15 +364,56 @@ router.get(
 )
 
 // ============================================================
+// Invitations
+// ============================================================
+// The token is 256 bits of CSPRNG, stored in full rather than hashed: the
+// pending-invite row has to reproduce the exact link for its Copy button, which a
+// hash cannot do. base64url so it is safe in a path without escaping.
+function mintInviteToken(): string {
+  return crypto.randomBytes(32).toString('base64url')
+}
+
+function mapInvitationToApi(invitation: Invitation) {
+  return {
+    id: invitation.id,
+    email: invitation.email,
+    roles: invitation.roles as OrgRole[],
+    status: invitation.status,
+    expiresAt: invitation.expiresAt.toISOString(),
+    inviteUrl: buildInviteUrl(invitation.token),
+    createdAt: invitation.createdAt.toISOString(),
+  }
+}
+
+/**
+ * Flip anything past its expiry to EXPIRED before the caller reads the list.
+ *
+ * Without this the admin's table shows a dead invite as live and offers a Copy
+ * button for a link that no longer works. Scoped to one org so a list request
+ * never writes another org's rows.
+ */
+export async function expireStaleInvitations(orgId?: string): Promise<void> {
+  await prisma.invitation.updateMany({
+    where: {
+      ...(orgId ? { orgId } : {}),
+      status: 'PENDING',
+      expiresAt: { lte: new Date() },
+    },
+    data: { status: 'EXPIRED' },
+  })
+}
+
+// ============================================================
 // POST /api/team/orgs/:orgId/invitations — invite someone to the org (admin only)
 // ============================================================
 // The role set is a closed list, not free text: without this an admin could mint
 // an invite carrying any string, and whatever accepts the invite would write it
-// straight onto a Membership.
+// straight onto a Membership. `assignableRolesSchema` also excludes "superadmin",
+// which is a platform role and must never be granted by an org admin.
 const inviteSchema = z
   .object({
     email: z.string().trim().toLowerCase().email().max(320),
-    roles: z.array(z.enum(['basic', 'admin'])).min(1).optional(),
+    roles: assignableRolesSchema.optional(),
   })
   .strict()
 
@@ -387,24 +430,36 @@ router.post(
     // --- Parse & validate params ---
     const parsed = inviteSchema.safeParse(req.body)
     if (!parsed.success) {
-      return void res.status(400).json({ error: 'Enter a valid email address.' })
+      return void res.status(400).json({ error: 'Enter a valid email address and role.' })
     }
     const { email } = parsed.data
     const roles = parsed.data.roles ?? ['basic']
 
     // --- Verify the invite is worth sending ---
-    const existing = await prisma.membership.findFirst({
+    const alreadyMember = await prisma.membership.findFirst({
       where: { orgId, user: { email } },
     })
-    if (existing) {
+    if (alreadyMember) {
       return void res.status(409).json({ error: 'That person is already a member.' })
     }
 
+    // A second invite for the same address would leave two live links, and the
+    // admin has no way to tell which one they already sent. Overwriting the token
+    // silently is worse still: it kills a link that may already be in an email.
+    await expireStaleInvitations(orgId)
+    const alreadyInvited = await prisma.invitation.findFirst({
+      where: { orgId, email, status: 'PENDING' },
+    })
+    if (alreadyInvited) {
+      return void res
+        .status(409)
+        .json({ error: 'That person already has an invite. Copy or revoke that one instead.' })
+    }
+
     // --- Execute query ---
-    const token = crypto.randomBytes(32).toString('hex')
     const invitation = await prisma.invitation.create({
       data: {
-        token,
+        token: mintInviteToken(),
         email,
         orgId,
         roles,
@@ -418,17 +473,7 @@ router.post(
     // --- Return response ---
     // No email is sent yet, so the link is returned for the admin to pass on. The
     // Invitations UI copies it rather than claiming a mail went out.
-    res.status(201).json({
-      invitation: {
-        id: invitation.id,
-        email: invitation.email,
-        roles: invitation.roles as UserRole[],
-        status: invitation.status,
-        expiresAt: invitation.expiresAt.toISOString(),
-        inviteUrl: buildInviteUrl(invitation.token),
-        createdAt: invitation.createdAt.toISOString(),
-      },
-    })
+    res.status(201).json({ invitation: mapInvitationToApi(invitation) })
   }),
 )
 
@@ -446,23 +491,56 @@ router.get(
     if (!membership) return
 
     // --- Execute query ---
+    await expireStaleInvitations(orgId)
+
     const invitations = await prisma.invitation.findMany({
-      where: { orgId, status: 'PENDING', expiresAt: { gt: new Date() } },
+      where: { orgId, status: 'PENDING' },
       orderBy: { createdAt: 'desc' },
     })
 
     res.json({
-      invitations: invitations.map((i) => ({
-        id: i.id,
-        email: i.email,
-        roles: i.roles as UserRole[],
-        status: i.status,
-        expiresAt: i.expiresAt.toISOString(),
-        inviteUrl: buildInviteUrl(i.token),
-        createdAt: i.createdAt.toISOString(),
-      })),
+      invitations: invitations.map(mapInvitationToApi),
       total: invitations.length,
     })
+  }),
+)
+
+// ============================================================
+// POST /api/team/orgs/:orgId/invitations/:id/regenerate — new link (admin only)
+// ============================================================
+// Replaces the token in place, so a link that leaked into the wrong inbox stops
+// working the moment the admin presses the button.
+router.post(
+  '/orgs/:orgId/invitations/:invitationId/regenerate',
+  wrapRoute('POST /api/team/orgs/:orgId/invitations/:invitationId/regenerate', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const invitationId = String(req.params.invitationId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId, { admin: true })
+    if (!membership) return
+
+    // --- Execute query ---
+    // Scoped by orgId, so an admin of one org cannot regenerate another org's
+    // invite by guessing its id. An already-accepted or revoked invite is not a
+    // candidate — those are finished, and reviving one would resurrect a link.
+    const result = await prisma.invitation.updateMany({
+      where: { id: invitationId, orgId, status: 'PENDING' },
+      data: {
+        token: mintInviteToken(),
+        expiresAt: new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
+      },
+    })
+    if (result.count === 0) {
+      return void res.status(404).json({ error: 'Invitation not found' })
+    }
+
+    const invitation = await prisma.invitation.findUniqueOrThrow({ where: { id: invitationId } })
+
+    logger.info({ orgId, userId: authReq.user!.id, invitationId }, 'regenerated an invite link')
+
+    res.json({ invitation: mapInvitationToApi(invitation) })
   }),
 )
 

@@ -8,6 +8,9 @@ export { useGetMembers } from './useGetMembers'
 export { useGetInvitations } from './useGetInvitations'
 export { useCreateInvitation } from './useCreateInvitation'
 export { useRevokeInvitation } from './useRevokeInvitation'
+export { useRegenerateInvitation } from './useRegenerateInvitation'
+export { useGetPublicInvitation } from './useGetPublicInvitation'
+export { useAcceptInvitation } from './useAcceptInvitation'
 export { memberDisplayName } from './types'
 export type {
   OrgSummary,
@@ -19,4 +22,7 @@ export type {
   CreateOrgInput,
   UpdateOrgInput,
   CreateInvitationInput,
+  PublicInvitation,
+  GetPublicInvitationResponse,
+  AcceptInvitationResponse,
 } from './types'

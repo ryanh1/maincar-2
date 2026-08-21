@@ -8,7 +8,9 @@ import { AuthProvider } from '@/providers/AuthProvider'
 
 import { SignIn } from '@/pages/auth/SignIn'
 import { SignUp } from '@/pages/auth/SignUp'
+import { CreateOrg } from '@/pages/CreateOrg'
 import { Home } from '@/pages/Home'
+import { JoinOrg } from '@/pages/JoinOrg'
 import { Settings } from '@/pages/Settings'
 import { Welcome } from '@/pages/Welcome'
 
@@ -17,6 +19,8 @@ const routeErrorElement = <RouteErrorPage />
 const router = createBrowserRouter([
   { path: '/auth/sign-in', element: <SignIn />, errorElement: routeErrorElement },
   { path: '/auth/sign-up', element: <SignUp />, errorElement: routeErrorElement },
+  // Public on purpose: the person opening an invite link may have no account.
+  { path: '/join/:token', element: <JoinOrg />, errorElement: routeErrorElement },
   {
     path: '/',
     element: <ProtectedLayout />,
@@ -25,6 +29,7 @@ const router = createBrowserRouter([
       { index: true, element: <Navigate to="/home" replace /> },
       { path: 'home', element: <Home /> },
       { path: 'welcome', element: <Welcome /> },
+      { path: 'create-org', element: <CreateOrg /> },
       { path: 'settings', element: <Settings /> },
     ],
   },

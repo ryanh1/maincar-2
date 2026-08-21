@@ -166,28 +166,16 @@ router.get(
         })
       }
 
-      // First sign-in. A new Org and its first admin membership are created together,
-      // in one transaction. The User is also set to have this org as their currentOrgId.
-      user = await prisma.$transaction(async (tx) => {
-        const org = await tx.org.create({ data: {} })
-        const newUser = await tx.user.create({
-          data: {
-            firebaseUid,
-            email,
-            currentOrgId: org.id,
-          },
-        })
-        // Create the admin membership
-        await tx.membership.create({
-          data: {
-            userId: newUser.id,
-            orgId: org.id,
-            roles: ['admin'],
-          },
-        })
-        return newUser
-      })
-      logger.info({ userId: user.id, currentOrgId: user.currentOrgId }, 'provisioned a new org and admin')
+      // First sign-in. The User row is created and NOTHING else: no org.
+      //
+      // Creating an account and belonging to an org are two separate steps now.
+      // Auto-minting an org here would hand every invited person a second, empty
+      // org they never asked for and are admin of, and the switcher would show it
+      // forever. A user with no memberships is a real, supported state — the
+      // client sends them to /create-org, and an invitee skips that entirely by
+      // accepting their invite.
+      user = await prisma.user.create({ data: { firebaseUid, email } })
+      logger.info({ userId: user.id }, 'provisioned a new user with no org')
     }
 
     if (!user.enabled) {

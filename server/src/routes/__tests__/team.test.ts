@@ -23,7 +23,13 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
       count: vi.fn(),
       create: vi.fn(),
     },
-    invitation: { create: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
+    invitation: {
+      create: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
+      updateMany: vi.fn(),
+    },
     $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
@@ -266,6 +272,8 @@ describe('POST /api/team/orgs/:orgId/invitations', () => {
       .mockResolvedValueOnce(membershipRow())
       // the "already a member?" check: nobody with that email yet
       .mockResolvedValueOnce(null)
+    // the "already invited?" check: no live invite for that address either
+    prismaMock.invitation.findFirst.mockResolvedValue(null)
     prismaMock.invitation.create.mockResolvedValue({
       id: 'inv-1',
       token: 'tok-1',
@@ -284,7 +292,7 @@ describe('POST /api/team/orgs/:orgId/invitations', () => {
 
     expect(res.status).toBe(201)
     expect(res.body.invitation.email).toBe('new@orga.com')
-    expect(res.body.invitation.inviteUrl).toContain('/auth/join/tok-1')
+    expect(res.body.invitation.inviteUrl).toContain('/join/tok-1')
     // The token is the secret in the link; it is never echoed as its own field.
     expect(res.body.invitation.token).toBeUndefined()
   })
@@ -336,6 +344,105 @@ describe('POST /api/team/orgs/:orgId/invitations', () => {
     expect(res.status).toBe(403)
     expect(prismaMock.invitation.create).not.toHaveBeenCalled()
   })
+
+  // A second live invite for the same address leaves the admin with two links
+  // and no way to tell which one they already sent. Overwriting the token
+  // silently would be worse: it kills a link that may already be in an inbox.
+  it('409s when that address already has a live invite', async () => {
+    prismaMock.membership.findFirst
+      .mockResolvedValueOnce(membershipRow())
+      .mockResolvedValueOnce(null)
+    prismaMock.invitation.findFirst.mockResolvedValue({ id: 'inv-live', status: 'PENDING' })
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations')
+      .set('Authorization', AUTH)
+      .send({ email: 'new@orga.com' })
+
+    expect(res.status).toBe(409)
+    expect(prismaMock.invitation.create).not.toHaveBeenCalled()
+  })
+
+  // Roles are stored deduped and sorted, so ["admin","admin","basic"] and
+  // ["basic","admin"] land as the same row and compare equal.
+  it('dedupes and sorts the roles it stores', async () => {
+    prismaMock.membership.findFirst
+      .mockResolvedValueOnce(membershipRow())
+      .mockResolvedValueOnce(null)
+    prismaMock.invitation.findFirst.mockResolvedValue(null)
+    prismaMock.invitation.create.mockResolvedValue({
+      id: 'inv-2',
+      token: 'tok-2',
+      email: 'new@orga.com',
+      orgId: 'org-a',
+      roles: ['admin', 'basic'],
+      status: 'PENDING',
+      expiresAt: NOW,
+      createdAt: NOW,
+    })
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations')
+      .set('Authorization', AUTH)
+      .send({ email: 'new@orga.com', roles: ['admin', 'admin', 'basic'] })
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.invitation.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ roles: ['admin', 'basic'] }) }),
+    )
+  })
+})
+
+describe('POST /api/team/orgs/:orgId/invitations/:id/regenerate', () => {
+  it('mints a new token and returns the new link', async () => {
+    prismaMock.membership.findFirst.mockResolvedValue(membershipRow())
+    prismaMock.invitation.updateMany.mockResolvedValue({ count: 1 })
+    prismaMock.invitation.findUniqueOrThrow.mockResolvedValue({
+      id: 'inv-1',
+      token: 'tok-fresh',
+      email: 'new@orga.com',
+      orgId: 'org-a',
+      roles: ['basic'],
+      status: 'PENDING',
+      expiresAt: NOW,
+      createdAt: NOW,
+    })
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations/inv-1/regenerate')
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.invitation.inviteUrl).toContain('/join/tok-fresh')
+    // Scoped by orgId, so an admin of one org cannot regenerate another's invite.
+    expect(prismaMock.invitation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'inv-1', orgId: 'org-a', status: 'PENDING' }),
+      }),
+    )
+  })
+
+  it('404s an invite that is not pending in this org', async () => {
+    prismaMock.membership.findFirst.mockResolvedValue(membershipRow())
+    prismaMock.invitation.updateMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations/inv-other/regenerate')
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+  })
+
+  it('403s a member who is not an admin of that org', async () => {
+    authAs(membershipRow({ roles: ['basic'] }))
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/invitations/inv-1/regenerate')
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(403)
+    expect(prismaMock.invitation.updateMany).not.toHaveBeenCalled()
+  })
 })
 
 describe('DELETE /api/team/orgs/:orgId/invitations/:invitationId', () => {
@@ -362,6 +469,76 @@ describe('DELETE /api/team/orgs/:orgId/invitations/:invitationId', () => {
 
     expect(res.status).toBe(404)
   })
+
+  it('403s a member who is not an admin of that org', async () => {
+    authAs(membershipRow({ roles: ['basic'] }))
+
+    const res = await request(app)
+      .delete('/api/team/orgs/org-a/invitations/inv-1')
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(403)
+    expect(prismaMock.invitation.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/team/orgs/:orgId/invitations', () => {
+  it('lists pending invites with their links', async () => {
+    prismaMock.membership.findFirst.mockResolvedValue(membershipRow())
+    prismaMock.invitation.updateMany.mockResolvedValue({ count: 0 })
+    prismaMock.invitation.findMany.mockResolvedValue([
+      {
+        id: 'inv-1',
+        token: 'tok-1',
+        email: 'new@orga.com',
+        orgId: 'org-a',
+        roles: ['basic'],
+        status: 'PENDING',
+        expiresAt: NOW,
+        createdAt: NOW,
+      },
+    ])
+
+    const res = await request(app)
+      .get('/api/team/orgs/org-a/invitations')
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.invitations[0].inviteUrl).toContain('/join/tok-1')
+    // The token is the secret in the link; it is never its own field.
+    expect(res.body.invitations[0].token).toBeUndefined()
+  })
+
+  // The admin's table must never offer a Copy button for a link that has already
+  // stopped working, so the read flips anything past its expiry first.
+  it('expires stale invites before listing, scoped to this org', async () => {
+    prismaMock.membership.findFirst.mockResolvedValue(membershipRow())
+    prismaMock.invitation.updateMany.mockResolvedValue({ count: 1 })
+    prismaMock.invitation.findMany.mockResolvedValue([])
+
+    await request(app).get('/api/team/orgs/org-a/invitations').set('Authorization', AUTH)
+
+    expect(prismaMock.invitation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ orgId: 'org-a', status: 'PENDING' }),
+        data: { status: 'EXPIRED' },
+      }),
+    )
+  })
+
+  // This is the route that hands back every live token, so the admin gate on it
+  // is what stops a plain member from reading them.
+  it('403s a member who is not an admin, so no token reaches them', async () => {
+    authAs(membershipRow({ roles: ['basic'] }))
+
+    const res = await request(app)
+      .get('/api/team/orgs/org-a/invitations')
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(403)
+    expect(res.body.invitations).toBeUndefined()
+    expect(prismaMock.invitation.findMany).not.toHaveBeenCalled()
+  })
 })
 
 // ============================================================
@@ -376,6 +553,7 @@ describe('org isolation', () => {
     { method: 'get' as const, path: '/api/team/orgs/org-b/invitations' },
     { method: 'post' as const, path: '/api/team/orgs/org-b/invitations' },
     { method: 'delete' as const, path: '/api/team/orgs/org-b/invitations/inv-1' },
+    { method: 'post' as const, path: '/api/team/orgs/org-b/invitations/inv-1/regenerate' },
   ]
 
   for (const route of ORG_SCOPED_ROUTES) {

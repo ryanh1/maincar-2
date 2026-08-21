@@ -5,6 +5,7 @@ import { logger } from '../dependencies/logger.js'
 import { WEB_ORIGIN } from './config.js'
 import { requestId } from './middleware/requestId.js'
 import authRouter from './routes/auth.js'
+import invitationsRouter from './routes/invitations.js'
 import teamRouter from './routes/team.js'
 
 // The app is assembled here and started in index.ts. Keeping them apart is what
@@ -32,6 +33,11 @@ app.use(requestId)
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true })
 })
+
+// Mounted at /api, not /api/team: the caller has no team yet, which is the
+// point of an invite. The router owns both /api/public/invitations/:token and
+// /api/invitations/:token/accept.
+app.use('/api', invitationsRouter)
 
 app.use('/api/auth', authRouter)
 app.use('/api/team', teamRouter)

@@ -85,6 +85,30 @@ export interface CreateInvitationResponse {
   invitation: Invitation
 }
 
+/**
+ * What GET /api/public/invitations/:token returns. Deliberately thin — anyone
+ * holding the link can read it, so it carries no ids and nothing about the org
+ * beyond its name.
+ */
+export interface PublicInvitation {
+  orgName: string | null
+  email: string
+  roles: UserRole[]
+  expiresAt: string
+}
+
+export interface GetPublicInvitationResponse {
+  invitation: PublicInvitation
+}
+
+export interface AcceptInvitationResponse {
+  membership: {
+    orgId: string
+    orgName: string | null
+    roles: UserRole[]
+  }
+}
+
 /** The display name for a member, falling back to the email when unnamed. */
 export function memberDisplayName(member: OrgMember): string {
   const name = [member.firstName, member.lastName].filter(Boolean).join(' ')

@@ -20,4 +20,9 @@ export const queryKeys = {
     members: (orgId: string) => ['orgs', 'members', orgId] as const,
     invitations: (orgId: string) => ['orgs', 'invitations', orgId] as const,
   },
+  invitations: {
+    all: ['invitations'] as const,
+    // Keyed by token, not by org: the reader of this one has no org yet.
+    public: (token: string) => ['invitations', 'public', token] as const,
+  },
 } as const

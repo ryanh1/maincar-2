@@ -135,4 +135,37 @@ describe('jsonFetch', () => {
 
     await expect(jsonFetch('/api/thing')).rejects.toBeInstanceOf(ApiError)
   })
+
+  // The error path logs unconditionally — VITE_DISABLE_API_LOGGING does not
+  // silence it — so an unredacted path would put every failed invite token into
+  // the browser console (MAI-7 → "No token appears in any log line or logged URL").
+  it('never logs an invite token', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fetchMock.mockResolvedValue(
+      mockResponse({ ok: false, status: 404, body: { error: 'Invitation unavailable' } }),
+    )
+
+    await expect(jsonFetch('/api/public/invitations/s3cr3t-token-value')).rejects.toThrow()
+
+    const logged = errorSpy.mock.calls.flat().map(String).join(' ')
+    expect(logged).not.toContain('s3cr3t-token-value')
+    expect(logged).toContain('/api/public/invitations/:token')
+    errorSpy.mockRestore()
+  })
+
+  it('never logs an accept token', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fetchMock.mockResolvedValue(
+      mockResponse({ ok: false, status: 409, body: { error: 'Wrong account' } }),
+    )
+
+    await expect(
+      jsonFetch('/api/invitations/s3cr3t-token-value/accept', { method: 'POST' }),
+    ).rejects.toThrow()
+
+    const logged = errorSpy.mock.calls.flat().map(String).join(' ')
+    expect(logged).not.toContain('s3cr3t-token-value')
+    expect(logged).toContain('/api/invitations/:token/accept')
+    errorSpy.mockRestore()
+  })
 })

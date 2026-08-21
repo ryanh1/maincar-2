@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Check, Copy, Trash2 } from 'lucide-react'
+import { Check, Copy, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -23,9 +23,11 @@ import {
   useCreateInvitation,
   useGetInvitations,
   useGetMembers,
+  useRegenerateInvitation,
   useRevokeInvitation,
 } from '@/hooks/orgs'
 import { ApiError } from '@/lib/api'
+import { formatDateTime } from '@/lib/datetime'
 import { getRoleLabel } from '@/lib/roles'
 import { useAuth } from '@/providers/useAuth'
 
@@ -33,13 +35,14 @@ import { useAuth } from '@/providers/useAuth'
 const COPIED_MS = 1500
 
 export function Settings_MembersTab() {
-  const { org, isAdmin } = useAuth()
+  const { user, org, isAdmin } = useAuth()
   const orgId = org?.id ?? null
 
   const membersQuery = useGetMembers(orgId)
   const invitationsQuery = useGetInvitations(orgId, isAdmin)
   const createInvitation = useCreateInvitation()
   const revokeInvitation = useRevokeInvitation()
+  const regenerateInvitation = useRegenerateInvitation()
 
   const [email, setEmail] = useState('')
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -70,6 +73,15 @@ export function Settings_MembersTab() {
       setTimeout(() => setCopiedId((current) => (current === id ? null : current)), COPIED_MS)
     } catch {
       toast.error('Could not copy the link. Copy it from the address bar instead.')
+    }
+  }
+
+  async function regenerate(invitationId: string) {
+    try {
+      await regenerateInvitation.mutateAsync({ orgId: org!.id, invitationId })
+      toast.success('New link created. The old link no longer works.')
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not create a new link. Try again.')
     }
   }
 
@@ -165,7 +177,8 @@ export function Settings_MembersTab() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{invitation.email}</p>
                       <p className="truncate text-xs text-muted-foreground">
-                        {invitation.roles.map(getRoleLabel).join(', ')}
+                        {invitation.roles.map(getRoleLabel).join(', ')} &middot; expires{' '}
+                        {formatDateTime(invitation.expiresAt, user?.timeZone)}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
@@ -176,6 +189,15 @@ export function Settings_MembersTab() {
                       >
                         {copiedId === invitation.id ? <Check size={16} /> : <Copy size={16} />}
                         Copy link
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={regenerateInvitation.isPending}
+                        aria-label={`Create a new link for ${invitation.email}`}
+                        onClick={() => void regenerate(invitation.id)}
+                      >
+                        <RefreshCw size={16} />
                       </Button>
                       <Button
                         variant="ghost"

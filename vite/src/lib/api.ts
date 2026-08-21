@@ -36,10 +36,23 @@ function resolveUrl(input: RequestInfo): RequestInfo {
   return `${API_URL}${input}`
 }
 
+/**
+ * Invite tokens travel in the path, and this logger prints the path. Logging is
+ * on by default in a production build, so without this every invitee's token
+ * lands in their browser console (MAI-7 → "No token appears in any log line or
+ * logged URL"). The route shape is what makes a log line useful anyway; the
+ * secret in it never was.
+ */
+function redactTokens(url: string): string {
+  return url
+    .replace(/\/api\/public\/invitations\/[^/?#]+/, '/api/public/invitations/:token')
+    .replace(/\/api\/invitations\/[^/?#]+\/accept/, '/api/invitations/:token/accept')
+}
+
 function getFullUrl(input: RequestInfo): string {
   const url = typeof input === 'string' ? input : input.url
-  if (url.startsWith('http')) return url
-  return `${window.location.origin}${url}`
+  const absolute = url.startsWith('http') ? url : `${window.location.origin}${url}`
+  return redactTokens(absolute)
 }
 
 export async function jsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {

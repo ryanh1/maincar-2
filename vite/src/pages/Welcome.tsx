@@ -2,7 +2,6 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
-import { APP_NAME } from '@/config'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -12,25 +11,30 @@ import { useAuth } from '@/providers/useAuth'
 
 export function Welcome() {
   const navigate = useNavigate()
-  const { user, org, isAdmin } = useAuth()
+  const { user } = useAuth()
   const updateProfile = useUpdateProfile()
 
   const [firstName, setFirstName] = useState(user?.firstName ?? '')
   const [lastName, setLastName] = useState(user?.lastName ?? '')
-  const [orgName, setOrgName] = useState(org?.name ?? '')
+  const [title, setTitle] = useState(user?.title ?? '')
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     try {
-      await updateProfile.mutateAsync({
+      const me = await updateProfile.mutateAsync({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
-        ...(isAdmin ? { orgName: orgName.trim() } : {}),
+        ...(title.trim() ? { title: title.trim() } : {}),
         // Default the zone from the browser. Every time shown to this user is
         // rendered in it (CLAUDE.md → Dates & Times).
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       })
-      navigate('/home', { replace: true })
+
+      // Pick the destination here rather than navigating to /home and letting
+      // ProtectedLayout bounce on. Two navigations in one tick leave the router
+      // rendering a <Navigate> whose effect never runs, and the screen goes blank
+      // until a reload. The response just told us whether an org exists, so use it.
+      navigate(me.memberships.length === 0 ? '/create-org' : '/home', { replace: true })
     } catch {
       toast.error('Your details could not be saved. Try again.')
     }
@@ -38,10 +42,7 @@ export function Welcome() {
 
   return (
     <div className="mx-auto w-full max-w-md py-8">
-      <h1 className="display text-2xl font-bold">Welcome to {APP_NAME}</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Tell us who you are. This takes a moment and you only do it once.
-      </p>
+      <h1 className="display text-2xl font-bold">Tell us who you are</h1>
 
       <form onSubmit={onSubmit} className="mt-8 flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
@@ -68,22 +69,13 @@ export function Welcome() {
           />
         </div>
 
-        {isAdmin && (
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="orgName">
-              Organization name <RequiredAsterisk />
-            </Label>
-            <Input
-              id="orgName"
-              required
-              value={orgName}
-              onChange={(e) => setOrgName(e.target.value)}
-            />
-          </div>
-        )}
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="title">Job title</Label>
+          <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </div>
 
         <Button type="submit" disabled={updateProfile.isPending}>
-          {updateProfile.isPending ? 'Saving…' : 'Continue'}
+          {updateProfile.isPending ? 'Saving…' : 'Save'}
         </Button>
       </form>
     </div>

@@ -20,6 +20,7 @@ function renderAt(path: string) {
       <Route path="/" element={<ProtectedLayout />}>
         <Route path="home" element={<p>home page</p>} />
         <Route path="welcome" element={<p>welcome page</p>} />
+        <Route path="create-org" element={<p>create org page</p>} />
       </Route>
       <Route path="/auth/sign-in" element={<p>sign in page</p>} />
     </Routes>,
@@ -33,7 +34,7 @@ beforeEach(() => {
 
 describe('ProtectedLayout', () => {
   it('shows the loader while auth is still resolving', () => {
-    useAuthMock.mockReturnValue({ isLoading: true, isAuthenticated: false, needsOnboarding: false })
+    useAuthMock.mockReturnValue({ isLoading: true, isAuthenticated: false, needsOnboarding: false, needsOrg: false })
 
     renderAt('/home')
 
@@ -46,6 +47,7 @@ describe('ProtectedLayout', () => {
       isLoading: false,
       isAuthenticated: false,
       needsOnboarding: false,
+      needsOrg: false,
     })
 
     renderAt('/home')
@@ -54,7 +56,7 @@ describe('ProtectedLayout', () => {
   })
 
   it('renders the page for a signed-in user who finished onboarding', () => {
-    useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true, needsOnboarding: false })
+    useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true, needsOnboarding: false, needsOrg: false })
 
     renderAt('/home')
 
@@ -62,7 +64,7 @@ describe('ProtectedLayout', () => {
   })
 
   it('forces an unonboarded user to /welcome', () => {
-    useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true, needsOnboarding: true })
+    useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true, needsOnboarding: true, needsOrg: true })
 
     renderAt('/home')
 
@@ -71,10 +73,68 @@ describe('ProtectedLayout', () => {
   })
 
   it('lets an unonboarded user stay on /welcome, so the redirect cannot loop', () => {
-    useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true, needsOnboarding: true })
+    useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true, needsOnboarding: true, needsOrg: true })
 
     renderAt('/welcome')
 
     expect(screen.getByText('welcome page')).toBeInTheDocument()
+  })
+
+  // Onboarding is two steps and the order matters: the name is asked for first,
+  // so an invitee's profile is complete before the invite lands them anywhere.
+  it('sends a named user with no org to /create-org', () => {
+    useAuthMock.mockReturnValue({
+      isLoading: false,
+      isAuthenticated: true,
+      needsOnboarding: false,
+      needsOrg: true,
+    })
+
+    renderAt('/home')
+
+    expect(screen.getByText('create org page')).toBeInTheDocument()
+    expect(screen.queryByText('home page')).not.toBeInTheDocument()
+  })
+
+  it('asks for the name before the org, never the other way round', () => {
+    useAuthMock.mockReturnValue({
+      isLoading: false,
+      isAuthenticated: true,
+      needsOnboarding: true,
+      needsOrg: true,
+    })
+
+    renderAt('/home')
+
+    expect(screen.getByText('welcome page')).toBeInTheDocument()
+    expect(screen.queryByText('create org page')).not.toBeInTheDocument()
+  })
+
+  it('lets an org-less user stay on /create-org, so the redirect cannot loop', () => {
+    useAuthMock.mockReturnValue({
+      isLoading: false,
+      isAuthenticated: true,
+      needsOnboarding: false,
+      needsOrg: true,
+    })
+
+    renderAt('/create-org')
+
+    expect(screen.getByText('create org page')).toBeInTheDocument()
+  })
+
+  // An invitee has an org the moment they accept, so both screens are finished
+  // asking and neither should hold them there.
+  it('bounces a fully onboarded user off /create-org', () => {
+    useAuthMock.mockReturnValue({
+      isLoading: false,
+      isAuthenticated: true,
+      needsOnboarding: false,
+      needsOrg: false,
+    })
+
+    renderAt('/create-org')
+
+    expect(screen.getByText('home page')).toBeInTheDocument()
   })
 })

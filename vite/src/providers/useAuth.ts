@@ -28,6 +28,8 @@ export interface AuthContextType {
   isAdmin: boolean
   isSuperadmin: boolean
   needsOnboarding: boolean
+  /** Signed in, profile done, but a member of no org yet. */
+  needsOrg: boolean
   refresh: () => Promise<void>
   signOut: () => Promise<void>
 }
@@ -54,12 +56,17 @@ export function useAuth(): AuthContextType {
   const activeRoles = memberships.find((m) => m.orgId === org?.id)?.roles ?? []
   const isAdmin = rolesIsAdmin(activeRoles)
 
-  // The onboarding gate. Limited to what a fresh signup cannot have:
-  //   1. Profile (first name, last name) — everyone.
-  //   2. Org name — admins only; everyone else inherits it from their inviter.
-  const needsProfileSetup = !user?.firstName || !user?.lastName
-  const needsOrgSetup = isAdmin && !org?.name
-  const needsOnboarding = !!user && !!org && (needsProfileSetup || needsOrgSetup)
+  // Onboarding is two steps, in this order, and they are separate on purpose.
+  //
+  //   1. Who you are — first and last name. Everyone.
+  //   2. Which org you are in. Creating an account no longer creates an org, so
+  //      a brand-new user genuinely belongs to none until they either name one or
+  //      accept an invite. An invitee never sees step 2.
+  //
+  // `needsOnboarding` deliberately does NOT require an org: the name is asked for
+  // first, so an invitee's profile is complete before they land anywhere.
+  const needsOnboarding = !!user && (!user.firstName || !user.lastName)
+  const needsOrg = !!user && memberships.length === 0
 
   const refresh = async (): Promise<void> => {
     if (!auth.currentUser) return
@@ -95,6 +102,7 @@ export function useAuth(): AuthContextType {
     isAdmin,
     isSuperadmin: rolesIsSuperadmin(user?.roles ?? []),
     needsOnboarding,
+    needsOrg,
     refresh,
     signOut,
   }

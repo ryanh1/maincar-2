@@ -10,6 +10,7 @@ const {
   useGetInvitationsMock,
   createInvitationMock,
   revokeInvitationMock,
+  regenerateInvitationMock,
   toastErrorMock,
   toastSuccessMock,
 } = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const {
   useGetInvitationsMock: vi.fn(),
   createInvitationMock: vi.fn(),
   revokeInvitationMock: vi.fn(),
+  regenerateInvitationMock: vi.fn(),
   toastErrorMock: vi.fn(),
   toastSuccessMock: vi.fn(),
 }))
@@ -28,6 +30,7 @@ vi.mock('@/hooks/orgs', () => ({
   useGetInvitations: useGetInvitationsMock,
   useCreateInvitation: () => ({ mutateAsync: createInvitationMock, isPending: false }),
   useRevokeInvitation: () => ({ mutateAsync: revokeInvitationMock, isPending: false }),
+  useRegenerateInvitation: () => ({ mutateAsync: regenerateInvitationMock, isPending: false }),
   memberDisplayName: (m: { firstName?: string; lastName?: string; email: string }) =>
     [m.firstName, m.lastName].filter(Boolean).join(' ') || m.email,
 }))
@@ -61,14 +64,18 @@ const INVITATION = {
   email: 'new@acme.com',
   roles: ['basic'],
   status: 'PENDING',
-  expiresAt: '',
-  inviteUrl: 'http://localhost:5183/auth/join/tok-1',
+  expiresAt: '2026-09-03T16:00:00.000Z',
+  inviteUrl: 'http://localhost:5183/join/tok-1',
   createdAt: '',
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useAuthMock.mockReturnValue({ org: ORG, isAdmin: true })
+  useAuthMock.mockReturnValue({
+    user: { timeZone: 'America/New_York' },
+    org: ORG,
+    isAdmin: true,
+  })
   useGetMembersMock.mockReturnValue({ data: MEMBERS, isPending: false, isError: false })
   useGetInvitationsMock.mockReturnValue({ data: [INVITATION], isPending: false, isError: false })
 })
@@ -160,5 +167,31 @@ describe('Settings_MembersTab', () => {
     await user.click(await screen.findByRole('button', { name: 'Cancel' }))
 
     expect(revokeInvitationMock).not.toHaveBeenCalled()
+  })
+
+  // Regenerate has no confirm dialog on purpose: the admin presses it BECAUSE the
+  // old link is a problem, so killing it immediately is the point, not a risk.
+  it('regenerates the link on one press', async () => {
+    const user = userEvent.setup()
+    regenerateInvitationMock.mockResolvedValue({ invitation: INVITATION })
+    renderWithProviders(<Settings_MembersTab />)
+
+    await user.click(screen.getByRole('button', { name: /Create a new link for new@acme.com/ }))
+
+    await waitFor(() =>
+      expect(regenerateInvitationMock).toHaveBeenCalledWith({
+        orgId: 'org-a',
+        invitationId: 'inv-1',
+      }),
+    )
+    expect(toastSuccessMock).toHaveBeenCalledWith('New link created. The old link no longer works.')
+  })
+
+  // Every time-of-day carries its zone label (CLAUDE.md → Dates & Times), and the
+  // zone is the VIEWING user's, not the browser's.
+  it('shows the expiry in the viewing user\'s timezone, with the zone named', () => {
+    renderWithProviders(<Settings_MembersTab />)
+
+    expect(screen.getByText(/expires Sep 3, 2026, 12:00 PM EDT/)).toBeInTheDocument()
   })
 })

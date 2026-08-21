@@ -9,7 +9,7 @@ import { useAuth } from '@/providers/useAuth'
 
 // The auth gate plus the app chrome. Every signed-in route nests under this.
 export function ProtectedLayout() {
-  const { isLoading, isAuthenticated, needsOnboarding } = useAuth()
+  const { isLoading, isAuthenticated, needsOnboarding, needsOrg } = useAuth()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -20,8 +20,19 @@ export function ProtectedLayout() {
     return <Navigate to="/auth/sign-in" replace state={{ from }} />
   }
 
+  // The two onboarding steps, in order. Name first, then org: an invitee never
+  // reaches the second one, because accepting the invite gives them a membership.
   if (needsOnboarding && location.pathname !== '/welcome') {
     return <Navigate to="/welcome" replace />
+  }
+
+  if (!needsOnboarding && needsOrg && location.pathname !== '/create-org') {
+    return <Navigate to="/create-org" replace />
+  }
+
+  // Both steps done, so neither screen has anything left to ask.
+  if (!needsOnboarding && !needsOrg && (location.pathname === '/welcome' || location.pathname === '/create-org')) {
+    return <Navigate to="/home" replace />
   }
 
   return (

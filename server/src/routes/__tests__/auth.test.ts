@@ -136,31 +136,32 @@ describe('GET /api/auth/me', () => {
     expect(res.body.user.createdAt).toBe(NOW.toISOString())
   })
 
-  it('provisions an org and an admin on first sign-in', async () => {
+  // Creating an account no longer creates an org (MAI-7). Those are two separate
+  // onboarding steps, so that an invited person does not end up owning a second,
+  // empty org they never asked for.
+  it('provisions a user with NO org on first sign-in', async () => {
     verifyTokenMock.mockResolvedValue({ uid: 'uid-new', email: 'new@orgb.com' })
     // Neither the uid lookup nor the email collision check finds anything.
     prismaMock.user.findUnique.mockResolvedValue(null)
-    const provisioned = userRow({
-      id: 'user-new',
-      firebaseUid: 'uid-new',
-      email: 'new@orgb.com',
-      currentOrgId: 'org-new',
-    })
-    prismaMock.$transaction.mockResolvedValue(provisioned)
-    prismaMock.membership.findMany.mockResolvedValue([
-      membershipRow({ userId: 'user-new', org: orgRow({ id: 'org-new' }), roles: ['admin'] }),
-    ])
+    prismaMock.user.create.mockResolvedValue(
+      userRow({
+        id: 'user-new',
+        firebaseUid: 'uid-new',
+        email: 'new@orgb.com',
+        currentOrgId: null,
+      }),
+    )
+    prismaMock.membership.findMany.mockResolvedValue([])
 
     const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer fake-token')
 
     expect(res.status).toBe(200)
-    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
     expect(res.body.user.email).toBe('new@orgb.com')
-    // The person who creates the org runs it — as a role on the MEMBERSHIP now,
-    // because "admin" means admin of one org, not of the platform.
-    expect(res.body.memberships).toHaveLength(1)
-    expect(res.body.memberships[0].roles).toContain('admin')
-    expect(res.body.org.id).toBe('org-new')
+    // No org, no membership, and above all no transaction minting either.
+    expect(prismaMock.org.create).not.toHaveBeenCalled()
+    expect(prismaMock.membership.create).not.toHaveBeenCalled()
+    expect(res.body.org).toBeNull()
+    expect(res.body.memberships).toHaveLength(0)
   })
 
   // A Firebase account deleted and recreated with the same address (a reset
