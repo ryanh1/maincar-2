@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { DEVICE_CHOICE_KEY } from '@/lib/deviceStorage'
@@ -240,6 +240,40 @@ describe('DeviceCheck', () => {
     ).toBeInTheDocument()
   })
 
+  it('persists the chosen speaker separately from the microphone', async () => {
+    const user = userEvent.setup()
+    render(<DeviceCheck />)
+
+    await user.click(speakerTrigger())
+    await user.click(await screen.findByRole('option', { name: 'Headset Speakers' }))
+
+    await waitFor(() => expect(speakerTrigger()).toHaveTextContent('Headset Speakers'))
+    // The microphone half of the choice is left exactly as it was.
+    expect(JSON.parse(window.localStorage.getItem(DEVICE_CHOICE_KEY) ?? '{}')).toEqual({
+      microphoneId: null,
+      speakerId: 'spk-headset',
+    })
+  })
+
+  // Chrome hands back an empty label for the default device even after a grant, so
+  // a raw label would render a blank row the rep cannot choose between.
+  it('names a device the browser did not name', async () => {
+    const user = userEvent.setup()
+    mockDevices({
+      microphones: [
+        { deviceId: 'default', label: '', groupId: 'g1' },
+        { deviceId: 'mic-2', label: '', groupId: 'g2' },
+      ],
+    })
+    render(<DeviceCheck />)
+
+    expect(micTrigger()).toHaveTextContent('Default microphone')
+
+    await user.click(micTrigger())
+
+    expect(await screen.findByRole('option', { name: 'Microphone 2' })).toBeInTheDocument()
+  })
+
   describe('the test button', () => {
     it('plays a ramped beep through the chosen speaker', async () => {
       const user = userEvent.setup()
@@ -336,6 +370,112 @@ describe('DeviceCheck', () => {
           'Could not open that microphone. Pick another one, then test again.',
         ),
       ).toBeInTheDocument()
+    })
+
+    it('reports a speaker that refused to play, and still tests the microphone', async () => {
+      const user = userEvent.setup()
+      class BlockedContext extends FakeAudioContext {
+        resume = vi.fn().mockRejectedValue(new DOMException('NotAllowedError'))
+      }
+      vi.stubGlobal('AudioContext', BlockedContext)
+      render(<DeviceCheck />)
+
+      await user.click(screen.getByRole('button', { name: 'Test' }))
+
+      expect(
+        await screen.findByText(
+          'Speaker: could not play the beep. Pick another speaker, then test again.',
+        ),
+      ).toBeInTheDocument()
+      // One failure does not cancel the other half of the check.
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalled())
+    })
+
+    it('names the next action when the microphone opens but cannot be read', async () => {
+      const user = userEvent.setup()
+      class NoSourceContext extends FakeAudioContext {
+        createMediaStreamSource(): never {
+          throw new DOMException('InvalidStateError')
+        }
+      }
+      vi.stubGlobal('AudioContext', NoSourceContext)
+      render(<DeviceCheck />)
+
+      await user.click(screen.getByRole('button', { name: 'Test' }))
+
+      expect(
+        await screen.findByText(
+          'Could not read that microphone. Pick another one, then test again.',
+        ),
+      ).toBeInTheDocument()
+      // The mic is released rather than left hot behind a failed read.
+      await waitFor(() => expect(trackStop).toHaveBeenCalled())
+    })
+
+    // `fireEvent`, not `userEvent`: userEvent's own timer plumbing deadlocks
+    // against vitest's fake clock, and the only thing this test needs from the
+    // click is that it happened.
+    it('says nothing came through when the mic stays silent for the whole test', async () => {
+      vi.useFakeTimers()
+      try {
+        analyserSample = 128 // silence
+        render(<DeviceCheck />)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Test' }))
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0)
+        })
+        expect(getUserMedia).toHaveBeenCalled()
+
+        // The run closes itself after TEST_DURATION_MS rather than holding the mic
+        // open for as long as the page lives.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000)
+        })
+
+        expect(
+          screen.getByText('Microphone: nothing came through. Pick another one, then test again.'),
+        ).toBeInTheDocument()
+        expect(trackStop).toHaveBeenCalled()
+        expect(screen.getByRole('button', { name: 'Test' })).toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('names the next action when the browser cannot open a microphone at all', async () => {
+      const user = userEvent.setup()
+      Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: undefined })
+      render(<DeviceCheck />)
+
+      await user.click(screen.getByRole('button', { name: 'Test' }))
+
+      expect(
+        await screen.findByText(
+          'Could not open that microphone. Pick another one, then test again.',
+        ),
+      ).toBeInTheDocument()
+    })
+
+    // Nothing else holds a reference to this stream, so if the late arrival is not
+    // released here the recording indicator stays lit for the life of the page.
+    it('releases a microphone that arrives after the rep has already stopped the test', async () => {
+      const user = userEvent.setup()
+      let release: (stream: MediaStream) => void = () => {}
+      getUserMedia.mockImplementation(
+        () => new Promise<MediaStream>((resolve) => (release = resolve)),
+      )
+      render(<DeviceCheck />)
+
+      await user.click(screen.getByRole('button', { name: 'Test' }))
+      await user.click(await screen.findByRole('button', { name: 'Stop test' }))
+      expect(trackStop).not.toHaveBeenCalled()
+
+      await act(async () => {
+        release(fakeStream())
+      })
+
+      expect(trackStop).toHaveBeenCalledTimes(1)
     })
 
     it('is disabled with a reason when the browser has no Web Audio', () => {

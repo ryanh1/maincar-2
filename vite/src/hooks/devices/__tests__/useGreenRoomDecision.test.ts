@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 
 import { readGreenRoomCheck, recordGreenRoomCheck } from '@/lib/greenRoomSession'
 
+import { __resetGreenRoomCheckStoreForTests } from '../greenRoomCheckStore'
 import { useGreenRoomDecision } from '../useGreenRoomDecision'
 
 // jsdom implements no `navigator.permissions`, so every test installs its own.
@@ -32,14 +33,19 @@ function recordPass(permission: 'granted' | 'prompt' = 'granted') {
   recordGreenRoomCheck({ permission, hasMicrophone: true })
 }
 
+// The record now lives in a module-level store shared by every hook instance, so
+// it outlives an individual test. Dropping its cache is what makes each test
+// start from the storage IT set up rather than the one before it.
 beforeEach(() => {
   window.sessionStorage.clear()
+  __resetGreenRoomCheckStoreForTests()
 })
 
 afterEach(() => {
   Reflect.deleteProperty(navigator, 'permissions')
   vi.restoreAllMocks()
   window.sessionStorage.clear()
+  __resetGreenRoomCheckStoreForTests()
 })
 
 describe('useGreenRoomDecision', () => {
@@ -190,6 +196,88 @@ describe('useGreenRoomDecision', () => {
     await waitFor(() => expect(query).toHaveBeenCalled())
     expect(result.current.permission).toBe('unknown')
     expect(result.current.shouldShow).toBe(true)
+  })
+
+  // The rep clicks Call and navigates away before the browser answers. The
+  // listener must not outlive the hook that made it.
+  it('detaches the permission listener when the answer lands after unmount', async () => {
+    const listeners = new Set<Listener>()
+    const status = {
+      state: 'granted' as PermissionState,
+      addEventListener: vi.fn((_type: string, cb: Listener) => listeners.add(cb)),
+      removeEventListener: vi.fn((_type: string, cb: Listener) => listeners.delete(cb)),
+    }
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const query = vi.fn(async () => {
+      await gate
+      return status
+    })
+    Object.defineProperty(navigator, 'permissions', { value: { query }, configurable: true })
+
+    const { unmount } = renderHook(() => useGreenRoomDecision())
+    await waitFor(() => expect(query).toHaveBeenCalled())
+
+    unmount()
+    await act(async () => {
+      release()
+      await gate
+    })
+
+    expect(status.removeEventListener).toHaveBeenCalledWith('change', expect.any(Function))
+    expect(status.addEventListener).not.toHaveBeenCalled()
+    expect(listeners.size).toBe(0)
+  })
+
+  // `getUserMedia` succeeding is more authoritative than the Permissions API, so a
+  // caller that learned something newer can say so. The greenroom deliberately does
+  // not (see GreenRoom.tsx), but the option is part of the hook's contract.
+  it('records the permission the caller passes instead of the one it read', async () => {
+    installPermissions('prompt')
+
+    const { result } = renderHook(() => useGreenRoomDecision())
+    await waitFor(() => expect(result.current.permission).toBe('prompt'))
+
+    act(() => {
+      result.current.recordSession({ hasMicrophone: true, permission: 'granted' })
+    })
+
+    expect(readGreenRoomCheck()).toMatchObject({ permission: 'granted' })
+    // And the record no longer matches the live read, so the next dial shows.
+    expect(result.current.reason).toBe('permission-changed')
+  })
+
+  // The likeliest moment for a mic blocked in browser settings is the rep's very
+  // first dial, and that is exactly the moment there is no record to compare
+  // against. A live denial outranks a missing record, or the greenroom opens
+  // with its primary button live on a microphone the browser has blocked.
+  it('names the denial on the first call of the session, with nothing on record', async () => {
+    installPermissions('denied')
+
+    const { result } = renderHook(() => useGreenRoomDecision())
+
+    await waitFor(() => expect(result.current.reason).toBe('mic-denied'))
+    expect(result.current.shouldShow).toBe(true)
+  })
+
+  // Two instances are read on the same screen — the dialer's and GreenRoom's —
+  // and a record made through one must be visible to the other. When they
+  // disagree the caller opens a dialog that renders nothing: no dialog, no call.
+  it('shares a recorded check with every other instance of the hook', async () => {
+    installPermissions('granted')
+
+    const caller = renderHook(() => useGreenRoomDecision())
+    const dialog = renderHook(() => useGreenRoomDecision())
+    await waitFor(() => expect(caller.result.current.permission).toBe('granted'))
+    expect(caller.result.current.shouldShow).toBe(true)
+
+    act(() => {
+      dialog.result.current.recordSession({ hasMicrophone: true })
+    })
+
+    expect(dialog.result.current.reason).toBe('retry')
+    expect(caller.result.current.reason).toBe('retry')
+    expect(caller.result.current.shouldShow).toBe(false)
   })
 
   it('stops listening for permission changes on unmount', async () => {

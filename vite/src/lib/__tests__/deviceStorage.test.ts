@@ -41,6 +41,12 @@ describe('readDeviceChoice', () => {
     expect(readDeviceChoice()).toEqual({ microphoneId: null, speakerId: null })
   })
 
+  it('returns nulls for a stored literal null', () => {
+    window.localStorage.setItem(DEVICE_CHOICE_KEY, 'null')
+
+    expect(readDeviceChoice()).toEqual({ microphoneId: null, speakerId: null })
+  })
+
   it('drops a field an older build wrote as a non-string', () => {
     window.localStorage.setItem(
       DEVICE_CHOICE_KEY,

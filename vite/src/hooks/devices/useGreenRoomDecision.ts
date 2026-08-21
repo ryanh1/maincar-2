@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+
+import { greenRoomCheckPassed } from '@/lib/greenRoomSession'
 
 import {
-  greenRoomCheckPassed,
-  readGreenRoomCheck,
-  recordGreenRoomCheck,
-} from '@/lib/greenRoomSession'
+  getGreenRoomCheckSnapshot,
+  recordGreenRoomCheckInStore,
+  subscribeToGreenRoomCheck,
+} from './greenRoomCheckStore'
 
 import type {
   GreenRoomCheck,
@@ -42,15 +44,19 @@ function toMicPermission(state: PermissionState | undefined): MicPermission {
  * the check ran, and `permission` says what is true now.
  */
 function decide(permission: MicPermission, check: GreenRoomCheck | null): GreenRoomReason {
-  // 1. Nothing recorded this session — the rep has not been through the
+  // 1. The microphone is denied. Always show, and say so — on a retry, and on
+  //    the very first dial of the session, which is the likeliest moment for a
+  //    mic blocked in browser settings. A live denial is a fact about right now
+  //    and a missing record is only a fact about history, so this rule is tested
+  //    FIRST: 'initial' shows the greenroom too, but it leaves the primary
+  //    button live, and a rep who dials past a blocked mic joins a call nobody
+  //    can hear.
+  if (permission === 'denied') return 'mic-denied'
+
+  // 2. Nothing recorded this session — the rep has not been through the
   //    greenroom yet, so run it. A check that found no usable microphone is not
   //    a pass and reads the same as no record: start over.
   if (!check || !greenRoomCheckPassed(check)) return 'initial'
-
-  // 2. The microphone is denied. Always show, even on a retry. A denied mic is
-  //    exactly the thing the greenroom exists to surface, and a rep who dials
-  //    past it joins a call nobody can hear.
-  if (permission === 'denied') return 'mic-denied'
 
   // 3. Permission is not what it was when the check passed. The rep changed a
   //    browser setting, so the recorded pass no longer describes reality.
@@ -73,7 +79,10 @@ export function useGreenRoomDecision(): UseGreenRoomDecisionResult {
   // Starts 'unknown', which shows the greenroom, and settles once the browser
   // answers. Failing toward showing means a slow answer never skips a check.
   const [permission, setPermission] = useState<MicPermission>('unknown')
-  const [check, setCheck] = useState<GreenRoomCheck | null>(() => readGreenRoomCheck())
+  // Shared, not per-instance. Two instances of this hook are read on the same
+  // screen — the dialer's and `GreenRoom`'s — and they must agree, or the rep
+  // presses Call and nothing happens. See `greenRoomCheckStore`.
+  const check = useSyncExternalStore(subscribeToGreenRoomCheck, getGreenRoomCheckSnapshot)
 
   useEffect(() => {
     let cancelled = false
@@ -103,13 +112,13 @@ export function useGreenRoomDecision(): UseGreenRoomDecisionResult {
 
   const recordSession = useCallback(
     (result: GreenRoomCheckResult) => {
-      const stored = recordGreenRoomCheck({
+      // Through the store, so every instance of this hook sees it, not just this
+      // one. A failed write leaves no record, so the next decision is 'initial'
+      // and shows — for all of them.
+      recordGreenRoomCheckInStore({
         ...result,
         permission: result.permission ?? permission,
       })
-      // Keep the in-memory decision honest even when the write failed: a failed
-      // write leaves no record, so the next decision is 'initial' and shows.
-      setCheck(stored)
     },
     [permission]
   )

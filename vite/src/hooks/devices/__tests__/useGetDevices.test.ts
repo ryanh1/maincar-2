@@ -129,6 +129,78 @@ describe('useGetDevices', () => {
     expect(result.current.error).toMatch(/https/i)
   })
 
+  // The rep has speakers but no microphone plugged in. That is not a permission
+  // failure, so the read must keep going rather than fail the whole screen.
+  it('keeps enumerating when there is no microphone to grant, and says so', async () => {
+    const missing = Object.assign(new Error('none'), { name: 'NotFoundError' })
+    const { media } = installMediaDevices({
+      getUserMedia: vi.fn(async () => Promise.reject(missing)),
+    })
+
+    const { result } = renderHook(() => useGetDevices())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(media.enumerateDevices).toHaveBeenCalledTimes(1)
+    expect(result.current.error).toBe('No microphone found. Plug one in, then try again.')
+    // Outputs still exist and are still worth showing.
+    expect(result.current.speakers).toEqual([
+      { deviceId: 'speaker-1', label: 'Headset Speaker', groupId: 'group-speaker-1' },
+    ])
+  })
+
+  it('treats the older DevicesNotFoundError name the same way', async () => {
+    const missing = Object.assign(new Error('none'), { name: 'DevicesNotFoundError' })
+    installMediaDevices({ getUserMedia: vi.fn(async () => Promise.reject(missing)) })
+
+    const { result } = renderHook(() => useGetDevices())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(result.current.error).toMatch(/plug one in/i)
+    expect(result.current.speakers).toHaveLength(1)
+  })
+
+  it('names the next action when the device list itself cannot be read', async () => {
+    installMediaDevices({
+      enumerateDevices: vi.fn(async () => Promise.reject(new Error('hardware busy'))),
+    })
+
+    const { result } = renderHook(() => useGetDevices())
+    await waitFor(() => expect(result.current.error).not.toBeNull())
+
+    // The raw Error message never reaches the rep.
+    expect(result.current.error).toBe(
+      'Could not read your audio devices. Reconnect your headset and try again.'
+    )
+    expect(result.current.microphones).toEqual([])
+    expect(result.current.isLoading).toBe(false)
+  })
+
+  // Unplugging a headset fires devicechange faster than a slow read can finish.
+  // The stale answer must lose, or the picker shows hardware that is already gone.
+  it('drops a slow read whose result lands after a newer read', async () => {
+    const { media } = installMediaDevices()
+    let releaseFirst: (devices: MediaDeviceInfo[]) => void = () => {}
+    media.enumerateDevices.mockImplementationOnce(
+      () => new Promise<MediaDeviceInfo[]>((resolve) => (releaseFirst = resolve))
+    )
+
+    const { result } = renderHook(() => useGetDevices())
+    // Let the permission prompt settle, leaving the first enumerate in flight.
+    await waitFor(() => expect(media.enumerateDevices).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      result.current.refetch()
+    })
+    await waitFor(() => expect(result.current.microphones).toHaveLength(1))
+    expect(result.current.microphones[0].deviceId).toBe('mic-1')
+
+    await act(async () => {
+      releaseFirst([deviceInfo('audioinput', 'mic-stale', 'Unplugged Microphone')])
+    })
+
+    expect(result.current.microphones[0].deviceId).toBe('mic-1')
+  })
+
   it('refetch re-reads the devices without prompting again', async () => {
     const { media } = installMediaDevices()
 

@@ -73,6 +73,12 @@ describe('readGreenRoomCheck', () => {
     expect(readGreenRoomCheck()).toBeNull()
   })
 
+  it('returns null for a stored literal null', () => {
+    window.sessionStorage.setItem(GREEN_ROOM_SESSION_KEY, 'null')
+
+    expect(readGreenRoomCheck()).toBeNull()
+  })
+
   it('returns null for an unrecognised permission value', () => {
     window.sessionStorage.setItem(
       GREEN_ROOM_SESSION_KEY,
