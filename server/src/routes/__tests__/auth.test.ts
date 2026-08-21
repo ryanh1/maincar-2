@@ -4,7 +4,7 @@ import request from 'supertest'
 // The canonical route-test shape: vi.hoisted() builds the mocks, vi.mock() swaps
 // the database and the Firebase SDK, and `app.js` is imported LAST so the mocks
 // are in place when its module graph loads.
-const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
+const { prismaMock, verifyTokenMock, loggerMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     org: {
@@ -18,9 +18,11 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
+  loggerMock: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
+vi.mock('../../../dependencies/logger.js', () => ({ logger: loggerMock }))
 vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   verifyFirebaseIdToken: verifyTokenMock,
   setFirebaseUserDisabled: vi.fn(),
@@ -60,6 +62,15 @@ function orgRow(overrides: Record<string, unknown> = {}) {
     updatedAt: NOW,
     ...overrides,
   }
+}
+
+/** A `FirebaseAuthError` as the Admin SDK actually shapes one. */
+function firebaseError(code: string, message: string): Error {
+  const err = new Error(message) as Error & { code: string; errorInfo: { code: string } }
+  err.name = 'FirebaseAuthError'
+  err.code = code
+  err.errorInfo = { code }
+  return err
 }
 
 /**
@@ -123,6 +134,91 @@ describe('GET /api/auth/me', () => {
     const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer nope')
 
     expect(res.status).toBe(401)
+  })
+
+  // This route is the client's whole sign-out decision: `AuthProvider` signs the
+  // user out of Firebase on a 401 or 403 and keeps the session on anything else.
+  // So the split below is what stops a Firebase blip reading as a mass sign-out.
+  describe('when Firebase is unreachable', () => {
+    // The exact error observed during an emulator outage, with a valid token.
+    const outage = firebaseError(
+      'app/network-error',
+      'Error while making request: connect ECONNREFUSED 127.0.0.1:9140. Error code: ECONNREFUSED',
+    )
+
+    it('503s a valid token instead of 401, so the session survives', async () => {
+      verifyTokenMock.mockRejectedValue(outage)
+
+      const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer valid-token')
+
+      expect(res.status).toBe(503)
+      expect(res.body.error).toBe('Cannot reach the sign-in service. Try again in a moment.')
+      expect(res.headers['retry-after']).toBe('5')
+      // 401 and 403 are the two statuses the client signs out on.
+      expect(res.status).not.toBe(401)
+      expect(res.status).not.toBe(403)
+    })
+
+    it('does not provision or touch a User row', async () => {
+      verifyTokenMock.mockRejectedValue(outage)
+
+      await request(app).get('/api/auth/me').set('Authorization', 'Bearer valid-token')
+
+      expect(prismaMock.user.findUnique).not.toHaveBeenCalled()
+      expect(prismaMock.user.create).not.toHaveBeenCalled()
+    })
+
+    it('logs the outage at error level, with the underlying code and no blame on the token', async () => {
+      verifyTokenMock.mockRejectedValue(outage)
+
+      await request(app).get('/api/auth/me').set('Authorization', 'Bearer valid-token')
+
+      const outageLog = loggerMock.error.mock.calls.find(
+        (call) => (call[0] as Record<string, unknown>)?.firebaseErrorCode === 'app/network-error',
+      ) as [Record<string, unknown>, string] | undefined
+
+      expect(outageLog).toBeDefined()
+      expect(outageLog?.[1]).toContain('could not reach Firebase')
+      expect(outageLog?.[1]).not.toMatch(/invalid|expired|revoked|bad token|malformed/i)
+    })
+
+    it.each([
+      ['a bare socket error', Object.assign(new Error('connect'), { code: 'ECONNREFUSED' })],
+      ['a timeout', Object.assign(new Error('socket hang up'), { code: 'ETIMEDOUT' })],
+      ['a DNS failure', Object.assign(new Error('getaddrinfo'), { code: 'EAI_AGAIN' })],
+    ])('503s on %s too', async (_label, err) => {
+      verifyTokenMock.mockRejectedValue(err)
+
+      const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer valid-token')
+
+      expect(res.status).toBe(503)
+    })
+  })
+
+  describe('when the token itself is the problem', () => {
+    it.each([
+      ['expired', firebaseError('auth/id-token-expired', 'Firebase ID token has expired.')],
+      ['revoked', firebaseError('auth/id-token-revoked', 'Firebase ID token has been revoked.')],
+      ['malformed', firebaseError('auth/argument-error', 'Decoding Firebase ID token failed.')],
+    ])('still 401s a %s token', async (_label, err) => {
+      verifyTokenMock.mockRejectedValue(err)
+
+      const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer nope')
+
+      expect(res.status).toBe(401)
+      expect(res.body.error).toBe('Not signed in')
+      expect(res.headers['retry-after']).toBeUndefined()
+    })
+
+    // An unrecognized failure must fail CLOSED: guessing "outage" would hand a
+    // forged token a 503 and invite the client to retry it forever.
+    it('401s an unrecognized verification failure', async () => {
+      verifyTokenMock.mockRejectedValue(new Error('something new'))
+
+      const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer nope')
+
+      expect(res.status).toBe(401)
+    })
   })
 
   it('returns the keyed user and org for an existing account', async () => {

@@ -14,7 +14,12 @@ import { verifyFirebaseIdToken } from '../../dependencies/firebaseAdmin.js'
 import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { isAdmin, type UserRole } from '../lib/roles.js'
-import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
+import {
+  isTransportFailure,
+  requireAuth,
+  respondFirebaseUnreachable,
+  type AuthenticatedRequest,
+} from '../middleware/auth.js'
 import type { Membership, Org, User } from '../generated/prisma/client.js'
 
 const router = Router()
@@ -128,7 +133,12 @@ router.get(
       const decoded = await verifyFirebaseIdToken(token)
       firebaseUid = decoded.uid
       email = decoded.email ?? ''
-    } catch {
+    } catch (err) {
+      // This route is the one the client calls on every auth state change, and
+      // it signs the user OUT on a 401. So a Firebase outage answered as 401 here
+      // is what turns a blip into a mass sign-out (MAI-12). A request that never
+      // reached Firebase is 503; a token Firebase rejected is still 401.
+      if (isTransportFailure(err)) return void respondFirebaseUnreachable(res, err)
       return void res.status(401).json({ error: 'Not signed in' })
     }
 
