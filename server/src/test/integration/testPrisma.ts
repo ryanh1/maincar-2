@@ -177,7 +177,13 @@ export async function seedCompany(
  */
 export async function seedPerson(
   prisma: PrismaClient,
-  opts: { orgId: string; companyId?: string | null; firstName?: string },
+  opts: {
+    orgId: string
+    companyId?: string | null
+    firstName?: string
+    /** IANA. Settable because the dial-time calling-hours guard reads it (MAI-201). */
+    timeZone?: string | null
+  },
 ): Promise<{ id: string }> {
   const suffix = uid()
   const person = await prisma.person.create({
@@ -185,6 +191,7 @@ export async function seedPerson(
       orgId: opts.orgId,
       firstName: opts.firstName ?? `Pat ${suffix}`,
       companyId: opts.companyId ?? null,
+      timeZone: opts.timeZone ?? null,
     },
   })
   return { id: person.id }
@@ -194,10 +201,23 @@ export async function seedPerson(
  * Adds a dialable number to a person (MAI-132 tests). `e164` is the match key the
  * whole feature turns on, so it is required; `isPrimary` is settable so a test can
  * prove the match prefers a primary number when one number is held by two people.
+ *
+ * `isDnc`, `status`, and `reason` are settable because the dial-time compliance
+ * guard turns on all three (MAI-201): a test cannot prove "a do-not-call number
+ * is refused" without a row that carries the flag.
  */
 export async function seedPersonPhone(
   prisma: PrismaClient,
-  opts: { orgId: string; personId: string; e164: string; isPrimary?: boolean },
+  opts: {
+    orgId: string
+    personId: string
+    e164: string
+    isPrimary?: boolean
+    isDnc?: boolean
+    dncReason?: string | null
+    status?: string
+    reason?: string | null
+  },
 ): Promise<{ id: string }> {
   const phone = await prisma.personPhone.create({
     data: {
@@ -205,6 +225,10 @@ export async function seedPersonPhone(
       personId: opts.personId,
       e164: opts.e164,
       isPrimary: opts.isPrimary ?? false,
+      isDnc: opts.isDnc ?? false,
+      dncReason: opts.dncReason ?? null,
+      status: opts.status ?? 'unverified',
+      reason: opts.reason ?? null,
     },
   })
   return { id: phone.id }

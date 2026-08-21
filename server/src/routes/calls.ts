@@ -23,7 +23,8 @@ import { getRecordingDownloadUrl } from '../../dependencies/s3.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
-import { matchCallToCrm } from '../lib/callMatch.js'
+import { crmLinksFromTarget, resolveDialTarget } from '../lib/callMatch.js'
+import { checkDialAllowed, type DialRefusal } from '../lib/dialGuard.js'
 import { activityFromCall, recordActivityInTx } from '../crm/activityFeed.js'
 import type { Call } from '../generated/prisma/client.js'
 
@@ -218,6 +219,17 @@ class DoubleCall extends Error {
     super('a call to this number is already in flight')
   }
 }
+/**
+ * The compliance guard said no (MAI-201). It carries the refusal so the reply
+ * can hand the rep the SPECIFIC reason — a do-not-call number and a 10 PM call
+ * are different problems with different fixes, and one generic sentence for both
+ * tells the rep nothing they can act on.
+ */
+class DialRefused extends Error {
+  constructor(readonly refusal: DialRefusal) {
+    super(refusal.code)
+  }
+}
 
 router.use(requireAuth)
 
@@ -371,9 +383,17 @@ router.get(
 // Device with this row's id as a param (vite/src/hooks/dialer/useCreateCall.ts),
 // Twilio fetches POST /api/twilio/voice for instructions, and THAT handler stamps
 // twilioCallSid and advances the row to "ringing" (routes/twilioVoice.ts). This
-// route's only job is the guard and the write: hold a lock on the caller's active
-// number so two clicks arriving at once cannot both become calls — the second
-// waits for the first to commit, then sees its queued row and is refused.
+// route's only job is the guards and the write: hold a lock on the caller's
+// active number so two clicks arriving at once cannot both become calls — the
+// second waits for the first to commit, then sees its queued row and is refused.
+//
+// It is also where compliance is enforced (MAI-201). Before any row is written,
+// lib/dialGuard.ts asks the spec's three questions in the spec's order —
+// do-not-call, calling hours in the CALLEE's local zone, then the number's
+// status — and a refusal is a 403 carrying the reason the dialer shows. On the
+// way out, a permitted dial stamps `lastDialedAt` and increments `timesDialed`
+// on the matched number, inside this same transaction, so a dial and its signal
+// can never disagree.
 router.post(
   '/',
   wrapRoute('POST /api/orgs/:orgId/calls', async (req, res) => {
@@ -393,6 +413,13 @@ router.post(
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
     const { toE164, recordingConsent } = parsed.data
+
+    // The one instant this request means by "now". Both the calling-hours check
+    // and the lastDialedAt it writes read it, so the moment a dial was judged
+    // against and the moment it is recorded as having happened are the same
+    // moment — a clock read twice around a transaction is a clock that can
+    // disagree with itself across a minute boundary.
+    const dialedAt = new Date()
 
     // --- Guard & create, in one transaction ---
     // The caller's active number is read with `FOR UPDATE`, so it is the lock
@@ -424,11 +451,22 @@ router.post(
         if (existing) throw new DoubleCall(existing)
 
         // Wire the call into the CRM spine: match the number being dialed against
-        // this org's PersonPhone rows and, on a hit, link the person and their
-        // company (MAI-132, spec §6). Run inside the transaction so the link is
-        // written atomically with the row. An unknown number resolves to all-null
-        // links, so the call still logs — the match never blocks a dial.
-        const crmLinks = await matchCallToCrm(tx, orgId, toE164)
+        // this org's PersonPhone rows and, on a hit, hold the person, their
+        // company, and the number's own compliance facts (MAI-132, spec §6).
+        // ONE read, inside the transaction, so the link is written atomically
+        // with the row and the guard below cannot judge a different row than the
+        // one the call is logged against. An unknown number resolves to null, so
+        // the call still logs — the match itself never blocks a dial.
+        const target = await resolveDialTarget(tx, orgId, toE164)
+        const crmLinks = crmLinksFromTarget(target)
+
+        // May we call this number at all? Do-not-call, then calling hours in the
+        // CALLEE's local zone, then the number's status — the spec's order, and
+        // before anything is written (MAI-201, spec §A2/A9). Throwing rolls the
+        // transaction back, so a refused dial leaves no Call row and no feed row
+        // claiming it happened.
+        const refusal = checkDialAllowed(target, dialedAt)
+        if (refusal) throw new DialRefused(refusal)
 
         // orgId comes from the path and userId from the verified caller — neither
         // is read off the body. status is written out rather than left to the
@@ -457,11 +495,38 @@ router.post(
         // refreshes the line instead of appending a second one.
         await recordActivityInTx(tx, activityFromCall(call))
 
+        // The dial signals (MAI-201, spec §A7). Written on the SAME row the guard
+        // read and in the SAME transaction as the call, so a dial and its signal
+        // cannot diverge: no call without its count, no count without its call.
+        // `dialedAt` is the instant the guard was evaluated against, not a second
+        // `new Date()`, so "last dialed" names the moment the dial was allowed.
+        // updateMany with orgId, never update by id — the tenant key belongs in
+        // the where clause (rules/database-and-prisma.md). No matched phone means
+        // an unknown number, which has no row to count against.
+        if (target) {
+          await tx.personPhone.updateMany({
+            where: { id: target.phoneId, orgId },
+            data: { timesDialed: { increment: 1 }, lastDialedAt: dialedAt },
+          })
+        }
+
         return call
       })
     } catch (error) {
       if (error instanceof NoActiveNumber) {
         return void res.status(400).json({ error: NO_ACTIVE_NUMBER_ERROR })
+      }
+      if (error instanceof DialRefused) {
+        // The refusal CODE, never the number: which rule fired is the operational
+        // fact worth a log line, and the number itself is PII.
+        logger.info({ orgId, userId, refusal: error.refusal.code }, 'refused an outbound dial')
+        // 403, not 400: the request is well-formed and understood, and it is
+        // refused on policy. `status` is the discriminator the client reads off
+        // the body (vite/src/lib/api.ts → ApiError.code), so the dialer can branch
+        // on WHICH rule stopped it without matching on the sentence.
+        return void res
+          .status(403)
+          .json({ error: error.refusal.message, status: error.refusal.code })
       }
       if (error instanceof DoubleCall) {
         // 409, with the call already up, so the client can adopt it rather than
