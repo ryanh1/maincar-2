@@ -23,6 +23,7 @@ import { getRecordingDownloadUrl } from '../../dependencies/s3.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { matchCallToCrm } from '../lib/callMatch.js'
 import type { Call } from '../generated/prisma/client.js'
 
 // mergeParams, or :orgId from the mount path never reaches req.params here —
@@ -369,6 +370,13 @@ router.post(
         })
         if (existing) throw new DoubleCall(existing)
 
+        // Wire the call into the CRM spine: match the number being dialed against
+        // this org's PersonPhone rows and, on a hit, link the person and their
+        // company (MAI-132, spec §6). Run inside the transaction so the link is
+        // written atomically with the row. An unknown number resolves to all-null
+        // links, so the call still logs — the match never blocks a dial.
+        const crmLinks = await matchCallToCrm(tx, orgId, toE164)
+
         // orgId comes from the path and userId from the verified caller — neither
         // is read off the body. status is written out rather than left to the
         // schema default because this response promises it.
@@ -381,6 +389,9 @@ router.post(
             direction: 'outbound',
             status: 'queued',
             recordingConsent,
+            personId: crmLinks.personId,
+            companyId: crmLinks.companyId,
+            dealId: crmLinks.dealId,
           },
         })
       })

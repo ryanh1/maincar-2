@@ -25,6 +25,10 @@ const { prismaMock, verifyTokenMock, initiateCallMock, hangUpCallMock, presignMo
       delete: vi.fn(),
       deleteMany: vi.fn(),
     },
+    // The number→person match (lib/callMatch.ts) reads this inside the POST
+    // transaction. Defaulted to "no match" in beforeEach, so an unknown number
+    // still logs; the CRM-spine tests override it with a hit.
+    personPhone: { findFirst: vi.fn() },
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   },
@@ -140,6 +144,9 @@ beforeEach(() => {
   prismaMock.call.count.mockResolvedValue(1)
   prismaMock.call.create.mockResolvedValue(callRow())
   prismaMock.call.updateMany.mockResolvedValue({ count: 1 })
+  // Default: the dialed number matches no person, so a call to it still logs with
+  // null CRM links. The CRM-spine tests override this to a match.
+  prismaMock.personPhone.findFirst.mockResolvedValue(null)
   // Runs the callback against the same mock, so the assertions below see the
   // reads and writes the route makes INSIDE the transaction.
   prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock))
@@ -644,6 +651,62 @@ describe('POST /api/orgs/:orgId/calls — double-call guard', () => {
         toE164: '+13035550199',
         status: { in: ['queued', 'ringing', 'in-progress'] },
       },
+    })
+  })
+})
+
+// ============================================================
+// POST — the CRM-spine match (MAI-132)
+// ============================================================
+describe('POST /api/orgs/:orgId/calls — CRM-spine match', () => {
+  it('links the call to the person and their company when the dialed number is known', async () => {
+    // The number being dialed matches a PersonPhone whose person belongs to a company.
+    prismaMock.personPhone.findFirst.mockResolvedValue({
+      person: { id: 'person-7', companyId: 'company-3' },
+    })
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(201)
+    // The match is scoped to the org in the path and run against the dialed number.
+    expect(prismaMock.personPhone.findFirst).toHaveBeenCalledTimes(1)
+    expect(prismaMock.personPhone.findFirst.mock.calls[0][0].where).toEqual({
+      orgId: ORG_A,
+      e164: '+13035550199',
+    })
+    // The link is written onto the Call row: person and their company, deal null.
+    expect(prismaMock.call.create.mock.calls[0][0].data).toMatchObject({
+      personId: 'person-7',
+      companyId: 'company-3',
+      dealId: null,
+    })
+  })
+
+  it('links the person with a null company when the matched person has no company', async () => {
+    prismaMock.personPhone.findFirst.mockResolvedValue({
+      person: { id: 'person-7', companyId: null },
+    })
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.call.create.mock.calls[0][0].data).toMatchObject({
+      personId: 'person-7',
+      companyId: null,
+      dealId: null,
+    })
+  })
+
+  it('still logs a call to an unknown number, with all three links null', async () => {
+    // The default: findFirst resolves null — no person owns this number.
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.call.create).toHaveBeenCalledTimes(1)
+    expect(prismaMock.call.create.mock.calls[0][0].data).toMatchObject({
+      personId: null,
+      companyId: null,
+      dealId: null,
     })
   })
 })

@@ -257,6 +257,22 @@ model Call {
   startedAt DateTime?
   endedAt   DateTime?
 
+  // --- CRM spine (MAI-132, spec §6) ------------------------------------------
+  // Who and what this call was with. All three are NULLABLE so a call from an
+  // unknown number still logs — the number→person match (lib/callMatch.ts) just
+  // leaves them null. onDelete: SetNull, never Cascade: trashing or deleting a
+  // Person, Company, or Deal must never destroy call history — the row survives
+  // and only its link goes null. At call-log time the match fills personId (and
+  // companyId, from that person's company); dealId is left for the caller to set
+  // from context, because a phone number resolves to a person, not to one of
+  // their possibly-many deals.
+  personId  String?
+  person    Person?  @relation(fields: [personId], references: [id], onDelete: SetNull)
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -264,6 +280,11 @@ model Call {
   @@index([userId])
   @@index([toE164])
   @@index([createdAt])
+  // The hot path: a Person/Company page loads its recent calls in one indexed
+  // round-trip, newest first (Checkpoint A).
+  @@index([orgId, personId, createdAt])
+  @@index([orgId, companyId, createdAt])
+  @@index([orgId, dealId, createdAt])
 }
 
 // -----------------------------------------------------------------------------
@@ -474,6 +495,9 @@ model Company {
   // The deals for this account (Deal.companyId → Company). SetNull on that side
   // too, so trashing/deleting a company does not delete its deals (MAI-131 T3).
   deals Deal[]
+  // Calls rolled up to this account (Call.companyId → Company). SetNull on that
+  // side, so deleting a company never destroys call history (MAI-132 T4).
+  calls Call[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -549,6 +573,9 @@ model Person {
   // This person's role on each deal they are on. A person can hold DIFFERENT roles
   // on DIFFERENT deals — champion on one, influencer on another (MAI-131 T3).
   dealRoles DealPersonRole[]
+  // Calls with this person (Call.personId → Person). SetNull on that side, so
+  // deleting a person never destroys call history (MAI-132 T4).
+  calls     Call[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -752,6 +779,9 @@ model Deal {
   deletedAt    DateTime?
 
   personRoles DealPersonRole[]
+  // Calls logged against this deal (Call.dealId → Deal). SetNull on that side, so
+  // deleting a deal never destroys call history (MAI-132 T4).
+  calls       Call[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

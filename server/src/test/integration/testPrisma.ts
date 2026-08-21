@@ -140,6 +140,66 @@ export async function seedPhoneNumber(
 }
 
 /**
+ * Adds a Company to an org (MAI-132 tests). Only the identity anchor is settable —
+ * a name and/or domain — since that is all the number→person match needs to prove a
+ * call rolls up to the right account.
+ */
+export async function seedCompany(
+  prisma: PrismaClient,
+  opts: { orgId: string; name?: string; domain?: string },
+): Promise<{ id: string }> {
+  const suffix = uid()
+  const company = await prisma.company.create({
+    data: {
+      orgId: opts.orgId,
+      name: opts.name ?? `Acme ${suffix}`,
+      domain: opts.domain ?? null,
+    },
+  })
+  return { id: company.id }
+}
+
+/**
+ * Adds a Person to an org, optionally at a company (MAI-132 tests). companyId is
+ * settable because the match rolls a matched person up to their company, and a test
+ * cannot prove that without placing the person at one.
+ */
+export async function seedPerson(
+  prisma: PrismaClient,
+  opts: { orgId: string; companyId?: string | null; firstName?: string },
+): Promise<{ id: string }> {
+  const suffix = uid()
+  const person = await prisma.person.create({
+    data: {
+      orgId: opts.orgId,
+      firstName: opts.firstName ?? `Pat ${suffix}`,
+      companyId: opts.companyId ?? null,
+    },
+  })
+  return { id: person.id }
+}
+
+/**
+ * Adds a dialable number to a person (MAI-132 tests). `e164` is the match key the
+ * whole feature turns on, so it is required; `isPrimary` is settable so a test can
+ * prove the match prefers a primary number when one number is held by two people.
+ */
+export async function seedPersonPhone(
+  prisma: PrismaClient,
+  opts: { orgId: string; personId: string; e164: string; isPrimary?: boolean },
+): Promise<{ id: string }> {
+  const phone = await prisma.personPhone.create({
+    data: {
+      orgId: opts.orgId,
+      personId: opts.personId,
+      e164: opts.e164,
+      isPrimary: opts.isPrimary ?? false,
+    },
+  })
+  return { id: phone.id }
+}
+
+/**
  * Adds a Call row, for the outbound-call routes' guards and lookups.
  *
  * `status` and `toE164` are settable because the double-call guard turns on both:
