@@ -238,6 +238,32 @@ describe('NumericKeypad', () => {
     )
   })
 
+  // MAI-201. A compliance refusal arrives as a 403 whose body names the rule that
+  // fired, and the rep has to read THAT rather than "could not place the call" —
+  // a do-not-call number and a 10 PM dial have different fixes.
+  it.each([
+    [
+      'This number is on the do-not-call list. Call a different number for this person.',
+      'dnc',
+    ],
+    [
+      'It is 11:00 PM EDT for this person, outside the 8:00 AM to 9:00 PM calling window. Call them after 8:00 AM their time.',
+      'outside_calling_hours',
+    ],
+    [
+      'This number is marked dead (no longer in service). Call a different number for this person.',
+      'number_dead',
+    ],
+  ])('shows the compliance refusal verbatim: %s', (message, code) => {
+    mutateMock.mockImplementation((_vars, opts) => opts.onError(new ApiError(message, 403, code)))
+    render(<NumericKeypad />)
+
+    pressKey('5')
+    fireEvent.keyDown(phoneInput(), { key: 'Enter' })
+
+    expect(toastErrorMock).toHaveBeenCalledWith(message)
+  })
+
   it('falls back to a generic line when the failure is not an ApiError', () => {
     mutateMock.mockImplementation((_vars, opts) => opts.onError(new Error('network down')))
     render(<NumericKeypad />)

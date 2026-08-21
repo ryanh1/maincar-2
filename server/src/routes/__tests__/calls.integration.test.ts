@@ -9,10 +9,14 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest'
 
 import type { PrismaClient } from '../../generated/prisma/client.js'
+import { crmLinksFromTarget, resolveDialTarget } from '../../lib/callMatch.js'
+import { checkDialAllowed } from '../../lib/dialGuard.js'
 import {
   createTestPrisma,
   seedCall,
   seedOrgWithAdmin,
+  seedPerson,
+  seedPersonPhone,
   seedPhoneNumber,
 } from '../../test/integration/testPrisma.js'
 
@@ -620,5 +624,293 @@ describe('hang up an active call (integration, real Postgres)', () => {
     expect(results.filter((r) => r === 'already-ended')).toHaveLength(1)
     const after = await prisma.call.findFirst({ where: { id: seeded.id, orgId: org.orgId } })
     expect(after!.status).toBe('canceled')
+  })
+})
+
+// ============================================================
+// The dial-time compliance guard and its signals (MAI-201)
+// ============================================================
+// The unit suite mocks Prisma, so it can only prove the route ASKS for the
+// increment and the rollback. This proves Postgres actually delivers them: that
+// `{ increment: 1 }` counts on the real column, and that a refusal thrown inside
+// the transaction really discards the count along with the call — the whole point
+// of putting the two in one unit of work.
+
+/**
+ * The dial path's body, verbatim: resolve the number to its person, run the
+ * guard, and on a pass write the call, its feed row's stand-in, and the dial
+ * signals — all in ONE transaction. The `search_path` line is a harness detail
+ * (see placeCall above), not part of the route.
+ */
+async function dial(
+  prisma: PrismaClient,
+  args: { orgId: string; userId: string; fromE164: string; toE164: string; now: Date },
+): Promise<'created' | { refused: string }> {
+  const schema = inject('testSchema')
+  let refusalCode: string | null = null
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL search_path TO "${schema}"`)
+
+      const target = await resolveDialTarget(tx, args.orgId, args.toE164)
+      const refusal = checkDialAllowed(target, args.now)
+      if (refusal) {
+        refusalCode = refusal.code
+        throw new Error('REFUSED')
+      }
+
+      const links = crmLinksFromTarget(target)
+      await tx.call.create({
+        data: {
+          orgId: args.orgId,
+          userId: args.userId,
+          fromE164: args.fromE164,
+          toE164: args.toE164,
+          direction: 'outbound',
+          status: 'queued',
+          recordingConsent: 'granted',
+          personId: links.personId,
+          companyId: links.companyId,
+          dealId: links.dealId,
+        },
+      })
+
+      if (target) {
+        await tx.personPhone.updateMany({
+          where: { id: target.phoneId, orgId: args.orgId },
+          data: { timesDialed: { increment: 1 }, lastDialedAt: args.now },
+        })
+      }
+    })
+    return 'created'
+  } catch (err) {
+    if (err instanceof Error && err.message === 'REFUSED') return { refused: refusalCode! }
+    throw err
+  }
+}
+
+describe('dial-time compliance guard (integration, real Postgres)', () => {
+  let prisma: PrismaClient
+
+  beforeAll(() => {
+    prisma = createTestPrisma()
+  })
+
+  afterAll(async () => {
+    await prisma.$disconnect()
+  })
+
+  // Noon in New York on a summer date, so the calling-hours check passes and the
+  // test is about the OTHER rule.
+  const MIDDAY = new Date('2026-08-21T16:00:00.000Z')
+  const FROM = '+12025550123'
+
+  /** An org, an active outbound number, and a person holding `e164`. */
+  async function seedTarget(
+    phone: Partial<Parameters<typeof seedPersonPhone>[1]> & { e164: string },
+    personTimeZone: string | null = 'America/New_York',
+  ) {
+    const org = await seedOrgWithAdmin(prisma)
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      isActiveForOutbound: true,
+    })
+    const person = await seedPerson(prisma, { orgId: org.orgId, timeZone: personTimeZone })
+    const seededPhone = await seedPersonPhone(prisma, {
+      ...phone,
+      orgId: org.orgId,
+      personId: person.id,
+    })
+    return { org, person, phoneId: seededPhone.id }
+  }
+
+  it('counts a permitted dial on the real column and stamps lastDialedAt', async () => {
+    const { org, phoneId } = await seedTarget({ e164: '+13035552001' })
+
+    const result = await dial(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      fromE164: FROM,
+      toE164: '+13035552001',
+      now: MIDDAY,
+    })
+
+    expect(result).toBe('created')
+    const after = await prisma.personPhone.findFirst({ where: { id: phoneId, orgId: org.orgId } })
+    expect(after!.timesDialed).toBe(1)
+    expect(after!.lastDialedAt).toEqual(MIDDAY)
+  })
+
+  it('accumulates across dials — the increment is a real one, not a set-to-one', async () => {
+    const { org, phoneId } = await seedTarget({ e164: '+13035552002' })
+    const args = {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      fromE164: FROM,
+      toE164: '+13035552002',
+      now: MIDDAY,
+    }
+
+    await dial(prisma, args)
+    await dial(prisma, args)
+    await dial(prisma, args)
+
+    const after = await prisma.personPhone.findFirst({ where: { id: phoneId, orgId: org.orgId } })
+    expect(after!.timesDialed).toBe(3)
+  })
+
+  it('lets two concurrent dials to the same number both count, losing neither', async () => {
+    // The double-call guard is a separate rule, proved above; here both dials are
+    // permitted, so the question is only whether the counter loses one. A
+    // read-modify-write would; `{ increment: 1 }` is an atomic UPDATE and does not.
+    const { org, phoneId } = await seedTarget({ e164: '+13035552003' })
+    const args = {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      fromE164: FROM,
+      toE164: '+13035552003',
+      now: MIDDAY,
+    }
+
+    await Promise.all([dial(prisma, args), dial(prisma, args)])
+
+    const after = await prisma.personPhone.findFirst({ where: { id: phoneId, orgId: org.orgId } })
+    expect(after!.timesDialed).toBe(2)
+  })
+
+  it('refuses a do-not-call number and rolls back the whole unit of work', async () => {
+    const { org, phoneId } = await seedTarget({ e164: '+13035552004', isDnc: true })
+
+    const result = await dial(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      fromE164: FROM,
+      toE164: '+13035552004',
+      now: MIDDAY,
+    })
+
+    expect(result).toEqual({ refused: 'dnc' })
+    // No call, and no count. The signal is not a separate write that could survive
+    // the refusal.
+    expect(await countCalls(prisma, org.orgId, '+13035552004')).toBe(0)
+    const after = await prisma.personPhone.findFirst({ where: { id: phoneId, orgId: org.orgId } })
+    expect(after!.timesDialed).toBe(0)
+    expect(after!.lastDialedAt).toBeNull()
+  })
+
+  it('refuses a dial outside the callee’s local calling hours, and writes nothing', async () => {
+    const { org, phoneId } = await seedTarget({ e164: '+13035552005' })
+
+    // 03:00 UTC is 11:00 PM the previous evening in New York.
+    const result = await dial(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      fromE164: FROM,
+      toE164: '+13035552005',
+      now: new Date('2026-08-22T03:00:00.000Z'),
+    })
+
+    expect(result).toEqual({ refused: 'outside_calling_hours' })
+    expect(await countCalls(prisma, org.orgId, '+13035552005')).toBe(0)
+    const after = await prisma.personPhone.findFirst({ where: { id: phoneId, orgId: org.orgId } })
+    expect(after!.timesDialed).toBe(0)
+  })
+
+  it('refuses a number marked dead, and writes nothing', async () => {
+    const { org } = await seedTarget({
+      e164: '+13035552006',
+      status: 'dead',
+      reason: 'no_longer_in_service',
+    })
+
+    const result = await dial(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      fromE164: FROM,
+      toE164: '+13035552006',
+      now: MIDDAY,
+    })
+
+    expect(result).toEqual({ refused: 'number_dead' })
+    expect(await countCalls(prisma, org.orgId, '+13035552006')).toBe(0)
+  })
+
+  it('lets a dial through at an hour that would be refused, when the person has no stored zone', async () => {
+    const { org, phoneId } = await seedTarget({ e164: '+13035552007' }, null)
+
+    // Midnight in New York — but nobody has recorded where this person is, so
+    // there is no clock to judge them by and UTC is not substituted.
+    const result = await dial(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      fromE164: FROM,
+      toE164: '+13035552007',
+      now: new Date('2026-08-21T04:00:00.000Z'),
+    })
+
+    expect(result).toBe('created')
+    const after = await prisma.personPhone.findFirst({ where: { id: phoneId, orgId: org.orgId } })
+    expect(after!.timesDialed).toBe(1)
+  })
+
+  it('lets an unknown number through and logs the call, with no signal to write', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      isActiveForOutbound: true,
+    })
+
+    const result = await dial(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      fromE164: FROM,
+      toE164: '+19998887777',
+      now: new Date('2026-08-21T04:00:00.000Z'),
+    })
+
+    expect(result).toBe('created')
+    expect(await countCalls(prisma, org.orgId, '+19998887777')).toBe(1)
+  })
+
+  it('never counts a dial against another org’s identical number', async () => {
+    // The same e164 held by a person in each of two orgs. The lookup is scoped to
+    // the org in the path, so only the caller's own row moves.
+    const mine = await seedTarget({ e164: '+13035552008' })
+    const theirs = await seedTarget({ e164: '+13035552008' })
+
+    await dial(prisma, {
+      orgId: mine.org.orgId,
+      userId: mine.org.adminUserId,
+      fromE164: FROM,
+      toE164: '+13035552008',
+      now: MIDDAY,
+    })
+
+    const mineAfter = await prisma.personPhone.findFirst({ where: { id: mine.phoneId } })
+    const theirsAfter = await prisma.personPhone.findFirst({ where: { id: theirs.phoneId } })
+    expect(mineAfter!.timesDialed).toBe(1)
+    expect(theirsAfter!.timesDialed).toBe(0)
+  })
+
+  it('is not refused by ANOTHER org’s do-not-call flag on the same number', async () => {
+    // Do-not-call is a fact about one org's relationship with one person, not a
+    // global blocklist. A tenant boundary that leaked here would silently stop a
+    // second org from calling a number it has every right to call.
+    const theirs = await seedTarget({ e164: '+13035552009', isDnc: true })
+    const mine = await seedTarget({ e164: '+13035552009' })
+
+    const result = await dial(prisma, {
+      orgId: mine.org.orgId,
+      userId: mine.org.adminUserId,
+      fromE164: FROM,
+      toE164: '+13035552009',
+      now: MIDDAY,
+    })
+
+    expect(result).toBe('created')
+    const theirsAfter = await prisma.personPhone.findFirst({ where: { id: theirs.phoneId } })
+    expect(theirsAfter!.timesDialed).toBe(0)
   })
 })

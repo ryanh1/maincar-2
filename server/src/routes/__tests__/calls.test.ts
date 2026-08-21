@@ -5,7 +5,7 @@
 // proves the contract: E.164 validation, the double-call guard, that the caller
 // ID and org come from the path and the locked number rather than the body, and
 // that a Twilio failure does not leave a phantom "queued" row behind.
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
@@ -28,7 +28,10 @@ const { prismaMock, verifyTokenMock, mintVoiceAccessTokenMock, hangUpCallMock, p
     // The number→person match (lib/callMatch.ts) reads this inside the POST
     // transaction. Defaulted to "no match" in beforeEach, so an unknown number
     // still logs; the CRM-spine tests override it with a hit.
-    personPhone: { findFirst: vi.fn() },
+    // `updateMany` is the dial-signal write (MAI-201): a permitted dial bumps
+    // timesDialed and stamps lastDialedAt on the matched row, inside the same
+    // transaction as the Call.
+    personPhone: { findFirst: vi.fn(), updateMany: vi.fn() },
     // The denormalized feed row the POST transaction appends (MAI-140 T12). It is
     // written through crm/activityFeed.ts with the SAME tx the Call is created on,
     // and $transaction below hands the route this very mock as that tx — so the
@@ -156,6 +159,7 @@ beforeEach(() => {
   // Default: the dialed number matches no person, so a call to it still logs with
   // null CRM links. The CRM-spine tests override this to a match.
   prismaMock.personPhone.findFirst.mockResolvedValue(null)
+  prismaMock.personPhone.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'feed-1' })
   // Runs the callback against the same mock, so the assertions below see the
   // reads and writes the route makes INSIDE the transaction.
@@ -802,6 +806,182 @@ describe('POST /api/orgs/:orgId/calls — CRM-spine match', () => {
       companyId: null,
       dealId: null,
     })
+  })
+})
+
+// ============================================================
+// POST — the dial-time compliance guard (MAI-201)
+// ============================================================
+// The guard's own logic — the order, the sentences, every timezone edge — is
+// proved in lib/__tests__/dialGuard.test.ts. These prove the ROUTE: that a
+// refusal is a 403 carrying the reason, that nothing is written when one fires,
+// and that a permitted dial records itself on the matched number.
+
+/** A matched PersonPhone row in the shape lib/callMatch.ts selects. */
+function phoneRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'phone-9',
+    isDnc: false,
+    dncReason: null,
+    status: 'reachable',
+    reason: null,
+    person: { id: 'person-7', companyId: 'company-3', timeZone: 'America/New_York' },
+    ...overrides,
+  }
+}
+
+describe('POST /api/orgs/:orgId/calls — the compliance guard', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Freeze the wall clock. Only Date is faked, so supertest's own timers still run. */
+  function at(instant: string): void {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(instant))
+  }
+
+  it('refuses a do-not-call number with 403 and the reason the dialer shows', async () => {
+    prismaMock.personPhone.findFirst.mockResolvedValue(
+      phoneRow({ isDnc: true, dncReason: 'asked to be removed' }),
+    )
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe(
+      'This number is on the do-not-call list (asked to be removed). Call a different number for this person.',
+    )
+    // The discriminator the client reads off the body, so the dialer can branch on
+    // WHICH rule stopped it without matching on the sentence.
+    expect(res.body.status).toBe('dnc')
+  })
+
+  it('writes nothing at all when the guard refuses — no call, no feed row, no dial signal', async () => {
+    prismaMock.personPhone.findFirst.mockResolvedValue(phoneRow({ isDnc: true }))
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(403)
+    expect(prismaMock.call.create).not.toHaveBeenCalled()
+    expect(prismaMock.activityEntry.upsert).not.toHaveBeenCalled()
+    expect(prismaMock.personPhone.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('refuses a dial outside the callee’s local calling hours', async () => {
+    // 03:00 UTC is 11:00 PM the previous evening in New York.
+    at('2026-08-22T03:00:00.000Z')
+    prismaMock.personPhone.findFirst.mockResolvedValue(phoneRow())
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(403)
+    expect(res.body.status).toBe('outside_calling_hours')
+    expect(res.body.error).toContain('11:00 PM EDT for this person')
+    expect(prismaMock.call.create).not.toHaveBeenCalled()
+  })
+
+  it('judges the hours in the CALLEE’s zone, not the server’s or the rep’s', async () => {
+    // The same instant: 4:00 PM in New York, and 1:00 PM in Los Angeles. Both are
+    // inside the window, so the call goes through — and the rep's own stored zone
+    // (America/New_York on the user row) never enters into it.
+    at('2026-08-21T20:00:00.000Z')
+    prismaMock.personPhone.findFirst.mockResolvedValue(
+      phoneRow({ person: { id: 'person-7', companyId: null, timeZone: 'America/Los_Angeles' } }),
+    )
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(201)
+  })
+
+  it('refuses a number marked dead, after the hours check has passed', async () => {
+    at('2026-08-21T16:00:00.000Z') // noon in New York
+    prismaMock.personPhone.findFirst.mockResolvedValue(
+      phoneRow({ status: 'dead', reason: 'no_longer_in_service' }),
+    )
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(403)
+    expect(res.body.status).toBe('number_dead')
+    expect(res.body.error).toBe(
+      'This number is marked dead (no longer in service). Call a different number for this person.',
+    )
+  })
+
+  it('lets an unknown number through — there is no saved row to check it against', async () => {
+    // Midnight in New York, an hour that would refuse a KNOWN person. The default
+    // findFirst resolves null, so nothing is known about this number at all.
+    at('2026-08-21T04:00:00.000Z')
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(201)
+  })
+
+  it('reads the guard fields and the CRM links from ONE row, so they cannot disagree', async () => {
+    prismaMock.personPhone.findFirst.mockResolvedValue(phoneRow())
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.personPhone.findFirst).toHaveBeenCalledTimes(1)
+    expect(prismaMock.personPhone.findFirst.mock.calls[0][0].where).toEqual({
+      orgId: ORG_A,
+      e164: '+13035550199',
+    })
+  })
+})
+
+// ============================================================
+// POST — the dial signals (MAI-201, spec §A7)
+// ============================================================
+describe('POST /api/orgs/:orgId/calls — dial signals', () => {
+  it('increments timesDialed and stamps lastDialedAt on the matched number', async () => {
+    prismaMock.personPhone.findFirst.mockResolvedValue(phoneRow())
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.personPhone.updateMany).toHaveBeenCalledTimes(1)
+    const args = prismaMock.personPhone.updateMany.mock.calls[0][0]
+    // updateMany with orgId, never update by id — the tenant key lives in the
+    // where clause (rules/database-and-prisma.md).
+    expect(args.where).toEqual({ id: 'phone-9', orgId: ORG_A })
+    expect(args.data.timesDialed).toEqual({ increment: 1 })
+    expect(args.data.lastDialedAt).toBeInstanceOf(Date)
+  })
+
+  it('writes the signal in the SAME transaction as the call, so the two cannot diverge', async () => {
+    prismaMock.personPhone.findFirst.mockResolvedValue(phoneRow())
+
+    await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    // $transaction is mocked to run its callback against this same client, so a
+    // signal recorded here is a signal recorded inside the unit of work. One
+    // transaction, not two.
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(prismaMock.call.create).toHaveBeenCalledTimes(1)
+    expect(prismaMock.personPhone.updateMany).toHaveBeenCalledTimes(1)
+  })
+
+  it('writes no signal for an unknown number, and still logs the call', async () => {
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.call.create).toHaveBeenCalledTimes(1)
+    expect(prismaMock.personPhone.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('does not count a dial that never happened — a double-call 409 writes no signal', async () => {
+    prismaMock.personPhone.findFirst.mockResolvedValue(phoneRow())
+    prismaMock.call.findFirst.mockResolvedValue(callRow({ status: 'ringing' }))
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(409)
+    expect(prismaMock.personPhone.updateMany).not.toHaveBeenCalled()
   })
 })
 

@@ -29,21 +29,36 @@ import { logger } from '../../dependencies/logger.js'
 export const FALLBACK_TIME_ZONE = 'UTC'
 
 /**
- * The zone to do the maths in. Pass `user.timeZone`.
+ * The stored zone if it is a real IANA name, otherwise null.
  *
- * `User.timeZone` is free text on the way in, so an unknown IANA name is a real
- * possibility and would otherwise throw a RangeError out of a route. An
- * unrecognized zone is logged and treated as missing.
+ * A stored `timeZone` is free text on the way in, so an unknown IANA name is a
+ * real possibility and would otherwise throw a RangeError out of a route. An
+ * unrecognized zone is logged and reported as missing.
+ *
+ * Separate from {@link resolveTimeZone} because "missing" and "UTC" are NOT the
+ * same answer everywhere. Date maths has to land on some zone, so it substitutes
+ * UTC. A check that only makes sense in the subject's own zone — is it a decent
+ * hour to call this person? — has to know that it does not know, so it can skip
+ * the check rather than judge a stranger by UTC's clock (lib/dialGuard.ts).
  */
-export function resolveTimeZone(timeZone: string | null | undefined): string {
-  if (!timeZone) return FALLBACK_TIME_ZONE
+export function normalizeTimeZone(timeZone: string | null | undefined): string | null {
+  if (!timeZone) return null
   try {
     new Intl.DateTimeFormat('en-US', { timeZone })
     return timeZone
   } catch {
-    logger.warn({ timeZone }, 'unrecognized IANA timezone on a user record, using UTC')
-    return FALLBACK_TIME_ZONE
+    logger.warn({ timeZone }, 'unrecognized IANA timezone on a record, treating it as missing')
+    return null
   }
+}
+
+/**
+ * The zone to do the maths in. Pass `user.timeZone`.
+ *
+ * A missing or unrecognized zone becomes {@link FALLBACK_TIME_ZONE}.
+ */
+export function resolveTimeZone(timeZone: string | null | undefined): string {
+  return normalizeTimeZone(timeZone) ?? FALLBACK_TIME_ZONE
 }
 
 interface WallClock {
@@ -81,6 +96,48 @@ function wallClockIn(instant: Date, timeZone: string): WallClock {
     minute: read('minute'),
     second: read('second'),
   }
+}
+
+/**
+ * What hour a clock in `timeZone` reads at `instant`, 0-23.
+ *
+ * Read through `Intl`, never by adding a fixed offset, so it is right on both
+ * sides of a DST transition.
+ */
+export function hourIn(instant: Date, timeZone: string): number {
+  return wallClockIn(instant, timeZone).hour
+}
+
+/**
+ * `instant` as a time of day in `timeZone`, WITH the zone label —
+ * `9:14 PM EDT`.
+ *
+ * The label is not decoration. CLAUDE.md → Dates & Times: every time-of-day a
+ * person reads carries an explicit zone, because "it is 9:14 PM" in a message
+ * about SOMEONE ELSE's clock is exactly the sentence a reader misreads as their
+ * own. No date, because the callers of this are talking about right now.
+ */
+export function formatTimeOfDayWithZone(instant: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(instant)
+}
+
+/**
+ * A whole hour of the day as a person says it — `8:00 AM`, `9:00 PM`.
+ *
+ * Zone-free on purpose: this labels a POLICY boundary ("the window opens at
+ * 8:00 AM"), which is a wall-clock rule in whatever zone it is applied to, not a
+ * moment in time. The zone belongs on the actual instant beside it, which is
+ * what {@link formatTimeOfDayWithZone} carries.
+ */
+export function formatHourOfDay(hour: number): string {
+  const suffix = hour < 12 ? 'AM' : 'PM'
+  const twelve = hour % 12 === 0 ? 12 : hour % 12
+  return `${twelve}:00 ${suffix}`
 }
 
 /**
