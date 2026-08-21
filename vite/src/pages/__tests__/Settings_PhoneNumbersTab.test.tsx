@@ -16,10 +16,12 @@ import { renderWithProviders } from '@/test/utils'
 const {
   useGetNumbersMock,
   useSetActiveNumberMock,
+  useReleaseNumberMock,
   useSearchAvailableNumbersMock,
   useBuyNumberMock,
   useAuthMock,
   setActiveMutateMock,
+  releaseMutateMock,
   searchMutateMock,
   buyMutateAsyncMock,
   toastErrorMock,
@@ -27,10 +29,12 @@ const {
 } = vi.hoisted(() => ({
   useGetNumbersMock: vi.fn(),
   useSetActiveNumberMock: vi.fn(),
+  useReleaseNumberMock: vi.fn(),
   useSearchAvailableNumbersMock: vi.fn(),
   useBuyNumberMock: vi.fn(),
   useAuthMock: vi.fn(),
   setActiveMutateMock: vi.fn(),
+  releaseMutateMock: vi.fn(),
   searchMutateMock: vi.fn(),
   buyMutateAsyncMock: vi.fn(),
   toastErrorMock: vi.fn(),
@@ -41,6 +45,7 @@ vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/hooks/phoneNumbers', () => ({
   useGetNumbers: useGetNumbersMock,
   useSetActiveNumber: useSetActiveNumberMock,
+  useReleaseNumber: useReleaseNumberMock,
   useSearchAvailableNumbers: useSearchAvailableNumbersMock,
   useBuyNumber: useBuyNumberMock,
 }))
@@ -103,6 +108,7 @@ beforeEach(() => {
   useAuthMock.mockReturnValue({ org: ORG })
   useGetNumbersMock.mockReturnValue(listState())
   useSetActiveNumberMock.mockReturnValue({ mutate: setActiveMutateMock, isPending: false })
+  useReleaseNumberMock.mockReturnValue({ mutate: releaseMutateMock, isPending: false })
   useSearchAvailableNumbersMock.mockReturnValue(searchState())
   useBuyNumberMock.mockReturnValue({
     mutateAsync: buyMutateAsyncMock,
@@ -166,6 +172,106 @@ describe('the numbers list', () => {
     await user.click(screen.getByRole('button', { name: 'Try again' }))
 
     expect(refetch).toHaveBeenCalled()
+  })
+})
+
+describe('releasing a number', () => {
+  it('names the number and says the release cannot be undone', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.click(screen.getByRole('button', { name: 'Show actions for +12025550122' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Release this number' }))
+
+    const dialog = screen.getByRole('alertdialog')
+    expect(within(dialog).getByText('Release +12025550122?')).toBeInTheDocument()
+    expect(within(dialog).getByText(/cannot get this number again/)).toBeInTheDocument()
+  })
+
+  it('sends the number id when the release is confirmed', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.click(screen.getByRole('button', { name: 'Show actions for +12025550122' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Release this number' }))
+    await user.click(screen.getByRole('button', { name: 'Release' }))
+
+    expect(releaseMutateMock).toHaveBeenCalledWith(
+      { orgId: 'org-a', id: 'num-ready' },
+      expect.anything(),
+    )
+  })
+
+  // Releasing the caller ID is blocked while another dialable number exists —
+  // the menu item names the first step rather than just refusing.
+  it('blocks releasing the active caller ID while another number can take over', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.click(screen.getByRole('button', { name: 'Show actions for +12025550111' }))
+
+    expect(screen.getByRole('menuitem', { name: 'Set another caller ID first' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+  })
+
+  // The one case the server lets through: no other dialable number to fall back
+  // on, so the confirm states the consequence instead of the control being blocked.
+  it('allows releasing the last dialable number and warns calling will stop', async () => {
+    useGetNumbersMock.mockReturnValue(
+      listState({
+        data: numbersResponse({
+          numbers: [
+            number({ id: 'num-active', isActiveForOutbound: true }),
+            number({
+              id: 'num-failed',
+              e164: '+12025550144',
+              status: 'failed',
+              twilioSid: null,
+              isActiveForOutbound: false,
+            }),
+          ],
+        }),
+      }),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.click(screen.getByRole('button', { name: 'Show actions for +12025550111' }))
+    expect(screen.getByRole('menuitem', { name: 'Release this number' })).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+
+    await user.click(screen.getByRole('menuitem', { name: 'Release this number' }))
+    expect(screen.getByText(/cannot place calls until you buy another number/)).toBeInTheDocument()
+  })
+
+  it('cannot be released while it is still being bought', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.click(screen.getByRole('button', { name: 'Show actions for +12025550133' }))
+
+    expect(screen.getByRole('menuitem', { name: 'Wait until it is ready' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+  })
+
+  it('surfaces the server’s refusal as a toast', async () => {
+    releaseMutateMock.mockImplementation((_vars, { onError }) => {
+      onError({ message: 'Make a different number your caller ID first, then release this one.' })
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.click(screen.getByRole('button', { name: 'Show actions for +12025550122' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Release this number' }))
+    await user.click(screen.getByRole('button', { name: 'Release' }))
+
+    expect(toastErrorMock).toHaveBeenCalledWith('Could not release the number. Try again.')
   })
 })
 

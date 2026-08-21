@@ -6,6 +6,7 @@ export { useBuyNumber } from './useBuyNumber'
 export { useSetActiveNumber } from './useSetActiveNumber'
 export { useGetOrgNumbers } from './useGetOrgNumbers'
 export { useAssignNumber } from './useAssignNumber'
+export { useReleaseNumber } from './useReleaseNumber'
 
 // What each mutation is called with. These are hook shapes, not API shapes, so
 // they live beside the hook rather than in lib/phoneNumberTypes.ts — that file
@@ -14,6 +15,7 @@ export type { SearchAvailableNumbersVariables } from './useSearchAvailableNumber
 export type { BuyNumberVariables } from './useBuyNumber'
 export type { SetActiveNumberVariables } from './useSetActiveNumber'
 export type { AssignNumberVariables } from './useAssignNumber'
+export type { ReleaseNumberVariables } from './useReleaseNumber'
 
 // The API shapes live in lib/phoneNumberTypes.ts, re-exported here so a component
 // that already imports a hook does not need a second import path.
