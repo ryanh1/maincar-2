@@ -132,3 +132,13 @@ export const S3_BUCKET = process.env.S3_BUCKET ?? ''
 // request that needed it rather than the server.
 export const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID ?? ''
 export const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN ?? ''
+
+// --- OpenAI (call transcription) ---
+// Consumed ONLY inside server/dependencies/openai.ts, which turns a call
+// recording into text (jobs/transcribeRecording.ts). Read as `?? ''` rather than
+// required(), for the same reason Twilio and S3 are: `/api/health` and the whole
+// unit suite must boot on a machine with no OpenAI account, and required() would
+// take the process down at import. dependencies/openai.ts throws a named error at
+// call time when the key is missing, so a missing credential fails the one job
+// that needed it rather than the server.
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? ''

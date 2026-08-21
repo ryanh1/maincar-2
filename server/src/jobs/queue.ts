@@ -22,7 +22,13 @@ export const JOB_PROVISION_NUMBER = 'provision-number'
 
 export const JOB_UPLOAD_RECORDING = 'upload-recording'
 
-export const JOB_NAMES = [JOB_PROVISION_NUMBER, JOB_UPLOAD_RECORDING] as const
+export const JOB_TRANSCRIBE_RECORDING = 'transcribe-recording'
+
+export const JOB_NAMES = [
+  JOB_PROVISION_NUMBER,
+  JOB_UPLOAD_RECORDING,
+  JOB_TRANSCRIBE_RECORDING,
+] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
 
@@ -41,6 +47,10 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }
   // pass. See jobs/uploadRecording.ts: a second retry buys nothing a first does
   // not, and the recording is safe on Twilio until the upload finally succeeds.
   [JOB_UPLOAD_RECORDING]: { retryLimit: 1, retryDelay: 30 },
+  // One retry, thirty seconds later. See jobs/transcribeRecording.ts: a Whisper
+  // call is expensive enough that hammering it on a persistent failure buys
+  // nothing, so a single retry then a `failed` transcriptStatus is the ceiling.
+  [JOB_TRANSCRIBE_RECORDING]: { retryLimit: 1, retryDelay: 30 },
 }
 
 let boss: PgBoss | null = null

@@ -4,6 +4,7 @@ import app from './app.js'
 import { APP_NAME, PORT } from './config.js'
 import { registerProvisionNumberWorker } from './jobs/provisionNumber.js'
 import { registerUploadRecordingWorker } from './jobs/uploadRecording.js'
+import { registerTranscribeRecordingWorker } from './jobs/transcribeRecording.js'
 import { startQueue, stopQueue } from './jobs/queue.js'
 import { registerOAuthTokenRefresher } from './lib/mail/oauthProviders.js'
 
@@ -38,8 +39,9 @@ async function startWorkers(): Promise<void> {
   await startQueue()
   await registerProvisionNumberWorker()
   await registerUploadRecordingWorker()
+  await registerTranscribeRecordingWorker()
   logger.info(
-    { workers: ['provision-number', 'upload-recording'] },
+    { workers: ['provision-number', 'upload-recording', 'transcribe-recording'] },
     'job queue workers started',
   )
 }
