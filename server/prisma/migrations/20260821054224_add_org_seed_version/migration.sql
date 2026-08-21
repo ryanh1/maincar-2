@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Org" ADD COLUMN     "seedVersion" INTEGER NOT NULL DEFAULT 0;

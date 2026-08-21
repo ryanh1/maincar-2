@@ -14,6 +14,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { logger } from '../../dependencies/logger.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { seedOrgInTx } from '../crm/seedOrg.js'
 import { assignableRolesSchema, type OrgRole, type UserRole } from '../lib/roles.js'
 import type { Invitation, Org, User } from '../generated/prisma/client.js'
 
@@ -170,6 +171,10 @@ router.post(
         where: { id: authReq.user!.id },
         data: { currentOrgId: created.id },
       })
+      // Seed the standard CRM schema (objects, fields, picklists, a default
+      // pipeline) in the SAME transaction, so a committed org is always fully
+      // seeded and a rollback leaves no half-seeded org (MAI-134 T6, spec §10.2).
+      await seedOrgInTx(tx, created.id)
       return created
     })
 

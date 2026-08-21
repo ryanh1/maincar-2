@@ -26,6 +26,13 @@ model Org {
   name      String?
   logo      String?
   enabled   Boolean  @default(true)
+
+  // Which version of the standard-schema seed (server/src/crm/standardObjects.ts)
+  // this org has had applied. Set by seedOrg on org creation; a later release bumps
+  // CURRENT_SEED_VERSION and the insert-missing-only backfill catches orgs behind
+  // it (MAI-134 T6, spec §10.2). 0 = never seeded.
+  seedVersion Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
