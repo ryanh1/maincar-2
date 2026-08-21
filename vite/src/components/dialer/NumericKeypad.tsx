@@ -1,13 +1,16 @@
 import { useCallback, useState, type KeyboardEvent } from 'react'
+import { Phone } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { cn } from '@/lib/utils'
 import { ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { BuyNumberBanner } from '@/components/BuyNumberBanner'
 import type { RecordingConsent } from '@/lib/callTypes'
 import { useAuth } from '@/providers/useAuth'
 import { useCreateCall } from '@/hooks/dialer'
+import { useGetNumbers } from '@/hooks/phoneNumbers'
 import { useDialer } from '@/components/dialer/dialerContext'
 
 /**
@@ -73,6 +76,13 @@ export function NumericKeypad({
   const { dialing } = useDialer()
   const createCall = useCreateCall()
 
+  // The org's numbers, so the rep sees which line the call goes out on and cannot
+  // reach a Call button when there is no line to call from. The active number's
+  // e164 is the caller ID; `activeCount === 0` means the rep has none yet.
+  const { data: numbers } = useGetNumbers(org?.id)
+  const activeNumber = numbers?.numbers.find((n) => n.isActiveForOutbound)
+  const hasNoActiveNumber = !!numbers && numbers.activeCount === 0
+
   // A key landed — from a grid button or the keyboard. Always show it; send it as
   // a tone only when a call is live.
   const press = useCallback(
@@ -123,8 +133,20 @@ export function NumericKeypad({
     [dial, removeLast],
   )
 
+  // The Call button is live only when a call can actually go out: a number is
+  // entered, no call is already up or in flight, and the org has a caller ID to
+  // dial from. Without an active number the button is not disabled — it is not
+  // shown at all, and the buy prompt takes its place (never a live-looking control
+  // that does nothing).
+  const callDisabled = !value.trim() || dialing || createCall.isPending || !activeNumber
+
   return (
     <div className={cn('flex flex-col gap-3', className)}>
+      {activeNumber ? (
+        <p className="text-center text-xs tabular-nums text-muted-foreground">
+          From {activeNumber.e164}
+        </p>
+      ) : null}
       <Input
         aria-label="Phone number"
         inputMode="tel"
@@ -148,6 +170,21 @@ export function NumericKeypad({
           </Button>
         ))}
       </div>
+      {hasNoActiveNumber ? (
+        <BuyNumberBanner />
+      ) : (
+        <Button
+          type="button"
+          variant="success"
+          size="sm"
+          className="w-full"
+          disabled={callDisabled}
+          onClick={dial}
+        >
+          <Phone size={16} aria-hidden="true" />
+          Call
+        </Button>
+      )}
     </div>
   )
 }
