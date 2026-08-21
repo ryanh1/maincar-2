@@ -1,29 +1,38 @@
 import { useState, type FormEvent } from 'react'
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth'
 import { useNavigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
 
 import { APP_NAME } from '@/config'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { PasswordInput } from '@/components/ui/password-input'
 import { RequiredAsterisk } from '@/components/ui/RequiredAsterisk'
 import { getFirebaseAuth } from '@/dependencies/firebase'
 import { useAcceptInvitation, useGetPublicInvitation } from '@/hooks/orgs'
 import { useUpdateProfile } from '@/hooks/profile'
 import { ApiError } from '@/lib/api'
+import { authErrorToMessage, isUnreachable } from '@/lib/firebaseErrors'
+import { passwordProblem } from '@/lib/passwordPolicy'
 import { getRoleLabel } from '@/lib/roles'
 import { useAuth } from '@/providers/useAuth'
+
+/** The one line for every dead link. See `DEAD_LINK` below for why it is one line. */
+const DEAD_LINK_HEADING = 'This invite is no longer valid'
+const DEAD_LINK_FIX = 'Ask the admin for a new one.'
 
 /**
  * `/join/:token` — the invitee's screen. Public, outside `ProtectedLayout`,
  * because the person opening it may have no account at all.
  *
- * Three states, decided by who is signed in:
- *   1. Nobody          → create an account or sign in, then accept, in one submit.
+ * Four states, decided by who is signed in and what the server said:
+ *   1. Nobody            → create an account or sign in, then accept, in one submit.
  *   2. The invited person → one button.
- *   3. Somebody else   → the mismatch warning and a way out.
+ *   3. Somebody else     → both addresses named, and a way out that lands back here.
+ *   4. Nothing usable    → one message for a dead link, a different one for a
+ *                          server we could not reach. Those are not the same
+ *                          problem and must never read as if they were.
  */
 export function JoinOrg() {
   const { token } = useParams<{ token: string }>()
@@ -38,18 +47,54 @@ export function JoinOrg() {
   const [password, setPassword] = useState('')
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
+  const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // The server is the authority on who this invite belongs to. It compares the
+  // invited address to the User ROW's email; the check below compares it to the
+  // Firebase account's. They are normally the same, and when they are not, the
+  // server wins — so its 409 puts the screen into the same mismatch state rather
+  // than flashing a toast over a screen that still says "Join".
+  const [serverMismatchMessage, setServerMismatchMessage] = useState<string | null>(null)
 
   const invitation = invitationQuery.data
   const orgName = invitation?.orgName ?? 'the organization'
 
-  // --- Unusable link ---------------------------------------------------------
-  // Every failure mode is the same 404 by design, so the screen says one thing.
+  // --- State 4: the link could not be read ------------------------------------
   if (invitationQuery.isError) {
+    const err = invitationQuery.error
+    // 404 is EVERY dead end — missing, expired, revoked, already accepted — and
+    // the server answers all four identically on purpose, so a scanner cannot
+    // tell a wrong token from a spent one. The screen keeps that promise: one
+    // message, and the fix is the same in all four cases.
+    const isDeadLink = err instanceof ApiError && err.status === 404
+    if (isDeadLink) {
+      return (
+        <Shell>
+          <h1 className="display text-2xl font-bold">{DEAD_LINK_HEADING}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{DEAD_LINK_FIX}</p>
+        </Shell>
+      )
+    }
+
+    // Anything else is OUR problem, not the link's. Saying "no longer valid"
+    // here sends the invitee to ask for a replacement link that will fail the
+    // same way.
+    const message = isUnreachable(err)
+      ? 'Cannot reach the server. Try again in a moment.'
+      : err instanceof ApiError
+        ? err.message
+        : 'Could not open this invite. Try again in a moment.'
     return (
       <Shell>
-        <h1 className="display text-2xl font-bold">This invite is no longer valid</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Ask the admin for a new one.</p>
+        <h1 className="display text-2xl font-bold">Could not open this invite</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{message}</p>
+        <Button
+          className="mt-6 w-full"
+          disabled={invitationQuery.isFetching}
+          onClick={() => void invitationQuery.refetch()}
+        >
+          {invitationQuery.isFetching ? 'Trying…' : 'Try again'}
+        </Button>
       </Shell>
     )
   }
@@ -70,21 +115,52 @@ export function JoinOrg() {
     return result
   }
 
+  function reportAcceptFailure(err: unknown) {
+    if (err instanceof ApiError && err.code === 'email_mismatch') {
+      setServerMismatchMessage(err.message)
+      return
+    }
+    if (err instanceof ApiError && err.status === 404) {
+      setError(`${DEAD_LINK_HEADING}. ${DEAD_LINK_FIX}`)
+      return
+    }
+    setError(authErrorToMessage(err, mode === 'create' ? 'signUp' : 'signIn'))
+  }
+
   // --- State 3: signed in as somebody else -----------------------------------
-  if (firebaseUser && invitation && firebaseUser.email?.toLowerCase() !== invitation.email.toLowerCase()) {
+  const signedInEmail = firebaseUser?.email ?? ''
+  const addressesDiffer =
+    !!firebaseUser && !!invitation && signedInEmail.toLowerCase() !== invitation.email.toLowerCase()
+
+  if (firebaseUser && invitation && (addressesDiffer || serverMismatchMessage)) {
+    const invitedEmail = invitation.email
     return (
       <Shell>
         <h1 className="display text-2xl font-bold">Wrong account</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          This invite was sent to {invitation.email}. You are signed in as {firebaseUser.email}.
+          {/* Both addresses, always — "wrong account" on its own leaves the reader
+              with no way to work out which account to use. When the server is the
+              one calling it a mismatch, the Firebase address is not the one it
+              compared, so its own sentence is the truthful one to show. */}
+          {addressesDiffer
+            ? `This invite was sent to ${invitedEmail}. You are signed in as ${signedInEmail || 'another account'}.`
+            : serverMismatchMessage}
         </p>
         <Button
           className="mt-6 w-full"
           onClick={() => {
-            void signOut().then(() => navigate(0))
+            // Sign out AND carry the invite with them, so signing in as the right
+            // person lands back on this link instead of on the home page with the
+            // invite lost.
+            void signOut().then(() =>
+              navigate('/auth/sign-in', {
+                replace: true,
+                state: { from: `/join/${encodeURIComponent(token!)}`, email: invitedEmail },
+              }),
+            )
           }}
         >
-          Sign out
+          Sign out and sign in as {invitedEmail}
         </Button>
       </Shell>
     )
@@ -102,13 +178,17 @@ export function JoinOrg() {
             </Badge>
           ))}
         </div>
+        {error && (
+          <p role="alert" className="mt-4 text-sm text-destructive">
+            {error}
+          </p>
+        )}
         <Button
           className="mt-6 w-full"
           disabled={acceptInvitation.isPending}
           onClick={() => {
-            void accept().catch((err) =>
-              toast.error(err instanceof ApiError ? err.message : 'Could not join. Try again.'),
-            )
+            setError('')
+            void accept().catch(reportAcceptFailure)
           }}
         >
           {acceptInvitation.isPending ? 'Joining…' : `Join ${orgName}`}
@@ -121,6 +201,13 @@ export function JoinOrg() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     if (!invitation) return
+    setError('')
+
+    if (mode === 'create') {
+      const problem = passwordProblem(password)
+      if (problem) return setError(problem)
+    }
+
     setSubmitting(true)
     try {
       const auth = getFirebaseAuth()
@@ -143,9 +230,7 @@ export function JoinOrg() {
 
       await accept()
     } catch (err) {
-      if (err instanceof ApiError) toast.error(err.message)
-      else if (mode === 'create') toast.error('That account could not be created. Try signing in.')
-      else toast.error('Could not sign in. Check the password and try again.')
+      reportAcceptFailure(err)
       setSubmitting(false)
     }
   }
@@ -196,19 +281,21 @@ export function JoinOrg() {
           <Label htmlFor="joinPassword">
             Password <RequiredAsterisk />
           </Label>
-          <Input
+          <PasswordInput
             id="joinPassword"
-            type="password"
             required
-            minLength={8}
+            showRequirement={mode === 'create'}
             autoComplete={mode === 'create' ? 'new-password' : 'current-password'}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          {mode === 'create' && (
-            <p className="text-xs text-muted-foreground">Use at least 8 characters.</p>
-          )}
         </div>
+
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
 
         <Button type="submit" disabled={submitting}>
           {submitting ? 'Joining…' : `Join ${orgName}`}
@@ -220,7 +307,10 @@ export function JoinOrg() {
         <button
           type="button"
           className="text-primary underline-offset-4 hover:underline"
-          onClick={() => setMode(mode === 'create' ? 'signIn' : 'create')}
+          onClick={() => {
+            setError('')
+            setMode(mode === 'create' ? 'signIn' : 'create')
+          }}
         >
           {mode === 'create' ? 'Sign in' : 'Create one'}
         </button>

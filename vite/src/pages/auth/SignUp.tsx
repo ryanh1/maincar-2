@@ -1,32 +1,48 @@
 import { useState, type FormEvent } from 'react'
 import { createUserWithEmailAndPassword } from 'firebase/auth'
-import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { PasswordInput } from '@/components/ui/password-input'
 import { RequiredAsterisk } from '@/components/ui/RequiredAsterisk'
 import { getFirebaseAuth } from '@/dependencies/firebase'
+import { authErrorToMessage } from '@/lib/firebaseErrors'
+import { passwordProblem } from '@/lib/passwordPolicy'
+import { readHandoff, safeRedirect } from '@/lib/redirectTo'
 
 export function SignUp() {
   const navigate = useNavigate()
-  const [email, setEmail] = useState('')
+  const location = useLocation()
+  const handoff = readHandoff(location.state)
+
+  const [email, setEmail] = useState(handoff.email ?? '')
   const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
+    setError('')
+
+    // Checked here as well as by the field, so the rule is the same sentence
+    // whether the browser catches it or we do.
+    const problem = passwordProblem(password)
+    if (problem) return setError(problem)
+
     setSubmitting(true)
     try {
-      await createUserWithEmailAndPassword(getFirebaseAuth(), email, password)
-      // The server creates the Org and User rows on the first /auth/me call, so
-      // the app lands on onboarding from here.
-      navigate('/welcome', { replace: true })
-    } catch {
-      toast.error('That account could not be created. Check the email and try again.')
-    } finally {
+      await createUserWithEmailAndPassword(getFirebaseAuth(), email.trim(), password)
+      // The server creates the User row on the first /auth/me call, so the app
+      // lands on onboarding from here.
+      navigate(safeRedirect(handoff.from, '/welcome'), { replace: true })
+    } catch (err) {
+      // Sign-up names the specific cause — "that email already has an account"
+      // is the one thing that tells the reader what to do instead, and the
+      // create would have failed anyway, so it discloses nothing new.
+      setError(authErrorToMessage(err, 'signUp'))
       setSubmitting(false)
     }
   }
@@ -55,17 +71,21 @@ export function SignUp() {
             <Label htmlFor="password">
               Password <RequiredAsterisk />
             </Label>
-            <Input
+            <PasswordInput
               id="password"
-              type="password"
               required
-              minLength={8}
+              showRequirement
               autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <p className="text-xs text-muted-foreground">Use at least 8 characters.</p>
           </div>
+
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
 
           <Button type="submit" disabled={submitting}>
             {submitting ? 'Creating account…' : 'Create account'}
@@ -74,7 +94,13 @@ export function SignUp() {
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
           Already have an account?{' '}
-          <Link to="/auth/sign-in" className="text-primary underline-offset-4 hover:underline">
+          <Link
+            to="/auth/sign-in"
+            // Carry both across, so switching screens never means retyping the
+            // address or losing the invite that sent them here.
+            state={handoff.from || email ? { from: handoff.from, email: email || undefined } : undefined}
+            className="text-primary underline-offset-4 hover:underline"
+          >
             Sign in
           </Link>
         </p>
