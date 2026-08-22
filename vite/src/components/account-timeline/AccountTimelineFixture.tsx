@@ -53,6 +53,7 @@ function TimelineFixtureContent() {
         <AccountTimelineDetailPanel
           open={selectedEventId !== null}
           onOpenChange={(open) => { if (!open) setSelectedEventId(null) }}
+          orgId="org-fixture"
           detail={detailQuery.data?.detail ?? null}
           navigation={detailQuery.data?.navigation ?? null}
           onNavigate={setSelectedEventId}
