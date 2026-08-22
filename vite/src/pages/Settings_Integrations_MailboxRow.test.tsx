@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, fireEvent, within } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/utils'
 import {
@@ -303,6 +303,35 @@ describe('Settings_Integrations_MailboxRow', () => {
       })
       expect(await within(mailboxCard).findByText('Test result')).toBeInTheDocument()
       expect(within(mailboxCard).getByText('Read your email')).toBeInTheDocument()
+    })
+
+    it('replaces the Test icon with a spinner while the request is pending', async () => {
+      let resolveTest: (value: undefined) => void
+      jsonFetch.mockImplementationOnce(
+        () => new Promise<undefined>((resolve) => {
+          resolveTest = resolve
+        }),
+      )
+
+      renderWithProviders(
+        <Settings_Integrations_MailboxRow
+          mailbox={connectedMailbox}
+          orgId={mockOrgId}
+          onOpenSettings={mockOnOpenSettings}
+          onReconnect={mockOnReconnect}
+        />,
+      )
+
+      const testButton = screen.getByRole('button', { name: 'Test user@gmail.com' })
+      await userEvent.click(testButton)
+
+      expect(await screen.findByLabelText('Testing user@gmail.com')).toHaveClass('animate-spin')
+      expect(screen.getByRole('button', { name: 'Test user@gmail.com' })).toBeDisabled()
+
+      resolveTest!(undefined)
+      await waitFor(() =>
+        expect(screen.queryByLabelText('Testing user@gmail.com')).not.toBeInTheDocument(),
+      )
     })
   })
 

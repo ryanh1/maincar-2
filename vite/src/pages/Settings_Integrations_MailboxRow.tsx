@@ -3,6 +3,7 @@ import {
   Check,
   CircleAlert,
   FlaskConical,
+  Loader2,
   RefreshCw,
   Settings,
   TriangleAlert,
@@ -151,7 +152,15 @@ export function Settings_Integrations_MailboxRow({
               disabled={test.isPending}
               onClick={runTest}
             >
-              <FlaskConical size={16} aria-hidden />
+              {test.isPending ? (
+                <Loader2
+                  size={16}
+                  aria-label={`Testing ${mailbox.emailAddress}`}
+                  className="animate-spin motion-reduce:animate-none"
+                />
+              ) : (
+                <FlaskConical size={16} aria-hidden />
+              )}
             </IconButton>
             {mailbox.status !== 'connected' && (
               <IconButton tooltip={repairTooltip} onClick={() => onReconnect(mailbox)}>
