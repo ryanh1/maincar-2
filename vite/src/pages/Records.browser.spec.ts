@@ -14,6 +14,11 @@ const nameAttribute = {
   isArchived: false, createdAt: companyObject.createdAt, updatedAt: companyObject.updatedAt,
 }
 
+const domainAttribute = {
+  ...nameAttribute,
+  id: 'domain', slug: 'domain', name: 'Domain', isIdentity: false, sortOrder: 1,
+}
+
 test('creates a Company from its grid after a recoverable validation error', async ({ page }) => {
   const consoleErrors: string[] = []
   const companies: Array<Record<string, unknown>> = []
@@ -28,7 +33,7 @@ test('creates a Company from its grid after a recoverable validation error', asy
       return route.fulfill({ json: { objects: [companyObject] } })
     }
     if (request.method() === 'GET' && pathname.endsWith('/objects/company')) {
-      return route.fulfill({ json: { object: { ...companyObject, attributes: [nameAttribute] } } })
+      return route.fulfill({ json: { object: { ...companyObject, attributes: [nameAttribute, domainAttribute] } } })
     }
     if (request.method() === 'POST' && pathname.endsWith('/objects/company/list')) {
       return route.fulfill({ json: { rows: companies, nextCursor: null, totalCount: companies.length } })
@@ -55,6 +60,19 @@ test('creates a Company from its grid after a recoverable validation error', asy
   await expect(page.getByRole('textbox', { name: 'Name' })).toHaveCount(0)
   await expect(page.getByTestId('data-grid-canvas')).toBeVisible()
   expect(companies).toEqual([expect.objectContaining({ id: 'company-1', name: 'Acme' })])
+
+  const gridBounds = await page.getByTestId('data-grid-canvas').boundingBox()
+  if (!gridBounds) throw new Error('The grid canvas did not have bounds')
+  await page.mouse.click(gridBounds.x + 80, gridBounds.y + 18)
+  await page.keyboard.down('Shift')
+  await page.mouse.click(gridBounds.x + 300, gridBounds.y + 18)
+  await page.keyboard.up('Shift')
+  await page.getByRole('textbox', { name: 'Column group name' }).fill('Identity')
+  await page.getByRole('button', { name: 'Group columns' }).click()
+  await expect(page.getByRole('button', { name: 'Collapse Identity column group' })).toBeVisible()
+  await page.getByRole('button', { name: 'Collapse Identity column group' }).click()
+  await expect(page.getByRole('button', { name: 'Expand Identity column group' })).toBeVisible()
+
   expect(consoleErrors).toEqual([])
 })
 

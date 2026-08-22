@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import type { ReactNode } from 'react'
 
 import type { AttributeDef } from '@/lib/crmTypes'
-import { toRecordListQuery, useViewConfig } from './viewConfig'
+import { reorderColumnGroup, toRecordListQuery, useViewConfig } from './viewConfig'
 
 const attributes = [
   { id: 'first-name', slug: 'firstName', name: 'First name' },
@@ -126,5 +126,27 @@ describe('viewConfig', () => {
     expect(config.frozenCols).toBe(2)
     expect(config.gridLines).toBe(false)
     expect(config.columnWidths).toEqual({ status: 240 })
+  })
+
+  it('moves a named column group as one contiguous unit', () => {
+    const columns = [
+      { attributeId: 'first-name', visible: true, order: 0, group: 'Name', collapsed: false },
+      { attributeId: 'status', visible: true, order: 1 },
+      { attributeId: 'owner', visible: true, order: 2, group: 'Assignment', collapsed: false },
+      { attributeId: 'title', visible: true, order: 3, group: 'Name', collapsed: false },
+    ]
+
+    expect(reorderColumnGroup(columns, 'Assignment', 'Name')).toEqual([
+      { attributeId: 'owner', visible: true, order: 0, group: 'Assignment', collapsed: false },
+      { attributeId: 'first-name', visible: true, order: 1, group: 'Name', collapsed: false },
+      { attributeId: 'title', visible: true, order: 2, group: 'Name', collapsed: false },
+      { attributeId: 'status', visible: true, order: 3 },
+    ])
+    expect(reorderColumnGroup(columns, 'Name', 'Assignment')).toEqual([
+      { attributeId: 'status', visible: true, order: 0 },
+      { attributeId: 'owner', visible: true, order: 1, group: 'Assignment', collapsed: false },
+      { attributeId: 'first-name', visible: true, order: 2, group: 'Name', collapsed: false },
+      { attributeId: 'title', visible: true, order: 3, group: 'Name', collapsed: false },
+    ])
   })
 })
