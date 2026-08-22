@@ -2,11 +2,10 @@
 // EC-17).
 //
 // What these exist to protect:
-//   - a template is ORG-SHARED, the deliberate inverse of a draft: every query
-//     filters on `orgId` ALONE, and a second member of the same org may read,
-//     edit, and delete a template they did not write. A test that only proved
-//     the cross-org 404 would still pass if someone added `userId` to the where
-//     clause by reflex, so the same-org member is pinned here explicitly.
+//   - a private template is visible and manageable only by its creator, while an
+//     organization template is visible to every active member and manageable by
+//     its creator or an organization admin. Every query carries the visibility
+//     constraint, so a client filter can never expose private content.
 //   - another ORG's template is a 404, never a 403 — a 403 confirms the id
 //     names a real row — and the tenant key is asserted on the where clause
 //     itself, not just on the status code.
@@ -26,6 +25,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
     emailTemplate: {
+      count: vi.fn(),
       findMany: vi.fn(),
       findFirst: vi.fn(),
       create: vi.fn(),
@@ -57,7 +57,7 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
 import app from '../../app.js'
 import {
   TEMPLATE_BODY_MAX,
-  TEMPLATE_LIST_LIMIT,
+  TEMPLATE_DEFAULT_PAGE_SIZE,
   TEMPLATE_NAME_MAX,
   TEMPLATE_SUBJECT_MAX,
 } from '../email.js'
@@ -117,6 +117,7 @@ function templateRow(overrides: Record<string, unknown> = {}) {
     name: 'Follow-up after call',
     subject: 'Great speaking with you',
     bodyHtml: '<p>Hi</p>',
+    visibility: 'PRIVATE',
     fieldsJson: null,
     createdAt: NOW,
     updatedAt: NOW,
@@ -136,6 +137,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   authAs()
   prismaMock.emailTemplate.findMany.mockResolvedValue([])
+  prismaMock.emailTemplate.count.mockResolvedValue(0)
   prismaMock.emailTemplate.create.mockImplementation(
     async ({ data }: { data: Record<string, unknown> }) => templateRow(data),
   )
@@ -154,31 +156,37 @@ describe('GET /api/email/orgs/:orgId/templates', () => {
       templateRow({ id: 'tpl-a', name: 'Apology' }),
       templateRow({ id: 'tpl-b', name: 'Booking' }),
     ])
+    prismaMock.emailTemplate.count.mockResolvedValue(2)
 
     const res = await request(app).get(URL_A).set('Authorization', AUTH)
 
     expect(res.status).toBe(200)
     expect(res.body.total).toBe(2)
     expect(res.body.templates.map((t: { name: string }) => t.name)).toEqual(['Apology', 'Booking'])
+    expect(res.body.templates[0].visibility).toBe('PRIVATE')
   })
 
-  it('reads on orgId ALONE, alphabetically, capped', async () => {
+  it('reads only the caller’s private templates plus organization templates', async () => {
     await request(app).get(URL_A).set('Authorization', AUTH)
 
     const args = prismaMock.emailTemplate.findMany.mock.calls[0][0]
-    expect(args.where).toEqual({ orgId: ORG_A })
-    // The point of the test: a template is org-shared, so the author is NOT a
-    // filter. If someone copies the draft's scoping down by reflex, this fails.
-    expect(args.where).not.toHaveProperty('userId')
-    expect(args.where).not.toHaveProperty('createdById')
+    expect(args.where).toEqual({
+      orgId: ORG_A,
+      OR: [
+        { visibility: 'PRIVATE', createdById: 'user-a' },
+        { visibility: 'ORGANIZATION' },
+      ],
+    })
     expect(args.orderBy).toEqual([{ name: 'asc' }, { id: 'asc' }])
-    expect(args.take).toBe(TEMPLATE_LIST_LIMIT)
+    expect(args.take).toBe(TEMPLATE_DEFAULT_PAGE_SIZE)
   })
 
   it('hands back a template whose author has left, with a null createdById', async () => {
     // onDelete: SetNull — the template outlives the rep who wrote it. A null
     // author is a fact about the row, not an error, and must not be dropped.
-    prismaMock.emailTemplate.findMany.mockResolvedValue([templateRow({ createdById: null })])
+    prismaMock.emailTemplate.findMany.mockResolvedValue([
+      templateRow({ createdById: null, visibility: 'ORGANIZATION' }),
+    ])
 
     const res = await request(app).get(URL_A).set('Authorization', AUTH)
 
@@ -190,6 +198,50 @@ describe('GET /api/email/orgs/:orgId/templates', () => {
     const res = await request(app).get(URL_A)
 
     expect(res.status).toBe(401)
+  })
+
+  it('keeps a caller’s private templates separate from organization templates', async () => {
+    await request(app).get(`${URL_A}?scope=private`).set('Authorization', AUTH)
+
+    expect(prismaMock.emailTemplate.findMany.mock.calls[0][0].where).toEqual({
+      orgId: ORG_A,
+      visibility: 'PRIVATE',
+      createdById: 'user-a',
+    })
+
+    await request(app).get(`${URL_A}?scope=organization`).set('Authorization', AUTH)
+
+    expect(prismaMock.emailTemplate.findMany.mock.calls[1][0].where).toEqual({
+      orgId: ORG_A,
+      visibility: 'ORGANIZATION',
+    })
+  })
+
+  it('pages, searches, and sorts in the database', async () => {
+    await request(app)
+      .get(`${URL_A}?scope=all&page=2&limit=25&sort=subject&dir=desc&q=follow`)
+      .set('Authorization', AUTH)
+
+    expect(prismaMock.emailTemplate.count).toHaveBeenCalledTimes(1)
+    const args = prismaMock.emailTemplate.findMany.mock.calls[0][0]
+    expect(args.skip).toBe(25)
+    expect(args.take).toBe(25)
+    expect(args.orderBy).toEqual([{ subject: 'desc' }, { id: 'asc' }])
+    expect(args.where).toMatchObject({ orgId: ORG_A })
+    expect(args.where.AND).toEqual([
+      {
+        OR: [
+          { visibility: 'PRIVATE', createdById: 'user-a' },
+          { visibility: 'ORGANIZATION' },
+        ],
+      },
+      {
+        OR: expect.arrayContaining([
+          { name: { contains: 'follow', mode: 'insensitive' } },
+          { subject: { contains: 'follow', mode: 'insensitive' } },
+        ]),
+      },
+    ])
   })
 })
 
@@ -218,6 +270,17 @@ describe('POST /api/email/orgs/:orgId/templates', () => {
     const { data } = prismaMock.emailTemplate.create.mock.calls[0][0]
     expect(data.orgId).toBe(ORG_A)
     expect(data.createdById).toBe('user-a')
+  })
+
+  it('creates private templates by default and permits an explicit organization share', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ name: 'Personal' })
+    expect(prismaMock.emailTemplate.create.mock.calls[0][0].data.visibility).toBe('PRIVATE')
+
+    await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ name: 'Shared', visibility: 'ORGANIZATION' })
+    expect(prismaMock.emailTemplate.create.mock.calls[1][0].data.visibility).toBe('ORGANIZATION')
   })
 
   it('requires a name', async () => {
@@ -315,12 +378,16 @@ describe('PATCH /api/email/orgs/:orgId/templates/:templateId', () => {
     expect(data).not.toHaveProperty('bodyHtml')
   })
 
-  it('scopes the write to orgId ALONE — never to the author', async () => {
+  it('scopes a private write to its org, visibility, and creator', async () => {
     await request(app).patch(ONE_A).set('Authorization', AUTH).send({ name: 'Renamed' })
 
     const { where } = prismaMock.emailTemplate.updateMany.mock.calls[0][0]
-    expect(where).toEqual({ id: TEMPLATE_ID, orgId: ORG_A })
-    expect(where).not.toHaveProperty('createdById')
+    expect(where).toEqual({
+      id: TEMPLATE_ID,
+      orgId: ORG_A,
+      visibility: 'PRIVATE',
+      createdById: 'user-a',
+    })
   })
 
   it('refuses an empty patch rather than bumping updatedAt for nothing', async () => {
@@ -348,6 +415,23 @@ describe('PATCH /api/email/orgs/:orgId/templates/:templateId', () => {
       'fieldsJson',
     )
   })
+
+  it('allows the creator to unshare their organization template', async () => {
+    prismaMock.emailTemplate.findFirst.mockResolvedValue(
+      templateRow({ visibility: 'ORGANIZATION' }),
+    )
+
+    const res = await request(app)
+      .patch(ONE_A)
+      .set('Authorization', AUTH)
+      .send({ visibility: 'PRIVATE' })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.emailTemplate.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { id: TEMPLATE_ID, orgId: ORG_A, visibility: 'ORGANIZATION', createdById: 'user-a' },
+      data: { visibility: 'PRIVATE' },
+    })
+  })
 })
 
 // ============================================================
@@ -362,6 +446,8 @@ describe('DELETE /api/email/orgs/:orgId/templates/:templateId', () => {
     expect(prismaMock.emailTemplate.deleteMany.mock.calls[0][0].where).toEqual({
       id: TEMPLATE_ID,
       orgId: ORG_A,
+      visibility: 'PRIVATE',
+      createdById: 'user-a',
     })
   })
 
@@ -385,32 +471,64 @@ describe('DELETE /api/email/orgs/:orgId/templates/:templateId', () => {
 })
 
 // ============================================================
-// A template is ORG-SHARED — any member, but only this org
+// Template management follows visibility and creator/admin authority
 // ============================================================
-describe('a template belongs to the org, not to its author', () => {
-  it('GET: a second member of the same org sees a template they did not write', async () => {
-    authAs(membershipRow({ id: 'mem-b', userId: 'user-a' }))
-    prismaMock.emailTemplate.findMany.mockResolvedValue([templateRow({ createdById: 'user-b' })])
-
-    const res = await request(app).get(URL_A).set('Authorization', AUTH)
-
-    expect(res.status).toBe(200)
-    expect(res.body.templates).toHaveLength(1)
-    expect(res.body.templates[0].createdById).toBe('user-b')
-  })
-
-  it('PATCH: a member may edit a template someone else wrote', async () => {
+describe('template visibility and management permissions', () => {
+  it('does not let a member manage another member’s private template', async () => {
     prismaMock.emailTemplate.findFirst.mockResolvedValue(templateRow({ createdById: 'user-b' }))
 
     const res = await request(app).patch(ONE_A).set('Authorization', AUTH).send({ name: 'Renamed' })
 
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Template not found')
+    expect(prismaMock.emailTemplate.updateMany).not.toHaveBeenCalled()
   })
 
-  it('DELETE: a member may delete a template someone else wrote', async () => {
+  it('does not let a non-admin manage an organization template they did not create', async () => {
+    prismaMock.emailTemplate.findFirst.mockResolvedValue(
+      templateRow({ createdById: 'user-b', visibility: 'ORGANIZATION' }),
+    )
+
     const res = await request(app).delete(ONE_A).set('Authorization', AUTH)
 
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Only the creator or an admin can manage this template')
+    expect(prismaMock.emailTemplate.deleteMany).not.toHaveBeenCalled()
+  })
+
+  it('lets an admin manage an organization template another member created', async () => {
+    authAs(membershipRow({ roles: ['admin'] }))
+    prismaMock.emailTemplate.findFirst.mockResolvedValue(
+      templateRow({ createdById: 'user-b', visibility: 'ORGANIZATION' }),
+    )
+
+    const res = await request(app).patch(ONE_A).set('Authorization', AUTH).send({ name: 'Renamed' })
+
     expect(res.status).toBe(200)
+    expect(prismaMock.emailTemplate.updateMany.mock.calls[0][0].where).toEqual({
+      id: TEMPLATE_ID,
+      orgId: ORG_A,
+      visibility: 'ORGANIZATION',
+    })
+  })
+
+  it('keeps a former member’s organization template manageable only by an admin', async () => {
+    prismaMock.emailTemplate.findFirst.mockResolvedValue(
+      templateRow({ createdById: null, visibility: 'ORGANIZATION' }),
+    )
+
+    const memberRes = await request(app).delete(ONE_A).set('Authorization', AUTH)
+    expect(memberRes.status).toBe(403)
+    expect(prismaMock.emailTemplate.deleteMany).not.toHaveBeenCalled()
+
+    authAs(membershipRow({ roles: ['admin'] }))
+    const adminRes = await request(app).delete(ONE_A).set('Authorization', AUTH)
+    expect(adminRes.status).toBe(200)
+    expect(prismaMock.emailTemplate.deleteMany.mock.calls[0][0].where).toEqual({
+      id: TEMPLATE_ID,
+      orgId: ORG_A,
+      visibility: 'ORGANIZATION',
+    })
   })
 })
 
