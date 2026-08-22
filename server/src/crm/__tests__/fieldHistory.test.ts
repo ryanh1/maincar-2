@@ -11,6 +11,7 @@ import {
   diffFieldValues,
   FieldHistoryShapeError,
   isChangeSource,
+  listFieldChangesInWindow,
   recordFieldHistoryInTx,
   toHistoryJson,
   validateChangeShapes,
@@ -250,5 +251,60 @@ describe('recordFieldHistoryInTx', () => {
     // a transaction client, and recordFieldHistoryInTx must not accept it.
     const rejected: HistoryClient = notATransaction
     expect(rejected).toBeDefined()
+  })
+})
+
+describe('listFieldChangesInWindow', () => {
+  it('counts only in-window changes and keeps the newest previous → current pair', async () => {
+    const rows = [
+      {
+        id: 'history-3', recordId: 'person-1', attribute: 'title',
+        oldJson: 'AE', newJson: 'Director', changedAt: new Date('2026-08-21T11:00:00.000Z'),
+      },
+      {
+        id: 'history-2', recordId: 'person-1', attribute: 'title',
+        oldJson: 'SDR', newJson: 'AE', changedAt: new Date('2026-08-20T11:00:00.000Z'),
+      },
+      {
+        id: 'history-1', recordId: 'person-1', attribute: 'title',
+        oldJson: 'BDR', newJson: 'SDR', changedAt: new Date('2026-08-19T11:00:00.000Z'),
+      },
+      // This fourth change is old evidence, not a change for the requested window.
+      {
+        id: 'history-outside-window', recordId: 'person-1', attribute: 'title',
+        oldJson: 'Intern', newJson: 'BDR', changedAt: new Date('2026-08-13T11:00:00.000Z'),
+      },
+    ]
+    const findMany = vi.fn(async ({ where }: { where: { changedAt: { gte: Date } } }) =>
+      rows.filter((row) => row.changedAt >= where.changedAt.gte),
+    )
+    const prisma = { fieldHistory: { findMany } } as never
+
+    const changes = await listFieldChangesInWindow(prisma, {
+      orgId: 'org-1',
+      objectSlug: 'person',
+      readableAttributes: ['title'],
+      days: 7,
+      now: new Date('2026-08-21T12:00:00.000Z'),
+    })
+
+    expect(changes).toEqual([
+      {
+        recordId: 'person-1', attribute: 'title', changeCount: 3,
+        previousValue: 'AE', currentValue: 'Director', changedAt: new Date('2026-08-21T11:00:00.000Z'),
+      },
+    ])
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        orgId: 'org-1',
+        objectSlug: 'person',
+        attribute: { in: ['title'] },
+        changedAt: { gte: new Date('2026-08-14T12:00:00.000Z') },
+      },
+      select: {
+        id: true, recordId: true, attribute: true, oldJson: true, newJson: true, changedAt: true,
+      },
+      orderBy: [{ changedAt: 'desc' }, { id: 'desc' }],
+    })
   })
 })

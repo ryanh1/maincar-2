@@ -21,6 +21,7 @@
  * field-write validator uses (./valuesValidator.ts). The database will not do it.
  */
 import { Prisma } from '../generated/prisma/client.js'
+import type { PrismaClient } from '../generated/prisma/client.js'
 
 import { checkValueShape, type ValidatorAttribute } from './valuesValidator.js'
 
@@ -69,6 +70,90 @@ export interface FieldChange {
   attribute: string
   oldValue: unknown
   newValue: unknown
+}
+
+/**
+ * The newest change and the number of changes for one cell in a time window.
+ * `attribute` stays a slug here because FieldHistory deliberately records the
+ * durable field identity it was written with. Routes can resolve that slug to
+ * the current AttributeDef id only after applying their read-access policy.
+ */
+export interface FieldChangeWindowSummary {
+  recordId: string
+  attribute: string
+  changeCount: number
+  previousValue: Prisma.JsonValue | null
+  currentValue: Prisma.JsonValue | null
+  changedAt: Date
+}
+
+export interface ListFieldChangesInWindowArgs {
+  orgId: string
+  objectSlug: string
+  /** Attribute slugs the caller has already established are readable. */
+  readableAttributes: readonly string[]
+  days: number
+  /** Injectable clock keeps the window boundary deterministic in unit tests. */
+  now?: Date
+}
+
+/**
+ * Reads every changed cell in an object's recent window, grouped by record and
+ * attribute. The history query is anchored on `changedAt`, and narrows its
+ * candidate set to the caller's readable AttributeDefs before any values leave
+ * the database. Rows arrive newest-first, so each group retains the most recent
+ * previous → current pair while the rest only increment its count.
+ */
+export async function listFieldChangesInWindow(
+  prisma: Pick<PrismaClient, 'fieldHistory'>,
+  args: ListFieldChangesInWindowArgs,
+): Promise<FieldChangeWindowSummary[]> {
+  const { orgId, objectSlug, readableAttributes, days, now = new Date() } = args
+  if (readableAttributes.length === 0) return []
+
+  const windowStart = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
+  const rows = await prisma.fieldHistory.findMany({
+    where: {
+      orgId,
+      objectSlug,
+      attribute: { in: [...readableAttributes] },
+      changedAt: { gte: windowStart },
+    },
+    select: {
+      id: true,
+      recordId: true,
+      attribute: true,
+      oldJson: true,
+      newJson: true,
+      changedAt: true,
+    },
+    // `id` makes the "most recent" winner deterministic for clock-tied writes.
+    orderBy: [{ changedAt: 'desc' }, { id: 'desc' }],
+  })
+
+  const byRecordAndAttribute = new Map<string, Map<string, FieldChangeWindowSummary>>()
+  for (const row of rows) {
+    let byAttribute = byRecordAndAttribute.get(row.recordId)
+    if (!byAttribute) {
+      byAttribute = new Map()
+      byRecordAndAttribute.set(row.recordId, byAttribute)
+    }
+    const existing = byAttribute.get(row.attribute)
+    if (existing) {
+      existing.changeCount += 1
+      continue
+    }
+    byAttribute.set(row.attribute, {
+      recordId: row.recordId,
+      attribute: row.attribute,
+      changeCount: 1,
+      previousValue: row.oldJson,
+      currentValue: row.newJson,
+      changedAt: row.changedAt,
+    })
+  }
+
+  return [...byRecordAndAttribute.values()].flatMap((byAttribute) => [...byAttribute.values()])
 }
 
 // --- JSON normalization -------------------------------------------------------
