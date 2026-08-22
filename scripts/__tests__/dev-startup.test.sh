@@ -59,6 +59,7 @@ if [ "$1" = "$PROJECT_ROOT/scripts/firebase-emulator.sh" ]; then
   [ "$2" = "--ready-file" ] || exit 21
   sleep 1
   : > "$3"
+  : > "$TEST_STATE_DIR/firebase-started"
   printf '%s\n' "$3" > "$TEST_STATE_DIR/ready-path"
   while :; do sleep 60; done
 fi
@@ -88,9 +89,30 @@ fi
 exit 26
 SH
 
-chmod +x "$TEST_DIR/bin/bash" "$TEST_DIR/bin/npx" "$TEST_DIR/bin/npm"
+cat > "$TEST_DIR/bin/node" <<'SH'
+#!/bin/bash
+case " $* " in
+  *'firebase-tools/lib/emulator/controller.js'*)
+    [ "${TEST_FORCE_DEPENDENCY_FAILURE:-0}" != 1 ] || exit 1
+    ;;
+esac
+exit 0
+SH
+
+chmod +x "$TEST_DIR/bin/bash" "$TEST_DIR/bin/npx" "$TEST_DIR/bin/npm" "$TEST_DIR/bin/node"
 PROJECT_ROOT="$ROOT" TEST_STATE_DIR="$TEST_DIR" PATH="$TEST_DIR/bin:$PATH" \
   /bin/bash "$BOOTSTRAP" >/dev/null || fail "API/web startup was not gated on Firebase readiness"
+
+# A package directory can exist while a transitive Firebase dependency is missing.
+# Startup must reject that state before it launches the emulator, rather than
+# surfacing a deep module-resolution error while polling for Auth readiness.
+rm -f "$TEST_DIR/firebase-started" "$TEST_DIR/ready-path" "$TEST_DIR/docker-ready" "$TEST_DIR/migrations-applied"
+if PROJECT_ROOT="$ROOT" TEST_STATE_DIR="$TEST_DIR" TEST_FORCE_DEPENDENCY_FAILURE=1 PATH="$TEST_DIR/bin:$PATH" \
+  /bin/bash "$BOOTSTRAP" >/dev/null 2>&1; then
+  fail "dev startup accepted an incomplete Firebase dependency tree"
+fi
+[ ! -f "$TEST_DIR/firebase-started" ] ||
+  fail "dev startup launched Firebase before validating local dependencies"
 
 # Remove the new migration command from a temporary copy to prove the old
 # startup path fails before concurrently can launch the API.
