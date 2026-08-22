@@ -2,7 +2,7 @@ import { Prisma } from '../generated/prisma/client.js'
 
 import { ACTIVITY_EVENT_COUNT_FIELD_REGISTRY, DEAL_FIELD_REGISTRY } from './fieldRegistry.js'
 
-export type DealPivotDimension = 'owner' | 'stage' | 'createdAt'
+export type DealPivotDimension = 'owner' | 'stage' | 'segment' | 'createdAt'
 
 export interface ReportChartConfig {
   type: 'bar' | 'line' | 'area' | 'pie' | 'funnel' | 'heatmap' | 'scatter' | 'kpi'
@@ -299,7 +299,7 @@ function compileDealStageAmountReport(
     config.values[0]?.field !== measure.field ||
     config.values[0]?.aggregation !== measure.aggregation
   ) {
-    throw new InvalidReportConfigError('Add up to two unique Owner or Stage groups and one Amount value.')
+    throw new InvalidReportConfigError('Add up to two unique Owner, Stage, or Segment groups and one Amount value.')
   }
 
   const selectedDimensions = [...config.rows, ...config.columns]
@@ -312,7 +312,7 @@ function compileDealStageAmountReport(
     throw new InvalidReportConfigError('Created date needs a day bucket before it can be used in a pivot.')
   }
   const dimensions = selectedDimensions
-    .filter((dimension): dimension is { field: 'owner' | 'stage' } => dimension.field !== 'createdAt')
+    .filter((dimension): dimension is { field: 'owner' | 'stage' | 'segment' } => dimension.field !== 'createdAt')
     .map(({ field }) => DEAL_FIELD_REGISTRY.dimensions[field])
 
   const timeZone = resolveReportTimeZone(config.timeZone, context)

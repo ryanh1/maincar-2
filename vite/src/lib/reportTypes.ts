@@ -4,7 +4,7 @@ export interface OwnerTeamScope {
   leadUserIds?: string[]
 }
 
-export type DealPivotDimension = 'owner' | 'stage' | 'createdAt'
+export type DealPivotDimension = 'owner' | 'stage' | 'segment' | 'createdAt'
 export type PivotValueTransform = 'none' | 'percentOfGrandTotal' | 'percentOfColumn' | 'percentOfRow' | 'percentOfParent' | 'runningTotal' | 'rankLargestToSmallest'
 export type PeriodComparison = 'previousPeriod' | 'samePeriodLastYear'
 
@@ -71,6 +71,8 @@ export interface RunReportResponse {
     rows: Array<{
       ownerId?: string
       ownerName?: string
+      segmentId?: string
+      segmentName?: string
       stageId?: string
       stageName?: string
       createdDay?: string

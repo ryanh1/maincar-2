@@ -53,6 +53,21 @@ describe('compileReport', () => {
     expect(query.values).toEqual(['org-a'])
   })
 
+  it('compiles the canonical Segment dimension through the registry without accepting a JSON key', () => {
+    const query = compileReport({
+      baseObject: 'deal',
+      rows: [{ field: 'segment' }],
+      columns: [],
+      values: [{ field: 'amountMinor', aggregation: 'sum' }],
+      timeZone: { mode: 'pinned', displayZone: 'UTC' },
+    } as ReportConfig, 'org-a')
+
+    expect(query.sql).toContain('"deal"."customJson" ->> \'segment\'')
+    expect(query.sql).toContain("'Unspecified') AS \"segmentName\"")
+    expect(query.sql).toContain('GROUP BY')
+    expect(query.values).toEqual(['org-a'])
+  })
+
   it('rejects the same dimension appearing in more than one zone', () => {
     expect(() => compileReport({
       baseObject: 'deal',

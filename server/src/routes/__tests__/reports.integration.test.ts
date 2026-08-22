@@ -38,6 +38,11 @@ const CONFIG = {
   timeZone: { mode: 'pinned', displayZone: 'UTC' },
 }
 
+const SEGMENT_CONFIG = {
+  ...CONFIG,
+  rows: [{ field: 'segment' }],
+}
+
 const VIEWER_DAY_CONFIG = {
   ...CONFIG,
   timeZone: { mode: 'viewer' },
@@ -170,6 +175,34 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
       .send({ filter: { type: 'condition', field: 'ownerUserId', operator: 'eq', value: org.adminUserId } })
     expect(widened.status).toBe(200)
     expect(widened.body.rows.map((row: { name: string }) => row.name).sort()).toEqual(['Discovery A', 'Discovery B', 'Proposal'])
+  })
+
+  it('groups Deals by the canonical Segment field, labels missing values, and excludes another org', async () => {
+    const orgA = await seedOrgWithAdmin(prisma, { seed: true })
+    const { pipeline, discovery } = await createPipelineAndStages(orgA.orgId)
+    await prisma.deal.createMany({
+      data: [
+        { orgId: orgA.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Enterprise', amountMinor: 1200n, customJson: { segment: 'Enterprise' } },
+        { orgId: orgA.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Unspecified', amountMinor: 2300n },
+      ],
+    })
+
+    const orgB = await seedOrgWithAdmin(prisma, { seed: true })
+    const other = await createPipelineAndStages(orgB.orgId)
+    await prisma.deal.create({
+      data: { orgId: orgB.orgId, pipelineId: other.pipeline.id, stageId: other.discovery.id, name: 'Foreign', amountMinor: 999999n, customJson: { segment: 'Enterprise' } },
+    })
+
+    const response = await request(app)
+      .post(`/api/orgs/${orgA.orgId}/reports/run`)
+      .set('Authorization', authorization(orgA.adminFirebaseUid))
+      .send({ config: SEGMENT_CONFIG })
+
+    expect(response.status).toBe(200)
+    expect(response.body.report.rows).toEqual([
+      { segmentId: 'Enterprise', segmentName: 'Enterprise', amountMinor: '1200' },
+      { segmentId: 'unspecified', segmentName: 'Unspecified', amountMinor: '2300' },
+    ])
   })
 
   it('applies specific teams and multiple direct leads once per owner, without reading another organization', async () => {
