@@ -14,6 +14,7 @@ import dealsRouter from './routes/deals.js'
 import dispositionsRouter from './routes/dispositions.js'
 import emailRouter from './routes/email.js'
 import emailsRouter from './routes/emails.js'
+import fieldHistoryRouter from './routes/fieldHistory.js'
 import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import mailboxesRouter from './routes/mailboxes.js'
@@ -133,6 +134,7 @@ app.use('/api/orgs/:orgId/account-timeline', accountTimelineRouter)
 // nested mount, matching the flat one-router-per-thing convention above.
 app.use('/api/orgs/:orgId/objects', objectsRouter)
 app.use('/api/orgs/:orgId/attributes', attributesRouter)
+app.use('/api/orgs/:orgId/field-history', fieldHistoryRouter)
 // Rows of custom (record-backed) objects (MAI-135 T7). Every valuesJson write goes
 // through the one validator; filtering hits the native GIN index via containment.
 app.use('/api/orgs/:orgId/records', recordsRouter)
