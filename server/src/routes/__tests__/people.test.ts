@@ -491,6 +491,15 @@ describe('PATCH /api/orgs/:orgId/people/:id', () => {
     expect(call.data.title).toBe('VP Sales')
   })
 
+  it('merge-patches one custom value without losing existing values', async () => {
+    prismaMock.person.findFirst
+      .mockResolvedValueOnce({ ...personRow({ id: 'p-1', customJson: { legacy: 'keep' } }), _count: { phones: 0, addresses: 0 } })
+      .mockResolvedValueOnce(personRow({ id: 'p-1', customJson: { legacy: 'keep', website: 'https://maincar.com' } }))
+    const res = await request(app).patch(`${URL_A}/p-1`).set('Authorization', AUTH).send({ customValues: { website: 'https://maincar.com' } })
+    expect(res.status).toBe(200)
+    expect(prismaMock.person.updateMany.mock.calls[0][0].data.customJson).toEqual({ legacy: 'keep', website: 'https://maincar.com' })
+  })
+
   // --- Field history (MAI-136 T8, spec §5.7) ---
   it('writes a FieldHistory row for a changed title, inside the update transaction', async () => {
     prismaMock.person.findFirst

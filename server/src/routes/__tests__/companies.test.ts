@@ -409,6 +409,15 @@ describe('PATCH /api/orgs/:orgId/companies/:id', () => {
     expect(res.body.company.industry).toBe('fintech')
   })
 
+  it('merge-patches one custom value without losing existing values', async () => {
+    prismaMock.company.findFirst
+      .mockResolvedValueOnce(companyRow({ id: 'co-1', customJson: { legacy: 'keep' } }))
+      .mockResolvedValueOnce(companyRow({ id: 'co-1', customJson: { legacy: 'keep', website: 'https://maincar.com' } }))
+    const res = await request(app).patch(`${URL_A}/co-1`).set('Authorization', AUTH).send({ customValues: { website: 'https://maincar.com' } })
+    expect(res.status).toBe(200)
+    expect(prismaMock.company.updateMany.mock.calls[0][0].data.customJson).toEqual({ legacy: 'keep', website: 'https://maincar.com' })
+  })
+
   it('422s an update that would clear the last identity anchor', async () => {
     // The stored row's only anchor is its name; clearing it leaves no anchor.
     prismaMock.company.findFirst.mockResolvedValueOnce(
