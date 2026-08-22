@@ -147,6 +147,11 @@ function authAs(membership: ReturnType<typeof membershipRow> | null = membership
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // A matched person is checked against their local calling hours. Freeze only
+  // Date at a permitted instant so these route tests do not turn red after 9 PM
+  // in New York while Supertest's real timers continue to run.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(NOW)
   authAs()
   // A locked active number is the default; the no-active-number test overrides
   // this to an empty result.
@@ -169,6 +174,10 @@ beforeEach(() => {
   // A stand-in for the URL the real presigner signs. The route's job is to call
   // this with the stored key and return what comes back, never to sign itself.
   presignMock.mockResolvedValue('https://minio.local/maincar2-local/recordings/call-1.mp3?sig=abc')
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 // ============================================================
