@@ -29,6 +29,7 @@ describe('CrmGrid', () => {
     )
 
     expect(screen.getByRole('grid', { name: 'People grid' })).toBeInTheDocument()
+    expect(screen.getByText('0 records')).toBeInTheDocument()
   })
 
   it('renders the selected list as a grid', () => {
