@@ -12,6 +12,10 @@ loadEnv({ path: path.resolve(import.meta.dirname, '../.env') })
 // transaction pooler, so migrations need a direct URL. Locally there is no pooler,
 // so DIRECT_DATABASE_URL may be left unset and DATABASE_URL is used for both.
 const directUrl = process.env.DIRECT_DATABASE_URL || undefined
+// Migration-drift checks replay migrations into a dedicated throwaway database.
+// It is set only by scripts/check-prisma-migration-drift.sh; never point it at
+// the application database because Prisma resets a configured shadow database.
+const shadowDatabaseUrl = process.env.SHADOW_DATABASE_URL || undefined
 
 export default defineConfig({
   schema: 'prisma/schema.prisma',
@@ -21,5 +25,6 @@ export default defineConfig({
   datasource: {
     url: env('DATABASE_URL'),
     ...(directUrl ? { directUrl } : {}),
+    ...(shadowDatabaseUrl ? { shadowDatabaseUrl } : {}),
   },
 })

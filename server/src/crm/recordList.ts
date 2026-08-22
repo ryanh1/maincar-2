@@ -25,7 +25,7 @@ import type { PrismaClient, ObjectDef, AttributeDef } from '../generated/prisma/
 // query. Every standard object that has landed a table (standardObjects.ts) goes
 // here. An object not in this map (storage="table" but no table yet, e.g. email/sms
 // before Phase 3/4) is a server misconfiguration, not a caller error.
-const TABLE_STORAGE_TABLES: Record<string, string> = {
+export const TABLE_STORAGE_TABLES: Record<string, string> = {
   person: 'Person',
   company: 'Company',
   deal: 'Deal',

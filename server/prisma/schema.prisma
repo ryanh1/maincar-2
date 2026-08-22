@@ -406,6 +406,14 @@ model Call {
   dealId    String?
   deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
 
+  // User-defined call fields. Every table-backed standard object exposes this
+  // JSON bag to the generic Objects list query.
+  customJson Json @default("{}")
+
+  // The generic Objects list excludes soft-deleted table rows.
+  isArchived Boolean   @default(false)
+  deletedAt  DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
