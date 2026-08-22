@@ -47,9 +47,6 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { id: 'profile', label: 'Profile', icon: UserIcon },
-  // Not needsOrg: the mic/speaker check is a property of this browser, not
-  // the active organization, so it stays visible for a user with no org yet.
-  { id: 'devices', label: 'Devices', icon: Headphones },
   { id: 'organization', label: 'Organization', icon: Building2, needsOrg: true },
   { id: 'members', label: 'Members', icon: Users, needsOrg: true, adminOnly: true },
   { id: 'numbers', label: 'Phone numbers', icon: Phone, needsOrg: true },
@@ -60,6 +57,9 @@ const TABS: TabDef[] = [
   // Hidden for a user with no org, like Organization and Members: connections belong to
   // an org, so there is nothing to show without one.
   { id: 'integrations', label: 'Integrations', icon: Plug, needsOrg: true },
+  // Not needsOrg: the mic/speaker check is a property of this browser, not
+  // the active organization, so it stays visible for a user with no org yet.
+  { id: 'devices', label: 'Devices', icon: Headphones },
 ]
 
 const TAB_CONTENT: Record<TabId, ComponentType> = {
