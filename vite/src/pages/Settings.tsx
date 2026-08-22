@@ -7,6 +7,7 @@ import {
   Radio,
   ListChecks,
   Plug,
+  UsersRound,
   User as UserIcon,
   Users,
   type LucideIcon,
@@ -27,11 +28,13 @@ import { Settings_IntegrationsTab } from './Settings_IntegrationsTab'
 import { Settings_CallRecordingsTab } from './Settings_CallRecordingsTab'
 import { Settings_VoicemailGreetingTab } from './Settings_VoicemailGreetingTab'
 import { Settings_DispositionsTab } from './Settings_DispositionsTab'
+import { Settings_TeamsTab } from './Settings_TeamsTab'
 
 type TabId =
   | 'profile'
   | 'organization'
   | 'members'
+  | 'teams'
   | 'numbers'
   | 'call-recordings'
   | 'dispositions'
@@ -54,6 +57,7 @@ const TABS: TabDef[] = [
   { id: 'profile', label: 'Profile', icon: UserIcon },
   { id: 'organization', label: 'Organization', icon: Building2, needsOrg: true },
   { id: 'members', label: 'Members', icon: Users, needsOrg: true, adminOnly: true },
+  { id: 'teams', label: 'Teams', icon: UsersRound, needsOrg: true },
   { id: 'numbers', label: 'Phone numbers', icon: Phone, needsOrg: true },
   { id: 'call-recordings', label: 'Call recordings', icon: Radio, needsOrg: true },
   { id: 'dispositions', label: 'Call dispositions', icon: ListChecks, needsOrg: true },
@@ -78,6 +82,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
   'email-templates': Settings_EmailTemplatesTab,
   signatures: Settings_EmailSignaturesTab,
   integrations: Settings_IntegrationsTab,
+  teams: Settings_TeamsTab,
 }
 
 /**

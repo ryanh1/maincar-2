@@ -47,6 +47,11 @@ const updateTeamSchema = z
 
 const teamQuerySchema = z.object({
   isArchived: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  sort: z.enum(['name']).default('name'),
+  dir: z.enum(['asc', 'desc']).default('asc'),
+  q: z.string().trim().max(200).optional(),
 })
 
 const teamInclude = {
@@ -132,14 +137,25 @@ router.get(
     if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
 
     // --- Execute query ---
-    const teams = await prisma.team.findMany({
-      where: { orgId, archivedAt: parsed.data.isArchived ? { not: null } : null },
-      orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
-      include: teamInclude,
-    })
+    const { page, limit, sort, dir, q } = parsed.data
+    const where: Prisma.TeamWhereInput = {
+      orgId,
+      archivedAt: parsed.data.isArchived ? { not: null } : null,
+      ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}),
+    }
+    const [teams, total] = await Promise.all([
+      prisma.team.findMany({
+        where,
+        orderBy: [{ [sort]: dir }, { createdAt: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        include: teamInclude,
+      }),
+      prisma.team.count({ where }),
+    ])
 
     // --- Return response ---
-    res.json({ teams: teams.map(mapTeam) })
+    res.json({ teams: teams.map(mapTeam), total, page, limit })
   }),
 )
 
