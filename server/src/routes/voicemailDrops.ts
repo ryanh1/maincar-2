@@ -1,14 +1,12 @@
 /**
- * Delete one reusable voicemail drop from an organization's library.
- *
- * Mounted at /api/orgs/:orgId/voicemail-drops. The database record is deleted
- * before its private S3 object, so a failed storage cleanup never revives a drop
- * that a caller explicitly removed.
+ * Create, update, and delete reusable voicemail drops from an organization's
+ * library. Audio is private in S3; database mutations are always org-scoped.
  */
 import { randomUUID } from 'node:crypto'
 
-import { Router } from 'express'
+import { Router, type Request, type Response } from 'express'
 import multer from 'multer'
+import { z } from 'zod'
 
 import { deleteObject, putObjectBytes } from '../../dependencies/s3.js'
 import { logger } from '../../dependencies/logger.js'
@@ -17,14 +15,22 @@ import { queueTranscodeVoicemailDrop } from '../jobs/transcodeVoicemailDrop.js'
 import { queueTranscribeVoicemailDrop } from '../jobs/transcribeVoicemailDrop.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
-import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { ensureOneDefault, lockVoicemailDrops } from '../lib/voicemailDropDefaults.js'
+import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 
 const router = Router({ mergeParams: true })
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 2 },
 })
+
+const patchSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  isDefault: z.preprocess(
+    (value) => value === 'true' ? true : value === 'false' ? false : value,
+    z.boolean().optional(),
+  ),
+}).strict()
 
 class LastVoicemailDropError extends Error {
   readonly status = 400
@@ -50,7 +56,7 @@ class VoicemailDropUploadError extends Error {
   }
 }
 
-async function parseAudioUpload(req: import('express').Request, res: import('express').Response): Promise<void> {
+async function parseAudioUpload(req: Request, res: Response): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     upload.single('audio')(req, res, (error) => {
       if (error) reject(new VoicemailDropUploadError('Upload one WebM audio file no larger than 20MB.'))
@@ -137,6 +143,85 @@ router.post(
 )
 
 // ===================================================================
+// PATCH /api/orgs/:orgId/voicemail-drops/:id — update a library drop
+// ===================================================================
+router.patch(
+  '/:id',
+  wrapRoute('PATCH /api/orgs/:orgId/voicemail-drops/:id', async (req, res) => {
+    const authReq = req as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    await parseAudioUpload(req, res)
+    const parsed = patchSchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid voicemail drop update.' })
+    }
+    const audio = req.file
+    if (!audio && Object.keys(parsed.data).length === 0) {
+      return void res.status(400).json({ error: 'Choose a voicemail drop field to update.' })
+    }
+    if (audio && !isWebm(audio)) {
+      return void res.status(400).json({ error: 'Upload a valid WebM audio file.' })
+    }
+    if (parsed.data.isDefault === false) {
+      return void res.status(400).json({ error: 'A voicemail drop can only be promoted to default.' })
+    }
+
+    // --- Verify ownership ---
+    const existing = await prisma.voicemailDrop.findFirst({ where: { id, orgId } })
+    if (!existing) throw new VoicemailDropNotFoundError()
+
+    const audioUrl = audio ? `maincar-voicemail-drops/${orgId}/${id}.webm` : undefined
+    const data = {
+      ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
+      ...(audioUrl === undefined ? {} : {
+        audioUrl,
+        duration: 0,
+        transcript: null,
+        transcriptStatus: 'pending',
+      }),
+    }
+
+    if (audio) {
+      await putObjectBytes({ key: audioUrl!, body: audio.buffer, contentType: audio.mimetype })
+    }
+
+    // --- Execute query ---
+    const updatedDrop = parsed.data.isDefault
+      ? await prisma.$transaction(async (tx) => {
+        const updated = await tx.voicemailDrop.updateMany({ where: { id, orgId }, data })
+        if (updated.count === 0) throw new VoicemailDropNotFoundError()
+        await ensureOneDefault(tx, orgId, { defaultId: id })
+        return tx.voicemailDrop.findFirst({ where: { id, orgId } })
+      })
+      : await (async () => {
+        const updated = await prisma.voicemailDrop.updateMany({ where: { id, orgId }, data })
+        if (updated.count === 0) throw new VoicemailDropNotFoundError()
+        return prisma.voicemailDrop.findFirst({ where: { id, orgId } })
+      })()
+
+    if (!updatedDrop) throw new VoicemailDropNotFoundError()
+
+    if (audio) {
+      const [transcodeJobId, transcribeJobId] = await Promise.all([
+        queueTranscodeVoicemailDrop({ orgId, voicemailDropId: id }),
+        queueTranscribeVoicemailDrop(id),
+      ])
+      if (!transcodeJobId || !transcribeJobId) throw new Error('Voicemail drop processing jobs were not queued')
+    }
+
+    // --- Return response ---
+    res.json({ drop: updatedDrop })
+  }),
+)
+
+// ===================================================================
 // DELETE /api/orgs/:orgId/voicemail-drops/:id — remove a library drop
 // ===================================================================
 router.delete(
@@ -165,9 +250,6 @@ router.delete(
       return drop
     })
 
-    // Storage cleanup happens after the committed, tenant-scoped database
-    // delete. Keep the successful deletion visible if storage is temporarily
-    // unavailable; the warning gives repair tooling the precise object key.
     try {
       await deleteObject(deletedDrop.audioUrl)
     } catch (error) {
