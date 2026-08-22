@@ -40,6 +40,20 @@ describe('Settings', () => {
     expect(screen.getByText('profile tab content')).toBeInTheDocument()
   })
 
+  it('renders Devices last without reordering the other settings tabs', () => {
+    renderWithProviders(<Settings />)
+
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Profile',
+      'Organization',
+      'Members',
+      'Phone numbers',
+      'Email templates',
+      'Integrations',
+      'Devices',
+    ])
+  })
+
   it('switches tabs on click and updates the URL', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings />)
