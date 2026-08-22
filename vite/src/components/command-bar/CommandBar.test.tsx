@@ -71,9 +71,31 @@ describe('CommandBar', () => {
     expect(composer.reopenCard).toHaveBeenCalledWith('draft-1')
   })
 
+  it('uses a plain paper icon and confirms deleting a draft from the drafts menu', async () => {
+    const user = userEvent.setup()
+    const { composer } = renderBar([draft()])
+
+    const draftsButton = screen.getByRole('button', { name: 'Open 1 email draft' })
+    expect(draftsButton.querySelector('.lucide-file')).toBeInTheDocument()
+
+    await user.click(draftsButton)
+    await user.click(screen.getByRole('button', { name: 'Delete draft for alex@example.test' }))
+
+    expect(await screen.findByRole('heading', { name: 'Delete this draft?' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Delete draft' }))
+
+    expect(composer.discardDraft).toHaveBeenCalledWith('draft-1')
+  })
+
   it('changes to a horizontal bottom bar on a narrow screen', () => {
     renderBar([], 375)
     expect(screen.getByRole('toolbar', { name: 'Outreach actions' })).toHaveClass('bottom-0', 'left-0', 'right-0', 'flex-row')
+  })
+
+  it('keeps the desktop command rail at the sm breakpoint', () => {
+    renderBar([], 640)
+
+    expect(screen.getByRole('toolbar', { name: 'Outreach actions' })).toHaveClass('right-6', 'bottom-6', 'flex-col')
   })
 
   it('uses a full-screen composer below the desktop dock threshold', async () => {

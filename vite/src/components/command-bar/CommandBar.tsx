@@ -1,9 +1,19 @@
 import { useMemo, useState } from 'react'
-import { FileText, Mail, Phone } from 'lucide-react'
+import { File, Mail, Phone, Trash2 } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
 import { IconButton } from '@/components/ui/icon-button'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { ComposerCard } from '@/components/composer/ComposerCard'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import {
@@ -39,13 +49,14 @@ function draftSubject(draft: EmailDraft): string {
  * intentionally absent: a visible action must always have a working outcome.
  */
 export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarProps) {
-  const { drafts, openComposer, reopenCard } = useComposer()
+  const { drafts, discardDraft, openComposer, reopenCard } = useComposer()
   const { expandDialer } = useDialer()
   const width = useWindowWidth()
   const [query, setQuery] = useState('')
   const [mobileDraftId, setMobileDraftId] = useState<string | null>(null)
   const [mobileDraftsOpen, setMobileDraftsOpen] = useState(false)
-  const narrow = width < 768
+  const [draftToDelete, setDraftToDelete] = useState<EmailDraft | null>(null)
+  const narrow = width < 640
   // Below the desktop dock threshold, a card has no safe corner to occupy.
   // Tablet and phone therefore share the full-screen composer and sheet list.
   const compact = width < LG_BREAKPOINT_PX
@@ -87,6 +98,13 @@ export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarPro
     }
   }
 
+  function deleteDraft(): void {
+    if (!draftToDelete) return
+    void discardDraft(draftToDelete.id)
+    if (mobileDraftId === draftToDelete.id) setMobileDraftId(null)
+    setDraftToDelete(null)
+  }
+
   const draftsLabel = `Open ${totalRecoverable} email draft${totalRecoverable === 1 ? '' : 's'}`
 
   return (
@@ -104,7 +122,7 @@ export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarPro
         }}>
           <SheetTrigger asChild>
             <IconButton tooltip={draftsLabel} className="relative">
-              <FileText size={16} aria-hidden />
+              <File size={16} aria-hidden />
               <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-xs leading-4 text-primary-foreground" aria-hidden>
                 {totalRecoverable}
               </span>
@@ -116,9 +134,14 @@ export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarPro
             {totalRecoverable > 6 ? <Input aria-label="Search drafts" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search drafts" className="my-2" /> : null}
             <div className="mt-2 flex flex-col gap-1">
               {recoverableDrafts.map((draft) => (
-                <Button key={draft.id} variant="ghost" className="h-auto justify-start py-2 text-left" onClick={() => void restoreDraft(draft)}>
-                  <span className="flex min-w-0 flex-col"><span className="truncate font-medium">{draftLabel(draft)}</span><span className="truncate text-xs text-muted-foreground">{draftSubject(draft)}</span></span>
-                </Button>
+                <div key={draft.id} className="flex items-center gap-1">
+                  <Button variant="ghost" className="h-auto flex-1 justify-start py-2 text-left" onClick={() => void restoreDraft(draft)}>
+                    <span className="flex min-w-0 flex-col"><span className="truncate font-medium">{draftLabel(draft)}</span><span className="truncate text-xs text-muted-foreground">{draftSubject(draft)}</span></span>
+                  </Button>
+                  <IconButton tooltip={`Delete draft for ${draftLabel(draft)}`} onClick={() => setDraftToDelete(draft)}>
+                    <Trash2 size={16} aria-hidden />
+                  </IconButton>
+                </div>
               ))}
             </div>
           </SheetContent>
@@ -127,7 +150,7 @@ export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarPro
         <DropdownMenu onOpenChange={(open) => { if (!open) setQuery('') }}>
           <DropdownMenuTrigger asChild>
             <IconButton tooltip={draftsLabel} className="relative">
-              <FileText size={16} aria-hidden />
+              <File size={16} aria-hidden />
               <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-xs leading-4 text-primary-foreground" aria-hidden>
                 {totalRecoverable}
               </span>
@@ -147,12 +170,17 @@ export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarPro
               />
             ) : null}
             {recoverableDrafts.map((draft) => (
-              <DropdownMenuItem key={draft.id} onSelect={() => void restoreDraft(draft)} className="h-auto py-2">
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate font-medium">{draftLabel(draft)}</span>
-                  <span className="truncate text-xs text-muted-foreground">{draftSubject(draft)}</span>
-                </span>
-              </DropdownMenuItem>
+              <div key={draft.id} className="flex items-center gap-1">
+                <DropdownMenuItem onSelect={() => void restoreDraft(draft)} className="h-auto flex-1 py-2">
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate font-medium">{draftLabel(draft)}</span>
+                    <span className="truncate text-xs text-muted-foreground">{draftSubject(draft)}</span>
+                  </span>
+                </DropdownMenuItem>
+                <IconButton tooltip={`Delete draft for ${draftLabel(draft)}`} onClick={() => setDraftToDelete(draft)}>
+                  <Trash2 size={16} aria-hidden />
+                </IconButton>
+              </div>
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -164,6 +192,18 @@ export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarPro
         <Phone size={16} aria-hidden />
       </IconButton>
       {mobileDraft ? <ComposerCard draft={mobileDraft} fullScreen onDismiss={() => setMobileDraftId(null)} /> : null}
+      <AlertDialog open={draftToDelete !== null} onOpenChange={(open) => !open && setDraftToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this draft?</AlertDialogTitle>
+            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={deleteDraft}>Delete draft</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
