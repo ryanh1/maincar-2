@@ -12,10 +12,23 @@ paths:
 
 - **NEVER write migration SQL by hand.** Always go schema-first:
   1. Edit `server/prisma/schema.prisma`
-  2. Run `npm run db:migrate` (`prisma migrate dev`) with a descriptive name
+  2. **Inside an issue-clone worktree**, create the migration with
+     `./.claude/scripts/coord/mc-migrate <descriptive_name>`, never a bare
+     `prisma migrate dev`. Two sessions once generated a migration in the same
+     minute; both got applied to the shared dev database, and an applied
+     migration can never be renamed. `mc-migrate` picks a timestamp that can't
+     collide with another worktree's, and authors the SQL against a throwaway
+     database so Prisma doesn't mistake other sessions' already-applied
+     migrations for drift.
   3. Prisma generates the SQL
 - For a complex data migration, edit the generated file AFTER Prisma creates it.
 - **Never run `prisma migrate reset` or `prisma db push`.**
+- **After a merge lands a schema change**, the primary checkout does not
+  pick it up automatically — `mc-merge` deliberately skips refreshing it when
+  the delivered change touches the Prisma schema, a migration, or a package
+  manifest/lockfile, since a half-updated database could break a running dev
+  server. Run `./.claude/scripts/coord/mc-local-main refresh` there when you
+  actually need that checkout caught up — not as a routine step otherwise.
 - **Never `DELETE FROM` a user-data table to satisfy a migration warning.** If Prisma warns
   that a column still holds non-null values, the right move is `UPDATE <table> SET
   <column> = NULL` or a proper data migration. Ask before any destructive SQL.
