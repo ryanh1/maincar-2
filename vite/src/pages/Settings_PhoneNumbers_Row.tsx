@@ -101,7 +101,7 @@ export function Settings_PhoneNumbers_Row({
         <label className="inline-flex items-center gap-2">
           <input
             type="radio"
-            name="caller-id"
+            name="call-from"
             className="size-4 accent-primary"
             checked={isActive}
             disabled={!canActivate || setActive.isPending}
@@ -109,20 +109,20 @@ export function Settings_PhoneNumbers_Row({
               setActive.mutate(
                 { orgId, id: number.id },
                 {
-                  onSuccess: () => toast.success('Caller ID updated.'),
+                  onSuccess: () => toast.success(`Now calling from ${number.e164}.`),
                   onError: (error) =>
                     toast.error(
                       error instanceof ApiError
                         ? error.message
-                        : 'Could not update the caller ID. Try again.',
+                        : 'Could not switch the number to call from. Try again.',
                     ),
                 },
               )
             }
-            aria-label={`Set ${number.e164} as caller ID`}
+            aria-label={`Call from ${number.e164}`}
           />
           <span className={isActive ? 'text-foreground' : 'text-muted-foreground'}>
-            {isActive ? 'Caller ID' : 'Set as caller ID'}
+            {isActive ? 'Calling from' : 'Call from this number'}
           </span>
         </label>
       </td>
@@ -145,7 +145,7 @@ export function Settings_PhoneNumbers_Row({
                 : isReleasing
                   ? 'Already releasing'
                   : needsAnotherCallerId
-                    ? 'Set another caller ID first'
+                    ? 'Choose another number to call from first'
                     : 'Release this number'}
             </DropdownMenuItem>
           </DropdownMenuContent>

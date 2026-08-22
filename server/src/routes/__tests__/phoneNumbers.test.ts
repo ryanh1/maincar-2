@@ -1165,7 +1165,7 @@ describe('PATCH /api/orgs/:orgId/phone-numbers/:id — invalid input', () => {
 
     expect(res.status).toBe(400)
     expect(res.body.error).toBe(
-      'To stop calling from this number, make a different one active instead. Switching this one off would leave you with no caller ID and no way to place a call.',
+      'To stop calling from this number, make a different one active instead. Switching this one off would leave you with no number to call from and no way to place a call.',
     )
     expect(prismaMock.$transaction).not.toHaveBeenCalled()
     expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
@@ -1375,7 +1375,7 @@ describe('DELETE /api/orgs/:orgId/phone-numbers/:id — the refusals', () => {
     const res = await request(app).delete(DELETE_A).set('Authorization', AUTH)
 
     expect(res.status).toBe(409)
-    expect(res.body.error).toBe('Make a different number your caller ID first, then release this one.')
+    expect(res.body.error).toBe('Choose a different number to call from first, then release this one.')
     expect(queueReleaseMock).not.toHaveBeenCalled()
   })
 

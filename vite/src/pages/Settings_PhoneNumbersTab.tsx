@@ -27,7 +27,7 @@ const COLUMNS: { label: string; sort: SortColumn | null; className?: string }[] 
   { label: 'Number', sort: 'e164' },
   { label: 'Status', sort: 'status', className: 'w-40' },
   { label: 'Bought on', sort: 'createdAt', className: 'w-32' },
-  { label: 'Caller ID', sort: null, className: 'w-48' },
+  { label: 'Call from', sort: null, className: 'w-48' },
 ]
 
 function compareNumbers(a: PhoneNumber, b: PhoneNumber, column: SortColumn): number {
@@ -37,13 +37,14 @@ function compareNumbers(a: PhoneNumber, b: PhoneNumber, column: SortColumn): num
 }
 
 /**
- * Settings → Phone numbers: the numbers this organization owns, and the caller ID
+ * Settings → Phone numbers: the numbers this organization owns, and the number
  * every outbound call goes out on.
  *
- * Picking the caller ID is a radio, not a checkbox: choosing one un-picks the
- * rest, so the control is disabled on the number that is already active and on any
- * number that is not yet dialable (a `searching` row is still provisioning). The
- * server re-checks all of it — every disabled control here is a courtesy.
+ * Picking the number to call from is a radio, not a checkbox: choosing one
+ * un-picks the rest, so the control is disabled on the number that is already
+ * active and on any number that is not yet dialable (a `searching` row is still
+ * provisioning). The server re-checks all of it — every disabled control here is
+ * a courtesy.
  *
  * Each row also carries the one action that stops the org paying for a number:
  * releasing it. That lives in Settings_PhoneNumbers_Row, behind a confirm.
@@ -199,7 +200,7 @@ export function Settings_PhoneNumbersTab() {
                 </th>
               </tr>
             </thead>
-            <tbody role="radiogroup" aria-label="Outbound caller ID">
+            <tbody role="radiogroup" aria-label="Number to call from">
               {pageRows.map((number) => (
                 <Settings_PhoneNumbers_Row
                   key={number.id}
@@ -207,7 +208,7 @@ export function Settings_PhoneNumbersTab() {
                   orgId={orgId}
                   timeZone={user?.timeZone}
                   // Counted over the FULL list, never the current page — whether
-                  // releasing THIS number would leave the rep with a caller ID to
+                  // releasing THIS number would leave the rep with no number to
                   // fall back on is a fact about every number they own, not just
                   // the ones on screen.
                   hasOtherActiveNumber={numbers.some(

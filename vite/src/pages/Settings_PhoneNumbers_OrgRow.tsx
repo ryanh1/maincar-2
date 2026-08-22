@@ -117,7 +117,7 @@ export function Settings_PhoneNumbers_OrgRow({ orgId, number, timeZone }: Props)
           <AlertDialogHeader>
             <AlertDialogTitle>Take back {number.e164}?</AlertDialogTitle>
             <AlertDialogDescription>
-              {holder ? holderName(holder) : 'The current holder'} loses this as their caller ID.
+              {holder ? holderName(holder) : 'The current holder'} can no longer call from this number.
               The organization keeps paying for the number until someone else gets it.
             </AlertDialogDescription>
           </AlertDialogHeader>

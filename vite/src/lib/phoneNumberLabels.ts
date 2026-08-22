@@ -9,10 +9,9 @@
 import type { PhoneNumber } from '@/lib/phoneNumberTypes'
 
 /**
- * The one line the Status column shows. `active` splits in two: the number that
- * is the outbound caller ID reads "Active caller ID", every other dialable number
- * reads "Ready" — the status alone does not say which one calls go out on, so the
- * label says it instead of leaving the reader to guess.
+ * The one line the Status column shows. `active` splits in two: the number
+ * outbound calls go out on reads "Active", every other dialable number reads
+ * "Ready" — the Call from column names which number that is.
  */
 export function getPhoneNumberStatusLabel(
   number: Pick<PhoneNumber, 'status' | 'isActiveForOutbound'>,
@@ -25,7 +24,7 @@ export function getPhoneNumberStatusLabel(
     case 'failed':
       return 'Failed'
     case 'active':
-      return number.isActiveForOutbound ? 'Active caller ID' : 'Ready'
+      return number.isActiveForOutbound ? 'Active' : 'Ready'
     default:
       return number.status
   }
