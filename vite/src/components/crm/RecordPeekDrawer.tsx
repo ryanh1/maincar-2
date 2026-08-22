@@ -1,11 +1,11 @@
-import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 
+import { ActivityFeedRow } from '@/components/activity-feed/ActivityFeedRow'
+import { mapActivityEntry } from '@/components/activity-feed/activityFeed'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useGetActivity, type ActivityScope } from '@/hooks/crm'
-import { formatDateTime } from '@/lib/datetime'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { parseOptions } from './cellBuilder'
 import { FieldValueEditor } from './FieldValueEditor'
@@ -100,7 +100,7 @@ export function RecordPeekDrawer({
             {!scope && <p className="text-sm text-muted-foreground">No activity feed for this object.</p>}
             {scope && activityQuery.isPending && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" /> Loading…
+                Loading…
               </div>
             )}
             {scope && activityQuery.isError && (
@@ -110,12 +110,9 @@ export function RecordPeekDrawer({
               <p className="text-sm text-muted-foreground">No activity yet.</p>
             )}
             {scope && activityQuery.data && activityQuery.data.activity.length > 0 && (
-              <ul className="flex flex-col gap-3">
+              <ul className="border border-border bg-bg">
                 {activityQuery.data.activity.map((entry) => (
-                  <li key={entry.id} className="text-sm">
-                    <p className="text-foreground">{entry.summary}</p>
-                    <p className="text-xs text-muted-foreground">{formatDateTime(entry.occurredAt, timeZone)}</p>
-                  </li>
+                  <li key={entry.id}><ActivityFeedRow item={mapActivityEntry(entry)} timeZone={timeZone} /></li>
                 ))}
               </ul>
             )}
