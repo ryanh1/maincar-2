@@ -45,6 +45,7 @@ describe('Settings_EmailSignaturesTab', () => {
     expect(screen.getByRole('heading', { name: 'Signatures' })).toBeInTheDocument()
     expect(screen.getByText('Work')).toBeInTheDocument()
     expect(screen.getAllByText('Default')).toHaveLength(2)
+    expect(screen.getByRole('columnheader', { name: 'Name' }).closest('tr')).toHaveClass('bg-surface')
   })
 
   it('opens a form to create a new signature', () => {

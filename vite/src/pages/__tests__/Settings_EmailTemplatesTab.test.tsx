@@ -166,6 +166,7 @@ describe('the templates list', () => {
     expect(screen.getByText('Great speaking with you')).toBeInTheDocument()
     // A template saved without a subject says so rather than showing a gap.
     expect(screen.getByText('No subject')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Name' }).closest('tr')).toHaveClass('bg-surface')
   })
 
   it('names the author, and never shows a raw user id', () => {

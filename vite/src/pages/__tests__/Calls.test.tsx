@@ -75,6 +75,7 @@ describe('the calls list', () => {
     expect(screen.getByText('Ready')).toBeInTheDocument()
     expect(screen.queryByText('done')).not.toBeInTheDocument()
     expect(screen.getByText('01:13')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Number' }).closest('tr')).toHaveClass('bg-surface')
   })
 
   it('links the Number to the call detail page at /calls/:id', () => {

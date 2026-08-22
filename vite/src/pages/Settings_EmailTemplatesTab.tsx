@@ -166,14 +166,14 @@ export function Settings_EmailTemplatesTab() {
           <table className="w-full">
             <caption className="sr-only">Email templates shared across {org.name}</caption>
             <thead>
-              <tr className="border-b border-border bg-muted/60">
-                <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">
+              <tr className="border-b border-border bg-surface">
+                <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-text-muted">
                   Name
                 </th>
-                <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">
+                <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-text-muted">
                   Subject
                 </th>
-                <th scope="col" className="w-48 px-3 py-2 text-left text-xs font-medium text-muted-foreground">
+                <th scope="col" className="w-48 px-3 py-2 text-left text-xs font-medium text-text-muted">
                   Author
                 </th>
                 {/* The actions column has no heading a reader needs, but a th

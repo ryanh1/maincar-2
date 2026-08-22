@@ -94,6 +94,7 @@ it("shows a colleague's name and email on their number, not the caller's own", (
 
   expect(screen.getByText('Bee Ta')).toBeInTheDocument()
   expect(screen.getByText('b@acme.com')).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: 'Number' }).closest('tr')).toHaveClass('bg-surface')
 })
 
 it('reads "Unassigned" for a number nobody holds, and counts it in the header', () => {

@@ -126,6 +126,7 @@ describe('the member list', () => {
     expect(screen.getByText('al@acme.com')).toBeInTheDocument()
     expect(screen.getAllByText('Admin').length).toBeGreaterThan(0)
     expect(screen.queryByText('admin')).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Name' }).closest('tr')).toHaveClass('bg-surface')
   })
 
   it('shows a loading state while members load', () => {
