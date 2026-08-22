@@ -2,10 +2,20 @@ import { useEffect, useMemo } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 
+import { DialerContext, type DialerContextValue } from '@/components/dialer/dialerContext'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAuthStore } from '@/store/authStore'
 
 import { Records } from './Records'
+
+const idleDialer: DialerContextValue = {
+  view: 'collapsed', phase: 'idle', mode: 'keypad', dialing: false, elapsedSeconds: 0,
+  activeCall: null, canControlAudio: false,
+  expandDialer: () => {}, collapseDialer: () => {}, toggleView: () => {},
+  startCall: () => {}, adoptCall: () => {}, connectCall: () => {}, endCall: () => {},
+  cancelCall: () => {}, reset: () => {}, placeDeviceCall: async () => {},
+  muteCall: () => {}, sendDigits: () => {},
+}
 
 /** Development-only shell for record-grid browser journeys. */
 export function RecordsFixture() {
@@ -34,11 +44,13 @@ export function RecordsFixture() {
   return (
     <QueryClientProvider client={client}>
       <BrowserRouter>
-        <TooltipProvider>
-          <main className="h-dvh bg-bg p-6">
-            <Routes><Route path="/__fixtures/records/:slug" element={<Records />} /></Routes>
-          </main>
-        </TooltipProvider>
+        <DialerContext.Provider value={idleDialer}>
+          <TooltipProvider>
+            <main className="h-dvh bg-bg p-6">
+              <Routes><Route path="/__fixtures/records/:slug" element={<Records />} /></Routes>
+            </main>
+          </TooltipProvider>
+        </DialerContext.Provider>
       </BrowserRouter>
     </QueryClientProvider>
   )

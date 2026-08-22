@@ -1,12 +1,17 @@
+import { useMemo, useState } from 'react'
 import { Table2 } from 'lucide-react'
 import { useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/PageHeader'
 import { RecordGrid } from '@/components/crm/RecordGrid'
-import { useViewConfig } from '@/components/crm/viewConfig'
+import { createViewConfig, sameViewConfig, useViewConfig } from '@/components/crm/viewConfig'
 import { Button } from '@/components/ui/button'
 import { useGetObject, useGetObjects } from '@/hooks/crm'
+import { useGetViews, useSaveView, useUpdateView } from '@/hooks/savedViews'
 import { useAuth } from '@/providers/useAuth'
+
+import { Records_SavedViewControls } from './Records_SavedViewControls'
 
 /**
  * One object's rows, read-only, on the Glide canvas grid (MAI-164, plan T0.2;
@@ -24,14 +29,45 @@ export function Records() {
 
   const objectQuery = useGetObject(orgId, isUnavailable ? null : object?.id ?? null)
   const detail = objectQuery.data?.object ?? null
-  const [viewConfig, setViewConfig] = useViewConfig(detail?.attributes ?? [])
+  const viewsQuery = useGetViews(orgId, detail?.id ?? null)
+  const views = viewsQuery.data?.views ?? []
+  const [selectedViewId, setSelectedViewId] = useState<string | null>(null)
+  const defaultView = views.find((view) => view.isDefault) ?? null
+  const selectedView = selectedViewId ? views.find((view) => view.id === selectedViewId) ?? null : defaultView
+  const fallbackConfig = useMemo(() => createViewConfig(detail?.attributes ?? []), [detail?.attributes])
+  const baselineConfig = selectedView?.config ?? fallbackConfig
+  const [viewConfig, setViewConfig, resetViewConfig] = useViewConfig(detail?.attributes ?? [], baselineConfig)
+  const hasUnsavedChanges = !sameViewConfig(viewConfig, baselineConfig)
+  const saveView = useSaveView()
+  const updateView = useUpdateView()
+  const isSaving = saveView.isPending || updateView.isPending
 
-  const isPending = objectsQuery.isPending || (!isUnavailable && object !== null && objectQuery.isPending)
-  const isError = objectsQuery.isError || (!isUnavailable && objectQuery.isError)
+  const isPending = objectsQuery.isPending || (!isUnavailable && object !== null && (objectQuery.isPending || viewsQuery.isPending))
+  const isError = objectsQuery.isError || (!isUnavailable && (objectQuery.isError || viewsQuery.isError))
 
   function retry() {
     void objectsQuery.refetch()
     if (object) void objectQuery.refetch()
+    if (detail) void viewsQuery.refetch()
+  }
+
+  function selectView(viewId: string | null) {
+    setSelectedViewId(viewId)
+    resetViewConfig()
+  }
+
+  async function saveChanges() {
+    if (!orgId || !detail) return
+    try {
+      if (selectedView) {
+        await updateView.mutateAsync({ orgId, viewId: selectedView.id, config: viewConfig })
+      } else {
+        const result = await saveView.mutateAsync({ orgId, objectId: detail.id, name: 'Default view', config: viewConfig })
+        setSelectedViewId(result.view.id)
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save changes. Try again.')
+    }
   }
 
   return (
@@ -73,6 +109,17 @@ export function Records() {
             attributes={detail.attributes}
             viewConfig={viewConfig}
             onViewConfigChange={setViewConfig}
+            toolbarLeading={
+              <Records_SavedViewControls
+                views={views}
+                selectedViewId={selectedView?.id ?? null}
+                hasUnsavedChanges={hasUnsavedChanges}
+                isSaving={isSaving}
+                onSelectView={selectView}
+                onSave={() => void saveChanges()}
+                onReset={resetViewConfig}
+              />
+            }
           />
         )}
       </div>
