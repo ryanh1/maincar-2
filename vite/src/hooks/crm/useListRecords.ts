@@ -3,9 +3,11 @@ import { useInfiniteQuery } from '@tanstack/react-query'
 import { jsonFetch } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import type { ListRecordsResponse, RecordSort } from '@/lib/crmTypes'
+import type { RecordListFilter } from '@/components/crm/viewConfig'
 
 export interface UseListRecordsParams {
   sort?: RecordSort
+  filter?: RecordListFilter
 }
 
 /**
@@ -30,6 +32,7 @@ export function useListRecords(
         body: JSON.stringify({
           cursor: pageParam,
           ...(params.sort ? { sort: params.sort } : {}),
+          ...(params.filter ? { filter: params.filter } : {}),
         }),
       }),
     getNextPageParam: (lastPage) => lastPage.nextCursor,

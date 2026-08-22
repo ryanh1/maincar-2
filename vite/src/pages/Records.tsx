@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 
 import { PageHeader } from '@/components/PageHeader'
 import { RecordGrid } from '@/components/crm/RecordGrid'
+import { useViewConfig } from '@/components/crm/viewConfig'
 import { Button } from '@/components/ui/button'
 import { useGetObject, useGetObjects } from '@/hooks/crm'
 import { useAuth } from '@/providers/useAuth'
@@ -22,6 +23,7 @@ export function Records() {
 
   const objectQuery = useGetObject(orgId, object?.id ?? null)
   const detail = objectQuery.data?.object ?? null
+  const [viewConfig, setViewConfig] = useViewConfig(detail?.attributes ?? [])
 
   const isPending = objectsQuery.isPending || (object !== null && objectQuery.isPending)
   const isError = objectsQuery.isError || objectQuery.isError
@@ -58,7 +60,13 @@ export function Records() {
         )}
 
         {!isPending && !isError && orgId && detail && (
-          <RecordGrid orgId={orgId} objectId={detail.id} attributes={detail.attributes} />
+          <RecordGrid
+            orgId={orgId}
+            objectId={detail.id}
+            attributes={detail.attributes}
+            viewConfig={viewConfig}
+            onViewConfigChange={setViewConfig}
+          />
         )}
       </div>
     </div>
