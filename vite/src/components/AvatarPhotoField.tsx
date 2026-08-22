@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Avatar } from '@/components/Avatar'
 import { AvatarCropper, ACCEPTED_IMAGE_TYPES, photoRejection } from '@/components/AvatarCropper'
@@ -14,9 +14,13 @@ interface AvatarPhotoFieldProps {
 
 export function AvatarPhotoField({ name, avatarUrl, disabled = false, upload, label }: AvatarPhotoFieldProps) {
   const input = useRef<HTMLInputElement>(null)
-  const [file, setFile] = useState<File | null>(null)
+  const [selection, setSelection] = useState<{ file: File; source: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    return () => { if (selection) URL.revokeObjectURL(selection.source) }
+  }, [selection])
 
   function pick(event: React.ChangeEvent<HTMLInputElement>) {
     const next = event.target.files?.[0] ?? null
@@ -25,14 +29,14 @@ export function AvatarPhotoField({ name, avatarUrl, disabled = false, upload, la
 
     const reason = photoRejection(next)
     setError(reason)
-    setFile(reason ? null : next)
+    setSelection(reason ? null : { file: next, source: URL.createObjectURL(next) })
   }
 
   async function save(blob: Blob | null) {
     setBusy(true)
     try {
       await upload(blob)
-      setFile(null)
+      setSelection(null)
       toast.success(blob ? 'Photo updated.' : 'Photo removed.')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save the photo. Try again.')
@@ -74,9 +78,10 @@ export function AvatarPhotoField({ name, avatarUrl, disabled = false, upload, la
         onChange={pick}
       />
       <AvatarCropper
-        key={file ? `${file.name}-${file.size}` : 'none'}
-        file={file}
-        onCancel={() => setFile(null)}
+        key={selection ? `${selection.file.name}-${selection.file.size}` : 'none'}
+        file={selection?.file ?? null}
+        source={selection?.source ?? null}
+        onCancel={() => setSelection(null)}
         onSave={(blob) => save(blob)}
         saving={busy}
       />
