@@ -7,6 +7,7 @@ import { registerReleaseNumberWorker } from './jobs/releaseNumber.js'
 import { registerUploadRecordingWorker } from './jobs/uploadRecording.js'
 import { registerTranscribeRecordingWorker } from './jobs/transcribeRecording.js'
 import { registerReapStaleCallsWorker, scheduleReapStaleCalls } from './jobs/reapStaleCalls.js'
+import { registerDialerAnalyticsRollupWorker, scheduleDialerAnalyticsRollup } from './jobs/dialerAnalyticsRollup.js'
 import { registerUploadVoicemailWorker } from './jobs/uploadVoicemail.js'
 import { registerTranscribeVoicemailWorker } from './jobs/transcribeVoicemail.js'
 import { registerTranscribeVoicemailDropWorker } from './jobs/transcribeVoicemailDrop.js'
@@ -50,6 +51,8 @@ async function startWorkers(): Promise<void> {
   await registerTranscribeRecordingWorker()
   await registerReapStaleCallsWorker()
   await scheduleReapStaleCalls()
+  await registerDialerAnalyticsRollupWorker()
+  await scheduleDialerAnalyticsRollup()
   await registerUploadVoicemailWorker()
   await registerTranscribeVoicemailWorker()
   await registerTranscribeVoicemailDropWorker()
@@ -62,6 +65,7 @@ async function startWorkers(): Promise<void> {
         'upload-recording',
         'transcribe-recording',
         'reap-stale-calls',
+        'dialer-analytics-rollup',
         'upload-voicemail',
         'transcribe-voicemail',
         'transcribe-voicemail-drop',

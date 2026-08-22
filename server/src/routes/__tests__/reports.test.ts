@@ -62,6 +62,16 @@ const ACTIVITY_METRICS_GRID_CONFIG = {
   timeBucket: { field: 'occurredAt', grain: 'week' },
 }
 
+const DIALER_NUMBER_CONFIG = {
+  baseObject: 'dialer',
+  rows: [{ field: 'numberE164' }],
+  values: [
+    { field: 'dials', aggregation: 'sum' },
+    { field: 'connects', aggregation: 'sum' },
+  ],
+  timeZone: { mode: 'pinned', displayZone: 'UTC' },
+}
+
 function authAsMember(): void {
   verifyTokenMock.mockResolvedValue({ uid: 'firebase-a' })
   prismaMock.user.findUnique.mockResolvedValue({
@@ -182,6 +192,29 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
       'America/New_York', 'calls', ORG_ID, 'call',
       'America/New_York', 'entered-qualified', ORG_ID, 'stage-qualified',
     ])
+  })
+
+  it('returns dialer number connect rates from the reporting engine’s rollup query', async () => {
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      { numberE164: '+14155550110', dials: '4', connects: '3' },
+      { numberE164: '+12125550120', dials: '2', connects: '1' },
+    ])
+
+    const response = await request(app)
+      .post(URL)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ config: DIALER_NUMBER_CONFIG })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      report: {
+        rows: [
+          { numberE164: '+14155550110', dials: '4', connects: '3', connectRate: '0.75' },
+          { numberE164: '+12125550120', dials: '2', connects: '1', connectRate: '0.5' },
+        ],
+      },
+    })
+    expect(prismaMock.$queryRaw.mock.calls[0][0].values).toEqual([ORG_ID])
   })
 
   it('uses an active subject member zone instead of the viewer zone', async () => {

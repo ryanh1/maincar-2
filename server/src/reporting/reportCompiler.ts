@@ -19,6 +19,16 @@ export interface ActivityEventCountsGridReportConfig {
   timeBucket: { field: 'occurredAt'; grain: 'week' }
 }
 
+export interface DialerConnectRateReportConfig {
+  baseObject: 'dialer'
+  rows: [{ field: 'numberE164' | 'areaCode' }]
+  values: [
+    { field: 'dials'; aggregation: 'sum' },
+    { field: 'connects'; aggregation: 'sum' },
+  ]
+  timeZone: ReportTimeZone
+}
+
 export type ActivityGridMetric =
   | { key: string; type: 'event_count'; sourceType: 'call' | 'email' | 'meeting' }
   | { key: string; type: 'stage_entry'; stageId: string }
@@ -40,6 +50,7 @@ export type ReportConfig =
   | DealStageAmountReportConfig
   | ActivityEventCountsGridReportConfig
   | ActivityMetricsGridReportConfig
+  | DialerConnectRateReportConfig
 
 /** A persisted selection resolved by the shared Team scope at query time. */
 export interface OwnerTeamScope {
@@ -74,6 +85,21 @@ export const ACTIVITY_EVENT_COUNTS_GRID_REPORT: ActivityEventCountsGridReportCon
   values: [{ field: 'id', aggregation: 'count' }],
   timeZone: { mode: 'viewer' },
   timeBucket: { field: 'occurredAt', grain: 'week' },
+}
+
+export const DIALER_CONNECT_RATE_BY_NUMBER_REPORT: DialerConnectRateReportConfig = {
+  baseObject: 'dialer',
+  rows: [{ field: 'numberE164' }],
+  values: [
+    { field: 'dials', aggregation: 'sum' },
+    { field: 'connects', aggregation: 'sum' },
+  ],
+  timeZone: { mode: 'pinned', displayZone: 'UTC' },
+}
+
+export const DIALER_CONNECT_RATE_BY_AREA_REPORT: DialerConnectRateReportConfig = {
+  ...DIALER_CONNECT_RATE_BY_NUMBER_REPORT,
+  rows: [{ field: 'areaCode' }],
 }
 
 export interface RawActivityGridCount {
@@ -149,6 +175,9 @@ export function compileReport(
   orgId: string,
   context: ReportExecutionContext = {},
 ): Prisma.Sql {
+  if (config.baseObject === 'dialer') {
+    return compileDialerConnectRateReport(config, orgId, context)
+  }
   if (config.baseObject === 'activityGrid') {
     return compileActivityMetricsGrid(config, orgId, context)
   }
@@ -200,6 +229,41 @@ export function buildActivityGridRows(
       }
     })
   })
+}
+
+function compileDialerConnectRateReport(
+  config: DialerConnectRateReportConfig,
+  orgId: string,
+  context: ReportExecutionContext,
+): Prisma.Sql {
+  if (
+    config.rows.length !== 1 ||
+    !['numberE164', 'areaCode'].includes(config.rows[0]?.field) ||
+    config.values.length !== 2 ||
+    config.values[0]?.field !== 'dials' ||
+    config.values[0]?.aggregation !== 'sum' ||
+    config.values[1]?.field !== 'connects' ||
+    config.values[1]?.aggregation !== 'sum'
+  ) {
+    throw new InvalidReportConfigError('Only dialer connect rates grouped by number or area code are available yet.')
+  }
+
+  resolveReportTimeZone(config.timeZone, context)
+  const dimension = config.rows[0].field
+  const select = dimension === 'numberE164'
+    ? '"rollup"."numberE164" AS "numberE164"'
+    : '"rollup"."areaCode" AS "areaCode"'
+  const groupBy = dimension === 'numberE164' ? '"rollup"."numberE164"' : '"rollup"."areaCode"'
+
+  return Prisma.sql([
+    `SELECT ${select}, SUM("rollup"."dials")::text AS "dials", SUM("rollup"."connects")::text AS "connects"
+FROM "AnalyticsRollup" AS "rollup"
+WHERE "rollup"."orgId" = `,
+    `
+  AND ${groupBy} IS NOT NULL
+GROUP BY ${groupBy}
+ORDER BY ${groupBy} ASC`,
+  ], orgId)
 }
 
 function compileDealStageAmountReport(

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ACTIVITY_EVENT_COUNTS_GRID_REPORT,
   buildActivityGridRows,
+  DIALER_CONNECT_RATE_BY_NUMBER_REPORT,
   DEAL_STAGE_AMOUNT_REPORT,
   compileReport,
   type ReportConfig,
@@ -138,5 +139,16 @@ describe('compileReport', () => {
       { weekStart: '2026-08-24', metricKey: 'entered-qualified', metricType: 'stage_entry', count: '1' },
       { weekStart: '2026-08-24', metricKey: 'qualified-per-call', metricType: 'conversion', ratio: null },
     ])
+  })
+
+  it('compiles the dialer number report from rollups, with no caller-controlled SQL identifiers', () => {
+    const query = compileReport(DIALER_CONNECT_RATE_BY_NUMBER_REPORT, 'org-a')
+
+    expect(query.sql).toContain('FROM "AnalyticsRollup" AS "rollup"')
+    expect(query.sql).toContain('"rollup"."numberE164" AS "numberE164"')
+    expect(query.sql).toContain('SUM("rollup"."dials")::text AS "dials"')
+    expect(query.sql).toContain('SUM("rollup"."connects")::text AS "connects"')
+    expect(query.sql).toContain('"rollup"."orgId" = ?')
+    expect(query.values).toEqual(['org-a'])
   })
 })

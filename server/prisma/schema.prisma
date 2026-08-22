@@ -132,7 +132,8 @@ model Org {
 
   // Saved reports (MAI-145). A report belongs to an organization, while its
   // owner controls this first lifecycle slice. Sharing arrives separately.
-  reports Report[]
+  reports          Report[]
+  analyticsRollups AnalyticsRollup[]
 
   // Shared in-app notifications (MAI-235). A source event is one durable object
   // with one recipient-owned lifecycle row per teammate; deleting the org clears
@@ -1373,6 +1374,35 @@ model Report {
 
   @@index([orgId])
   @@index([orgId, ownerId, deletedAt])
+}
+
+// Dialer-specific hourly aggregates (MAI-161). General activity metrics stay
+// in ActivityEntry; these rows exist only for the number/area analytics that
+// the general reporting slices do not model.
+model AnalyticsRollup {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // UTC calendar day derived from the call instant. P2.6 will add the
+  // organization-zone time-of-day dimension without rewriting this source data.
+  day DateTime
+  // Reserved for P2.6's hour-by-day heatmap. Null is this issue's daily rollup.
+  hourOfDay Int?
+  // The owned caller ID used for the outbound call.
+  numberE164 String
+  // The dialed prospect's North American area code, null for other numbering plans.
+  areaCode String?
+  dials    Int @default(0)
+  connects Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, day, hourOfDay, numberE164, areaCode])
+  @@index([orgId, numberE164])
+  @@index([orgId, areaCode])
 }
 
 // One step in a Pipeline. winProbability weights the forecast; outcome tells the

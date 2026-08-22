@@ -28,6 +28,8 @@ export const JOB_TRANSCRIBE_RECORDING = 'transcribe-recording'
 
 export const JOB_REAP_STALE_CALLS = 'reap-stale-calls'
 
+export const JOB_DIALER_ANALYTICS_ROLLUP = 'dialer-analytics-rollup'
+
 export const JOB_UPLOAD_VOICEMAIL = 'upload-voicemail'
 
 export const JOB_TRANSCRIBE_VOICEMAIL = 'transcribe-voicemail'
@@ -44,6 +46,7 @@ export const JOB_NAMES = [
   JOB_UPLOAD_RECORDING,
   JOB_TRANSCRIBE_RECORDING,
   JOB_REAP_STALE_CALLS,
+  JOB_DIALER_ANALYTICS_ROLLUP,
   JOB_UPLOAD_VOICEMAIL,
   JOB_TRANSCRIBE_VOICEMAIL,
   JOB_TRANSCRIBE_VOICEMAIL_DROP,
@@ -81,6 +84,9 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }
   // minutes regardless — a failed run is caught by the next tick, and retrying
   // immediately would just repeat the same Twilio/database failure sooner.
   [JOB_REAP_STALE_CALLS]: { retryLimit: 0, retryDelay: 0 },
+  // Rebuilding an aggregate is idempotent, so a transient database failure can
+  // safely retry twice without double-counting a call.
+  [JOB_DIALER_ANALYTICS_ROLLUP]: { retryLimit: 2, retryDelay: 60 },
   // One retry, thirty seconds later — the same shape as JOB_UPLOAD_RECORDING,
   // its outbound twin. See jobs/uploadVoicemail.ts.
   [JOB_UPLOAD_VOICEMAIL]: { retryLimit: 1, retryDelay: 30 },

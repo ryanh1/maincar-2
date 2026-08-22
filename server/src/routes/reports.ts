@@ -79,10 +79,21 @@ const activityMetricsGridConfigSchema = z.object({
   timeBucket: z.object({ field: z.literal('occurredAt'), grain: z.literal('week') }).strict(),
 }).strict()
 
+const dialerConnectRateConfigSchema = z.object({
+  baseObject: z.literal('dialer'),
+  rows: z.tuple([z.object({ field: z.enum(['numberE164', 'areaCode']) }).strict()]),
+  values: z.tuple([
+    z.object({ field: z.literal('dials'), aggregation: z.literal('sum') }).strict(),
+    z.object({ field: z.literal('connects'), aggregation: z.literal('sum') }).strict(),
+  ]),
+  timeZone: timeZoneSchema,
+}).strict()
+
 const reportConfigSchema = z.discriminatedUnion('baseObject', [
   dealReportConfigSchema,
   activityGridConfigSchema,
   activityMetricsGridConfigSchema,
+  dialerConnectRateConfigSchema,
 ])
 
 const runReportBodySchema = z.object({ config: reportConfigSchema }).strict()
@@ -122,6 +133,18 @@ interface RawActivityWeekCount {
   weekStart: string
   sourceType: string
   count: string | number | bigint
+}
+
+interface RawDialerConnectRate {
+  numberE164?: string
+  areaCode?: string
+  dials: string | number | bigint
+  connects: string | number | bigint
+}
+
+function connectRate(dials: RawDialerConnectRate['dials'], connects: RawDialerConnectRate['connects']): string {
+  const total = Number(dials)
+  return total === 0 ? '0' : String(Number(connects) / total)
 }
 
 router.use(requireAuth)
@@ -176,6 +199,20 @@ router.post(
       return void res.json({
         report: {
           rows: buildActivityGridRows(parsed.data.config as ActivityMetricsGridReportConfig, rows),
+        },
+      })
+    }
+    if (parsed.data.config.baseObject === 'dialer') {
+      const rows = await prisma.$queryRaw<RawDialerConnectRate[]>(query)
+      const dimension = parsed.data.config.rows[0].field
+      return void res.json({
+        report: {
+          rows: rows.map((row) => ({
+            [dimension]: row[dimension]!,
+            dials: String(row.dials),
+            connects: String(row.connects),
+            connectRate: connectRate(row.dials, row.connects),
+          })),
         },
       })
     }
