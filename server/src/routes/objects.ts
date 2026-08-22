@@ -29,6 +29,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { getObjectSurfaceCapabilities } from '../crm/objectCapabilities.js'
+import { listFieldChangesInWindow } from '../crm/fieldHistory.js'
 import { isRecordGridCreateSupported, listRecords, ListQueryError } from '../crm/recordList.js'
 import { Prisma } from '../generated/prisma/client.js'
 import type { ObjectDef, AttributeDef } from '../generated/prisma/client.js'
@@ -163,6 +164,10 @@ const listBodySchema = z.object({
   teamScope: teamScopeSchema.optional(),
   cursor: z.string().nullish(),
   limit: z.number().int().positive().optional(),
+})
+
+const fieldChangesQuerySchema = z.object({
+  days: z.coerce.number().int().min(1, 'days must be at least 1.').max(365, 'days may not exceed 365.'),
 })
 
 const optionalText = z.preprocess(blankToUndefined, z.string().optional())
@@ -334,6 +339,65 @@ router.get(
 
     // --- Return response ---
     res.json({ recordCount, references })
+  }),
+)
+
+// ============================================================
+// GET /api/orgs/:orgId/objects/:id/field-changes — recent changed cells
+// ============================================================
+// The grid uses this as an overlay data source, not a row filter. AttributeDef
+// is the field-read boundary in the current CRM schema: history for an archived
+// or deleted field must not be returned even when its append-only rows remain.
+router.get(
+  '/:id/field-changes',
+  wrapRoute('GET /api/orgs/:orgId/objects/:id/field-changes', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = fieldChangesQuerySchema.safeParse(req.query ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // --- Verify the object and resolve readable fields ---
+    const object = await prisma.objectDef.findFirst({
+      where: { id, orgId, deletedAt: null },
+      select: { slug: true },
+    })
+    if (!object) {
+      return void res.status(404).json({ error: 'Object not found' })
+    }
+    const attributes = await prisma.attributeDef.findMany({
+      where: { orgId, objectId: id, isArchived: false, deletedAt: null },
+      select: { id: true, slug: true },
+    })
+    const attributeIdBySlug = new Map(attributes.map((attribute) => [attribute.slug, attribute.id]))
+
+    // --- Execute query ---
+    const changes = await listFieldChangesInWindow(prisma, {
+      orgId,
+      objectSlug: object.slug,
+      readableAttributes: attributes.map((attribute) => attribute.slug),
+      days: parsed.data.days,
+    })
+
+    // --- Return response ---
+    res.json({
+      changes: changes.map((change) => ({
+        recordId: change.recordId,
+        attributeId: attributeIdBySlug.get(change.attribute),
+        changeCount: change.changeCount,
+        previousValue: change.previousValue,
+        currentValue: change.currentValue,
+        changedAt: change.changedAt.toISOString(),
+      })),
+    })
   }),
 )
 

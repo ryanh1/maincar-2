@@ -23,6 +23,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
       deleteMany: vi.fn(),
     },
     attributeDef: { findMany: vi.fn() },
+    fieldHistory: { findMany: vi.fn() },
     record: { count: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
@@ -113,6 +114,7 @@ beforeEach(() => {
   prismaMock.objectDef.create.mockResolvedValue(objectRow())
   prismaMock.objectDef.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.attributeDef.findMany.mockResolvedValue([])
+  prismaMock.fieldHistory.findMany.mockResolvedValue([])
   prismaMock.record.count.mockResolvedValue(0)
   prismaMock.$queryRaw.mockResolvedValue([])
 })
@@ -351,6 +353,58 @@ describe('GET /api/orgs/:orgId/objects/:id/impact', () => {
     const foreign = await request(app).get(`${URL_A}/obj-in-b/impact`).set('Authorization', AUTH)
     expect(foreign.status).toBe(404)
     expect(foreign.body).toEqual({ error: 'Object not found' })
+  })
+})
+
+// ============================================================
+// GET — change-highlight data
+// ============================================================
+describe('GET /api/orgs/:orgId/objects/:id/field-changes', () => {
+  it('returns counts and the latest transition only for the object’s live fields', async () => {
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(objectRow({ id: 'obj-person', slug: 'person' }))
+    prismaMock.attributeDef.findMany.mockResolvedValueOnce([{ id: 'attr-title', slug: 'title' }])
+    prismaMock.fieldHistory.findMany.mockResolvedValueOnce([
+      {
+        id: 'history-3', recordId: 'person-1', attribute: 'title', oldJson: 'AE', newJson: 'Director',
+        changedAt: new Date('2026-08-21T11:00:00.000Z'),
+      },
+      {
+        id: 'history-2', recordId: 'person-1', attribute: 'title', oldJson: 'SDR', newJson: 'AE',
+        changedAt: new Date('2026-08-20T11:00:00.000Z'),
+      },
+      {
+        id: 'history-1', recordId: 'person-1', attribute: 'title', oldJson: 'BDR', newJson: 'SDR',
+        changedAt: new Date('2026-08-19T11:00:00.000Z'),
+      },
+    ])
+
+    const res = await request(app)
+      .get(`${URL_A}/obj-person/field-changes?days=7`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.changes).toEqual([
+      {
+        recordId: 'person-1', attributeId: 'attr-title', changeCount: 3,
+        previousValue: 'AE', currentValue: 'Director', changedAt: '2026-08-21T11:00:00.000Z',
+      },
+    ])
+    expect(prismaMock.attributeDef.findMany).toHaveBeenCalledWith({
+      where: { orgId: ORG_A, objectId: 'obj-person', isArchived: false, deletedAt: null },
+      select: { id: true, slug: true },
+    })
+    expect(prismaMock.fieldHistory.findMany.mock.calls[0][0].where.attribute).toEqual({ in: ['title'] })
+  })
+
+  it('rejects invalid windows and a foreign object before reading history', async () => {
+    const invalid = await request(app).get(`${URL_A}/obj-1/field-changes?days=0`).set('Authorization', AUTH)
+    expect(invalid.status).toBe(400)
+    expect(prismaMock.objectDef.findFirst).not.toHaveBeenCalled()
+
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(null)
+    const foreign = await request(app).get(`${URL_A}/obj-other/field-changes?days=7`).set('Authorization', AUTH)
+    expect(foreign.status).toBe(404)
+    expect(prismaMock.fieldHistory.findMany).not.toHaveBeenCalled()
   })
 })
 
