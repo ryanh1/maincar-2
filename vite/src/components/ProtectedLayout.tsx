@@ -57,9 +57,8 @@ export function ProtectedLayout() {
   // the only place the two meet.
   // DialerProvider wraps the tree for the same reason ComposerProvider does: a
   // call in progress survives navigation only because the state holding it never
-  // unmounts when the route under it changes. DialerDock sits out here beside the
-  // composer dock, both `fixed` to the bottom-right corner — the dialer owns the
-  // corner (z-100) and the composer reserves its width, so the two never overlap.
+  // unmounts when the route under it changes. Its expanded surface sits beside
+  // the command bar; when idle, the command bar is the only dialer entry point.
   return (
     <DialerProvider>
       <ComposerProvider>

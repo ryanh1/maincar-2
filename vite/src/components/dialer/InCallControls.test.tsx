@@ -180,7 +180,9 @@ describe('InCallControls', () => {
     // The name comes from IconButton's required `tooltip`, so the visible
     // tooltip and the accessible name are the same string.
     expect(screen.getByRole('button', { name: 'Mute the call' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'End the call' })).toBeInTheDocument()
+    const endCall = screen.getByRole('button', { name: 'End the call' })
+    expect(endCall).toBeInTheDocument()
+    expect(endCall.querySelector('svg.lucide-phone')).toHaveClass('rotate-[135deg]')
     expect(screen.getByLabelText('Call duration')).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Call controls' })).toBeInTheDocument()
   })

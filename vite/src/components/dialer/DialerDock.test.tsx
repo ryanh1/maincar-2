@@ -59,17 +59,11 @@ beforeEach(() => {
 })
 
 describe('DialerDock', () => {
-  it('renders a region docked bottom-right, at z-100', () => {
-    setDialer()
+  it('renders nothing while collapsed, leaving the command bar as the idle entry point', () => {
+    setDialer({ view: 'collapsed' })
     render(<DialerDock />)
 
-    const region = screen.getByRole('region', { name: 'Dialer' })
-    expect(region.className).toContain('fixed')
-    expect(region.className).toContain('bottom-0')
-    // The command bar owns the right edge, so the dialer reserves a stable
-    // lane immediately to its left whether it is collapsed or expanded.
-    expect(region.className).toContain('right-16')
-    expect(region.className).toContain('z-[100]')
+    expect(screen.queryByRole('region', { name: 'Dialer' })).not.toBeInTheDocument()
   })
 
   it('expanded keeps the floating card look: rounded top corners, a border, a shadow', () => {
@@ -82,43 +76,6 @@ describe('DialerDock', () => {
     expect(region.className).toContain('w-80')
   })
 
-  it('collapsed is a flat segment: no top border, no rounded corners, sized to its content', () => {
-    setDialer({ view: 'collapsed' })
-    render(<DialerDock />)
-
-    const region = screen.getByRole('region', { name: 'Dialer' })
-    expect(region.className).not.toMatch(/rounded-t/)
-    expect(region.className).not.toContain('border-t')
-    expect(region.className).toContain('border-x')
-    expect(region.className).not.toContain('w-80')
-  })
-
-  it('collapsed shows only the title bar, no body', () => {
-    setDialer({ view: 'collapsed' })
-    render(<DialerDock />)
-
-    expect(titleBar()).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByTestId('keypad')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('in-call')).not.toBeInTheDocument()
-  })
-
-  it('collapsed and idle reads "Start call", with no chevron', () => {
-    setDialer({ view: 'collapsed', phase: 'idle' })
-    render(<DialerDock />)
-
-    const button = screen.getByRole('button', { name: 'Start call' })
-    expect(button.querySelector('svg.lucide-chevron-down')).not.toBeInTheDocument()
-    expect(button.querySelector('svg.lucide-chevron-up')).not.toBeInTheDocument()
-  })
-
-  it('collapsed mid-call reads "Dialer", not "Start call" — there is nothing left to start', () => {
-    setDialer({ view: 'collapsed', phase: 'in-progress', elapsedSeconds: 5 })
-    render(<DialerDock />)
-
-    expect(screen.getByRole('button', { name: /^Dialer/ })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Start call/ })).not.toBeInTheDocument()
-  })
-
   it('expanded still shows the collapsing chevron', () => {
     setDialer({ view: 'expanded', phase: 'idle' })
     render(<DialerDock />)
@@ -128,23 +85,11 @@ describe('DialerDock', () => {
   })
 
   it('clicking the title bar toggles the view', () => {
-    const dialer = setDialer({ view: 'collapsed' })
+    const dialer = setDialer({ view: 'expanded' })
     render(<DialerDock />)
 
     fireEvent.click(titleBar())
     expect(dialer.toggleView).toHaveBeenCalledTimes(1)
-  })
-
-  it('⌘⇧D toggles the view from anywhere', () => {
-    const dialer = setDialer()
-    render(<DialerDock />)
-
-    fireEvent.keyDown(window, { code: 'KeyD', key: 'D', shiftKey: true, metaKey: true })
-    expect(dialer.toggleView).toHaveBeenCalledTimes(1)
-
-    // Ctrl+Shift+D works too, for the non-Mac rep.
-    fireEvent.keyDown(window, { code: 'KeyD', key: 'D', shiftKey: true, ctrlKey: true })
-    expect(dialer.toggleView).toHaveBeenCalledTimes(2)
   })
 
   it('Escape collapses when idle', () => {
@@ -193,13 +138,18 @@ describe('DialerDock', () => {
     expect(screen.queryByTestId('keypad')).not.toBeInTheDocument()
   })
 
-  it('shows the running duration in the title bar during a call, even collapsed', () => {
-    setDialer({ view: 'collapsed', phase: 'in-progress', elapsedSeconds: 65 })
+  it('shows the running duration in the title bar during a call', () => {
+    setDialer({
+      view: 'expanded',
+      mode: 'call',
+      phase: 'in-progress',
+      elapsedSeconds: 65,
+      activeCall: { orgId: 'org-1', callId: 'call-1', recording: false },
+    })
     render(<DialerDock />)
 
     expect(screen.getByLabelText('Call duration')).toHaveTextContent('01:05')
-    // Still collapsed — the duration rides in the title bar, no body.
-    expect(screen.queryByTestId('keypad')).not.toBeInTheDocument()
+    expect(screen.getByTestId('in-call')).toBeInTheDocument()
   })
 
   it('shows no duration when idle', () => {

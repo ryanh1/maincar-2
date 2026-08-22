@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Mic, MicOff, Phone, PhoneOff } from 'lucide-react'
+import { Mic, MicOff, Phone } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { cn } from '@/lib/utils'
@@ -119,7 +119,7 @@ export function InCallControls({ orgId, callId, recording = false, className }: 
           disabled={endCall.isPending}
           onClick={hangUp}
         >
-          <PhoneOff size={16} aria-hidden />
+          <Phone size={16} aria-hidden className="rotate-[135deg]" />
         </IconButton>
       </div>
     </div>

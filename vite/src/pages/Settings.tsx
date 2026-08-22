@@ -3,7 +3,6 @@ import {
   Building2,
   FileText,
   FileSignature,
-  Headphones,
   Phone,
   Plug,
   User as UserIcon,
@@ -23,7 +22,6 @@ import { Settings_PhoneNumbersTab } from './Settings_PhoneNumbersTab'
 import { Settings_EmailTemplatesTab } from './Settings_EmailTemplatesTab'
 import { Settings_EmailSignaturesTab } from './Settings_EmailSignaturesTab'
 import { Settings_IntegrationsTab } from './Settings_IntegrationsTab'
-import { Settings_DevicesTab } from './Settings_DevicesTab'
 
 type TabId =
   | 'profile'
@@ -33,7 +31,6 @@ type TabId =
   | 'email-templates'
   | 'signatures'
   | 'integrations'
-  | 'devices'
 
 interface TabDef {
   id: TabId
@@ -57,14 +54,10 @@ const TABS: TabDef[] = [
   // Hidden for a user with no org, like Organization and Members: connections belong to
   // an org, so there is nothing to show without one.
   { id: 'integrations', label: 'Integrations', icon: Plug, needsOrg: true },
-  // Not needsOrg: the mic/speaker check is a property of this browser, not
-  // the active organization, so it stays visible for a user with no org yet.
-  { id: 'devices', label: 'Devices', icon: Headphones },
 ]
 
 const TAB_CONTENT: Record<TabId, ComponentType> = {
   profile: Settings_ProfileTab,
-  devices: Settings_DevicesTab,
   organization: Settings_OrganizationTab,
   members: Settings_MembersTab,
   numbers: Settings_PhoneNumbersTab,

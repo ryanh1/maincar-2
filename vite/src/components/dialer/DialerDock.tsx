@@ -11,7 +11,7 @@ import { useDialer } from '@/components/dialer/dialerContext'
 const BODY_ID = 'dialer-dock-body'
 
 /**
- * The dialer's docked surface: a panel pinned to the bottom-right corner that a
+ * The dialer's expanded surface: a panel pinned beside the command bar that a
  * rep drives without leaving the page they are on.
  *
  * It renders nothing of its own state — every bit of it (open or shut, keypad or
@@ -19,12 +19,11 @@ const BODY_ID = 'dialer-dock-body'
  * a call lives. Mounted once above the router (in `ProtectedLayout`, beside the
  * composer dock) so a call in progress survives navigation between pages.
  *
- * Behavior the issue asks for:
- *  - Collapsed shows only the title bar; the call duration rides in it during a call.
- *  - Expanded shows the keypad when idle, the in-call controls while a call is up.
- *  - Clicking the title bar toggles the two. ⌘⇧D (or Ctrl+Shift+D) toggles from
- *    anywhere. Escape collapses, but never mid-call — a rep reaching for Escape
- *    during a live call must not lose the controls that hang it up.
+ * The command bar is the sole idle entry point. This component renders only
+ * after it has been expanded; it contains the keypad while idle and in-call
+ * controls while a call is up. Escape closes it while idle, but never mid-call
+ * — a rep reaching for Escape during a live call must not lose the controls that
+ * hang it up.
  *
  * z-100 keeps it above the composer dock (z-40), which already reserves this
  * corner's width so the two never overlap.
@@ -36,14 +35,6 @@ export function DialerDock() {
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      // ⌘⇧D / Ctrl+Shift+D toggles from anywhere. `code` keeps it on the physical
-      // D key regardless of layout, and preventDefault keeps the browser's own
-      // bookmark shortcut out of it.
-      if (e.code === 'KeyD' && e.shiftKey && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault()
-        toggleView()
-        return
-      }
       // Escape collapses, but not while a call is live.
       if (e.key === 'Escape' && !inCall) {
         collapseDialer()
@@ -54,26 +45,13 @@ export function DialerDock() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [toggleView, collapseDialer, inCall])
 
-  // "Start call" only while idle and collapsed — the label naming what a
-  // click does. Mid-call there is nothing left to start, so the collapsed
-  // button reads "Dialer" instead, same as the expanded title bar always has.
-  const label = !expanded && phase === 'idle' ? 'Start call' : 'Dialer'
+  if (!expanded) return null
 
   return (
     <div
       role="region"
       aria-label="Dialer"
-      className={cn(
-        'fixed bottom-0 right-16 z-[100] flex flex-col bg-card text-card-foreground',
-        // Expanded keeps the floating-card look it always had. Collapsed is
-        // one flat segment in the dock's own row: no top border, no rounded
-        // corners — only the side borders that separate it from its neighbor
-        // (MAI-209 → edge-to-edge borders), sized to its own content instead
-        // of the card's fixed width.
-        expanded
-          ? 'w-80 rounded-t-md border border-b-0 border-border shadow-md'
-          : 'w-auto border-x border-border',
-      )}
+      className={cn('fixed bottom-0 right-16 z-[100] flex w-80 flex-col rounded-t-md border border-b-0 border-border bg-card text-card-foreground shadow-md')}
     >
       <button
         type="button"
@@ -83,30 +61,26 @@ export function DialerDock() {
         className="flex h-8 items-center gap-2 px-3 text-left text-sm font-medium transition-colors hover:bg-accent/50"
       >
         <Phone size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
-        <span className="flex-1 truncate">{label}</span>
+        <span className="flex-1 truncate">Dialer</span>
         {phase !== 'idle' ? (
           <span className="text-xs tabular-nums text-muted-foreground" aria-label="Call duration">
             {formatElapsed(elapsedSeconds)}
           </span>
         ) : null}
-        {expanded ? (
-          <ChevronDown size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
-        ) : null}
+        <ChevronDown size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
       </button>
 
-      {expanded ? (
-        <div id={BODY_ID} className="border-t border-border p-3">
-          {inCall && activeCall ? (
-            <InCallControls
-              orgId={activeCall.orgId}
-              callId={activeCall.callId}
-              recording={activeCall.recording}
-            />
-          ) : (
-            <NumericKeypad />
-          )}
-        </div>
-      ) : null}
+      <div id={BODY_ID} className="border-t border-border p-3">
+        {inCall && activeCall ? (
+          <InCallControls
+            orgId={activeCall.orgId}
+            callId={activeCall.callId}
+            recording={activeCall.recording}
+          />
+        ) : (
+          <NumericKeypad />
+        )}
+      </div>
     </div>
   )
 }
