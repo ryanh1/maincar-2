@@ -15,6 +15,7 @@ const { assignMutateMock } = vi.hoisted(() => ({ assignMutateMock: vi.fn() }))
 
 vi.mock('@/hooks/phoneNumbers', () => ({
   useAssignNumber: () => ({ mutate: assignMutateMock, isPending: false }),
+  useSetActiveNumber: () => ({ mutate: vi.fn(), isPending: false }),
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 // The assign/reassign dialog has its own coverage
@@ -50,7 +51,12 @@ async function openMenu(number: typeof UNASSIGNED | typeof HELD) {
   renderWithProviders(
     <table>
       <tbody>
-        <Settings_PhoneNumbers_OrgRow orgId="org-a" number={number} timeZone="America/New_York" />
+        <Settings_PhoneNumbers_OrgRow
+          orgId="org-a"
+          number={number}
+          timeZone="America/New_York"
+          viewerId="user-a"
+        />
       </tbody>
     </table>,
   )

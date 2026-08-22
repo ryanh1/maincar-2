@@ -18,6 +18,7 @@ import { renderWithProviders } from '@/test/utils'
 
 const {
   useGetNumbersMock,
+  useGetOrgNumbersMock,
   useSetActiveNumberMock,
   useReleaseNumberMock,
   useSearchAvailableNumbersMock,
@@ -31,6 +32,7 @@ const {
   toastSuccessMock,
 } = vi.hoisted(() => ({
   useGetNumbersMock: vi.fn(),
+  useGetOrgNumbersMock: vi.fn(),
   useSetActiveNumberMock: vi.fn(),
   useReleaseNumberMock: vi.fn(),
   useSearchAvailableNumbersMock: vi.fn(),
@@ -47,6 +49,8 @@ const {
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/hooks/phoneNumbers', () => ({
   useGetNumbers: useGetNumbersMock,
+  useGetOrgNumbers: useGetOrgNumbersMock,
+  useAssignNumber: () => ({ mutate: vi.fn(), isPending: false }),
   useSetActiveNumber: useSetActiveNumberMock,
   useReleaseNumber: useReleaseNumberMock,
   useSearchAvailableNumbers: useSearchAvailableNumbersMock,
@@ -118,6 +122,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   useAuthMock.mockReturnValue({ org: ORG, user: USER, isAdmin: false })
   useGetNumbersMock.mockReturnValue(listState())
+  useGetOrgNumbersMock.mockReturnValue({ isPending: false, isError: false, data: { numbers: [], total: 0, unassignedCount: 0 } })
   useSetActiveNumberMock.mockReturnValue({ mutate: setActiveMutateMock, isPending: false })
   useReleaseNumberMock.mockReturnValue({ mutate: releaseMutateMock, isPending: false })
   useSearchAvailableNumbersMock.mockReturnValue(searchState())
@@ -154,27 +159,64 @@ describe('the numbers list', () => {
     expect(screen.getAllByText('Aug 1, 2026').length).toBeGreaterThan(0)
   })
 
-  it('lets a dialable number be made the one to call from, and disables the rest', () => {
+  it('shows a Primary label for the active number and enables Make primary only when ready', () => {
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
-    // The active number's radio is checked and disabled — it is already the one.
-    expect(screen.getByRole('radio', { name: 'Call from +12025550111' })).toBeDisabled()
-    // A dialable, not-yet-active number can be picked.
-    expect(screen.getByRole('radio', { name: 'Call from +12025550122' })).toBeEnabled()
-    // A provisioning number cannot be picked yet.
-    expect(screen.getByRole('radio', { name: 'Call from +12025550133' })).toBeDisabled()
+    expect(screen.getAllByText('Primary')).toHaveLength(2)
+    const makePrimary = screen.getAllByRole('button', { name: 'Make primary' })
+    expect(makePrimary[0]).toBeEnabled()
+    expect(makePrimary[1]).toBeDisabled()
   })
 
-  it('sends the chosen number id when a new number to call from is picked', async () => {
+  it('sends the chosen number id when Make primary is clicked', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
-    await user.click(screen.getByRole('radio', { name: 'Call from +12025550122' }))
+    await user.click(screen.getAllByRole('button', { name: 'Make primary' })[0])
 
     expect(setActiveMutateMock).toHaveBeenCalledWith(
       { orgId: 'org-a', id: 'num-ready' },
       expect.anything(),
     )
+  })
+
+  it('keeps the my-numbers toggle on and disabled for a non-admin', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    const toggle = screen.getByRole('switch', { name: 'Show only my numbers' })
+    expect(toggle).toBeChecked()
+    expect(toggle).toBeDisabled()
+
+    await user.hover(toggle.parentElement!)
+    expect(await screen.findByText('You must be an admin to do that.')).toBeInTheDocument()
+  })
+
+  it('shows every organization number by default for an admin and can filter to the admin\'s numbers', async () => {
+    useAuthMock.mockReturnValue({ org: ORG, user: { ...USER, id: 'user-a' }, isAdmin: true })
+    useGetOrgNumbersMock.mockReturnValue({
+      isPending: false,
+      isError: false,
+      data: {
+        numbers: [
+          {
+            ...number({ id: 'num-colleague', e164: '+12025550999', isActiveForOutbound: false }),
+            assignedUser: { id: 'user-b', firstName: 'Bee', lastName: 'Ta', email: 'b@acme.com' },
+          },
+        ],
+        total: 1,
+        unassignedCount: 0,
+      },
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    expect(screen.getByText('+12025550999')).toBeInTheDocument()
+    expect(screen.queryByText('+12025550111')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('switch', { name: 'Show only my numbers' }))
+    expect(screen.getByText('+12025550111')).toBeInTheDocument()
+    expect(screen.queryByText('+12025550999')).not.toBeInTheDocument()
   })
 
   it('shows a loading state while the numbers load', () => {

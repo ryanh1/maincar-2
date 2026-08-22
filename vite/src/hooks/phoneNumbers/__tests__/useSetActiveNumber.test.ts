@@ -64,6 +64,18 @@ describe('useSetActiveNumber', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.phoneNumbers.list('org-1') })
   })
 
+  it('invalidates the organization list so the Primary column reflects the switch', async () => {
+    jsonFetch.mockResolvedValue({ number: activeRow('pn-1') })
+    const client = makeTestQueryClient()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    const { result } = renderSetActive(client)
+    result.current.mutate({ orgId: 'org-1', id: 'pn-1' })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.phoneNumbers.orgList('org-1') })
+  })
+
   it('surfaces the server own message when the number is not ready', async () => {
     jsonFetch.mockRejectedValue(
       new ApiError(

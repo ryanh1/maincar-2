@@ -37,6 +37,9 @@ export function useReleaseNumber() {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.phoneNumbers.list(variables.orgId),
       })
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.phoneNumbers.orgList(variables.orgId),
+      })
     },
   })
 }

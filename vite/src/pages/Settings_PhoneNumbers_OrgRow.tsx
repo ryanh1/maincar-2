@@ -26,11 +26,13 @@ import { ApiError } from '@/lib/api'
 import { getPhoneNumberStatusLabel } from '@/lib/phoneNumberLabels'
 
 import { Settings_PhoneNumbers_AssignDialog } from './Settings_PhoneNumbers_AssignDialog'
+import { Settings_PhoneNumbers_PrimaryControl } from './Settings_PhoneNumbers_PrimaryControl'
 
 interface Props {
   orgId: string
   number: OrgPhoneNumber
   timeZone: string | null | undefined
+  viewerId: string | null | undefined
 }
 
 /** The holder's display name, or the email when they have none set. */
@@ -41,7 +43,7 @@ function holderName(assignee: OrgPhoneNumber['assignedUser']): string {
 }
 
 /** One row of the org-wide phone number inventory: the number, its holder, and what an admin can do. */
-export function Settings_PhoneNumbers_OrgRow({ orgId, number, timeZone }: Props) {
+export function Settings_PhoneNumbers_OrgRow({ orgId, number, timeZone, viewerId }: Props) {
   const [assignOpen, setAssignOpen] = useState(false)
   const [confirmUnassign, setConfirmUnassign] = useState(false)
   const unassign = useAssignNumber()
@@ -80,6 +82,13 @@ export function Settings_PhoneNumbers_OrgRow({ orgId, number, timeZone }: Props)
       <td className="px-4 py-2 text-sm">{getPhoneNumberStatusLabel(number)}</td>
       <td className="px-4 py-2 text-sm tabular-nums text-muted-foreground">
         {formatDate(number.createdAt, timeZone)}
+      </td>
+      <td className="px-4 py-1 text-sm">
+        <Settings_PhoneNumbers_PrimaryControl
+          number={number}
+          orgId={orgId}
+          ownedByViewer={number.assignedUser?.id === viewerId}
+        />
       </td>
       <td className="px-2 py-2 text-right">
         <DropdownMenu>

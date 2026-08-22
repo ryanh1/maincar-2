@@ -58,7 +58,7 @@ export function Settings_PhoneNumbers_OrgTable({ orgId }: { orgId: string }) {
           <table className="w-full">
             <caption className="sr-only">Every phone number owned by {org?.name}</caption>
             <thead>
-              <tr className="border-b border-border bg-muted/60">
+              <tr className="border-b border-border bg-surface">
                 <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
                   Number
                 </th>
@@ -70,6 +70,9 @@ export function Settings_PhoneNumbers_OrgTable({ orgId }: { orgId: string }) {
                 </th>
                 <th scope="col" className="w-32 px-4 py-2 text-left text-xs font-medium text-muted-foreground">
                   Bought
+                </th>
+                <th scope="col" className="w-36 px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                  Primary
                 </th>
                 <th scope="col" className="w-12 px-2 py-2">
                   <span className="sr-only">Actions</span>
@@ -83,6 +86,7 @@ export function Settings_PhoneNumbers_OrgTable({ orgId }: { orgId: string }) {
                   orgId={orgId}
                   number={number}
                   timeZone={user?.timeZone}
+                  viewerId={user?.id}
                 />
               ))}
             </tbody>

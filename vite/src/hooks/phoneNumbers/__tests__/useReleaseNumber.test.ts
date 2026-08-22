@@ -63,6 +63,18 @@ describe('useReleaseNumber', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.phoneNumbers.list('org-1') })
   })
 
+  it('invalidates the organization list so the released row updates there too', async () => {
+    jsonFetch.mockResolvedValue({ number: releasingRow('pn-1') })
+    const client = makeTestQueryClient()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    const { result } = renderRelease(client)
+    result.current.mutate({ orgId: 'org-1', id: 'pn-1' })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.phoneNumbers.orgList('org-1') })
+  })
+
   it('surfaces the server’s own refusal message', async () => {
     jsonFetch.mockRejectedValue(
       new ApiError('Make a different number your caller ID first, then release this one.', 409),

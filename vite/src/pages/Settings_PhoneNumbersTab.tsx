@@ -4,6 +4,8 @@ import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useGetNumbers } from '@/hooks/phoneNumbers'
 import type { PhoneNumber } from '@/hooks/phoneNumbers'
 import { useSetUrlParams, useUrlInt, useUrlString } from '@/hooks/urlState'
@@ -27,7 +29,7 @@ const COLUMNS: { label: string; sort: SortColumn | null; className?: string }[] 
   { label: 'Number', sort: 'e164' },
   { label: 'Status', sort: 'status', className: 'w-40' },
   { label: 'Bought on', sort: 'createdAt', className: 'w-32' },
-  { label: 'Call from', sort: null, className: 'w-48' },
+  { label: 'Primary', sort: null, className: 'w-36' },
 ]
 
 function compareNumbers(a: PhoneNumber, b: PhoneNumber, column: SortColumn): number {
@@ -61,6 +63,14 @@ export function Settings_PhoneNumbersTab() {
   const numbersQuery = useGetNumbers(orgId)
 
   const [buyOpen, setBuyOpen] = useState(false)
+  const [myNumbersFilter, setMyNumbersFilter] = useState({ orgId, isAdmin, value: !isAdmin })
+  // A member can switch organizations without this page unmounting. A filter
+  // choice belongs to the current org and role, so a changed context starts at
+  // its safe default without an effect that schedules a second render.
+  const myNumbersOnly =
+    myNumbersFilter.orgId === orgId && myNumbersFilter.isAdmin === isAdmin
+      ? myNumbersFilter.value
+      : !isAdmin
 
   const setUrlParams = useSetUrlParams()
   const [search] = useUrlString('q', '')
@@ -78,6 +88,7 @@ export function Settings_PhoneNumbersTab() {
     : 'createdAt'
   const sortDir = dir === 'asc' ? 'asc' : 'desc'
   const hasSearch = search.trim() !== ''
+  const showMyNumbers = !isAdmin || myNumbersOnly
 
   const filtered = hasSearch
     ? numbers.filter((number) => number.e164.includes(search.trim()))
@@ -108,7 +119,27 @@ export function Settings_PhoneNumbersTab() {
         )}
       </div>
 
-      {numbers.length > 0 && (
+      <div className="flex items-center gap-2">
+        <label htmlFor="my-numbers-only" className="text-sm font-medium">
+          Show only my numbers
+        </label>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span>
+              <Switch
+                id="my-numbers-only"
+                aria-label="Show only my numbers"
+                checked={myNumbersOnly}
+                disabled={!isAdmin}
+                onCheckedChange={(value) => setMyNumbersFilter({ orgId, isAdmin, value })}
+              />
+            </span>
+          </TooltipTrigger>
+          {!isAdmin && <TooltipContent>You must be an admin to do that.</TooltipContent>}
+        </Tooltip>
+      </div>
+
+      {showMyNumbers && numbers.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-56 flex-1">
             <Search
@@ -134,7 +165,7 @@ export function Settings_PhoneNumbersTab() {
         </div>
       )}
 
-      {numbersQuery.isPending && (
+      {showMyNumbers && numbersQuery.isPending && (
         <div className="flex flex-col gap-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
@@ -142,7 +173,7 @@ export function Settings_PhoneNumbersTab() {
         </div>
       )}
 
-      {numbersQuery.isError && (
+      {showMyNumbers && numbersQuery.isError && (
         <div className="flex items-center gap-3 rounded-md border border-border p-3">
           <p className="text-sm text-destructive">Could not load your numbers.</p>
           <Button variant="secondary" size="sm" onClick={() => void numbersQuery.refetch()}>
@@ -151,7 +182,7 @@ export function Settings_PhoneNumbersTab() {
         </div>
       )}
 
-      {data && numbers.length === 0 && (
+      {showMyNumbers && data && numbers.length === 0 && (
         <div className="flex flex-col items-center gap-3 rounded-md border border-border py-12 text-center">
           <p className="text-base font-semibold">You need a number to call out.</p>
           <Button size="sm" onClick={() => setBuyOpen(true)}>
@@ -160,12 +191,12 @@ export function Settings_PhoneNumbersTab() {
         </div>
       )}
 
-      {data && numbers.length > 0 && (
+      {showMyNumbers && data && numbers.length > 0 && (
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full">
             <caption className="sr-only">Phone numbers owned by {org.name}</caption>
             <thead>
-              <tr className="border-b border-border bg-muted/60">
+              <tr className="border-b border-border bg-surface">
                 {COLUMNS.map((column) => (
                   <th
                     key={column.label}
@@ -200,7 +231,7 @@ export function Settings_PhoneNumbersTab() {
                 </th>
               </tr>
             </thead>
-            <tbody role="radiogroup" aria-label="Number to call from">
+            <tbody>
               {pageRows.map((number) => (
                 <Settings_PhoneNumbers_Row
                   key={number.id}
@@ -228,7 +259,7 @@ export function Settings_PhoneNumbersTab() {
         </div>
       )}
 
-      {total > PAGE_SIZE && (
+      {showMyNumbers && total > PAGE_SIZE && (
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs tabular-nums text-muted-foreground">
             Page {page} of {lastPage}
@@ -256,7 +287,7 @@ export function Settings_PhoneNumbersTab() {
 
       <Settings_PhoneNumbers_BuyDialog orgId={orgId} open={buyOpen} onOpenChange={setBuyOpen} />
 
-      {isAdmin && <Settings_PhoneNumbers_OrgTable orgId={orgId} />}
+      {isAdmin && !showMyNumbers && <Settings_PhoneNumbers_OrgTable orgId={orgId} />}
     </section>
   )
 }
