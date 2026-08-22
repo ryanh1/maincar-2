@@ -8,6 +8,9 @@ interface GridColors {
   cellText: string
   mutedText: string
   accent: string
+  activeCallAccent: string
+  activeCallTint: string
+  recentCallTint: string
 }
 
 const FALLBACK: GridColors = {
@@ -18,6 +21,9 @@ const FALLBACK: GridColors = {
   cellText: '#0f172a',
   mutedText: '#64748b',
   accent: '#4f46e5',
+  activeCallAccent: '#0284c7',
+  activeCallTint: '#e0f2fe',
+  recentCallTint: '#f0f9ff',
 }
 
 function readGridColors(): GridColors {
@@ -32,6 +38,9 @@ function readGridColors(): GridColors {
     cellText: read('--foreground', FALLBACK.cellText),
     mutedText: read('--muted-foreground', FALLBACK.mutedText),
     accent: read('--primary', FALLBACK.accent),
+    activeCallAccent: read('--status-active', FALLBACK.activeCallAccent),
+    activeCallTint: read('--status-active-tint', FALLBACK.activeCallTint),
+    recentCallTint: read('--status-active-faded-tint', FALLBACK.recentCallTint),
   }
 }
 

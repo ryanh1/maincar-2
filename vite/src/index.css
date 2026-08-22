@@ -115,6 +115,8 @@
   --sidebar-ring: var(--ring);
 
   --status-active: #0284c7; /* sky-600 — in progress, neutral */
+  --status-active-tint: #e0f2fe;
+  --status-active-faded-tint: #f0f9ff;
   --status-pending: var(--primary); /* the actionable state — brand indigo */
   --status-attention: #d97706; /* amber-600 — attention, not error */
   --status-success: #16a34a; /* green-600 */
@@ -162,6 +164,8 @@
   --sidebar-ring: var(--ring);
 
   --status-active: #38bdf8; /* sky-400 */
+  --status-active-tint: #0c2434;
+  --status-active-faded-tint: #0a1824;
   --status-pending: var(--primary);
   --status-attention: #f59e0b; /* amber-500 */
   --status-success: #22c55e; /* green-500 */

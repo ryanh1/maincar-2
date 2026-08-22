@@ -5,11 +5,11 @@
  * loading/erroring/empty), not about canvas rendering. Real rendering and 60fps
  * scroll are verified in the browser (CLAUDE.md → Verification before finishing).
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
-import { renderWithProviders } from '@/test/utils'
+import { makeTestQueryClient, renderWithProviders, withProviders } from '@/test/utils'
 import type { AttributeDef } from '@/lib/crmTypes'
 import { RecordGrid } from './RecordGrid'
 import { createViewConfig } from './viewConfig'
@@ -21,7 +21,10 @@ const useUpdateRecordValue = vi.hoisted(() => vi.fn(() => ({ mutateAsync })))
 const createMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 const useCreateRecord = vi.hoisted(() => vi.fn(() => ({ mutateAsync: createMutateAsync, isPending: false })))
 const dataEditorScrollTo = vi.hoisted(() => vi.fn())
+const useDialerMock = vi.hoisted(() => vi.fn())
 vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetActivity, useUpdateRecordValue, useCreateRecord }))
+
+vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }))
 
 vi.mock('@/providers/useAuth', () => ({
   useAuth: () => ({ user: { timeZone: 'America/New_York' } }),
@@ -110,12 +113,60 @@ beforeEach(() => {
   createMutateAsync.mockReset()
   createMutateAsync.mockResolvedValue(undefined)
   useCreateRecord.mockReturnValue({ mutateAsync: createMutateAsync, isPending: false })
+  useDialerMock.mockReturnValue({ activeCall: null, dialing: false })
   dataEditorProps.current = null
   dataEditorScrollTo.mockReset()
   dataEditorProps.frozenRows = null
 })
 
+afterEach(() => vi.useRealTimers())
+
 describe('RecordGrid', () => {
+  it('highlights and scrolls to the live Call record without changing selection', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'call-1', firstName: 'Ada' }, { id: 'call-2', firstName: 'Grace' }], totalCount: 2,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    useDialerMock.mockReturnValue({ activeCall: { callId: 'call-2' }, dialing: true })
+
+    renderWithProviders(
+      <RecordGrid
+        orgId="org-1"
+        object={{ ...TEST_OBJECT, slug: 'call', name: 'Call', namePlural: 'Calls' }}
+        attributes={ATTRIBUTES}
+      />,
+    )
+
+    const props = dataEditorProps.current!
+    const getRowThemeOverride = props.getRowThemeOverride as (row: number) => Record<string, unknown> | undefined
+    expect(getRowThemeOverride(0)).toBeUndefined()
+    expect(getRowThemeOverride(1)).toEqual(expect.objectContaining({ bgCell: expect.any(String), accentColor: expect.any(String) }))
+    expect(props.gridSelection).toEqual({ current: undefined, columns: { items: [] }, rows: { items: [] } })
+    expect(dataEditorScrollTo).toHaveBeenCalledWith(0, 1, 'both', 0, 0, expect.objectContaining({ behavior: 'smooth' }))
+  })
+
+  it('keeps a just-called marker briefly after the active call ends', async () => {
+    vi.useFakeTimers()
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'call-1', firstName: 'Ada' }], totalCount: 1,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    useDialerMock.mockReturnValue({ activeCall: { callId: 'call-1' }, dialing: true })
+    const client = makeTestQueryClient()
+    const view = renderWithProviders(<RecordGrid orgId="org-1" object={{ ...TEST_OBJECT, slug: 'call' }} attributes={ATTRIBUTES} />, { client })
+    useDialerMock.mockReturnValue({ activeCall: { callId: 'call-1' }, dialing: false })
+    act(() => {
+      view.rerender(withProviders(<RecordGrid orgId="org-1" object={{ ...TEST_OBJECT, slug: 'call' }} attributes={ATTRIBUTES} />, { client }))
+    })
+    await act(async () => { await Promise.resolve() })
+
+    const getRowThemeOverride = dataEditorProps.current!.getRowThemeOverride as (row: number) => Record<string, unknown> | undefined
+    expect(getRowThemeOverride(0)).toEqual(expect.objectContaining({ bgCell: expect.any(String) }))
+    act(() => vi.advanceTimersByTime(5_000))
+    const getExpiredRowThemeOverride = dataEditorProps.current!.getRowThemeOverride as (row: number) => Record<string, unknown> | undefined
+    expect(getExpiredRowThemeOverride(0)).toBeUndefined()
+  })
+
   it('does not render a create action when the server says grid creation is unsupported', () => {
     useRecordWindow.mockReturnValue({
       rows: [], totalCount: 0, isPending: false, isError: false, hasNextPage: false,
