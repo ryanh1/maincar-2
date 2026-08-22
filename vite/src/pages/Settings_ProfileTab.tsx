@@ -39,30 +39,32 @@ export function Settings_ProfileTab() {
       <h2 className="text-base font-semibold">Your profile</h2>
 
       <form onSubmit={onSubmit} className="mt-4 flex max-w-sm flex-col gap-4">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="firstName">
-            First name <RequiredAsterisk />
-          </Label>
-          <Input
-            id="firstName"
-            required
-            autoComplete="given-name"
-            value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
-          />
-        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="firstName">
+              First name <RequiredAsterisk />
+            </Label>
+            <Input
+              id="firstName"
+              required
+              autoComplete="given-name"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+            />
+          </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="lastName">
-            Last name <RequiredAsterisk />
-          </Label>
-          <Input
-            id="lastName"
-            required
-            autoComplete="family-name"
-            value={lastName}
-            onChange={(e) => setLastName(e.target.value)}
-          />
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="lastName">
+              Last name <RequiredAsterisk />
+            </Label>
+            <Input
+              id="lastName"
+              required
+              autoComplete="family-name"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col gap-1.5">

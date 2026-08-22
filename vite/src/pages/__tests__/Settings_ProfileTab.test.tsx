@@ -40,6 +40,13 @@ beforeEach(() => {
 })
 
 describe('Settings_ProfileTab', () => {
+  it('keeps name fields in one responsive row', () => {
+    renderWithProviders(<Settings_ProfileTab />)
+
+    const nameFields = screen.getByLabelText(/First name/).parentElement?.parentElement
+    expect(nameFields).toHaveClass('grid', 'grid-cols-1', 'sm:grid-cols-2')
+  })
+
   it('fills the form from the signed-in user', () => {
     renderWithProviders(<Settings_ProfileTab />)
 
