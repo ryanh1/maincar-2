@@ -56,18 +56,16 @@ describe('GridViewToolbar', () => {
       isPending: false,
     })
   })
-  it('writes the same view config when choosing a sort from the toolbar', async () => {
-    const user = userEvent.setup()
-    const onConfigChange = vi.fn()
+  it('keeps sort and column filtering in the header while exposing compact labeled toolbar controls', () => {
     const config = createViewConfig(attributes)
 
-    renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={onConfigChange} />)
+    renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={vi.fn()} />)
 
-    await user.click(screen.getByRole('button', { name: 'Sort' }))
-    await user.click(await screen.findByText('Status: Sort A→Z'))
-
-    const update = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
-    expect(update(config).sorts).toEqual([{ attributeId: 'status', direction: 'asc' }])
+    expect(screen.queryByRole('button', { name: 'Sort' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Filter' })).not.toBeInTheDocument()
+    for (const name of ['Fields', 'Group', 'Row height', 'Freeze']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument()
+    }
   })
 
   it('writes field visibility, grouping, row height, and grid lines through the shared config', async () => {
@@ -113,15 +111,13 @@ describe('GridViewToolbar', () => {
       />,
     )
 
-    await user.click(screen.getByRole('button', { name: 'Filter' }))
-    await user.click(await screen.findByText('Team'))
+    await user.click(screen.getByRole('button', { name: 'Team' }))
     expect(await screen.findByText('Specific teams')).toBeInTheDocument()
     expect(await screen.findByText('Teams led by')).toBeInTheDocument()
 
     unmount()
     renderWithProviders(<GridViewToolbar orgId="org-1" attributes={attributes} config={config} onConfigChange={vi.fn()} teamScopeSupported={false} />)
-    await user.click(screen.getByRole('button', { name: 'Filter' }))
-    expect(screen.queryByText('Team')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Team' })).not.toBeInTheDocument()
   })
 
   it('writes selected teams and direct team leads into the reusable scope without expanding a roster', async () => {
@@ -131,8 +127,7 @@ describe('GridViewToolbar', () => {
 
     renderWithProviders(<GridViewToolbar orgId="org-1" attributes={attributes} config={config} onConfigChange={onConfigChange} teamScopeSupported />)
 
-    await user.click(screen.getByRole('button', { name: 'Filter' }))
-    await user.click(await screen.findByText('Team'))
+    await user.click(screen.getByRole('button', { name: 'Team' }))
     const revenue = await screen.findByRole('menuitemcheckbox', { name: 'Revenue' })
     revenue.focus()
     await user.keyboard(' ')

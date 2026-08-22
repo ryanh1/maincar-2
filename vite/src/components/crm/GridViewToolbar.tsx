@@ -1,4 +1,4 @@
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Columns3Cog, PanelsTopLeft, Rows3, SlidersHorizontal, UsersRound } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import type { AttributeDef } from '@/lib/crmTypes'
 import { memberDisplayName, useGetMembers, useGetTeams } from '@/hooks/orgs'
-import type { TeamScope, ViewConfig, ViewFilterCondition } from './viewConfig'
+import type { TeamScope, ViewConfig } from './viewConfig'
 
 interface GridViewToolbarProps {
   orgId?: string
@@ -27,13 +27,6 @@ interface GridViewToolbarProps {
   createLabel?: string
   onCreate?: () => void
   createDisabled?: boolean
-}
-
-function selectedValues(config: ViewConfig, attributeId: string): string[] {
-  const filter = config.filterTree
-  return filter?.type === 'condition' && filter.attributeId === attributeId && filter.operator === 'in' && Array.isArray(filter.value)
-    ? filter.value.filter((value): value is string => typeof value === 'string')
-    : []
 }
 
 function scopeLabel(scope: TeamScope | undefined, teams: Array<{ id: string; name: string }>, members: Array<{ userId: string; firstName: string | null; lastName: string | null; email: string }>): string | null {
@@ -77,9 +70,7 @@ function TeamScopeMenu({ orgId, config, onConfigChange }: TeamScopeControlProps)
   }
 
   return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger>Team</DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="max-h-80 overflow-y-auto">
+    <>
         <DropdownMenuLabel>Specific teams</DropdownMenuLabel>
         {teams.map((team) => (
           <DropdownMenuCheckboxItem key={team.id} checked={config.teamScope?.teamIds?.includes(team.id) ?? false} onSelect={(event) => event.preventDefault()} onCheckedChange={() => toggleTeamScopeId('teamIds', team.id)}>
@@ -101,8 +92,7 @@ function TeamScopeMenu({ orgId, config, onConfigChange }: TeamScopeControlProps)
             <DropdownMenuItem onSelect={() => onConfigChange((current) => ({ ...current, teamScope: undefined }))}>Clear Team filter</DropdownMenuItem>
           </>
         )}
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
+    </>
   )
 }
 
@@ -115,12 +105,6 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
 export function GridViewToolbar({ orgId, attributes, config, onConfigChange, teamScopeSupported = false, createLabel, onCreate, createDisabled = false }: GridViewToolbarProps) {
-  const activeSort = config.sorts[0]
-  const activeSortAttribute = attributes.find((attribute) => attribute.id === activeSort?.attributeId)
-  const selectableAttributes = attributes.filter(
-    (attribute) => (attribute.type === 'select' || attribute.type === 'status') && Array.isArray(attribute.optionsJson),
-  )
-
   function setColumnVisible(attributeId: string, visible: boolean) {
     onConfigChange((current) => ({
       ...current,
@@ -143,26 +127,12 @@ export function GridViewToolbar({ orgId, attributes, config, onConfigChange, tea
     onConfigChange((current) => ({ ...current, [key]: Math.max(0, Math.floor(value)) }))
   }
 
-  function setSort(attributeId: string, direction: 'asc' | 'desc') {
-    onConfigChange((current) => ({ ...current, sorts: [{ attributeId, direction }] }))
-  }
-
-  function toggleValue(attribute: AttributeDef, value: string) {
-    onConfigChange((current) => {
-      const values = selectedValues(current, attribute.id)
-      const nextValues = values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value]
-      const filterTree: ViewFilterCondition | undefined = nextValues.length
-        ? { type: 'condition', attributeId: attribute.id, operator: 'in', value: nextValues }
-        : undefined
-      return { ...current, ...(filterTree ? { filterTree } : { filterTree: undefined }) }
-    })
-  }
-
   return (
-    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-surface px-4">
+    <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-surface px-3">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm">
+            <Columns3Cog size={16} />
             Fields
             <ChevronDown size={16} />
           </Button>
@@ -205,78 +175,27 @@ export function GridViewToolbar({ orgId, attributes, config, onConfigChange, tea
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="secondary" size="sm">
-            Sort{activeSortAttribute ? `: ${activeSortAttribute.name} ${activeSort?.direction === 'asc' ? 'A→Z' : 'Z→A'}` : ''}
-            <ChevronDown size={16} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuLabel>Sort by field</DropdownMenuLabel>
-          {attributes.flatMap((attribute) => [
-            <DropdownMenuItem key={`${attribute.id}-asc`} onSelect={() => setSort(attribute.id, 'asc')}>
-              {attribute.name}: Sort A→Z
-            </DropdownMenuItem>,
-            <DropdownMenuItem key={`${attribute.id}-desc`} onSelect={() => setSort(attribute.id, 'desc')}>
-              {attribute.name}: Sort Z→A
-            </DropdownMenuItem>,
-          ])}
-          {activeSort && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => onConfigChange((current) => ({ ...current, sorts: [] }))}>
-                Clear sort
-              </DropdownMenuItem>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="secondary" size="sm">
-            Filter{config.filterTree || config.teamScope ? ` · ${(config.filterTree ? 1 : 0) + (config.teamScope ? 1 : 0)}` : ''}
-            <ChevronDown size={16} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuLabel>Filter by values</DropdownMenuLabel>
-          {selectableAttributes.map((attribute) => (
-            <DropdownMenuSub key={attribute.id}>
-              <DropdownMenuSubTrigger>{attribute.name}</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {(attribute.optionsJson as Array<{ value: string; label: string }>).map((option) => (
-                  <DropdownMenuCheckboxItem
-                    key={option.value}
-                    checked={selectedValues(config, attribute.id).includes(option.value)}
-                    onSelect={(event) => event.preventDefault()}
-                    onCheckedChange={() => toggleValue(attribute, option.value)}
-                  >
-                    {option.label}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          ))}
-          {teamScopeSupported && orgId && <TeamScopeMenu orgId={orgId} config={config} onConfigChange={onConfigChange} />}
-          {selectableAttributes.length === 0 && <DropdownMenuItem disabled>No selectable fields</DropdownMenuItem>}
-          {config.filterTree && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => onConfigChange((current) => ({ ...current, filterTree: undefined }))}>
-                Clear filter
-              </DropdownMenuItem>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {teamScopeSupported && orgId && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="secondary" size="sm">
+              <UsersRound size={16} />
+              Team
+              <ChevronDown size={16} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <TeamScopeMenu orgId={orgId} config={config} onConfigChange={onConfigChange} />
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
 
       {teamScopeSupported && orgId && config.teamScope && <TeamScopeChip orgId={orgId} config={config} />}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm">
+            <SlidersHorizontal size={16} />
             Group{config.groupBy[0] ? ' · 1' : ''}
             <ChevronDown size={16} />
           </Button>
@@ -305,6 +224,7 @@ export function GridViewToolbar({ orgId, attributes, config, onConfigChange, tea
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm">
+            <Rows3 size={16} />
             Row height
             <ChevronDown size={16} />
           </Button>
@@ -330,6 +250,7 @@ export function GridViewToolbar({ orgId, attributes, config, onConfigChange, tea
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm">
+            <PanelsTopLeft size={16} />
             Freeze
             <ChevronDown size={16} />
           </Button>
@@ -361,7 +282,6 @@ export function GridViewToolbar({ orgId, attributes, config, onConfigChange, tea
       </DropdownMenu>
 
       <div className="ml-auto flex items-center gap-2">
-        {activeSortAttribute && <span className="text-xs tabular-nums text-text-muted">Sorted by {activeSortAttribute.name}</span>}
         {createLabel && onCreate && <Button type="button" size="sm" disabled={createDisabled} onClick={onCreate}>{createLabel}</Button>}
       </div>
     </div>

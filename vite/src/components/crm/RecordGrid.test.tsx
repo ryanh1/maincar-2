@@ -768,7 +768,7 @@ describe('RecordGrid', () => {
     })
   })
 
-  it('updates the shared view config when a column header is clicked', () => {
+  it('opens a column-owned filter menu instead of changing sort on a header click', () => {
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
       totalCount: 1,
@@ -792,10 +792,16 @@ describe('RecordGrid', () => {
       />,
     )
 
-    const onHeaderClicked = dataEditorProps.current!.onHeaderClicked as (column: number) => void
-    onHeaderClicked(0)
+    const onHeaderMenuClick = dataEditorProps.current!.onHeaderMenuClick as (
+      column: number,
+      bounds: { x: number; y: number; width: number; height: number },
+    ) => void
+    act(() => {
+      onHeaderMenuClick(0, { x: 16, y: 16, width: 220, height: 32 })
+    })
 
-    const update = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
-    expect(update(config).sorts).toEqual([{ attributeId: 'firstName', direction: 'asc' }])
+    expect((dataEditorProps.current!.columns as { hasMenu?: boolean }[])[0]?.hasMenu).toBe(true)
+    expect(screen.getByText('Filter First name')).toBeInTheDocument()
+    expect(onViewConfigChange).not.toHaveBeenCalled()
   })
 })

@@ -27,6 +27,8 @@ import { buildGridCell, coerceForType, FLAGGED_THEME, parseOptions } from './cel
 import { chipCellRenderer, type ChipCellData } from './chipCell'
 import { fieldEditorCellRenderer, type FieldEditorCellData } from './fieldEditorCell'
 import { GridViewToolbar } from './GridViewToolbar'
+import { GridColumnFilterMenu } from './GridColumnFilterMenu'
+import type { GridFilterValue, GridMenuAnchor } from './gridFilterMenu'
 import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { RecordGridCreateRow } from './RecordGrid_CreateRow'
@@ -93,6 +95,34 @@ interface RecordGridProps {
   onViewConfigChange?: (update: (current: ViewConfig) => ViewConfig) => void
 }
 
+const HEADER_MENU_UNSUPPORTED_TYPES = new Set(['multiselect', 'record_reference', 'user_reference', 'location', 'ai'])
+
+function headerMenuSupported(attribute: AttributeDef): boolean {
+  return !attribute.isMulti && !HEADER_MENU_UNSUPPORTED_TYPES.has(attribute.type)
+}
+
+function headerMenuValues(attribute: AttributeDef, rows: RecordRow[], timeZone: string | null | undefined): GridFilterValue[] {
+  if (Array.isArray(attribute.optionsJson)) {
+    return attribute.optionsJson
+      .filter((option): option is { value: string; label: string; isArchived?: boolean } =>
+        typeof option === 'object' && option !== null && typeof (option as { value?: unknown }).value === 'string' && typeof (option as { label?: unknown }).label === 'string',
+      )
+      .filter((option) => !option.isArchived)
+      .map((option) => ({ value: option.value, label: option.label }))
+  }
+
+  const values = new Map<string, string>()
+  for (const row of rows) {
+    const raw = row[attribute.slug]
+    if (raw === undefined || raw === null || raw === '') continue
+    const value = String(raw)
+    values.set(value, formatCellValue(raw, attribute.type, timeZone, typeof row.currency === 'string' ? row.currency : undefined))
+  }
+  return [...values.entries()]
+    .map(([value, label]) => ({ value, label }))
+    .sort((left, right) => left.label.localeCompare(right.label))
+}
+
 // Mirrors KeyboardSystem.tsx's guards (not imported from there: those two are
 // local to that file, and duplicating five lines beats coupling this grid's
 // row-scoped keys to the global command registry).
@@ -139,6 +169,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const fallbackConfig = useMemo(() => createViewConfig(attributes), [attributes])
   const config = viewConfig ?? fallbackConfig
   const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
+  const [headerMenu, setHeaderMenu] = useState<{ attribute: AttributeDef; anchor: GridMenuAnchor } | null>(null)
 
   const visibleColumns = useMemo(() => {
     const configured = new Map(config.columns.map((column) => [column.attributeId, column]))
@@ -153,6 +184,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         id: attr.slug,
         title: attr.name,
         width: config.columnWidths[attr.id] ?? (index === 0 ? LEADING_COLUMN_WIDTH : DEFAULT_COLUMN_WIDTH),
+        hasMenu: headerMenuSupported(attr),
       })),
     [visibleColumns, config.columnWidths],
   )
@@ -354,19 +386,26 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     [displayRows.length, hasNextPage, isFetchingNextPage, fetchNextPage],
   )
 
-  const onHeaderClicked = useCallback(
-    (columnIndex: number) => {
+  const onHeaderMenuClick = useCallback(
+    (columnIndex: number, bounds: Rectangle) => {
       const attribute = visibleColumns[columnIndex]
-      if (!attribute || !onViewConfigChange) return
-
-      onViewConfigChange((current) => {
-        const active = current.sorts[0]
-        const direction =
-          active?.attributeId !== attribute.id ? 'asc' : active.direction === 'asc' ? 'desc' : undefined
-        return { ...current, sorts: direction ? [{ attributeId: attribute.id, direction }] : [] }
+      if (!attribute || !onViewConfigChange || !headerMenuSupported(attribute)) return
+      setHeaderMenu({
+        attribute,
+        anchor: {
+          x: bounds.x - window.scrollX,
+          y: bounds.y - window.scrollY,
+          width: bounds.width,
+          height: bounds.height,
+        },
       })
     },
     [visibleColumns, onViewConfigChange],
+  )
+
+  const activeHeaderMenuValues = useMemo(
+    () => headerMenu ? headerMenuValues(headerMenu.attribute, rows, user?.timeZone) : [],
+    [headerMenu, rows, user?.timeZone],
   )
 
   const onColumnMoved = useCallback(
@@ -736,7 +775,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         smoothScrollX
         smoothScrollY
         onVisibleRegionChanged={onGridVisibleRegionChanged}
-        onHeaderClicked={onHeaderClicked}
+        onHeaderMenuClick={onHeaderMenuClick}
         onCellClicked={onCellClicked}
         gridSelection={finderSelection ?? gridSelection}
         onGridSelectionChange={setGridSelection}
@@ -745,6 +784,20 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         width="100%"
         height="100%"
         />
+
+        {headerMenu && onViewConfigChange && (
+          <GridColumnFilterMenu
+            attribute={headerMenu.attribute}
+            anchor={headerMenu.anchor}
+            config={config}
+            onConfigChange={onViewConfigChange}
+            onOpenChange={(open) => {
+              if (!open) setHeaderMenu(null)
+            }}
+            open
+            values={activeHeaderMenuValues}
+          />
+        )}
 
         {findOpen && (
           <div className="absolute top-2 right-2 z-20 flex w-80 flex-col gap-2 rounded-md border border-border bg-bg p-2 shadow-md">
