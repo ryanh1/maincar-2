@@ -33,6 +33,13 @@ const CONFIG = {
   baseObject: 'deal',
   rows: [{ field: 'stage' }],
   values: [{ field: 'amountMinor', aggregation: 'sum' }],
+  timeZone: { mode: 'pinned', displayZone: 'UTC' },
+}
+
+const VIEWER_DAY_CONFIG = {
+  ...CONFIG,
+  timeZone: { mode: 'viewer' },
+  timeBucket: { field: 'createdAt', grain: 'day' },
 }
 
 function authorization(firebaseUid: string): string {
@@ -89,5 +96,53 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
     // of the implementation's grouped output.
     expect(response.body.report.rows.reduce((sum: bigint, row: { amountMinor: string }) => sum + BigInt(row.amountMinor), 0n))
       .toBe(12500n)
+  })
+
+  it('re-buckets the same report for New York and London viewers', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const { pipeline, discovery } = await createPipelineAndStages(org.orgId)
+    await prisma.user.update({ where: { id: org.adminUserId }, data: { timeZone: 'America/New_York' } })
+    await prisma.deal.create({
+      data: {
+        orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id,
+        name: 'Zone boundary', amountMinor: 1200n, createdAt: new Date('2026-03-09T03:30:00.000Z'),
+      },
+    })
+
+    const newYork = await request(app)
+      .post(`/api/orgs/${org.orgId}/reports/run`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({ config: VIEWER_DAY_CONFIG })
+
+    await prisma.user.update({ where: { id: org.adminUserId }, data: { timeZone: 'Europe/London' } })
+    const london = await request(app)
+      .post(`/api/orgs/${org.orgId}/reports/run`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({ config: VIEWER_DAY_CONFIG })
+
+    expect(newYork.body.report.rows).toMatchObject([{ createdDay: '2026-03-08', amountMinor: '1200' }])
+    expect(london.body.report.rows).toMatchObject([{ createdDay: '2026-03-09', amountMinor: '1200' }])
+  })
+
+  it('keeps every DST-week instant in its one correct New York local-day bucket', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const { pipeline, discovery } = await createPipelineAndStages(org.orgId)
+    await prisma.user.update({ where: { id: org.adminUserId }, data: { timeZone: 'America/New_York' } })
+    await prisma.deal.createMany({
+      data: [
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Before spring forward', amountMinor: 1000n, createdAt: new Date('2026-03-08T06:30:00.000Z') },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'After spring forward', amountMinor: 2000n, createdAt: new Date('2026-03-08T07:30:00.000Z') },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Late local evening', amountMinor: 4000n, createdAt: new Date('2026-03-09T03:30:00.000Z') },
+      ],
+    })
+
+    const response = await request(app)
+      .post(`/api/orgs/${org.orgId}/reports/run`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({ config: VIEWER_DAY_CONFIG })
+
+    expect(response.status).toBe(200)
+    expect(response.body.report.rows).toMatchObject([{ createdDay: '2026-03-08', amountMinor: '7000' }])
+    expect(response.body.report.rows).toHaveLength(1)
   })
 })
