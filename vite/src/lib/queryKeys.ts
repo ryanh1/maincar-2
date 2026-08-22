@@ -150,4 +150,12 @@ export const queryKeys = {
     detail: (orgId: string, reportId: string) => ['reports', orgId, 'detail', reportId] as const,
     run: (orgId: string, reportId: string) => ['reports', orgId, 'run', reportId] as const,
   },
+  accountTimeline: {
+    all: (orgId: string) => ['accountTimeline', orgId] as const,
+    list: (
+      orgId: string,
+      root: { type: 'company' | 'deal'; id: string },
+      params: Record<string, unknown> = {},
+    ) => ['accountTimeline', orgId, root, params] as const,
+  },
 } as const
