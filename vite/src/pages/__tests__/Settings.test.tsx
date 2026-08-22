@@ -49,6 +49,7 @@ describe('Settings', () => {
       'Members',
       'Phone numbers',
       'Email templates',
+      'Signatures',
       'Integrations',
       'Devices',
     ])
