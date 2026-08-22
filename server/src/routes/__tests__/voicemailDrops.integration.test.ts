@@ -3,9 +3,18 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
-const { verifyTokenMock, deleteObjectMock } = vi.hoisted(() => ({
+const {
+  verifyTokenMock,
+  deleteObjectMock,
+  putObjectBytesMock,
+  queueTranscodeVoicemailDropMock,
+  queueTranscribeVoicemailDropMock,
+} = vi.hoisted(() => ({
   verifyTokenMock: vi.fn(),
   deleteObjectMock: vi.fn(),
+  putObjectBytesMock: vi.fn(),
+  queueTranscodeVoicemailDropMock: vi.fn(),
+  queueTranscribeVoicemailDropMock: vi.fn(),
 }))
 
 vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
@@ -13,7 +22,16 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   setFirebaseUserDisabled: vi.fn(),
   deleteFirebaseUser: vi.fn(),
 }))
-vi.mock('../../../dependencies/s3.js', () => ({ deleteObject: deleteObjectMock }))
+vi.mock('../../../dependencies/s3.js', () => ({
+  deleteObject: deleteObjectMock,
+  putObjectBytes: putObjectBytesMock,
+}))
+vi.mock('../../jobs/transcodeVoicemailDrop.js', () => ({
+  queueTranscodeVoicemailDrop: queueTranscodeVoicemailDropMock,
+}))
+vi.mock('../../jobs/transcribeVoicemailDrop.js', () => ({
+  queueTranscribeVoicemailDrop: queueTranscribeVoicemailDropMock,
+}))
 
 vi.mock('../../db.js', async () => {
   const { inject } = await import('vitest')
@@ -56,6 +74,9 @@ async function createDrop(
 beforeAll(() => {
   verifyTokenMock.mockImplementation(async (idToken: string) => ({ uid: idToken }))
   deleteObjectMock.mockResolvedValue(undefined)
+  putObjectBytesMock.mockResolvedValue(undefined)
+  queueTranscodeVoicemailDropMock.mockResolvedValue('transcode-job')
+  queueTranscribeVoicemailDropMock.mockResolvedValue('transcribe-job')
 })
 
 afterAll(async () => {
@@ -111,5 +132,56 @@ describe('DELETE /api/orgs/:orgId/voicemail-drops/:id (integration, real Postgre
     const remaining = await prisma.voicemailDrop.findMany({ where: { orgId: org.orgId } })
     expect(remaining).toHaveLength(1)
     expect(remaining[0]!.isDefault).toBe(true)
+  })
+})
+
+describe('PATCH /api/orgs/:orgId/voicemail-drops/:id (integration, real Postgres)', () => {
+  it('renames a drop and atomically makes it the organization default', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const oldDefault = await createDrop(org.orgId, 'Original default', true, new Date('2026-08-20T12:00:00.000Z'))
+    const promoted = await createDrop(org.orgId, 'Alternative', false, new Date('2026-08-21T12:00:00.000Z'))
+
+    const response = await request(app)
+      .patch(`/api/orgs/${org.orgId}/voicemail-drops/${promoted.id}`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ name: 'New default', isDefault: true })
+
+    expect(response.status).toBe(200)
+    expect(response.body.drop).toMatchObject({ id: promoted.id, name: 'New default', isDefault: true })
+    expect(await prisma.voicemailDrop.findUniqueOrThrow({ where: { id: oldDefault.id } })).toMatchObject({ isDefault: false })
+    expect(await prisma.voicemailDrop.findUniqueOrThrow({ where: { id: promoted.id } })).toMatchObject({
+      name: 'New default',
+      isDefault: true,
+    })
+  })
+
+  it('re-records a drop from WebM and queues its processing jobs', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const drop = await createDrop(org.orgId, 'Original', true, new Date('2026-08-20T12:00:00.000Z'))
+    await prisma.voicemailDrop.updateMany({
+      where: { id: drop.id, orgId: org.orgId },
+      data: { transcript: 'Old transcript', transcriptStatus: 'done' },
+    })
+    const audio = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x00])
+
+    const response = await request(app)
+      .patch(`/api/orgs/${org.orgId}/voicemail-drops/${drop.id}`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .attach('audio', audio, { contentType: 'audio/webm', filename: 'replacement.webm' })
+
+    expect(response.status).toBe(200)
+    expect(putObjectBytesMock).toHaveBeenCalledWith({
+      key: `maincar-voicemail-drops/${org.orgId}/${drop.id}.webm`,
+      body: audio,
+      contentType: 'audio/webm',
+    })
+    expect(queueTranscodeVoicemailDropMock).toHaveBeenCalledWith({ orgId: org.orgId, voicemailDropId: drop.id })
+    expect(queueTranscribeVoicemailDropMock).toHaveBeenCalledWith(drop.id)
+    expect(await prisma.voicemailDrop.findUniqueOrThrow({ where: { id: drop.id } })).toMatchObject({
+      audioUrl: `maincar-voicemail-drops/${org.orgId}/${drop.id}.webm`,
+      duration: 0,
+      transcript: null,
+      transcriptStatus: 'pending',
+    })
   })
 })

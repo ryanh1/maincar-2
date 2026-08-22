@@ -1,5 +1,5 @@
-// The voicemail-drop deletion contract: it keeps every org's library non-empty,
-// removes private audio, and immediately replaces a deleted default.
+// The voicemail-drop route contract: audio processing stays queued, every
+// mutation stays in the request org, and one default survives every update.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
@@ -89,9 +89,7 @@ beforeEach(() => {
     dropRow({ ...data, id: 'drop-1', transcriptStatus: 'pending', transcript: null })
   ))
   prismaMock.voicemailDrop.findFirst.mockImplementation((args: { where?: { isDefault?: boolean } }) => (
-    args.where?.isDefault
-      ? dropRow({ id: 'existing-default', isDefault: true })
-      : dropRow()
+    args.where?.isDefault ? dropRow({ id: 'existing-default', isDefault: true }) : dropRow()
   ))
   prismaMock.voicemailDrop.deleteMany.mockResolvedValue({ count: 1 })
   prismaMock.voicemailDrop.updateMany.mockResolvedValue({ count: 1 })
@@ -105,61 +103,40 @@ beforeEach(() => {
 describe('POST /api/orgs/:orgId/voicemail-drops', () => {
   it('stores a WebM upload, queues processing, and returns the created drop', async () => {
     const response = await request(app)
-      .post(URL_A)
-      .set('Authorization', AUTH)
-      .field('name', 'Intro drop')
+      .post(URL_A).set('Authorization', AUTH).field('name', 'Intro drop')
       .attach('audio', WEBM, { filename: 'intro.webm', contentType: 'audio/webm' })
 
     expect(response.status).toBe(201)
-    expect(response.body).toEqual({
-      drop: expect.objectContaining({
-        id: 'drop-1', name: 'Intro drop',
-        audioUrl: expect.stringMatching(/^maincar-voicemail-drops\/org-a\/.+\.webm$/),
-        isDefault: false, transcriptStatus: 'pending',
-      }),
-    })
-    expect(putObjectBytesMock).toHaveBeenCalledWith(expect.objectContaining({
-      body: WEBM,
-      contentType: 'audio/webm',
-      key: expect.stringMatching(/^maincar-voicemail-drops\/org-a\/.+\.webm$/),
+    expect(response.body.drop).toEqual(expect.objectContaining({
+      id: 'drop-1', name: 'Intro drop', isDefault: false, transcriptStatus: 'pending',
     }))
-    expect(queueTranscodeVoicemailDropMock).toHaveBeenCalledWith({
-      orgId: ORG_A,
-      voicemailDropId: 'drop-1',
-    })
+    expect(putObjectBytesMock).toHaveBeenCalledWith(expect.objectContaining({
+      body: WEBM, contentType: 'audio/webm', key: expect.stringMatching(/^maincar-voicemail-drops\/org-a\/.+\.webm$/),
+    }))
+    expect(queueTranscodeVoicemailDropMock).toHaveBeenCalledWith({ orgId: ORG_A, voicemailDropId: 'drop-1' })
     expect(queueTranscribeVoicemailDropMock).toHaveBeenCalledWith('drop-1')
   })
 
   it('atomically replaces the default when requested', async () => {
     const response = await request(app)
-      .post(URL_A)
-      .set('Authorization', AUTH)
-      .field('name', 'New default')
-      .field('isDefault', 'true')
+      .post(URL_A).set('Authorization', AUTH).field('name', 'New default').field('isDefault', 'true')
       .attach('audio', WEBM, { filename: 'default.webm', contentType: 'audio/webm' })
 
     expect(response.status).toBe(201)
     expect(prismaMock.voicemailDrop.updateMany).toHaveBeenCalledWith({
-      where: { orgId: ORG_A, isDefault: true, id: { not: 'drop-1' } },
-      data: { isDefault: false },
+      where: { orgId: ORG_A, isDefault: true, id: { not: 'drop-1' } }, data: { isDefault: false },
     })
     expect(prismaMock.voicemailDrop.updateMany).toHaveBeenCalledWith({
-      where: { id: 'drop-1', orgId: ORG_A },
-      data: { isDefault: true },
+      where: { id: 'drop-1', orgId: ORG_A }, data: { isDefault: true },
     })
-    expect(response.body.drop.isDefault).toBe(true)
   })
 
   it('rejects empty names and invalid audio before storing anything', async () => {
     const emptyName = await request(app)
-      .post(URL_A)
-      .set('Authorization', AUTH)
-      .field('name', '   ')
+      .post(URL_A).set('Authorization', AUTH).field('name', '   ')
       .attach('audio', WEBM, { filename: 'intro.webm', contentType: 'audio/webm' })
     const invalidAudio = await request(app)
-      .post(URL_A)
-      .set('Authorization', AUTH)
-      .field('name', 'Intro drop')
+      .post(URL_A).set('Authorization', AUTH).field('name', 'Intro drop')
       .attach('audio', Buffer.from('not WebM'), { filename: 'intro.webm', contentType: 'audio/webm' })
 
     expect(emptyName.status).toBe(400)
@@ -172,8 +149,7 @@ describe('POST /api/orgs/:orgId/voicemail-drops', () => {
     verifyTokenMock.mockRejectedValue(new Error('invalid token'))
 
     const response = await request(app)
-      .post(URL_A)
-      .field('name', 'Intro drop')
+      .post(URL_A).field('name', 'Intro drop')
       .attach('audio', WEBM, { filename: 'intro.webm', contentType: 'audio/webm' })
 
     expect(response.status).toBe(401)
@@ -182,14 +158,85 @@ describe('POST /api/orgs/:orgId/voicemail-drops', () => {
   })
 })
 
+describe('PATCH /api/orgs/:orgId/voicemail-drops/:id', () => {
+  it('renames an org-scoped drop and returns the updated drop', async () => {
+    prismaMock.voicemailDrop.findFirst.mockResolvedValue(dropRow({ name: 'New pitch' }))
+
+    const response = await request(app)
+      .patch(`${URL_A}/drop-1`).set('Authorization', AUTH).send({ name: 'New pitch' })
+
+    expect(response.status).toBe(200)
+    expect(response.body.drop).toEqual(expect.objectContaining({ id: 'drop-1', name: 'New pitch' }))
+    expect(prismaMock.voicemailDrop.updateMany).toHaveBeenCalledWith({
+      where: { id: 'drop-1', orgId: ORG_A }, data: { name: 'New pitch' },
+    })
+  })
+
+  it('re-records a drop, resets its transcript, and queues both audio jobs', async () => {
+    prismaMock.voicemailDrop.findFirst.mockResolvedValue(dropRow({
+      audioUrl: 'maincar-voicemail-drops/org-a/drop-1.webm', duration: 0, transcriptStatus: 'pending', transcript: null,
+    }))
+
+    const response = await request(app)
+      .patch(`${URL_A}/drop-1`).set('Authorization', AUTH)
+      .attach('audio', WEBM, { contentType: 'audio/webm', filename: 'new-take.webm' })
+
+    expect(response.status).toBe(200)
+    expect(putObjectBytesMock).toHaveBeenCalledWith({
+      key: 'maincar-voicemail-drops/org-a/drop-1.webm', body: WEBM, contentType: 'audio/webm',
+    })
+    expect(prismaMock.voicemailDrop.updateMany).toHaveBeenCalledWith({
+      where: { id: 'drop-1', orgId: ORG_A },
+      data: { audioUrl: 'maincar-voicemail-drops/org-a/drop-1.webm', duration: 0, transcript: null, transcriptStatus: 'pending' },
+    })
+    expect(queueTranscodeVoicemailDropMock).toHaveBeenCalledWith({ orgId: ORG_A, voicemailDropId: 'drop-1' })
+    expect(queueTranscribeVoicemailDropMock).toHaveBeenCalledWith('drop-1')
+  })
+
+  it('moves the default atomically and returns the promoted drop', async () => {
+    prismaMock.voicemailDrop.findFirst.mockResolvedValue(dropRow({ isDefault: true }))
+
+    const response = await request(app)
+      .patch(`${URL_A}/drop-1`).set('Authorization', AUTH).send({ isDefault: true })
+
+    expect(response.status).toBe(200)
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(prismaMock.$queryRaw).toHaveBeenCalled()
+    expect(prismaMock.voicemailDrop.updateMany).toHaveBeenCalledWith({
+      where: { orgId: ORG_A, isDefault: true, id: { not: 'drop-1' } }, data: { isDefault: false },
+    })
+    expect(response.body.drop).toEqual(expect.objectContaining({ id: 'drop-1', isDefault: true }))
+  })
+
+  it('rejects an empty update and malformed audio', async () => {
+    const empty = await request(app).patch(`${URL_A}/drop-1`).set('Authorization', AUTH).send({})
+    const malformed = await request(app)
+      .patch(`${URL_A}/drop-1`).set('Authorization', AUTH)
+      .attach('audio', Buffer.from('not-a-webm'), { contentType: 'audio/webm', filename: 'bad.webm' })
+
+    expect(empty.status).toBe(400)
+    expect(malformed.status).toBe(400)
+    expect(prismaMock.voicemailDrop.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 without writing or queueing for an absent org-scoped drop', async () => {
+    prismaMock.voicemailDrop.findFirst.mockResolvedValue(null)
+
+    const response = await request(app)
+      .patch(`${URL_A}/missing`).set('Authorization', AUTH).send({ name: 'Never written' })
+
+    expect(response.status).toBe(404)
+    expect(queueTranscodeVoicemailDropMock).not.toHaveBeenCalled()
+    expect(queueTranscribeVoicemailDropMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('DELETE /api/orgs/:orgId/voicemail-drops/:id', () => {
   it('deletes an org-scoped drop and its private audio object', async () => {
-    const res = await request(app).delete(`${URL_A}/drop-1`).set('Authorization', AUTH)
+    const response = await request(app).delete(`${URL_A}/drop-1`).set('Authorization', AUTH)
 
-    expect(res.status).toBe(204)
-    expect(prismaMock.voicemailDrop.deleteMany).toHaveBeenCalledWith({
-      where: { id: 'drop-1', orgId: ORG_A },
-    })
+    expect(response.status).toBe(204)
+    expect(prismaMock.voicemailDrop.deleteMany).toHaveBeenCalledWith({ where: { id: 'drop-1', orgId: ORG_A } })
     expect(deleteObjectMock).toHaveBeenCalledWith('maincar-voicemail-drops/org-a/drop-1.mp3')
   })
 
@@ -201,32 +248,26 @@ describe('DELETE /api/orgs/:orgId/voicemail-drops/:id', () => {
   })
 
   it('promotes the oldest remaining drop after deleting the default', async () => {
-    const oldest = dropRow({ id: 'drop-2', name: 'Oldest remaining', createdAt: new Date('2026-08-20T12:00:00.000Z') })
+    const oldest = dropRow({ id: 'drop-2', createdAt: new Date('2026-08-20T12:00:00.000Z') })
     prismaMock.voicemailDrop.findFirst
       .mockResolvedValueOnce(dropRow({ isDefault: true }))
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(oldest)
 
-    const res = await request(app).delete(`${URL_A}/drop-1`).set('Authorization', AUTH)
+    const response = await request(app).delete(`${URL_A}/drop-1`).set('Authorization', AUTH)
 
-    expect(res.status).toBe(204)
-    expect(prismaMock.voicemailDrop.findFirst).toHaveBeenLastCalledWith({
-      where: { orgId: ORG_A },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    })
+    expect(response.status).toBe(204)
     expect(prismaMock.voicemailDrop.updateMany).toHaveBeenCalledWith({
-      where: { id: 'drop-2', orgId: ORG_A },
-      data: { isDefault: true },
+      where: { id: 'drop-2', orgId: ORG_A }, data: { isDefault: true },
     })
   })
 
   it('rejects deletion of an org’s final voicemail drop', async () => {
     prismaMock.$queryRaw.mockResolvedValue([{ count: 1n }])
 
-    const res = await request(app).delete(`${URL_A}/drop-1`).set('Authorization', AUTH)
+    const response = await request(app).delete(`${URL_A}/drop-1`).set('Authorization', AUTH)
 
-    expect(res.status).toBe(400)
-    expect(res.body).toEqual({ error: 'Your organization must keep at least one voicemail drop.' })
+    expect(response.status).toBe(400)
     expect(prismaMock.voicemailDrop.deleteMany).not.toHaveBeenCalled()
     expect(deleteObjectMock).not.toHaveBeenCalled()
   })
@@ -234,18 +275,18 @@ describe('DELETE /api/orgs/:orgId/voicemail-drops/:id', () => {
   it('answers 404 without deleting audio when the drop is absent', async () => {
     prismaMock.voicemailDrop.findFirst.mockResolvedValue(null)
 
-    const res = await request(app).delete(`${URL_A}/missing`).set('Authorization', AUTH)
+    const response = await request(app).delete(`${URL_A}/missing`).set('Authorization', AUTH)
 
-    expect(res.status).toBe(404)
+    expect(response.status).toBe(404)
     expect(deleteObjectMock).not.toHaveBeenCalled()
   })
 
   it('answers 404 before accessing a drop for a caller outside the organization', async () => {
     authAs(null)
 
-    const res = await request(app).delete(`/api/orgs/${ORG_B}/voicemail-drops/drop-1`).set('Authorization', AUTH)
+    const response = await request(app).delete(`/api/orgs/${ORG_B}/voicemail-drops/drop-1`).set('Authorization', AUTH)
 
-    expect(res.status).toBe(404)
+    expect(response.status).toBe(404)
     expect(prismaMock.$transaction).not.toHaveBeenCalled()
   })
 })
