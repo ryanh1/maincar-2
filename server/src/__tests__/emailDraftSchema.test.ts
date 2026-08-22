@@ -51,7 +51,6 @@ describe('EmailDraft schema', () => {
       subject: 'String?',
       bodyHtml: 'String?',
       isOpen: 'Boolean',
-      isMinimized: 'Boolean',
       createdAt: 'DateTime',
       updatedAt: 'DateTime',
     }
@@ -61,16 +60,12 @@ describe('EmailDraft schema', () => {
     }
   })
 
-  it('opens a new card and leaves it expanded — two flags, not one', () => {
+  it('opens a new card as visible', () => {
     expect(fieldLine(emailDraft, 'isOpen')).toContain('@default(true)')
-    expect(fieldLine(emailDraft, 'isMinimized')).toContain('@default(false)')
   })
 
-  it('explains why closing and minimizing are separate flags', () => {
-    // The comment is the only place the distinction is written down: closing
-    // KEEPS the draft, and only a DELETE discards it. Losing the comment is how
-    // the next reader collapses the two flags back into one.
-    expect(emailDraft).toMatch(/isOpen[\s\S]*?false means the card is out of the dock but the draft is KEPT/)
+  it('documents that putting a draft away keeps it', () => {
+    expect(emailDraft).toContain('put away but kept')
     expect(emailDraft).toContain('Discarding is a DELETE')
   })
 

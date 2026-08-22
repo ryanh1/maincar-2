@@ -124,17 +124,11 @@ const draftFieldsSchema = z.object({
 export const draftInputSchema = draftFieldsSchema.superRefine(checkRecordPairing)
 
 /**
- * What a PATCH may set: everything POST accepts, plus the two dock-state flags.
- *
- * They are two flags and not one because they answer different questions.
- * `isMinimized` is "this card is collapsed to a chip"; `isOpen` is "this card is
- * in the dock at all". Closing a card is a SAVE — `isOpen: false` — and the
- * draft is kept. Only DELETE throws one away.
+ * What a PATCH may set: everything POST accepts, plus the saved-state flag.
  */
 export const draftPatchSchema = draftFieldsSchema
   .extend({
     isOpen: z.boolean().optional(),
-    isMinimized: z.boolean().optional(),
   })
   .superRefine(checkRecordPairing)
 
@@ -170,7 +164,6 @@ function mapDraftToApi(draft: EmailDraft) {
     subject: draft.subject,
     bodyHtml: draft.bodyHtml,
     isOpen: draft.isOpen,
-    isMinimized: draft.isMinimized,
     createdAt: draft.createdAt.toISOString(),
     updatedAt: draft.updatedAt.toISOString(),
   }
@@ -282,9 +275,7 @@ router.post(
         // does it: a composer opened from a record can land with a body, and
         // every write path that accepts HTML shares one sanitiser.
         bodyHtml: sanitizeOptionalRichTextHtml(parsed.data.bodyHtml),
-        // isOpen and isMinimized are left to their schema defaults: a card that
-        // was just opened is open and expanded, and there is nothing else a
-        // caller could sensibly ask for here.
+        // `isOpen` is left to its schema default: a new composer is visible.
       },
     })
 
@@ -296,10 +287,10 @@ router.post(
 // ============================================================
 // PATCH /api/email/orgs/:orgId/drafts/:draftId — autosave
 // ============================================================
-// Writes ONLY the keys the body carries. `{ isMinimized: true }` must leave
+// Writes ONLY the keys the body carries. `{ isOpen: false }` must leave
 // `bodyHtml` alone: the card sends the field it changed, not a whole draft, and
 // a handler that defaulted the absent keys would blank a half-written email
-// every time the rep collapsed the card.
+// every time the rep puts it away.
 //
 // The write path stores what it is given and returns the stored row. The ONE
 // thing it rewrites is `bodyHtml`, which goes through the allow-list in
@@ -354,7 +345,6 @@ router.patch(
     // keeps null as null, so "clear the body" still clears it.
     if ('bodyHtml' in body) data.bodyHtml = sanitizeOptionalRichTextHtml(body.bodyHtml)
     if ('isOpen' in body) data.isOpen = body.isOpen
-    if ('isMinimized' in body) data.isMinimized = body.isMinimized
 
     // An empty patch is refused rather than run. `@updatedAt` would fire on a
     // write that changed nothing, and `updatedAt` is what orders the dock left

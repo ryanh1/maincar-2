@@ -34,13 +34,8 @@ export interface EmailDraft {
   bccAddrs: string[]
   subject: string | null
   bodyHtml: string | null
-  /**
-   * Two flags, not one, because the X and the − are different acts. `isOpen`
-   * false means the card left the dock but the draft was KEPT; `isMinimized`
-   * means it is still in the dock, collapsed to a chip. Only a DELETE discards.
-   */
+  /** False means the draft was put away but kept. Only a DELETE discards it. */
   isOpen: boolean
-  isMinimized: boolean
   createdAt: string
   updatedAt: string
 }
@@ -62,14 +57,10 @@ export interface EmailDraftInput {
 }
 
 /**
- * What a PATCH may set: everything POST accepts, plus the two dock-state flags.
- *
- * Send only the keys that changed. The route writes exactly the keys the body
- * carries, so `{ isMinimized: true }` leaves a half-written `bodyHtml` alone.
+ * What a PATCH may set: everything POST accepts, plus the saved state.
  */
 export interface EmailDraftPatch extends EmailDraftInput {
   isOpen?: boolean
-  isMinimized?: boolean
 }
 
 /** The drafts list. Oldest first, because the dock lays cards out left to right. */

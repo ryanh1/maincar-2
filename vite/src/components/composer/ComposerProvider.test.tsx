@@ -50,7 +50,6 @@ function makeDraft(overrides: Partial<EmailDraft> = {}): EmailDraft {
     subject: null,
     bodyHtml: null,
     isOpen: true,
-    isMinimized: false,
     createdAt: '2026-08-20T12:00:00.000Z',
     updatedAt: '2026-08-20T12:00:00.000Z',
     ...overrides,
@@ -109,7 +108,7 @@ function callsWithMethod(method: string) {
 
 /** Reads the provider and exposes one button per action, so a click is a test. */
 function Probe() {
-  const { drafts, openDrafts, keptDrafts, closeCard, discardDraft, reopenCard, setMinimized } =
+  const { drafts, openDrafts, keptDrafts, closeCard, discardDraft, reopenCard } =
     useComposer()
 
   return (
@@ -119,12 +118,9 @@ function Probe() {
       <ul>
         {drafts.map((draft) => (
           <li key={draft.id}>
-            <span>{draft.isMinimized ? `${draft.id} minimized` : draft.id}</span>
+            <span>{draft.id}</span>
             <button type="button" onClick={() => void closeCard(draft.id)}>{`close ${draft.id}`}</button>
             <button type="button" onClick={() => void reopenCard(draft.id)}>{`reopen ${draft.id}`}</button>
-            <button type="button" onClick={() => void setMinimized(draft.id, true)}>
-              {`minimize ${draft.id}`}
-            </button>
             <button type="button" onClick={() => void discardDraft(draft.id)}>
               {`discard ${draft.id}`}
             </button>
@@ -273,7 +269,7 @@ describe('ComposerProvider', () => {
   })
 
   it('reopens a kept draft expanded', async () => {
-    draftsByOrg.set('org-1', [makeDraft({ id: 'kept-draft', isOpen: false, isMinimized: true })])
+    draftsByOrg.set('org-1', [makeDraft({ id: 'kept-draft', isOpen: false })])
 
     const user = userEvent.setup()
     renderProvider()
@@ -284,26 +280,10 @@ describe('ComposerProvider', () => {
     await waitFor(() => expect(screen.getByText('open 1')).toBeInTheDocument())
     expect(jsonFetch).toHaveBeenCalledWith('/api/email/orgs/org-1/drafts/kept-draft', {
       method: 'PATCH',
-      body: JSON.stringify({ isOpen: true, isMinimized: false }),
+      body: JSON.stringify({ isOpen: true }),
     })
   })
 
-  it('minimizes without touching anything else in the draft', async () => {
-    const user = userEvent.setup()
-    renderProvider()
-
-    await user.keyboard('c')
-    await screen.findByText('draft-1')
-    await user.click(screen.getByRole('button', { name: 'minimize draft-1' }))
-
-    await screen.findByText('draft-1 minimized')
-    // Only the flag travels. The route writes exactly the keys it is given, so a
-    // half-written body is left alone.
-    expect(jsonFetch).toHaveBeenCalledWith('/api/email/orgs/org-1/drafts/draft-1', {
-      method: 'PATCH',
-      body: JSON.stringify({ isMinimized: true }),
-    })
-  })
 
   it('deletes only on discard, and drops the card straight away', async () => {
     const user = userEvent.setup()

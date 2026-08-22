@@ -66,7 +66,9 @@ describe('DialerDock', () => {
     const region = screen.getByRole('region', { name: 'Dialer' })
     expect(region.className).toContain('fixed')
     expect(region.className).toContain('bottom-0')
-    expect(region.className).toContain('right-6')
+    // The command bar owns the right edge, so the dialer reserves a stable
+    // lane immediately to its left whether it is collapsed or expanded.
+    expect(region.className).toContain('right-16')
     expect(region.className).toContain('z-[100]')
   })
 

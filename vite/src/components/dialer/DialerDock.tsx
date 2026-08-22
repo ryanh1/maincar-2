@@ -64,7 +64,7 @@ export function DialerDock() {
       role="region"
       aria-label="Dialer"
       className={cn(
-        'fixed bottom-0 right-6 z-[100] flex flex-col bg-card text-card-foreground',
+        'fixed bottom-0 right-16 z-[100] flex flex-col bg-card text-card-foreground',
         // Expanded keeps the floating-card look it always had. Collapsed is
         // one flat segment in the dock's own row: no top border, no rounded
         // corners — only the side borders that separate it from its neighbor

@@ -120,21 +120,13 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         if (!closing) return current
         return [...current.filter((d) => d.id !== draftId), closing]
       })
-      // Closing is a SAVE. The draft is kept; only discardDraft removes one.
       await saveDraft(draftId, { isOpen: false })
     },
     [saveDraft],
   )
 
   const reopenCard = useCallback(
-    // Expanded, not as a chip: a card that came back collapsed would read as a
-    // click that did nothing.
-    (draftId: string) => saveDraft(draftId, { isOpen: true, isMinimized: false }),
-    [saveDraft],
-  )
-
-  const setMinimized = useCallback(
-    (draftId: string, isMinimized: boolean) => saveDraft(draftId, { isMinimized }),
+    (draftId: string) => saveDraft(draftId, { isOpen: true }),
     [saveDraft],
   )
 
@@ -204,7 +196,6 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       saveDraft,
       closeCard,
       reopenCard,
-      setMinimized,
       discardDraft,
     }),
     [
@@ -215,7 +206,6 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       saveDraft,
       closeCard,
       reopenCard,
-      setMinimized,
       discardDraft,
     ],
   )
