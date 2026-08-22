@@ -889,13 +889,19 @@ const signatureBodySchema = z
 export const signatureInputSchema = z.object({
   name: signatureNameSchema,
   bodyHtml: signatureBodySchema.optional(),
+  // Kept for callers that shipped before message-context defaults existed.
   isDefault: z.boolean().optional(),
+  isDefaultForNew: z.boolean().optional(),
+  isDefaultForReply: z.boolean().optional(),
 })
 
 export const signaturePatchSchema = z.object({
   name: signatureNameSchema.optional(),
   bodyHtml: signatureBodySchema.optional(),
+  // Kept for callers that shipped before message-context defaults existed.
   isDefault: z.boolean().optional(),
+  isDefaultForNew: z.boolean().optional(),
+  isDefaultForReply: z.boolean().optional(),
 })
 
 function mapSignatureToApi(signature: EmailSignature) {
@@ -904,6 +910,8 @@ function mapSignatureToApi(signature: EmailSignature) {
     name: signature.name,
     bodyHtml: signature.bodyHtml,
     isDefault: signature.isDefault,
+    isDefaultForNew: signature.isDefaultForNew,
+    isDefaultForReply: signature.isDefaultForReply,
     createdAt: signature.createdAt.toISOString(),
     updatedAt: signature.updatedAt.toISOString(),
   }
@@ -926,7 +934,7 @@ router.get(
     // --- Execute query ---
     const rows = await prisma.emailSignature.findMany({
       where: { userId },
-      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }, { id: 'asc' }],
+      orderBy: [{ isDefaultForNew: 'desc' }, { isDefaultForReply: 'desc' }, { name: 'asc' }, { id: 'asc' }],
       take: SIGNATURE_LIST_LIMIT,
     })
 
@@ -958,19 +966,33 @@ router.post(
 
     // --- Execute query ---
     const data = parsed.data
-    const signature = data.isDefault
+    const isDefaultForNew = data.isDefaultForNew ?? data.isDefault ?? false
+    const isDefaultForReply = data.isDefaultForReply ?? data.isDefault ?? false
+    const signature = isDefaultForNew || isDefaultForReply
       ? await prisma.$transaction(async (tx) => {
-          await tx.emailSignature.updateMany({
-            where: { userId },
-            data: { isDefault: false, defaultForUser: null },
-          })
+          if (isDefaultForNew) {
+            await tx.emailSignature.updateMany({
+              where: { userId },
+              data: { isDefault: false, defaultForUser: null, isDefaultForNew: false, defaultForNewUser: null },
+            })
+          }
+          if (isDefaultForReply) {
+            await tx.emailSignature.updateMany({
+              where: { userId },
+              data: { isDefaultForReply: false, defaultForReplyUser: null },
+            })
+          }
           return tx.emailSignature.create({
             data: {
               userId,
               name: data.name,
               bodyHtml: sanitizeRichTextHtml(data.bodyHtml ?? ''),
-              isDefault: true,
-              defaultForUser: userId,
+              isDefault: isDefaultForNew,
+              defaultForUser: isDefaultForNew ? userId : null,
+              isDefaultForNew,
+              defaultForNewUser: isDefaultForNew ? userId : null,
+              isDefaultForReply,
+              defaultForReplyUser: isDefaultForReply ? userId : null,
             },
           })
         })
@@ -981,6 +1003,10 @@ router.post(
             bodyHtml: sanitizeRichTextHtml(data.bodyHtml ?? ''),
             isDefault: false,
             defaultForUser: null,
+            isDefaultForNew: false,
+            defaultForNewUser: null,
+            isDefaultForReply: false,
+            defaultForReplyUser: null,
           },
         })
 
@@ -1015,9 +1041,17 @@ router.patch(
     const data: Prisma.EmailSignatureUncheckedUpdateManyInput = {}
     if ('name' in body) data.name = body.name
     if ('bodyHtml' in body) data.bodyHtml = sanitizeRichTextHtml(body.bodyHtml ?? '')
-    if ('isDefault' in body) {
-      data.isDefault = body.isDefault
-      data.defaultForUser = body.isDefault ? userId : null
+    const isDefaultForNew = body.isDefaultForNew ?? body.isDefault
+    const isDefaultForReply = body.isDefaultForReply ?? body.isDefault
+    if (isDefaultForNew !== undefined) {
+      data.isDefault = isDefaultForNew
+      data.defaultForUser = isDefaultForNew ? userId : null
+      data.isDefaultForNew = isDefaultForNew
+      data.defaultForNewUser = isDefaultForNew ? userId : null
+    }
+    if (isDefaultForReply !== undefined) {
+      data.isDefaultForReply = isDefaultForReply
+      data.defaultForReplyUser = isDefaultForReply ? userId : null
     }
     if (Object.keys(data).length === 0) {
       return void res.status(400).json({ error: 'Name a field to save.' })
@@ -1031,12 +1065,20 @@ router.patch(
     }
 
     // --- Execute query ---
-    if (body.isDefault === true) {
+    if (isDefaultForNew === true || isDefaultForReply === true) {
       await prisma.$transaction(async (tx) => {
-        await tx.emailSignature.updateMany({
-          where: { userId, id: { not: signatureId } },
-          data: { isDefault: false, defaultForUser: null },
-        })
+        if (isDefaultForNew === true) {
+          await tx.emailSignature.updateMany({
+            where: { userId, id: { not: signatureId } },
+            data: { isDefault: false, defaultForUser: null, isDefaultForNew: false, defaultForNewUser: null },
+          })
+        }
+        if (isDefaultForReply === true) {
+          await tx.emailSignature.updateMany({
+            where: { userId, id: { not: signatureId } },
+            data: { isDefaultForReply: false, defaultForReplyUser: null },
+          })
+        }
         await tx.emailSignature.updateMany({ where: { id: signatureId, userId }, data })
       })
     } else {

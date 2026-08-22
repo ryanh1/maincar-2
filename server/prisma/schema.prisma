@@ -878,6 +878,15 @@ model EmailSignature {
   isDefault      Boolean @default(false)
   defaultForUser String? @unique
 
+  // The legacy default remains the new-message default for existing composer
+  // clients. These two independent ownership keys let a rep choose a different
+  // sign-off for new messages and replies without a two-tab race creating two
+  // defaults in either context.
+  isDefaultForNew      Boolean @default(false)
+  defaultForNewUser    String? @unique
+  isDefaultForReply    Boolean @default(false)
+  defaultForReplyUser  String? @unique
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

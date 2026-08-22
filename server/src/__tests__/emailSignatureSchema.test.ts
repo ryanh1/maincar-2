@@ -37,9 +37,13 @@ describe('EmailSignature schema', () => {
     expect(fieldLine(signatures, 'bodyHtml')).toBe('bodyHtml String')
   })
 
-  it('allows only one default signature for a user', () => {
+  it('keeps the legacy default for new mail and stores independent defaults for both contexts', () => {
     expect(fieldLine(signatures, 'isDefault')).toBe('isDefault Boolean @default(false)')
     expect(fieldLine(signatures, 'defaultForUser')).toBe('defaultForUser String? @unique')
+    expect(fieldLine(signatures, 'isDefaultForNew')).toBe('isDefaultForNew Boolean @default(false)')
+    expect(fieldLine(signatures, 'defaultForNewUser')).toBe('defaultForNewUser String? @unique')
+    expect(fieldLine(signatures, 'isDefaultForReply')).toBe('isDefaultForReply Boolean @default(false)')
+    expect(fieldLine(signatures, 'defaultForReplyUser')).toBe('defaultForReplyUser String? @unique')
   })
 
   it('indexes the settings and composer list by owner and name', () => {

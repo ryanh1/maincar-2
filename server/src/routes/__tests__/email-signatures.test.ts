@@ -74,6 +74,10 @@ function signatureRow(overrides: Record<string, unknown> = {}) {
     bodyHtml: '<p>Ari Rep</p>',
     isDefault: false,
     defaultForUser: null,
+    isDefaultForNew: false,
+    defaultForNewUser: null,
+    isDefaultForReply: false,
+    defaultForReplyUser: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -105,7 +109,7 @@ describe('email signature routes', () => {
     expect(res.body.signatures).toHaveLength(1)
     expect(prismaMock.emailSignature.findMany).toHaveBeenCalledWith({
       where: { userId: USER_ID },
-      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }, { id: 'asc' }],
+      orderBy: [{ isDefaultForNew: 'desc' }, { isDefaultForReply: 'desc' }, { name: 'asc' }, { id: 'asc' }],
       take: 200,
     })
   })
@@ -118,9 +122,13 @@ describe('email signature routes', () => {
 
     expect(res.status).toBe(201)
     expect(res.body.signature.bodyHtml).toBe('<p>Ari</p>')
-    expect(prismaMock.emailSignature.updateMany).toHaveBeenCalledWith({
+    expect(prismaMock.emailSignature.updateMany).toHaveBeenNthCalledWith(1, {
       where: { userId: USER_ID },
-      data: { isDefault: false, defaultForUser: null },
+      data: { isDefault: false, defaultForUser: null, isDefaultForNew: false, defaultForNewUser: null },
+    })
+    expect(prismaMock.emailSignature.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { userId: USER_ID },
+      data: { isDefaultForReply: false, defaultForReplyUser: null },
     })
     expect(prismaMock.emailSignature.create).toHaveBeenCalledWith({
       data: {
@@ -129,6 +137,10 @@ describe('email signature routes', () => {
         bodyHtml: '<p>Ari</p>',
         isDefault: true,
         defaultForUser: USER_ID,
+        isDefaultForNew: true,
+        defaultForNewUser: USER_ID,
+        isDefaultForReply: true,
+        defaultForReplyUser: USER_ID,
       },
     })
   })
@@ -140,13 +152,41 @@ describe('email signature routes', () => {
       .send({ isDefault: true })
 
     expect(res.status).toBe(200)
+    expect(prismaMock.emailSignature.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { userId: USER_ID, id: { not: 'signature-a' } },
+      data: { isDefault: false, defaultForUser: null, isDefaultForNew: false, defaultForNewUser: null },
+    })
+    expect(prismaMock.emailSignature.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { userId: USER_ID, id: { not: 'signature-a' } },
+      data: { isDefaultForReply: false, defaultForReplyUser: null },
+    })
+    expect(prismaMock.emailSignature.updateMany).toHaveBeenNthCalledWith(3, {
+      where: { id: 'signature-a', userId: USER_ID },
+      data: {
+        isDefault: true,
+        defaultForUser: USER_ID,
+        isDefaultForNew: true,
+        defaultForNewUser: USER_ID,
+        isDefaultForReply: true,
+        defaultForReplyUser: USER_ID,
+      },
+    })
+  })
+
+  it('sets independent defaults for new messages and replies without changing the other context', async () => {
+    const res = await request(app)
+      .patch(`${URL}/signature-a`)
+      .set('Authorization', AUTH)
+      .send({ isDefaultForReply: true })
+
+    expect(res.status).toBe(200)
     expect(prismaMock.emailSignature.updateMany).toHaveBeenCalledWith({
       where: { userId: USER_ID, id: { not: 'signature-a' } },
-      data: { isDefault: false, defaultForUser: null },
+      data: { isDefaultForReply: false, defaultForReplyUser: null },
     })
     expect(prismaMock.emailSignature.updateMany).toHaveBeenCalledWith({
       where: { id: 'signature-a', userId: USER_ID },
-      data: { isDefault: true, defaultForUser: USER_ID },
+      data: { isDefaultForReply: true, defaultForReplyUser: USER_ID },
     })
   })
 
