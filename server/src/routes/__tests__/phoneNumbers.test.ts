@@ -20,6 +20,7 @@ const {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
     phoneNumber: {
+      count: vi.fn(),
       findMany: vi.fn(),
       findFirst: vi.fn(),
       create: vi.fn(),
@@ -151,6 +152,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   authAs()
   prismaMock.phoneNumber.findMany.mockResolvedValue([])
+  prismaMock.phoneNumber.count.mockResolvedValue(0)
   prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow())
   prismaMock.phoneNumber.updateMany.mockResolvedValue({ count: 1 })
   // Runs the callback against the same mock, so the assertions below see the
@@ -239,7 +241,7 @@ describe('GET /api/orgs/:orgId/phone-numbers', () => {
     const res = await request(app).get(URL_A).set('Authorization', AUTH)
 
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ numbers: [], total: 0, activeCount: 0 })
+    expect(res.body).toEqual({ numbers: [], total: 0, activeCount: 0, readyCount: 0 })
   })
 
   // The schema allows one active number per user. If two ever go true, the
@@ -253,6 +255,30 @@ describe('GET /api/orgs/:orgId/phone-numbers', () => {
     const res = await request(app).get(URL_A).set('Authorization', AUTH)
 
     expect(res.body.activeCount).toBe(2)
+  })
+
+  it('searches, sorts, and pages the caller table on the server', async () => {
+    prismaMock.phoneNumber.count
+      .mockResolvedValueOnce(30)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(30)
+    prismaMock.phoneNumber.findMany.mockResolvedValue([numberRow({ id: 'num-26' })])
+
+    const res = await request(app)
+      .get(`${URL_A}?page=2&limit=25&sort=e164&dir=asc&q=202`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ total: 30, page: 2, limit: 25 })
+    expect(prismaMock.phoneNumber.findMany).toHaveBeenCalledWith({
+      where: { orgId: ORG_A, assignedUserId: 'user-a', e164: { contains: '202' } },
+      orderBy: [{ e164: 'asc' }, { createdAt: 'desc' }],
+      skip: 25,
+      take: 25,
+    })
+    expect(prismaMock.phoneNumber.count).toHaveBeenNthCalledWith(3, {
+      where: { orgId: ORG_A, assignedUserId: 'user-a', status: 'active' },
+    })
   })
 })
 
@@ -2079,6 +2105,26 @@ describe('GET /api/orgs/:orgId/phone-numbers/all', () => {
     expect(args.where).not.toHaveProperty('assignedUserId')
     // Newest first: an admin reading an inventory is checking recent buys.
     expect(args.orderBy).toEqual([{ createdAt: 'desc' }])
+  })
+
+  it('searches, sorts, and pages the organization inventory on the server', async () => {
+    authAsAdmin()
+    prismaMock.phoneNumber.count.mockResolvedValueOnce(30).mockResolvedValueOnce(4)
+    prismaMock.phoneNumber.findMany.mockResolvedValue([orgNumberRow({ id: 'num-26' })])
+
+    const res = await request(app)
+      .get(`${ALL_A}?page=2&limit=25&sort=status&dir=asc&q=202`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ total: 30, unassignedCount: 4, page: 2, limit: 25 })
+    expect(prismaMock.phoneNumber.findMany).toHaveBeenCalledWith({
+      where: { orgId: ORG_A, e164: { contains: '202' } },
+      include: { assignedUser: { select: { id: true, firstName: true, lastName: true, email: true } } },
+      orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+      skip: 25,
+      take: 25,
+    })
   })
 
   it('refuses a non-admin member with 403, and reads nothing', async () => {

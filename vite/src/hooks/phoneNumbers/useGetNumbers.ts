@@ -1,25 +1,32 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
 import { jsonFetch } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
-import type { GetNumbersResponse } from '@/lib/phoneNumberTypes'
+import type { GetNumbersResponse, GetPhoneNumbersParams } from '@/lib/phoneNumberTypes'
+
+import { buildPhoneNumbersListQuery } from './listQuery'
 
 /**
  * The phone numbers an org owns, active first.
  *
- * Not paginated: the route returns every number the caller owns so the caller-ID
- * picker can show all of them at once, so there is one answer per org and the key
- * is the org alone. `activeCount` lets the UI SEE a broken pair (two active, or
- * zero) rather than pick one at random.
+ * Without params, this is the caller-ID picker's complete list. Settings passes
+ * table params to page, search, and sort on the server; those params become part
+ * of the query key so page two never reuses page one's answer.
  */
-export function useGetNumbers(orgId: string | null | undefined) {
+export function useGetNumbers(orgId: string | null | undefined, params?: GetPhoneNumbersParams) {
   return useQuery({
     // 'none' is a placeholder key that is never fetched — `enabled` is false
     // without an org, so nothing is ever written under it.
-    queryKey: queryKeys.phoneNumbers.list(orgId ?? 'none'),
+    queryKey: params
+      ? queryKeys.phoneNumbers.listPage(orgId ?? 'none', params as Record<string, unknown>)
+      : queryKeys.phoneNumbers.list(orgId ?? 'none'),
     // No org means no URL to build. Firing anyway would request
     // /api/orgs/null/phone-numbers and take a 404 before sign-in resolves the org.
     enabled: !!orgId,
-    queryFn: () => jsonFetch<GetNumbersResponse>(`/api/orgs/${orgId}/phone-numbers`),
+    placeholderData: params ? keepPreviousData : undefined,
+    queryFn: () =>
+      jsonFetch<GetNumbersResponse>(
+        `/api/orgs/${orgId}/phone-numbers${params ? buildPhoneNumbersListQuery(params) : ''}`,
+      ),
   })
 }

@@ -197,6 +197,41 @@ const ALREADY_OWNED_ERROR = 'Your organization already has this number. Pick a d
 // ("failed") — none of them can carry a call.
 const ACTIVE_STATUS = 'active'
 
+// Settings tables are deliberately bounded at a screenful. The caller-ID picker
+// still uses the bare route below and receives every number the rep owns.
+const TABLE_DEFAULT_LIMIT = 25
+const TABLE_MAX_LIMIT = 100
+const TABLE_SORT_FIELDS = ['e164', 'status', 'createdAt'] as const
+
+const tableQuerySchema = z.object({
+  page: z.coerce.number().int().min(1, 'page starts at 1.').default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1, 'Ask for at least one row.')
+    .max(TABLE_MAX_LIMIT, `Ask for at most ${TABLE_MAX_LIMIT} rows at a time.`)
+    .default(TABLE_DEFAULT_LIMIT),
+  sort: z
+    .enum(TABLE_SORT_FIELDS, {
+      error: `Sort by one of: ${TABLE_SORT_FIELDS.join(', ')}.`,
+    })
+    .default('createdAt'),
+  dir: z.enum(['asc', 'desc'], { error: 'Sort direction is asc or desc.' }).default('desc'),
+  q: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .trim()
+      .regex(/^\+?\d{1,15}$/, 'Search by digits of the number, like 201.')
+      .optional(),
+  ),
+})
+
+/** A bare request is the caller-ID picker contract; any table parameter opts into a page. */
+function hasTableQuery(query: Record<string, unknown>): boolean {
+  return ['page', 'limit', 'sort', 'dir', 'q'].some((key) => query[key] !== undefined)
+}
+
 // The same wording whether the id is nonsense, belongs to a colleague, or lives
 // in another org. Three answers would let a caller map what they cannot see.
 const NOT_FOUND_ERROR = 'Phone number not found'
@@ -282,9 +317,9 @@ router.use(requireAuth)
 // ============================================================
 // GET /api/orgs/:orgId/phone-numbers — the caller's numbers in this org
 // ============================================================
-// Not paginated on purpose. A user holds a handful of numbers, and this list
-// feeds the caller-ID picker, which has to show all of them at once — a page 2
-// the picker never asks for would hide a number the user owns.
+// A bare request returns every number for the caller-ID picker. Settings opts
+// into the validated table query below, so its search, sort, and pagination run
+// on the server without making a page hide a caller ID from the dialer.
 router.get(
   '/',
   wrapRoute('GET /api/orgs/:orgId/phone-numbers', async (req, res) => {
@@ -295,28 +330,65 @@ router.get(
     const membership = await requireMembership(authReq, res, orgId)
     if (!membership) return
 
+    // --- Parse & validate params ---
+    const query = req.query as Record<string, unknown>
+    const tableQuery = hasTableQuery(query) ? tableQuerySchema.safeParse(query) : null
+    if (tableQuery && !tableQuery.success) {
+      return void res.status(400).json({ error: tableQuery.error.issues[0].message })
+    }
+
     // --- Build filters ---
     // Both keys, always: orgId is the tenant boundary and assignedUserId is
     // "mine". A number belonging to a colleague is not the caller's to dial from.
-    const where = { orgId, assignedUserId: authReq.user!.id }
+    const callerWhere = { orgId, assignedUserId: authReq.user!.id }
+    const where = {
+      ...callerWhere,
+      ...(tableQuery?.data.q ? { e164: { contains: tableQuery.data.q } } : {}),
+    }
 
     // --- Execute query ---
-    // Active first, then oldest first, so the number the user actually dials
-    // from is row one and the rest keep a stable order between requests.
-    const numbers = await prisma.phoneNumber.findMany({
-      where,
-      orderBy: [{ isActiveForOutbound: 'desc' }, { createdAt: 'asc' }],
-    })
+    if (!tableQuery) {
+      // Active first, then oldest first, so the number the user actually dials
+      // from is row one and the rest keep a stable order between requests.
+      const numbers = await prisma.phoneNumber.findMany({
+        where,
+        orderBy: [{ isActiveForOutbound: 'desc' }, { createdAt: 'asc' }],
+      })
+
+      // --- Return response ---
+      return void res.json({
+        numbers: numbers.map(mapPhoneNumberToApi),
+        total: numbers.length,
+        activeCount: numbers.filter((n) => n.isActiveForOutbound).length,
+        readyCount: numbers.filter((n) => n.status === ACTIVE_STATUS).length,
+      })
+    }
+
+    const { page, limit, sort, dir } = tableQuery.data
+    const orderBy =
+      sort === 'createdAt' ? [{ createdAt: dir }] : [{ [sort]: dir }, { createdAt: 'desc' as const }]
+    const [total, activeCount, readyCount, numbers] = await Promise.all([
+      prisma.phoneNumber.count({ where }),
+      prisma.phoneNumber.count({ where: { ...where, isActiveForOutbound: true } }),
+      // The release warning needs every dialable number the caller holds, not
+      // only the rows whose number happens to match the table's search text.
+      prisma.phoneNumber.count({ where: { ...callerWhere, status: ACTIVE_STATUS } }),
+      prisma.phoneNumber.findMany({
+        where,
+        orderBy,
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ])
 
     // --- Return response ---
-    // activeCount is counted from the rows just read rather than with a second
-    // query: one read cannot disagree with itself. The schema allows at most one
-    // active number per user, so this is normally 0 or 1 — it is returned as a
-    // count so the client can SEE a broken pair rather than pick one at random.
     res.json({
       numbers: numbers.map(mapPhoneNumberToApi),
-      total: numbers.length,
-      activeCount: numbers.filter((n) => n.isActiveForOutbound).length,
+      total,
+      activeCount,
+      readyCount,
+      page,
+      limit,
     })
   }),
 )
@@ -336,10 +408,9 @@ router.get(
 // the boundary, and it answers 403 rather than 404 because the caller can see
 // the org perfectly well — they just may not read the whole inventory.
 //
-// Not paginated, for the same reason the per-user list is not: every row is a
-// number the org rents every month, so the list is bounded by the bill rather
-// than by anything a page size would protect. A page 2 would hide a number the
-// org is paying for, which is the exact question this view exists to answer.
+// A bare request remains available to existing inventory consumers. Settings
+// sends table parameters, which keep an admin's organization inventory usable
+// as the organization grows.
 router.get(
   '/all',
   wrapRoute('GET /api/orgs/:orgId/phone-numbers/all', async (req, res) => {
@@ -350,24 +421,56 @@ router.get(
     const membership = await requireMembership(authReq, res, orgId, { admin: true })
     if (!membership) return
 
+    // --- Parse & validate params ---
+    const query = req.query as Record<string, unknown>
+    const tableQuery = hasTableQuery(query) ? tableQuerySchema.safeParse(query) : null
+    if (tableQuery && !tableQuery.success) {
+      return void res.status(400).json({ error: tableQuery.error.issues[0].message })
+    }
+
     // --- Execute query ---
     // orgId alone: the tenant boundary, and deliberately no assignedUserId — the
     // whole point is the numbers that are NOT the caller's. Newest first, because
     // an admin reading an inventory is usually checking what was just bought.
-    const numbers = await prisma.phoneNumber.findMany({
-      where: { orgId },
-      include: { assignedUser: { select: ASSIGNEE_SELECT } },
-      orderBy: [{ createdAt: 'desc' }],
-    })
+    const where = { orgId, ...(tableQuery?.data.q ? { e164: { contains: tableQuery.data.q } } : {}) }
+    const include = { assignedUser: { select: ASSIGNEE_SELECT } }
+    if (!tableQuery) {
+      const numbers = await prisma.phoneNumber.findMany({
+        where,
+        include,
+        orderBy: [{ createdAt: 'desc' }],
+      })
+
+      // --- Return response ---
+      return void res.json({
+        numbers: numbers.map(mapOrgPhoneNumberToApi),
+        total: numbers.length,
+        unassignedCount: numbers.filter((n) => n.assignedUserId === null).length,
+      })
+    }
+
+    const { page, limit, sort, dir } = tableQuery.data
+    const orderBy =
+      sort === 'createdAt' ? [{ createdAt: dir }] : [{ [sort]: dir }, { createdAt: 'desc' as const }]
+    const [total, unassignedCount, numbers] = await Promise.all([
+      prisma.phoneNumber.count({ where }),
+      prisma.phoneNumber.count({ where: { ...where, assignedUserId: null } }),
+      prisma.phoneNumber.findMany({
+        where,
+        include,
+        orderBy,
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ])
 
     // --- Return response ---
-    // unassignedCount is counted from the rows just read rather than with a
-    // second query: one read cannot disagree with itself. It is what lets the
-    // table say "3 numbers have nobody" without the reader counting rows.
     res.json({
       numbers: numbers.map(mapOrgPhoneNumberToApi),
-      total: numbers.length,
-      unassignedCount: numbers.filter((n) => n.assignedUserId === null).length,
+      total,
+      unassignedCount,
+      page,
+      limit,
     })
   }),
 )

@@ -7,6 +7,7 @@
 //   - the unassigned count only shows when it is above zero
 import { beforeEach, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
 
@@ -180,4 +181,29 @@ it('labels the primary column and does not offer to change a colleague\'s caller
 
   expect(screen.getByRole('columnheader', { name: 'Primary' })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Make primary' })).not.toBeInTheDocument()
+})
+
+it('sends search, sort, and page state to the organization list query', async () => {
+  useGetOrgNumbersMock.mockReturnValue({
+    isPending: false,
+    isError: false,
+    data: { numbers: [], total: 30, unassignedCount: 0, page: 1, limit: 25 },
+  })
+  const user = userEvent.setup()
+  render()
+
+  await user.type(screen.getByRole('textbox', { name: 'Search organization phone numbers' }), '0122')
+
+  expect(useGetOrgNumbersMock).toHaveBeenLastCalledWith(
+    'org-a',
+    expect.objectContaining({ page: 1, limit: 25, q: '0122' }),
+  )
+
+  await user.click(screen.getByRole('button', { name: 'Sort by Number' }))
+  await user.click(screen.getByRole('button', { name: 'Next' }))
+
+  expect(useGetOrgNumbersMock).toHaveBeenLastCalledWith(
+    'org-a',
+    expect.objectContaining({ page: 2, limit: 25, sort: 'e164', dir: 'asc', q: '0122' }),
+  )
 })

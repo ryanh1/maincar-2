@@ -32,6 +32,20 @@ export interface PhoneNumber {
   createdAt: string
 }
 
+/** The server fields each Numbers table may sort by. */
+export const PHONE_NUMBER_SORT_COLUMNS = ['e164', 'status', 'createdAt'] as const
+export type PhoneNumberSortColumn = (typeof PHONE_NUMBER_SORT_COLUMNS)[number]
+
+/** A server-backed Numbers table request. Omit it to read the complete caller-ID list. */
+export interface GetPhoneNumbersParams {
+  page?: number
+  limit?: number
+  sort?: PhoneNumberSortColumn
+  dir?: 'asc' | 'desc'
+  /** A partial E.164 number, such as "201" or "+1201". */
+  q?: string
+}
+
 /**
  * One row of the search results — a number Twilio will sell. `priceMonthly` is a
  * decimal STRING ("1.15"), the same text Twilio quoted, so nothing rounds it on
@@ -50,6 +64,12 @@ export interface GetNumbersResponse {
   total: number
   /** How many of the returned rows are active. Normally 0 or 1. */
   activeCount: number
+  /** How many matching numbers are dialable, including rows outside the current page. */
+  readyCount: number
+  /** Present when this is a server-backed table response. */
+  page?: number
+  /** Present when this is a server-backed table response. */
+  limit?: number
 }
 
 /** What POST /search accepts. Only `country` is required; it defaults to US server-side. */
@@ -103,6 +123,10 @@ export interface GetOrgNumbersResponse {
   total: number
   /** How many of the returned rows nobody holds. */
   unassignedCount: number
+  /** Present when this is a server-backed table response. */
+  page?: number
+  /** Present when this is a server-backed table response. */
+  limit?: number
 }
 
 /** What PATCH .../assignment returns: the number, with its new holder. */
