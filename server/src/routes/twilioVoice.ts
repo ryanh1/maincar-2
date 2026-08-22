@@ -24,7 +24,7 @@
  * records the caller with `<Record>`. Anything else with no `callId` (a stray
  * request, an unrecognized `To`) hears an honest "not accepting calls" message
  * instead. POST /voice tells Twilio to record the bridged call only when the
- * row's `recordingConsent` is `"granted"`. POST /voice/status is the call-progress
+ * row's server-resolved `recordingPlanned` decision is true. POST /voice/status is the call-progress
  * status callback: it maps Twilio's CallStatus onto Call.status and records
  * duration and end time. POST /voice/recording-status is the recording-progress
  * callback — the only place Twilio delivers a `RecordingSid` for a `<Dial
@@ -216,7 +216,7 @@ router.post(
       buildBridgeTwiml({
         toE164: call.toE164,
         callerId: call.fromE164,
-        record: call.recordingConsent === 'granted',
+        record: call.recordingPlanned === true,
       }),
     )
   }),
@@ -326,11 +326,11 @@ router.post(
 // ============================================================
 // Twilio POSTs here only for a call whose <Dial> carried `record`
 // (dependencies/twilio.ts -> buildBridgeTwiml), which happens only when the row's
-// recordingConsent was "granted" at the moment POST /voice ran. This is the ONLY
+// recordingPlanned was true at the moment POST /voice ran. This is the ONLY
 // place Twilio delivers a RecordingSid for this architecture — it is not part of
 // the CallStatus callback above, because the recording belongs to the <Dial>
 // verb, not the <Number> leg that callback tracks. `recordingEnabled` is set HERE,
-// from Twilio's own confirmation that a recording exists — never from consent —
+// from Twilio's own confirmation that a recording exists — never from policy —
 // so a call whose recording failed to start still reads as not recorded.
 const RECORDING_STATUSES_MEANING_RECORDING_HAPPENED = new Set(['in-progress', 'completed'])
 

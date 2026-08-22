@@ -54,7 +54,8 @@ function queuedCall(id: string, status: Call['status'] = 'queued'): Call {
     status,
     fromE164: '+12025550100',
     toE164: '+12025550123',
-    recordingConsent: 'granted',
+    recordingPlanned: true,
+    recordingReason: 'allowed',
     twilioCallSid: null,
     createdAt: '2026-08-20T12:00:00.000Z',
   }
@@ -82,20 +83,19 @@ beforeEach(() => {
 })
 
 describe('useCreateCall', () => {
-  it('POSTs the number and consent to the org-scoped path, orgId in the path only', async () => {
+  it('POSTs the number to the org-scoped path, orgId in the path only', async () => {
     jsonFetch.mockResolvedValue({ call: queuedCall('call-1') })
 
     const { result } = renderCreateCall()
     result.current.create.mutate({
       orgId: 'org-1',
       toE164: '+12025550123',
-      recordingConsent: 'granted',
     })
 
     await waitFor(() => expect(result.current.create.isSuccess).toBe(true))
     expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/calls', {
       method: 'POST',
-      body: JSON.stringify({ toE164: '+12025550123', recordingConsent: 'granted' }),
+      body: JSON.stringify({ toE164: '+12025550123' }),
     })
   })
 
@@ -110,7 +110,6 @@ describe('useCreateCall', () => {
     result.current.create.mutate({
       orgId: 'org-1',
       toE164: '+12025550123',
-      recordingConsent: 'granted',
     })
 
     await waitFor(() => expect(result.current.dialer.phase).toBe('ringing'))
@@ -118,7 +117,7 @@ describe('useCreateCall', () => {
     expect(result.current.dialer.view).toBe('expanded')
     expect(result.current.dialer.mode).toBe('call')
     // The queued call's identity is handed to the dialer so the in-call controls
-    // can hang it up. Consent was granted, so recording is on.
+    // can hang it up. The stored policy allows recording.
     expect(result.current.dialer.activeCall).toEqual({
       orgId: 'org-1',
       callId: 'call-1',
@@ -135,7 +134,6 @@ describe('useCreateCall', () => {
     result.current.create.mutate({
       orgId: 'org-1',
       toE164: '+12025550123',
-      recordingConsent: 'granted',
     })
 
     await waitFor(() => expect(result.current.create.isSuccess).toBe(true))
@@ -151,7 +149,6 @@ describe('useCreateCall', () => {
     result.current.create.mutate({
       orgId: 'org-1',
       toE164: '+12025550123',
-      recordingConsent: 'granted',
     })
 
     await waitFor(() => expect(result.current.create.isError).toBe(true))
@@ -176,7 +173,6 @@ describe('useCreateCall', () => {
     result.current.create.mutate({
       orgId: 'org-1',
       toE164: '+12025550123',
-      recordingConsent: 'granted',
     })
 
     await waitFor(() => expect(result.current.create.isError).toBe(true))
@@ -198,7 +194,6 @@ describe('useCreateCall', () => {
     result.current.create.mutate({
       orgId: 'org-1',
       toE164: '+12025550123',
-      recordingConsent: 'granted',
     })
 
     await waitFor(() => expect(deviceConnectMock).toHaveBeenCalledWith({ params: { callId: 'call-1' } }))
@@ -212,7 +207,6 @@ describe('useCreateCall', () => {
     result.current.create.mutate({
       orgId: 'org-1',
       toE164: '+12025550123',
-      recordingConsent: 'granted',
     })
 
     // Shows ringing first — the POST succeeded — then reverts once the Device

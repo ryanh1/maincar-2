@@ -14,6 +14,7 @@ const { prismaMock, verifyTokenMock, mintVoiceAccessTokenMock, hangUpCallMock, p
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
+    org: { findFirst: vi.fn() },
     call: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
@@ -79,7 +80,7 @@ const ORG_A = 'org-a'
 const ORG_B = 'org-b'
 const URL_A = `/api/orgs/${ORG_A}/calls`
 
-const VALID_BODY = { toE164: '+13035550199', recordingConsent: 'granted' }
+const VALID_BODY = { toE164: '+13035550199' }
 
 function userRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -123,7 +124,10 @@ function callRow(overrides: Record<string, unknown> = {}) {
     direction: 'outbound',
     status: 'queued',
     twilioCallSid: null,
-    recordingConsent: 'granted',
+    recordingConsent: null,
+    recordingPlanned: true,
+    recordingReason: 'allowed',
+    destinationState: 'CO',
     recordingEnabled: null,
     recordingUrl: null,
     transcriptStatus: 'pending',
@@ -160,6 +164,11 @@ beforeEach(() => {
   prismaMock.call.findMany.mockResolvedValue([callRow()])
   prismaMock.call.count.mockResolvedValue(1)
   prismaMock.call.create.mockResolvedValue(callRow())
+  prismaMock.org.findFirst.mockResolvedValue({
+    recordCalls: true,
+    blockTwoPartyConsentStates: true,
+    recordingAllowedStates: [],
+  })
   prismaMock.call.updateMany.mockResolvedValue({ count: 1 })
   // Default: the dialed number matches no person, so a call to it still logs with
   // null CRM links. The CRM-spine tests override this to a match.
@@ -258,7 +267,8 @@ describe('GET /api/orgs/:orgId/calls', () => {
       'endedAt',
       'fromE164',
       'id',
-      'recordingConsent',
+      'recordingPlanned',
+      'recordingReason',
       'startedAt',
       'status',
       'toE164',
@@ -436,13 +446,15 @@ describe('GET /api/orgs/:orgId/calls/:id', () => {
     // The whole record a detail view needs, and no tenant internals.
     expect(Object.keys(res.body.call).sort()).toEqual([
       'createdAt',
+      'destinationState',
       'direction',
       'durationS',
       'endedAt',
       'fromE164',
       'id',
-      'recordingConsent',
       'recordingEnabled',
+      'recordingPlanned',
+      'recordingReason',
       'recordingUrl',
       'startedAt',
       'status',
@@ -621,7 +633,8 @@ describe('POST /api/orgs/:orgId/calls', () => {
       'direction',
       'fromE164',
       'id',
-      'recordingConsent',
+      'recordingPlanned',
+      'recordingReason',
       'status',
       'toE164',
       'twilioCallSid',
@@ -643,7 +656,9 @@ describe('POST /api/orgs/:orgId/calls', () => {
       toE164: '+13035550199',
       direction: 'outbound',
       status: 'queued',
-      recordingConsent: 'granted',
+      recordingPlanned: true,
+      recordingReason: 'allowed',
+      destinationState: 'CO',
     })
   })
 
@@ -696,25 +711,30 @@ describe('POST /api/orgs/:orgId/calls — invalid input', () => {
     expect(prismaMock.$transaction).not.toHaveBeenCalled()
   })
 
-  it('400s a missing recordingConsent, and dials nothing', async () => {
+  it('ignores a legacy recordingConsent value and keeps the server policy decision', async () => {
     const res = await request(app)
       .post(URL_A)
       .set('Authorization', AUTH)
-      .send({ toE164: '+13035550199' })
+      .send({ toE164: '+13035550199', recordingConsent: 'declined' })
 
-    expect(res.status).toBe(400)
-    expect(res.body.error).toBe('Send recordingConsent as "granted" or "declined".')
-    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+    expect(res.status).toBe(201)
+    expect(prismaMock.call.create.mock.calls[0][0].data).toMatchObject({
+      recordingPlanned: true,
+      recordingReason: 'allowed',
+    })
   })
 
-  it('400s an unrecognized recordingConsent value', async () => {
+  it('does not accept a client recordingConsent as a policy override', async () => {
     const res = await request(app)
       .post(URL_A)
       .set('Authorization', AUTH)
       .send({ toE164: '+13035550199', recordingConsent: 'maybe' })
 
-    expect(res.status).toBe(400)
-    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+    expect(res.status).toBe(201)
+    expect(prismaMock.call.create.mock.calls[0][0].data).toMatchObject({
+      recordingPlanned: true,
+      recordingReason: 'allowed',
+    })
   })
 
   it('400s when the caller has no active number, and dials nothing', async () => {

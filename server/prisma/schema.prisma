@@ -30,6 +30,12 @@ model Org {
   avatarKey String?
   enabled Boolean @default(true)
 
+  // Organization-level outbound call recording policy. An empty allowlist means
+  // every mapped US state is eligible, subject to the other two settings.
+  recordCalls                  Boolean  @default(true)
+  blockTwoPartyConsentStates   Boolean  @default(true)
+  recordingAllowedStates       String[] @default([])
+
   // Which version of the standard-schema seed (server/src/crm/standardObjects.ts)
   // this org has had applied. Set by seedOrg on org creation; a later release bumps
   // CURRENT_SEED_VERSION and the insert-missing-only backfill catches orgs behind
@@ -329,6 +335,15 @@ model Call {
 
   // Allowed values: "granted", "declined", or null if never asked.
   recordingConsent String?
+
+  // The server-owned policy decision made synchronously when the call is queued.
+  // Null preserves the history of calls created before MAI-260 introduced policy.
+  recordingPlanned Boolean?
+  // Allowed values: "allowed", "recording-disabled", "two-party-consent-state",
+  // "state-not-allowed", "unknown-destination-state". Null for legacy calls.
+  recordingReason String?
+  // USPS state resolved from the destination NPA, or null when unknown/non-US.
+  destinationState String?
 
   // True once recording actually started. Null before the call connects.
   recordingEnabled Boolean?

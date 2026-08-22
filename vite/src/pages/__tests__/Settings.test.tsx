@@ -40,7 +40,7 @@ describe('Settings', () => {
     expect(screen.getByText('profile tab content')).toBeInTheDocument()
   })
 
-  it('does not present Devices as a standalone Settings destination', () => {
+  it('adds Call recordings without reintroducing Devices as a standalone Settings destination', () => {
     renderWithProviders(<Settings />)
 
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
@@ -48,6 +48,7 @@ describe('Settings', () => {
       'Organization',
       'Members',
       'Phone numbers',
+      'Call recordings',
       'Email templates',
       'Signatures',
       'Integrations',

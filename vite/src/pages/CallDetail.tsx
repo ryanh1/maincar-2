@@ -90,7 +90,7 @@ function CallDetailBody({
 
       <CallFacts call={call} timeZone={timeZone} />
       <TranscriptSection status={call.transcriptStatus} transcript={call.transcript} />
-      <RecordingSection recordingUrl={call.recordingUrl} number={call.toE164} />
+      <RecordingSection recordingUrl={call.recordingUrl} number={call.toE164} reason={call.recordingReason} />
 
       {/* The reason this is dead is the whole message, so it is on the screen,
           not behind a hover. A tooltip is invisible until pointed at and absent
@@ -227,9 +227,11 @@ function CopyTranscriptButton({ text }: { text: string }) {
 function RecordingSection({
   recordingUrl,
   number,
+  reason,
 }: {
   recordingUrl: string | null
   number: string
+  reason: CallDetailShape['recordingReason']
 }) {
   return (
     <div className="rounded-md border border-border p-4">
@@ -249,9 +251,17 @@ function RecordingSection({
             </Button>
           </div>
         </div>
-      ) : (
-        <p className="mt-3 text-sm text-muted-foreground">This call has no recording.</p>
-      )}
+      ) : <p className="mt-3 text-sm text-muted-foreground">{recordingReason(reason)}</p>}
     </div>
   )
+}
+
+function recordingReason(reason: CallDetailShape['recordingReason']): string {
+  switch (reason) {
+    case 'recording-disabled': return 'Recording was disabled for the organization.'
+    case 'two-party-consent-state': return 'Recording was off because the destination appeared to be in a two-party-consent state.'
+    case 'state-not-allowed': return 'Recording was off because the destination was not in the organization’s allowed states.'
+    case 'unknown-destination-state': return 'Recording was off because the destination state could not be determined.'
+    default: return 'This call has no recording.'
+  }
 }

@@ -26,6 +26,7 @@ import { requireMembership } from '../lib/membership.js'
 import { crmLinksFromTarget, resolveDialTarget } from '../lib/callMatch.js'
 import { checkDialAllowed, type DialRefusal } from '../lib/dialGuard.js'
 import { IN_FLIGHT_STATUSES } from '../lib/callStatus.js'
+import { decideRecordingPolicy } from '../lib/recordingPolicy.js'
 import { activityFromCall, recordActivityInTx } from '../crm/activityFeed.js'
 import type { Call } from '../generated/prisma/client.js'
 
@@ -46,7 +47,8 @@ function mapCallToApi(call: Call) {
     status: call.status,
     fromE164: call.fromE164,
     toE164: call.toE164,
-    recordingConsent: call.recordingConsent,
+    recordingPlanned: call.recordingPlanned,
+    recordingReason: call.recordingReason,
     twilioCallSid: call.twilioCallSid,
     createdAt: call.createdAt.toISOString(),
   }
@@ -67,7 +69,8 @@ function mapCallToHistoryApi(call: Call) {
     status: call.status,
     fromE164: call.fromE164,
     toE164: call.toE164,
-    recordingConsent: call.recordingConsent,
+    recordingPlanned: call.recordingPlanned,
+    recordingReason: call.recordingReason,
     transcriptStatus: call.transcriptStatus,
     twilioCallSid: call.twilioCallSid,
     durationS: call.durationS,
@@ -91,7 +94,9 @@ function mapCallToDetailApi(call: Call, recordingUrl: string | null) {
     status: call.status,
     fromE164: call.fromE164,
     toE164: call.toE164,
-    recordingConsent: call.recordingConsent,
+    recordingPlanned: call.recordingPlanned,
+    recordingReason: call.recordingReason,
+    destinationState: call.destinationState,
     recordingEnabled: call.recordingEnabled,
     recordingUrl,
     transcriptStatus: call.transcriptStatus,
@@ -123,12 +128,6 @@ const createCallSchema = z.object({
       E164_PATTERN,
       'Enter the number in E.164 form — a plus, the country code, then digits, like +12025550123.',
     ),
-  // Consent is decided before the call is placed (the greenroom asks), so it is
-  // required here rather than defaulted: recording someone without a recorded
-  // decision is exactly the mistake this field exists to prevent.
-  recordingConsent: z.enum(['granted', 'declined'], {
-    error: 'Send recordingConsent as "granted" or "declined".',
-  }),
 })
 
 // --- List input ---
@@ -406,7 +405,7 @@ router.post(
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
-    const { toE164, recordingConsent } = parsed.data
+    const { toE164 } = parsed.data
 
     // The one instant this request means by "now". Both the calling-hours check
     // and the lastDialedAt it writes read it, so the moment a dial was judged
@@ -462,6 +461,24 @@ router.post(
         const refusal = checkDialAllowed(target, dialedAt)
         if (refusal) throw new DialRefused(refusal)
 
+        const recordingPolicy = await tx.org.findFirst({
+          where: { id: orgId },
+          select: {
+            recordCalls: true,
+            blockTwoPartyConsentStates: true,
+            recordingAllowedStates: true,
+          },
+        })
+        if (!recordingPolicy) throw new Error('Organization recording policy was not found')
+        const recordingDecision = decideRecordingPolicy(
+          {
+            recordCalls: recordingPolicy.recordCalls,
+            blockTwoPartyConsentStates: recordingPolicy.blockTwoPartyConsentStates,
+            allowedStates: recordingPolicy.recordingAllowedStates,
+          },
+          toE164,
+        )
+
         // orgId comes from the path and userId from the verified caller — neither
         // is read off the body. status is written out rather than left to the
         // schema default because this response promises it.
@@ -473,7 +490,9 @@ router.post(
             toE164,
             direction: 'outbound',
             status: 'queued',
-            recordingConsent,
+            recordingPlanned: recordingDecision.record,
+            recordingReason: recordingDecision.reason,
+            destinationState: recordingDecision.destinationState,
             personId: crmLinks.personId,
             companyId: crmLinks.companyId,
             dealId: crmLinks.dealId,

@@ -57,6 +57,7 @@ export const queryKeys = {
     // token per org is what the Device lifecycle actually needs.
     voiceToken: (orgId: string) => ['calls', 'voiceToken', orgId] as const,
   },
+  recordingPolicy: (orgId: string) => ['recordingPolicy', orgId] as const,
   phoneNumbers: {
     all: ['phoneNumbers'] as const,
     // Keyed by org only, not by any query: the list is not paginated (the route

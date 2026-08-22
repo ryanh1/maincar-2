@@ -85,7 +85,10 @@ function callRow(overrides: Record<string, unknown> = {}) {
     direction: 'outbound',
     status: 'queued',
     twilioCallSid: CALL_SID,
-    recordingConsent: 'granted',
+    recordingConsent: null,
+    recordingPlanned: true,
+    recordingReason: 'allowed',
+    destinationState: 'CO',
     recordingEnabled: null,
     recordingUrl: null,
     transcriptStatus: 'pending',
@@ -176,8 +179,8 @@ describe('a call the browser Device originated (carries our callId)', () => {
     expect(res.text).toContain('+13035550199')
   })
 
-  it('tells Twilio to record when the row’s recordingConsent is granted', async () => {
-    prismaMock.call.findFirst.mockResolvedValue(callRow({ recordingConsent: 'granted' }))
+  it('tells Twilio to record only when the stored policy decision allows it', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(callRow({ recordingPlanned: true }))
 
     const res = await post({ CallSid: CALL_SID, callId: 'call-1' })
 
@@ -185,10 +188,10 @@ describe('a call the browser Device originated (carries our callId)', () => {
     expect(res.text).toMatch(/recordingStatusCallback="[^"]*\/api\/twilio\/voice\/recording-status"/)
   })
 
-  it.each([['declined'], [null]])(
-    'never tells Twilio to record when recordingConsent is %s',
-    async (consent) => {
-      prismaMock.call.findFirst.mockResolvedValue(callRow({ recordingConsent: consent }))
+  it.each([[false], [null]])(
+    'never tells Twilio to record when recordingPlanned is %s',
+    async (recordingPlanned) => {
+      prismaMock.call.findFirst.mockResolvedValue(callRow({ recordingPlanned }))
 
       const res = await post({ CallSid: CALL_SID, callId: 'call-1' })
 

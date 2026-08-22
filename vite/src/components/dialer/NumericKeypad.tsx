@@ -5,14 +5,11 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { BuyNumberBanner } from '@/components/BuyNumberBanner'
 import { GreenRoom } from '@/components/GreenRoom'
 import type { DeviceSelection } from '@/components/DeviceCheck'
-import type { RecordingConsent } from '@/lib/callTypes'
 import {
   ENTRY_KEYS,
   IN_CALL_KEYS,
@@ -27,9 +24,6 @@ import { isAdoptableInFlightCallError, useCreateCall } from '@/hooks/dialer'
 import { useGetNumbers } from '@/hooks/phoneNumbers'
 import { clearGreenRoomCheckInStore, useGreenRoomDecision } from '@/hooks/devices'
 import { useDialer } from '@/components/dialer/dialerContext'
-
-/** Ties the consent checkbox to its label. */
-const CONSENT_ID = 'dialer-recording-consent'
 
 export interface NumericKeypadProps {
   className?: string
@@ -69,23 +63,12 @@ export interface NumericKeypadProps {
  * reason to bail (including an entry that does not parse), so the greenroom never
  * opens for a call that was never going out anyway.
  *
- * ## Recording consent (MAI-192)
- *
- * Captured here, per call, by the checkbox above the Call button. It is state,
- * not a prop: the spec allows recording only on an explicit opt-in for each
- * call, so there is no default to inherit and nothing to persist. It starts at
- * `declined` and returns there on every fresh keypad — the dock swaps this
- * component out for the in-call controls once a call is up, so a granted tick
- * can never outlive the call it was given for. The greenroom detour does not
- * reset it: the choice is made before `dial()` runs, whether or not the gate
- * opens.
  */
 export function NumericKeypad({ className }: NumericKeypadProps) {
   // The entry as digits plus an optional leading `+` — never the formatted text.
   // Formatting is derived on every render, so one keystroke is always one
   // character here and Backspace never has to step over a bracket or a dash.
   const [entry, setEntry] = useState('')
-  const [recordingConsent, setRecordingConsent] = useState<RecordingConsent>('declined')
   const { org } = useAuth()
   const { dialing, sendDigits } = useDialer()
   const createCall = useCreateCall()
@@ -130,7 +113,7 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
     (toE164: string) => {
       if (!org) return
       createCall.mutate(
-        { orgId: org.id, toE164, recordingConsent },
+        { orgId: org.id, toE164 },
         {
           onError: (err) => {
             // A 409 with a live Call is a recovered session, not an actionable
@@ -141,7 +124,7 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
         },
       )
     },
-    [org, createCall, recordingConsent],
+    [org, createCall],
   )
 
   // Place the call, or gate it behind the greenroom first. Guarded so an unusable
@@ -273,24 +256,6 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
         <BuyNumberBanner />
       ) : (
         <>
-          {/*
-            Consent rides with the Call button, not with the keypad grid: both are
-            hidden together when there is no line to call from, so a rep is never
-            offered a recording choice for a call they cannot place. It locks while
-            a call is in flight — the value the POST carried is already fixed, so a
-            togglable box would be a control that does nothing.
-          */}
-          <Label htmlFor={CONSENT_ID} className="cursor-pointer">
-            <Checkbox
-              id={CONSENT_ID}
-              checked={recordingConsent === 'granted'}
-              onCheckedChange={(checked) =>
-                setRecordingConsent(checked === true ? 'granted' : 'declined')
-              }
-              disabled={dialing || createCall.isPending}
-            />
-            Record this call
-          </Label>
           <Button
             type="button"
             variant="success"

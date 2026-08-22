@@ -20,7 +20,6 @@ export type {
   CallDetail,
   CallDirection,
   CallStatus,
-  RecordingConsent,
   TranscriptStatus,
   CreateCallInput,
   CallSortColumn,
