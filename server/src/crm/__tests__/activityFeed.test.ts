@@ -25,8 +25,14 @@ import {
   PREVIEW_MAX_LENGTH,
   recordActivityInTx,
   SUMMARY_MAX_LENGTH,
+  TIMELINE_EVENT_INTENSITIES,
+  TIMELINE_EVENT_MARKER_TYPES,
+  TIMELINE_EVENT_SUBTYPES,
+  TIMELINE_EVENT_VERSION,
+  validateTimelineEventProjection,
   type ActivityFeedClient,
   type NewActivityEntry,
+  type TimelineEventProjection,
 } from '../activityFeed.js'
 import type { Call, Email, Meeting, SmsMessage } from '../../generated/prisma/client.js'
 
@@ -206,6 +212,60 @@ describe('the string unions', () => {
     for (const value of ACTIVITY_DIRECTIONS) expect(isActivityDirection(value)).toBe(true)
     expect(isActivityDirection('internal')).toBe(false)
     expect(isActivityDirection(null)).toBe(false)
+  })
+
+  it('documents timeline-only source types as string values, never Prisma enums', () => {
+    expect(ACTIVITY_SOURCE_TYPES).toEqual(expect.arrayContaining(['task', 'record_created', 'custom']))
+  })
+})
+
+describe('the versioned timeline-event projection', () => {
+  function projection(overrides: Partial<TimelineEventProjection> = {}): TimelineEventProjection {
+    return {
+      version: TIMELINE_EVENT_VERSION,
+      title: 'Call with Jane Doe',
+      preview: 'Discussed the September rollout.',
+      subtype: 'completed',
+      intensity: 3,
+      display: {
+        actorName: 'Al Pha',
+        personName: 'Jane Doe',
+        dealName: 'Enterprise renewal',
+      },
+      ...overrides,
+    }
+  }
+
+  it('validates the durable v1 shape before it is written', () => {
+    expect(validateTimelineEventProjection(projection())).toMatchObject(projection())
+    expect(TIMELINE_EVENT_SUBTYPES).toContain('completed')
+    expect(TIMELINE_EVENT_INTENSITIES).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('keeps deal-ribbon marker data optional and typed', () => {
+    const marked = projection({
+      marker: { type: 'stage_moved', before: 'Discovery', after: 'Proposal' },
+    })
+
+    expect(validateTimelineEventProjection(marked)).toEqual(marked)
+    expect(TIMELINE_EVENT_MARKER_TYPES).toEqual([
+      'deal_created',
+      'stage_moved',
+      'closed_won',
+      'closed_lost',
+    ])
+  })
+
+  it.each([
+    projection({ version: 2 as never }),
+    projection({ title: '   ' }),
+    projection({ preview: 'x'.repeat(PREVIEW_MAX_LENGTH + 1) }),
+    projection({ subtype: 'not-a-subtype' as never }),
+    projection({ intensity: 0 as never }),
+    projection({ display: { actorName: '   ' } }),
+    projection({ marker: { type: 'stage_moved', before: 'Discovery' } as never }),
+  ])('rejects an invalid projection before persistence: %o', (invalid) => {
+    expect(() => validateTimelineEventProjection(invalid)).toThrow(ActivityFeedError)
   })
 })
 
@@ -483,6 +543,39 @@ describe('recordActivityInTx', () => {
     })
   })
 
+  it('persists a validated v1 projection while preserving the generic feed fields', async () => {
+    const { tx, calls } = fakeTx()
+    await recordActivityInTx(
+      tx,
+      entry({
+        timeline: {
+          version: 1,
+          title: 'Call with Jane Doe',
+          preview: 'Discussed the September rollout.',
+          subtype: 'completed',
+          intensity: 3,
+          display: { actorName: 'Al Pha', personName: 'Jane Doe', dealName: 'Enterprise renewal' },
+          marker: { type: 'stage_moved', before: 'Discovery', after: 'Proposal' },
+        },
+      }),
+    )
+
+    expect(calls[0].create).toMatchObject({
+      summary: 'Called +12025550123',
+      preview: 'Discussed the September rollout.',
+      timelineVersion: 1,
+      timelineTitle: 'Call with Jane Doe',
+      timelineSubtype: 'completed',
+      timelineIntensity: 3,
+      timelineDisplay: {
+        actorName: 'Al Pha',
+        personName: 'Jane Doe',
+        dealName: 'Enterprise renewal',
+      },
+      timelineMarker: { type: 'stage_moved', before: 'Discovery', after: 'Proposal' },
+    })
+  })
+
   it('condenses the summary and the preview before they are stored', async () => {
     const { tx, calls } = fakeTx()
     await recordActivityInTx(
@@ -518,6 +611,24 @@ describe('recordActivityInTx', () => {
     ).rejects.toBeInstanceOf(ActivityFeedError)
     await expect(
       recordActivityInTx(tx, entry({ direction: 'sideways' as never })),
+    ).rejects.toBeInstanceOf(ActivityFeedError)
+    expect(upsert).not.toHaveBeenCalled()
+  })
+
+  it('refuses an invalid timeline projection before it reaches Prisma', async () => {
+    const { tx, upsert } = fakeTx()
+    await expect(
+      recordActivityInTx(
+        tx,
+        entry({
+          timeline: {
+            version: 1,
+            title: 'Call with Jane Doe',
+            intensity: 0 as never,
+            display: {},
+          },
+        }),
+      ),
     ).rejects.toBeInstanceOf(ActivityFeedError)
     expect(upsert).not.toHaveBeenCalled()
   })
