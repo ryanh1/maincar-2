@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
 
@@ -30,14 +31,33 @@ describe('Settings_CallRecordingsTab', () => {
     useGetRecordingPolicyMock.mockReturnValue({
       isError: false,
       isLoading: false,
-      data: { recordingPolicy: { recordCalls: true, blockTwoPartyConsentStates: true, allowedStates: [] } },
+      data: { recordingPolicy: { recordCalls: true, blockedStates: ['CA', 'UNKNOWN'] } },
     })
 
     renderWithProviders(<Settings_CallRecordingsTab />)
 
     expect(screen.getByRole('switch', { name: 'Record calls' })).toBeChecked()
-    expect(screen.getByRole('switch', { name: 'Do not record in two-party-consent states' })).toBeChecked()
-    expect(screen.getByText('Leave empty to record every state allowed by the settings above.')).toBeInTheDocument()
+    expect(screen.getByText('Do not record in the following states')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /remove california/i })).not.toBeInTheDocument()
+  })
+
+  it('applies the two-party preset inside the selected-state picker', async () => {
+    const user = userEvent.setup()
+    const mutateAsync = vi.fn().mockResolvedValue(undefined)
+    useGetRecordingPolicyMock.mockReturnValue({
+      isError: false,
+      isLoading: false,
+      data: { recordingPolicy: { recordCalls: true, blockedStates: [] } },
+    })
+    useUpdateRecordingPolicyMock.mockReturnValue({ isPending: false, mutateAsync })
+
+    renderWithProviders(<Settings_CallRecordingsTab />)
+    await user.click(screen.getByRole('button', { name: /select states/i }))
+    await user.click(screen.getByRole('button', { name: 'Two-party consent states' }))
+
+    expect(mutateAsync).toHaveBeenCalledWith({
+      blockedStates: expect.arrayContaining(['CA', 'CT', 'WA']),
+    })
   })
 
   it('shows an actionable error when the initial policy request fails', () => {

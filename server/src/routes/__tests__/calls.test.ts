@@ -171,8 +171,7 @@ beforeEach(() => {
   prismaMock.call.create.mockResolvedValue(callRow())
   prismaMock.org.findFirst.mockResolvedValue({
     recordCalls: true,
-    blockTwoPartyConsentStates: true,
-    recordingAllowedStates: [],
+    recordingBlockedStates: ['CA', 'CT', 'DE', 'FL', 'IL', 'MD', 'MA', 'MI', 'MT', 'NV', 'NH', 'OR', 'PA', 'WA', 'UNKNOWN'],
   })
   prismaMock.call.updateMany.mockResolvedValue({ count: 1 })
   // Default: the dialed number matches no person, so a call to it still logs with

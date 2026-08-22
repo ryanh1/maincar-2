@@ -746,16 +746,14 @@ router.post(
           where: { id: orgId },
           select: {
             recordCalls: true,
-            blockTwoPartyConsentStates: true,
-            recordingAllowedStates: true,
+            recordingBlockedStates: true,
           },
         })
         if (!recordingPolicy) throw new Error('Organization recording policy was not found')
         const recordingDecision = decideRecordingPolicy(
           {
             recordCalls: recordingPolicy.recordCalls,
-            blockTwoPartyConsentStates: recordingPolicy.blockTwoPartyConsentStates,
-            allowedStates: recordingPolicy.recordingAllowedStates,
+            blockedStates: recordingPolicy.recordingBlockedStates,
           },
           toE164,
         )

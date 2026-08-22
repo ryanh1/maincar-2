@@ -32,6 +32,7 @@ export type CallStatus =
 export type RecordingDecisionReason =
   | 'allowed'
   | 'recording-disabled'
+  | 'state-blocked'
   | 'two-party-consent-state'
   | 'state-not-allowed'
   | 'unknown-destination-state'
