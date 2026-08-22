@@ -79,6 +79,10 @@ if [ "$(git -C "$SANDBOX/state/local-main.git" rev-parse main)" != "$(git -C "$S
   echo 'local bare mirror did not refresh after the merge' >&2
   exit 1
 fi
+if [ "$(git -C "$SANDBOX/issue-worktree" rev-parse origin/main)" != "$(git -C "$SANDBOX/state/local-main.git" rev-parse main)" ]; then
+  echo 'ticket origin/main did not refresh after the merge' >&2
+  exit 1
+fi
 
 if env "${env_for_test[@]}" bash -c 'cd "$2"; source "$1/.claude/scripts/coord/mc-common.sh"; mc_assert_ticket_checkout' _ "$ROOT" "$SANDBOX/primary"; then
   echo 'the primary checkout was allowed to run a ticket command' >&2
