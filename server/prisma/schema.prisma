@@ -52,6 +52,8 @@ model Org {
   transcripts        Transcript[]
   transcriptSegments TranscriptSegment[]
   callSpeakers       CallSpeaker[]
+  callComments       CallComment[]
+  callCommentReactions CallCommentReaction[]
   emailDrafts        EmailDraft[]
   emailTemplates     EmailTemplate[]
   oauthConnections   OAuthConnection[]
@@ -175,6 +177,8 @@ model User {
   invitationsAccepted Invitation[]      @relation("InvitationAcceptor")
   phoneNumbers        PhoneNumber[]
   calls               Call[]
+  callCommentsAuthored CallComment[]         @relation("CallCommentAuthor")
+  callCommentReactions CallCommentReaction[]
   emailDrafts         EmailDraft[]
   emailTemplates      EmailTemplate[]
   emailSignatures     EmailSignature[]
@@ -383,6 +387,7 @@ model Call {
   // existing readers remain compatible while consumers move to timed segments.
   finalTranscript Transcript?
   speakers        CallSpeaker[]
+  comments        CallComment[]
 
   // Billed duration in whole seconds, from Twilio's status callback.
   durationS Int?
@@ -512,6 +517,78 @@ model CallSpeaker {
   @@unique([callId, speakerKey])
   @@index([orgId])
   @@index([orgId, personId])
+}
+
+// A discussion item pinned to one authoritative media moment. Only roots carry
+// anchors; a reply reaches the same moment through its root parent, so transcript
+// regeneration can never move a reply independently of the thread it belongs to.
+model CallComment {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  callId String
+  call   Call   @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  parentId String?
+  parent   CallComment?  @relation("CallCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  CallComment[] @relation("CallCommentReplies")
+
+  // Null after author deletion: the org retains the discussion even when a
+  // departed teammate's account is removed.
+  authorUserId String?
+  author       User? @relation("CallCommentAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  // TipTap JSON is the rendered source; bodyText is server-derived with
+  // flattenTipTapText and is never accepted as a client assertion.
+  bodyJson Json
+  bodyText String
+
+  // Required only for root comments. atMs remains authoritative across transcript
+  // regeneration; the optional selection data can only re-highlight text.
+  atMs                Int?
+  anchorEndMs         Int?
+  anchorQuote         String?
+  selectionStartChar  Int?
+  selectionEndChar    Int?
+  transcriptId        String?
+
+  // Roots with replies are tombstoned; leaf comments can be removed completely.
+  deletedAt DateTime?
+
+  reactions CallCommentReaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([orgId, callId, createdAt])
+  @@index([parentId, createdAt])
+}
+
+// A user's one emoji on one comment. The compound key makes a retry of the same
+// reaction idempotent at the database boundary rather than relying on a racey read.
+model CallCommentReaction {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  commentId String
+  comment   CallComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  emoji String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([commentId, userId, emoji])
+  @@index([orgId])
+  @@index([commentId, createdAt])
 }
 
 // An immutable personal-greeting candidate. At most one candidate per org has
