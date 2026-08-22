@@ -22,6 +22,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { useCreateRecord, useGetFieldChanges, useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
+import { useWorkspaceUrlState } from '@/hooks/workspaceUrlState'
 import { useAuth } from '@/providers/useAuth'
 import { useDialer } from '@/components/dialer/dialerContext'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
@@ -187,6 +188,7 @@ function createdRecordId(response: unknown, object: ObjectDef): string | null {
 export function RecordGrid({ orgId, object, attributes, initialRecordId, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken, layout = 'grid', onLayoutChange }: RecordGridProps) {
   const { user } = useAuth()
   const { activeCall, dialing } = useDialer()
+  const [workspaceUrlState, updateWorkspaceUrlState] = useWorkspaceUrlState()
   const colors = useGridColors()
 
   // list-storage attributes (ListEntry-scoped) never appear in a row payload
@@ -767,7 +769,12 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
     return () => window.cancelAnimationFrame(frame)
   }, [createdRecordIdToFocus, displayRows, focusCell])
 
-  const [peekIndex, setPeekIndex] = useState<number | null>(null)
+  const peekIndex = useMemo(() => {
+    const selectedRecordId = workspaceUrlState.selectedRecordId
+    if (!selectedRecordId) return null
+    const index = displayRows.findIndex((row) => row.kind === 'record' && row.record.id === selectedRecordId)
+    return index >= 0 ? index : null
+  }, [displayRows, workspaceUrlState.selectedRecordId])
   const peekOpen = peekIndex !== null
 
   const focusRow = useCallback((row: number) => {
@@ -864,12 +871,15 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
     (row: number) => {
       if (!recordAtRow(row)) return
       focusRow(row)
-      setPeekIndex(row)
+      const record = recordAtRow(row)
+      if (record) updateWorkspaceUrlState((current) => ({ ...current, selectedRecordId: record.id }))
     },
-    [recordAtRow, focusRow],
+    [recordAtRow, focusRow, updateWorkspaceUrlState],
   )
 
-  const closePeek = useCallback(() => setPeekIndex(null), [])
+  const closePeek = useCallback(() => {
+    updateWorkspaceUrlState((current) => ({ ...current, selectedRecordId: undefined }))
+  }, [updateWorkspaceUrlState])
 
   const openedInitialRecordRef = useRef<string | null>(null)
   useEffect(() => {
@@ -890,16 +900,15 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
 
   const step = useCallback(
     (delta: 1 | -1) => {
-      setPeekIndex((prev) => {
-        if (prev === null) return prev
-        let next = prev + delta
-        while (next >= 0 && next < displayRows.length && !recordAtRow(next)) next += delta
-        if (next < 0 || next >= displayRows.length) return prev
-        focusRow(next)
-        return next
-      })
+      if (peekIndex === null) return
+      let next = peekIndex + delta
+      while (next >= 0 && next < displayRows.length && !recordAtRow(next)) next += delta
+      const record = recordAtRow(next)
+      if (!record) return
+      focusRow(next)
+      updateWorkspaceUrlState((current) => ({ ...current, selectedRecordId: record.id }))
     },
-    [displayRows.length, recordAtRow, focusRow],
+    [displayRows.length, peekIndex, recordAtRow, focusRow, updateWorkspaceUrlState],
   )
 
   // Space opens the drawer for the focused row (DECISIONS D3 — not Enter, which

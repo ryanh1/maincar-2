@@ -32,7 +32,7 @@ describe('CallDetail_DispositionForm', () => {
 
     renderWithProviders(<CallDetail_DispositionForm orgId="org-a" call={call} />)
 
-    expect(screen.getByRole('link', { name: 'Manage dispositions' })).toHaveAttribute('href', '/settings?tab=dispositions')
+    expect(screen.getByRole('link', { name: 'Manage dispositions' })).toHaveAttribute('href', '/settings/dispositions')
   })
 
   it('saves the selected outcome and note', async () => {

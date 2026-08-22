@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 
 import type { AttributeDef } from '@/lib/crmTypes'
 import { createViewConfig, reorderColumnGroup, toRecordListQuery, useViewConfig } from './viewConfig'
+import { encodeWorkspaceUrlState } from '@/lib/workspaceUrlState'
 
 const attributes = [
   { id: 'first-name', slug: 'firstName', name: 'First name' },
@@ -131,18 +132,16 @@ describe('viewConfig', () => {
 
     expect(result.current.config.sorts).toEqual([{ attributeId: 'first-name', direction: 'asc' }])
     expect(result.current.config.filterTree).toMatchObject({ attributeId: 'status', value: ['open'] })
-    expect(result.current.search).toContain('v=')
+    expect(result.current.search).toContain('ws=')
     expect(result.current.search).not.toContain('open')
   })
 
   it('restores a Team scope from the shared URL config', () => {
-    const encoded = btoa(JSON.stringify({
-      version: 1,
-      sorts: [],
-      teamScope: { teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] },
-    }))
+    const encoded = encodeWorkspaceUrlState({
+      viewConfig: { teamScope: { teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] } },
+    })
     const teamScopeWrapper = ({ children }: { children: ReactNode }) => (
-      <MemoryRouter initialEntries={[`/records/person?v=${encoded}`]}>{children}</MemoryRouter>
+      <MemoryRouter initialEntries={[`/records/person?ws=${encoded}`]}>{children}</MemoryRouter>
     )
 
     const { result } = renderHook(() => useViewConfig(attributes), { wrapper: teamScopeWrapper })
@@ -150,7 +149,7 @@ describe('viewConfig', () => {
     expect(result.current[0].teamScope).toEqual({ teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] })
   })
 
-  it('persists and shares the change-highlight mode, window, and changed-row switch', () => {
+  it('keeps change-highlight settings local instead of serializing them', () => {
     const { result } = renderHook(
       () => {
         const [config, updateConfig] = useViewConfig(attributes)
@@ -169,9 +168,9 @@ describe('viewConfig', () => {
     })
 
     expect(result.current.config.changeHighlight).toEqual({ mode: 'on', days: 30, onlyChangedRows: true })
-    const encoded = new URLSearchParams(result.current.search).get('v')
-    expect(encoded).not.toBeNull()
-    expect(JSON.parse(atob(encoded!))).toMatchObject({ changeHighlight: { mode: 'on', days: 30, onlyChangedRows: true } })
+    expect(result.current.search).toContain('ws=')
+    expect(result.current.search).not.toContain('changeHighlight')
+    expect(result.current.search).not.toContain('v=')
   })
 
   it('keeps display-only grid controls live in the route config', () => {

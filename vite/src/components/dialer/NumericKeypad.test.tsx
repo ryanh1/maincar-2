@@ -487,7 +487,7 @@ describe('NumericKeypad', () => {
     expect(screen.getByText('You need a number to call out.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Buy a number' })).toHaveAttribute(
       'href',
-      '/settings?tab=numbers',
+      '/settings/numbers',
     )
   })
 

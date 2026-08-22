@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
-import { useSearchParams } from 'react-router-dom'
 import { renderWithProviders } from '@/test/utils'
+import { useWorkspaceUrlState } from '@/hooks/workspaceUrlState'
+import { encodeWorkspaceUrlState } from '@/lib/workspaceUrlState'
 import { Settings_Integrations_MailboxDrawer } from './Settings_Integrations_MailboxDrawer'
 import type { Mailbox } from '@/lib/mailboxTypes'
 import * as mailboxHooks from '@/hooks/mailboxes'
@@ -53,10 +54,14 @@ const secondMailbox: Mailbox = {
   connectedAt: '2026-06-24T23:00:00Z',
 }
 
-/** Renders the current `?mailbox=` value beside the drawer, so a test can assert on it. */
+/** Renders the current selected opaque record id beside the drawer for assertions. */
 function MailboxParamProbe() {
-  const [params] = useSearchParams()
-  return <div data-testid="mailbox-param">{params.get('mailbox') ?? ''}</div>
+  const [state] = useWorkspaceUrlState()
+  return <div data-testid="mailbox-param">{state.selectedRecordId ?? ''}</div>
+}
+
+function mailboxRoute(mailboxId: string): string {
+  return `/settings/integrations?ws=${encodeWorkspaceUrlState({ selectedRecordId: mailboxId })}`
 }
 
 function renderDrawer(initialEntries: string[]) {
@@ -94,8 +99,8 @@ describe('Settings_Integrations_MailboxDrawer', () => {
     } as unknown as ReturnType<typeof mailboxHooks.useDisconnectMailbox>)
   })
 
-  it('opens on the mailbox named by ?mailbox= on first render', () => {
-    renderDrawer(['/settings?mailbox=mailbox-2'])
+  it('opens on the selected opaque record id on first render', () => {
+    renderDrawer([mailboxRoute('mailbox-2')])
     expect(screen.getByRole('heading', { name: 'work@gmail.com' })).toBeInTheDocument()
   })
 
@@ -105,14 +110,14 @@ describe('Settings_Integrations_MailboxDrawer', () => {
   })
 
   it('shows the connected-at date with a zone label, not a bare time', () => {
-    renderDrawer(['/settings?mailbox=mailbox-1'])
+    renderDrawer([mailboxRoute('mailbox-1')])
     // formatDateTime always appends a zone abbreviation (e.g. EDT); this asserts one
     // is present rather than pinning the exact string, which shifts with DST.
     expect(screen.getByText(/Connected .+ (E[SD]T)/)).toBeInTheDocument()
   })
 
-  it('closing the drawer clears the ?mailbox= param', async () => {
-    renderDrawer(['/settings?mailbox=mailbox-1'])
+  it('closing the drawer clears the selected record id', async () => {
+    renderDrawer([mailboxRoute('mailbox-1')])
     expect(screen.getByTestId('mailbox-param')).toHaveTextContent('mailbox-1')
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
@@ -121,14 +126,14 @@ describe('Settings_Integrations_MailboxDrawer', () => {
   })
 
   it('closes rather than rendering an empty drawer when the id no longer exists', async () => {
-    renderDrawer(['/settings?mailbox=stale-id'])
+    renderDrawer([mailboxRoute('stale-id')])
 
     await waitFor(() => expect(screen.getByTestId('mailbox-param')).toHaveTextContent(''))
     expect(screen.queryByRole('heading', { name: /@gmail.com/ })).not.toBeInTheDocument()
   })
 
   it('saves the display name', () => {
-    renderDrawer(['/settings?mailbox=mailbox-1'])
+    renderDrawer([mailboxRoute('mailbox-1')])
 
     const input = screen.getByLabelText('Name this mailbox')
     fireEvent.change(input, { target: { value: 'Sales inbox' } })
@@ -141,18 +146,18 @@ describe('Settings_Integrations_MailboxDrawer', () => {
   })
 
   it('disables Save until the name actually changes', () => {
-    renderDrawer(['/settings?mailbox=mailbox-2'])
+    renderDrawer([mailboxRoute('mailbox-2')])
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
   })
 
   it('shows the Primary badge for the primary mailbox, and no promote button', () => {
-    renderDrawer(['/settings?mailbox=mailbox-1'])
+    renderDrawer([mailboxRoute('mailbox-1')])
     expect(screen.getByText('Primary')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Make primary/i })).not.toBeInTheDocument()
   })
 
   it('offers "Make primary" on a non-primary mailbox, and promotes on click', () => {
-    renderDrawer(['/settings?mailbox=mailbox-2'])
+    renderDrawer([mailboxRoute('mailbox-2')])
     fireEvent.click(screen.getByRole('button', { name: /Make primary/i }))
     expect(mockSetPrimary).toHaveBeenCalledWith(
       { orgId: mockOrgId, mailboxId: 'mailbox-2' },
@@ -161,7 +166,7 @@ describe('Settings_Integrations_MailboxDrawer', () => {
   })
 
   it('does not render a sync, import, or automation control', () => {
-    renderDrawer(['/settings?mailbox=mailbox-1'])
+    renderDrawer([mailboxRoute('mailbox-1')])
     expect(screen.queryByText(/sync/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/import/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/automation/i)).not.toBeInTheDocument()
@@ -169,7 +174,7 @@ describe('Settings_Integrations_MailboxDrawer', () => {
 
   describe('Disconnect', () => {
     it('opens a confirm dialog naming the address', () => {
-      renderDrawer(['/settings?mailbox=mailbox-1'])
+      renderDrawer([mailboxRoute('mailbox-1')])
       fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
     expect(
       screen.getByRole('heading', { name: 'Disconnect user@gmail.com?' }),
@@ -180,14 +185,14 @@ describe('Settings_Integrations_MailboxDrawer', () => {
     })
 
     it('does not disconnect until confirmed', () => {
-      renderDrawer(['/settings?mailbox=mailbox-1'])
+      renderDrawer([mailboxRoute('mailbox-1')])
       fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
       expect(mockDisconnect).not.toHaveBeenCalled()
     })
 
     it('disconnects and clears the param on confirm', () => {
-      renderDrawer(['/settings?mailbox=mailbox-1'])
+      renderDrawer([mailboxRoute('mailbox-1')])
       fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
       const confirmButtons = screen.getAllByRole('button', { name: 'Disconnect' })
       fireEvent.click(confirmButtons[confirmButtons.length - 1])

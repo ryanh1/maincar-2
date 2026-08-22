@@ -159,33 +159,29 @@ describe('the member list', () => {
     expect(screen.getByText('Invite someone to work with you.')).toBeInTheDocument()
   })
 
-  it('asks the SERVER for the page, sort, search, and role — it never slices locally', () => {
+  it('asks the SERVER for safe page and sort state while ignoring literal search and role filters', () => {
     renderWithProviders(<Settings_MembersTab />, {
       initialEntries: ['/settings?q=al&sort=name&dir=desc&page=3&role=admin'],
     })
 
-    // The role filter goes to the server too, so `total` and the page boundaries
-    // describe the filtered set rather than the unfiltered one.
     expect(useGetMembersMock).toHaveBeenCalledWith('org-a', {
       page: 3,
       limit: 25,
       sort: 'name',
       dir: 'desc',
-      q: 'al',
-      role: ['admin'],
+      q: undefined,
+      role: [],
     })
   })
 
-  it('restores the search, sort, and page from the URL on reload', () => {
+  it('restores safe sort and page state but not search or role literals', () => {
     renderWithProviders(<Settings_MembersTab />, {
       initialEntries: ['/settings?q=pha&sort=email&dir=desc&page=2&role=admin'],
     })
 
-    expect(screen.getByLabelText('Search members')).toHaveValue('pha')
-    // The role filter carries its count back from the URL — as plain text, not a
-    // chip: a chip inside a button takes the button's hover and press states.
+    expect(screen.getByLabelText('Search members')).toHaveValue('')
     const filter = screen.getByRole('button', { name: /Filter by role/ })
-    expect(filter).toHaveTextContent('1')
+    expect(filter).not.toHaveTextContent('1')
     expect(filter.querySelector('[data-slot="badge"]')).toBeNull()
   })
 

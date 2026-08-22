@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp, Phone, Search, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,19 +31,18 @@ const COLUMNS: { label: string; sort: CallSortColumn | null; className?: string 
 /**
  * Every call this organization has placed, most recent first.
  *
- * Search, sort, and page all live in the QUERY STRING, so a reload or a pasted
- * link restores the same view. The list itself is paged, sorted, and searched on
- * the SERVER — the browser never holds more than one page of a history that can
- * run to tens of thousands of rows.
+ * Sort and page are URL state, while the entered number stays in ephemeral
+ * client state so a copied link cannot expose it. The list itself is paged,
+ * sorted, and searched on the SERVER — the browser never holds more than one
+ * page of a history that can run to tens of thousands of rows.
  */
 export function Calls() {
   const { user, org } = useAuth()
 
-  // Everything the table shows lives in the URL, so a reload or a pasted link
-  // restores the same view. `setUrlParams` writes several keys in one navigation —
-  // two single-key setters in one handler would clobber each other.
+  // Safe table configuration remains navigable. The entered phone number is
+  // intentionally local, while `setUrlParams` updates sort and page together.
   const setUrlParams = useSetUrlParams()
-  const [search] = useUrlString('q', '')
+  const [search, setSearch] = useState('')
   const [sort] = useUrlString('sort', 'createdAt')
   const [dir] = useUrlString('dir', 'desc')
   const [page, setPage] = useUrlInt('page', 1)
@@ -100,12 +100,12 @@ export function Calls() {
               placeholder="Search by number"
               aria-label="Search calls by number"
               value={search}
-              onChange={(event) => setUrlParams({ q: event.target.value, page: null })}
+              onChange={(event) => { setSearch(event.target.value); setPage(1) }}
             />
           </div>
 
           {hasSearch && (
-            <Button variant="ghost" size="sm" onClick={() => setUrlParams({ q: null, page: null })}>
+            <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setPage(1) }}>
               <X size={16} aria-hidden />
               Clear
             </Button>

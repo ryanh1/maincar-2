@@ -32,7 +32,7 @@ it('prompts the buy, linked to phone number settings, when there is no active nu
   expect(screen.getByText('You need a number to call out.')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Buy a number' })).toHaveAttribute(
     'href',
-    '/settings?tab=numbers',
+    '/settings/numbers',
   )
 })
 

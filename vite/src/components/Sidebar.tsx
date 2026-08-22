@@ -21,8 +21,8 @@ const NAV = [
 
 // The badge deep-links to the Integrations tab, not just to Settings: a rep who is
 // not on that page is exactly the one who needs telling. The tab is selected by the
-// `tab` query param (Settings.tsx), so the fix is one click away.
-const INTEGRATIONS_TAB = '/settings?tab=integrations'
+// Settings path segment (Settings.tsx), so the fix is one click away.
+const INTEGRATIONS_TAB = '/settings/integrations'
 
 /**
  * The badge's accessible name. It names the problem AND the fix, never a bare number

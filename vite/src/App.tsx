@@ -17,7 +17,7 @@ import { Home } from '@/pages/Home'
 import { JoinOrg } from '@/pages/JoinOrg'
 import { Records } from '@/pages/Records'
 import { Reports } from '@/pages/Reports'
-import { Settings } from '@/pages/Settings'
+import { Settings, SettingsLegacyRedirect } from '@/pages/Settings'
 import { Welcome } from '@/pages/Welcome'
 import { VoicemailDetail } from '@/pages/VoicemailDetail'
 import { Voicemails } from '@/pages/Voicemails'
@@ -45,7 +45,8 @@ const router = createBrowserRouter([
       { path: 'lists/:listId', element: <CrmGrid /> },
       { path: 'welcome', element: <Welcome /> },
       { path: 'create-org', element: <CreateOrg /> },
-      { path: 'settings', element: <Settings /> },
+      { path: 'settings', element: <SettingsLegacyRedirect /> },
+      { path: 'settings/:section', element: <Settings /> },
     ],
   },
   { path: '*', element: <Navigate to="/" replace /> },

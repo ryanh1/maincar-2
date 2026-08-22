@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -32,7 +33,7 @@ const COLUMNS: { label: string; sort: PhoneNumberSortColumn | null; className?: 
 export function Settings_PhoneNumbers_OrgTable({ orgId }: { orgId: string }) {
   const { org, user } = useAuth()
   const setUrlParams = useSetUrlParams()
-  const [search] = useUrlString('q', '')
+  const [search, setSearch] = useState('')
   const [sort] = useUrlString('sort', 'createdAt')
   const [dir] = useUrlString('dir', 'desc')
   const [page, setPage] = useUrlInt('page', 1)
@@ -84,11 +85,11 @@ export function Settings_PhoneNumbers_OrgTable({ orgId }: { orgId: string }) {
               placeholder="Search by number"
               aria-label="Search organization phone numbers"
               value={search}
-              onChange={(event) => setUrlParams({ q: event.target.value, page: null })}
+              onChange={(event) => { setSearch(event.target.value); setPage(1) }}
             />
           </div>
           {hasSearch && (
-            <Button variant="ghost" size="sm" onClick={() => setUrlParams({ q: null, page: null })}>
+            <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setPage(1) }}>
               <X size={16} aria-hidden />
               Clear
             </Button>

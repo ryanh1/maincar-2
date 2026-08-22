@@ -1,4 +1,5 @@
 import { ArrowDown, ArrowUp, ChevronDown, Search, X } from 'lucide-react'
+import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -14,7 +15,6 @@ import type { MemberSortColumn } from '@/hooks/orgs'
 import {
   toggleArrayValue,
   useSetUrlParams,
-  useUrlArray,
   useUrlInt,
   useUrlString,
 } from '@/hooks/urlState'
@@ -42,23 +42,21 @@ const COLUMNS: { label: string; sort: MemberSortColumn | null; className?: strin
  * Settings → Members: who is in this organization, what they hold, and how an
  * admin changes or ends it.
  *
- * Search, role filter, sort, and page all live in the QUERY STRING, so a reload
- * or a pasted link restores the same view. The list itself is paged, sorted, and
- * searched on the server — the browser never holds more than one page.
+ * Sort and page are URL state. Search text and role filters remain ephemeral so
+ * a copied link cannot expose names, email addresses, or the filter values.
  *
  * Every disabled control here is a courtesy. The server re-checks all of it.
  */
 export function Settings_MembersTab() {
   const { user, org } = useAuth()
 
-  // Everything the table is showing lives in the URL, so a reload or a pasted
-  // link restores the same view. `setUrlParams` writes several of them at once —
-  // two single-key setters in one handler would clobber each other.
+  // Safe table configuration remains navigable. Search and role selection stay
+  // local, while `setUrlParams` updates related safe values together.
   const setUrlParams = useSetUrlParams()
-  const [search] = useUrlString('q', '')
+  const [search, setSearch] = useState('')
   const [sort] = useUrlString('sort', 'joinedAt')
   const [dir] = useUrlString('dir', 'asc')
-  const [roleFilter] = useUrlArray('role')
+  const [roleFilter, setRoleFilter] = useState<string[]>([])
   const [page, setPage] = useUrlInt('page', 1)
 
   const orgId = org?.id ?? null
@@ -118,7 +116,7 @@ export function Settings_MembersTab() {
               placeholder="Search name or email"
               aria-label="Search members"
               value={search}
-              onChange={(event) => setUrlParams({ q: event.target.value, page: null })}
+              onChange={(event) => { setSearch(event.target.value); setPage(1) }}
             />
           </div>
 
@@ -148,9 +146,10 @@ export function Settings_MembersTab() {
                 >
                   <Checkbox
                     checked={roleFilter.includes(role)}
-                    onCheckedChange={() =>
-                      setUrlParams({ role: toggleArrayValue(roleFilter, role), page: null })
-                    }
+                    onCheckedChange={() => {
+                      setRoleFilter(toggleArrayValue(roleFilter, role))
+                      setPage(1)
+                    }}
                   />
                   {getRoleLabel(role)}
                 </label>
@@ -162,7 +161,7 @@ export function Settings_MembersTab() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setUrlParams({ q: null, role: [], page: null })}
+              onClick={() => { setSearch(''); setRoleFilter([]); setPage(1) }}
             >
               <X size={16} aria-hidden />
               Clear
