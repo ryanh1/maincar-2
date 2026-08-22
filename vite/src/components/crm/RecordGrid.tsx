@@ -25,6 +25,7 @@ import { useAuth } from '@/providers/useAuth'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { buildGridCell, coerceForType, FLAGGED_THEME, parseOptions } from './cellBuilder'
 import { chipCellRenderer, type ChipCellData } from './chipCell'
+import { fieldEditorCellRenderer, type FieldEditorCellData } from './fieldEditorCell'
 import { GridViewToolbar } from './GridViewToolbar'
 import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
@@ -228,9 +229,9 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
       const record = displayRow.record
       const value = cellValue(record, attr)
       const flagged = flaggedCells.has(`${record.id}:${attr.slug}`)
-      return buildGridCell(attr, value, { timeZone: user?.timeZone, flagged })
+      return buildGridCell(attr, value, { orgId, timeZone: user?.timeZone, currencyCode: typeof record.currency === 'string' ? record.currency : undefined, flagged })
     },
-    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups],
+    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups, orgId],
   )
 
   // The single coercion seam: runs for a typed commit AND a paste (glide
@@ -300,8 +301,10 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
       } else if (newValue.kind === GridCellKind.Number) {
         stored = newValue.data ?? null
       } else if (newValue.kind === GridCellKind.Custom) {
-        const chipData = newValue.data as ChipCellData
-        stored = attr.isMulti ? chipData.selectedValues : (chipData.selectedValues[0] ?? null)
+        const customData = newValue.data as ChipCellData | FieldEditorCellData
+        stored = customData.kind === 'field-editor-cell'
+          ? customData.value
+          : attr.isMulti ? customData.selectedValues : (customData.selectedValues[0] ?? null)
       } else if (newValue.kind === GridCellKind.Text) {
         const command = parseGridCommand(newValue.data, { type: attr.type, options: parseOptions(attr.optionsJson) })
         stored = command.kind === 'value' ? command.value : newValue.data === '' ? null : newValue.data
@@ -679,7 +682,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         getCellContent={getCellContent}
         onCellEdited={onCellEdited}
         validateCell={validateCell}
-        customRenderers={[chipCellRenderer]}
+        customRenderers={[chipCellRenderer, fieldEditorCellRenderer]}
         rows={gridRowCount}
         freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
         rowHeight={ROW_HEIGHTS[config.rowHeight]}

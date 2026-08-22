@@ -27,6 +27,10 @@ describe('formatDate', () => {
     expect(formatDate(new Date(NY_END_OF_SEP_4), 'America/New_York')).toBe('Sep 4, 2026')
   })
 
+  it('keeps a date-only value on the same calendar day in a western viewing zone', () => {
+    expect(formatDate('2026-08-24', 'America/New_York')).toBe('Aug 24, 2026')
+  })
+
   it('renders nothing for a value that is not a date', () => {
     expect(formatDate('not-a-date', 'America/New_York')).toBe('')
   })

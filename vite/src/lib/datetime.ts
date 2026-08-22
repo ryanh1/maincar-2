@@ -48,7 +48,12 @@ export function formatDateTime(value: string | Date, timeZone: string | null | u
  * pins the same calendar date for every reader, which is the point.
  */
 export function formatDate(value: string | Date, timeZone: string | null | undefined): string {
-  const date = typeof value === 'string' ? new Date(value) : value
+  const date =
+    typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ? new Date(`${value}T12:00:00.000Z`)
+      : typeof value === 'string'
+        ? new Date(value)
+        : value
   if (Number.isNaN(date.getTime())) return ''
 
   return new Intl.DateTimeFormat('en-US', {

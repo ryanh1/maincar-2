@@ -28,6 +28,11 @@ describe('formatCellValue', () => {
     expect(formatCellValue(false, 'checkbox', null)).toBe('No')
   })
 
+  it('renders currency through the locale formatter, including minor-unit deal amounts', () => {
+    expect(formatCellValue(42.5, 'currency', null)).toBe('$42.50')
+    expect(formatCellValue('12345', 'currency', null, 'USD', true)).toBe('$123.45')
+  })
+
   it('stringifies a plain scalar for every other type', () => {
     expect(formatCellValue('Ada', 'person_name', null)).toBe('Ada')
     expect(formatCellValue(42, 'number', null)).toBe('42')

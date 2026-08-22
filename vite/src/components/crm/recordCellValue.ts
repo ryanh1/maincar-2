@@ -14,6 +14,8 @@ export function formatCellValue(
   value: unknown,
   type: AttributeType,
   timeZone: string | null | undefined,
+  currencyCode = 'USD',
+  isMinorCurrency = false,
 ): string {
   if (value === null || value === undefined || value === '') return ''
 
@@ -24,6 +26,13 @@ export function formatCellValue(
       return formatDate(String(value), timeZone)
     case 'checkbox':
       return value ? 'Yes' : 'No'
+    case 'currency': {
+      const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
+      if (!Number.isFinite(numeric)) return String(value)
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: currencyCode }).format(
+        isMinorCurrency ? numeric / 100 : numeric,
+      )
+    }
     default:
       return typeof value === 'object' ? JSON.stringify(value) : String(value)
   }

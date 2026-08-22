@@ -60,9 +60,9 @@ describe('buildGridCell', () => {
     expect(cell).toMatchObject({ kind: GridCellKind.Boolean, data: true })
   })
 
-  it('renders currency as a Number cell formatted to two decimals', () => {
+  it('renders currency as an editable custom cell', () => {
     const cell = buildGridCell(attribute({ type: 'currency' }), 42.5, { timeZone: null })
-    expect(cell).toMatchObject({ kind: GridCellKind.Number, data: 42.5, displayData: '42.50' })
+    expect(cell).toMatchObject({ kind: GridCellKind.Custom, data: { kind: 'field-editor-cell', value: 42.5 } })
   })
 
   it('renders select as a chip Custom cell carrying the option list', () => {
@@ -90,9 +90,16 @@ describe('buildGridCell', () => {
     expect(cell.data.selectedValues).toEqual(['a', 'b'])
   })
 
-  it('renders a record reference as read-only', () => {
-    const cell = buildGridCell(attribute({ type: 'record_reference' }), 'rec_1', { timeZone: null })
-    expect(cell).toMatchObject({ readonly: true, allowOverlay: false })
+  it('renders date, currency, and reference fields with the shared typed editor cell', () => {
+    for (const type of ['date', 'currency', 'record_reference', 'user_reference'] as const) {
+      const cell = buildGridCell(attribute({ type }), 'rec_1', { timeZone: null, orgId: 'org-1' })
+      expect(cell).toMatchObject({
+        kind: GridCellKind.Custom,
+        readonly: false,
+        allowOverlay: true,
+        data: { kind: 'field-editor-cell', orgId: 'org-1', value: 'rec_1' },
+      })
+    }
   })
 
   it('marks a flagged cell with a red-tinted theme override', () => {

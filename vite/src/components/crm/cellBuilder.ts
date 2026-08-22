@@ -12,6 +12,7 @@ import {
   type CoercionResult,
 } from './cellCoercion'
 import type { ChipCellData } from './chipCell'
+import type { FieldEditorCellData } from './fieldEditorCell'
 import { formatCellValue } from './recordCellValue'
 
 export function parseOptions(optionsJson: unknown): AttributeOption[] {
@@ -66,12 +67,39 @@ function textCell(display: string, opts: { readOnly: boolean; flagged?: boolean 
 
 export interface BuildGridCellOptions {
   timeZone: string | null | undefined
+  orgId?: string
+  currencyCode?: string
   flagged?: boolean
+}
+
+function fieldEditorCell(attr: AttributeDef, value: unknown, opts: BuildGridCellOptions): GridCell {
+  const data: FieldEditorCellData = {
+    kind: 'field-editor-cell',
+    attribute: attr,
+    value,
+    orgId: opts.orgId ?? '',
+    timeZone: opts.timeZone,
+    currencyCode: opts.currencyCode,
+  }
+  return {
+    kind: GridCellKind.Custom,
+    data,
+    copyData: formatCellValue(value, attr.type, opts.timeZone, opts.currencyCode, attr.slug === 'amountMinor'),
+    allowOverlay: !attr.isReadOnly,
+    readonly: attr.isReadOnly,
+  }
 }
 
 /** Renderer + editor per `AttributeDef.type` (issue MAI-169 / CHUNK-1 §C). */
 export function buildGridCell(attr: AttributeDef, value: unknown, opts: BuildGridCellOptions): GridCell {
   switch (attr.type) {
+    case 'date':
+    case 'timestamp':
+    case 'currency':
+    case 'record_reference':
+    case 'user_reference':
+      return fieldEditorCell(attr, value, opts)
+
     case 'checkbox':
       return {
         kind: GridCellKind.Boolean,
@@ -87,17 +115,6 @@ export function buildGridCell(attr: AttributeDef, value: unknown, opts: BuildGri
         kind: GridCellKind.Number,
         data: num,
         displayData: num === undefined ? '' : String(num),
-        allowOverlay: !attr.isReadOnly,
-        readonly: attr.isReadOnly,
-      }
-    }
-
-    case 'currency': {
-      const num = typeof value === 'number' ? value : undefined
-      return {
-        kind: GridCellKind.Number,
-        data: num,
-        displayData: num === undefined ? '' : num.toFixed(2),
         allowOverlay: !attr.isReadOnly,
         readonly: attr.isReadOnly,
       }
@@ -130,11 +147,6 @@ export function buildGridCell(attr: AttributeDef, value: unknown, opts: BuildGri
       }
     }
 
-    // Editing a reference is a picker UI (CHUNK-3 composite cells) — out of
-    // this slice. Render the current value read-only rather than fake an
-    // editor with nowhere to write.
-    case 'record_reference':
-    case 'user_reference':
     case 'ai':
       return textCell(String(value ?? ''), { readOnly: true })
 
