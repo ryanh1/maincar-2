@@ -81,7 +81,7 @@ describe('GreenRoom opening', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Check your devices' })).toBeInTheDocument()
     // DeviceCheck itself, not a stand-in for it.
-    expect(screen.getByRole('heading', { name: 'Check your audio' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Audio devices' })).toBeInTheDocument()
     expect(screen.getByLabelText('Microphone')).toBeInTheDocument()
     expect(screen.getByLabelText('Speaker')).toBeInTheDocument()
   })
@@ -301,15 +301,11 @@ describe('GreenRoom confirm', () => {
 
 describe('GreenRoom when the microphone is blocked', () => {
   it('names the fix and refuses to dial', () => {
-    mockDevices({
-      error: 'Maincar needs your microphone to make calls. Allow microphone access in your browser settings, then try again.',
-    })
+    mockDevices({ error: 'Allow the microphone in your browser settings to start calling.' })
     mockDecision('mic-denied', 'denied')
     renderGreenRoom()
 
-    expect(
-      screen.getByText('Allow the microphone in your browser settings to start calling.'),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Allow your microphone' })).toBeInTheDocument()
     // Never a live-looking control that cannot work.
     expect(screen.getByRole('button', { name: 'Start call' })).toBeDisabled()
     // Still an escape hatch, so the dialog is not a trap.

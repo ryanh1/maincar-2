@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 
 const { useGetDevicesMock } = vi.hoisted(() => ({ useGetDevicesMock: vi.fn() }))
 vi.mock('@/hooks/devices', () => ({
+  MICROPHONE_PERMISSION_MESSAGE: 'Allow the microphone in your browser settings to start calling.',
   useGetDevices: useGetDevicesMock,
   useNetworkStatus: () => ({ online: true }),
 }))
@@ -23,6 +24,6 @@ describe('Settings_DevicesTab', () => {
 
     expect(screen.getByRole('heading', { name: 'Devices' })).toBeInTheDocument()
     // DeviceCheck itself, not a stand-in for it — same as the greenroom shows.
-    expect(screen.getByRole('heading', { name: 'Check your audio' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Audio devices' })).toBeInTheDocument()
   })
 })

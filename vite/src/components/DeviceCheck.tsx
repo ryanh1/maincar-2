@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CircleAlert, CircleCheck, LoaderCircle, Wifi, WifiOff } from 'lucide-react'
+import { CircleAlert, LoaderCircle } from 'lucide-react'
 
 import { Meter } from '@/components/DeviceCheck_Meter'
 import { Button } from '@/components/ui/button'
@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useGetDevices, useNetworkStatus, type AudioDevice } from '@/hooks/devices'
+import { MICROPHONE_PERMISSION_MESSAGE, useGetDevices, type AudioDevice } from '@/hooks/devices'
 import { readDeviceChoice, resolveDeviceId, saveDeviceChoice } from '@/lib/deviceStorage'
 import { cn } from '@/lib/utils'
 
@@ -109,7 +109,6 @@ export interface DeviceCheckProps {
  */
 export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) {
   const { microphones, speakers, isLoading, error, refetch } = useGetDevices()
-  const { online } = useNetworkStatus()
 
   // The rep's *preference*, which is not always the device in front of them.
   const [preferredMicrophoneId, setPreferredMicrophoneId] = useState<string | null>(
@@ -396,14 +395,9 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
   return (
     <section
       className={cn('flex max-w-md flex-col gap-4', className)}
-      aria-labelledby="deviceCheckTitle"
+      aria-label="Audio devices"
     >
-      <h2 id="deviceCheckTitle" className="text-sm font-semibold">
-        Check your audio
-      </h2>
-
       <PermissionStatus isLoading={isLoading} error={error} onRetry={refetch} />
-      <NetworkStatusLine online={online} />
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
@@ -474,7 +468,7 @@ function deviceLabel(device: AudioDevice, index: number, kind: string): string {
 }
 
 /**
- * Granted, denied, or pending — an icon plus words, never colour alone.
+ * Pending or failed — an icon plus words, never colour alone.
  *
  * On failure it shows `useGetDevices`'s own sentence verbatim. That string is
  * already written to name the rep's next action, so wrapping it in a generic
@@ -503,6 +497,22 @@ function PermissionStatus({
   }
 
   if (error) {
+    if (error === MICROPHONE_PERMISSION_MESSAGE) {
+      return (
+        <div className="flex items-start gap-2 text-sm text-status-failed">
+          <span className="flex h-5 shrink-0 items-center">
+            <CircleAlert size={16} aria-hidden="true" />
+          </span>
+          <span>
+            <Button type="button" variant="link" size="sm" className="px-0" onClick={onRetry}>
+              Allow your microphone
+            </Button>{' '}
+            in your browser settings to start calling.
+          </span>
+        </div>
+      )
+    }
+
     return (
       <div className="flex items-start gap-2 text-sm text-status-failed">
         <span className="flex h-5 shrink-0 items-center">
@@ -518,35 +528,7 @@ function PermissionStatus({
     )
   }
 
-  return (
-    <p className="flex items-center gap-2 text-sm text-status-success">
-      <CircleCheck size={16} aria-hidden="true" className="shrink-0" />
-      Microphone allowed.
-    </p>
-  )
-}
-
-/**
- * A rep who blames a dead microphone when the real problem is no network
- * connection needs that ruled out first, not last. Colour is never the only
- * signal — the words carry it too.
- */
-function NetworkStatusLine({ online }: { online: boolean }) {
-  if (online) {
-    return (
-      <p className="flex items-center gap-2 text-sm text-status-success">
-        <Wifi size={16} aria-hidden="true" className="shrink-0" />
-        Connected.
-      </p>
-    )
-  }
-
-  return (
-    <p className="flex items-center gap-2 text-sm text-status-failed">
-      <WifiOff size={16} aria-hidden="true" className="shrink-0" />
-      No internet connection. Check your network, then try again.
-    </p>
-  )
+  return null
 }
 
 function DeviceSelect({

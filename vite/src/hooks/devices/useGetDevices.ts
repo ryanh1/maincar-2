@@ -5,8 +5,8 @@ import type { AudioDevice, UseGetDevicesResult } from './types'
 // Every message names the next action, per .claude/rules/copy.md.
 const NO_MEDIA_DEVICES =
   'This browser cannot reach your microphone. Open Maincar over https in Chrome, Edge, Safari, or Firefox.'
-const PERMISSION_DENIED =
-  'Maincar needs your microphone to make calls. Allow microphone access in your browser settings, then try again.'
+export const MICROPHONE_PERMISSION_MESSAGE =
+  'Allow the microphone in your browser settings to start calling.'
 const NO_MICROPHONE = 'No microphone found. Plug one in, then try again.'
 const ENUMERATE_FAILED = 'Could not read your audio devices. Reconnect your headset and try again.'
 
@@ -73,7 +73,7 @@ export function useGetDevices(): UseGetDevicesResult {
       } catch (err) {
         const name = (err as DOMException | undefined)?.name
         if (name !== 'NotFoundError' && name !== 'DevicesNotFoundError') {
-          fail(PERMISSION_DENIED)
+          fail(MICROPHONE_PERMISSION_MESSAGE)
           return
         }
         // No input hardware is not a permission failure. Outputs may still exist,

@@ -84,9 +84,20 @@ describe('useGetDevices', () => {
 
     expect(result.current.microphones).toEqual([])
     expect(result.current.speakers).toEqual([])
-    expect(result.current.error).toMatch(/microphone access/i)
+    expect(result.current.error).toMatch(/browser settings/i)
     expect(result.current.isLoading).toBe(false)
     expect(media.enumerateDevices).not.toHaveBeenCalled()
+  })
+
+  it('asks for microphone permission again when a rep retries after a denial', async () => {
+    const denied = Object.assign(new Error('denied'), { name: 'NotAllowedError' })
+    const { media } = installMediaDevices({ getUserMedia: vi.fn(async () => Promise.reject(denied)) })
+
+    const { result } = renderHook(() => useGetDevices())
+    await waitFor(() => expect(result.current.error).not.toBeNull())
+
+    act(() => result.current.refetch())
+    await waitFor(() => expect(media.getUserMedia).toHaveBeenCalledTimes(2))
   })
 
   it('re-enumerates when the browser reports a device change', async () => {
