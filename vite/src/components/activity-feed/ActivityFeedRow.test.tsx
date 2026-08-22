@@ -32,6 +32,7 @@ describe('ActivityFeedRow', () => {
     expect(screen.getByText('Call')).toBeInTheDocument()
     expect(screen.getByText('Called Ada Lovelace')).toBeInTheDocument()
     expect(screen.getByText(/Grace Hopper/)).toBeInTheDocument()
+    expect(screen.getByText('GH')).toBeInTheDocument()
     expect(screen.getByText(/Outbound/)).toBeInTheDocument()
     expect(screen.getByText(/5 minutes ago/)).toBeInTheDocument()
     expect(screen.getByText(/Aug 22, 2026, 2:00 PM EDT/)).toBeInTheDocument()

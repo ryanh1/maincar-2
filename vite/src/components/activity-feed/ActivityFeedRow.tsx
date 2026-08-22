@@ -1,5 +1,6 @@
 import { useState } from 'react'
 
+import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/ui/button'
 import { formatDateTime } from '@/lib/datetime'
 import { cn } from '@/lib/utils'
@@ -55,7 +56,12 @@ export function ActivityFeedRow({
         </div>
       )}
 
-      {metadata.length > 0 && <p className="mt-2 text-xs text-text-muted">{metadata.join(' · ')}</p>}
+      {metadata.length > 0 && (
+        <div className="mt-2 flex items-center gap-2">
+          {item.actorName && <Avatar name={item.actorName} />}
+          <p className="text-xs text-text-muted">{metadata.join(' · ')}</p>
+        </div>
+      )}
     </article>
   )
 }

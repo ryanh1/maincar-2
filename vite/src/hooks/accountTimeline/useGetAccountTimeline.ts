@@ -21,6 +21,7 @@ function buildTimelineQuery(root: AccountTimelineRoot, params: AccountTimelinePa
   if (params.direction) search.set('direction', params.direction)
   if (params.personId) search.set('personId', params.personId)
   if (params.dealId) search.set('dealId', params.dealId)
+  if (params.mine) search.set('mine', 'true')
   if (cursor) search.set('cursor', cursor)
   return search.toString()
 }

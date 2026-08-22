@@ -1,4 +1,5 @@
 import type { AccountTimelineParams, AccountTimelineSourceType } from '@/lib/accountTimelineTypes'
+import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
@@ -7,7 +8,7 @@ export interface TimelineFilterOption {
   label: string
 }
 
-export type TimelineFilterValue = Pick<AccountTimelineParams, 'sourceType' | 'personId' | 'dealId'>
+export type TimelineFilterValue = Pick<AccountTimelineParams, 'sourceType' | 'personId' | 'dealId' | 'mine'>
 
 const TYPE_OPTIONS: { value: AccountTimelineSourceType; label: string }[] = [
   { value: 'call', label: 'Calls' },
@@ -21,7 +22,7 @@ const TYPE_OPTIONS: { value: AccountTimelineSourceType; label: string }[] = [
   { value: 'custom', label: 'Custom activity' },
 ]
 
-function withoutAll<T extends Record<string, string | undefined>>(value: T): T {
+function withoutAll<T extends Record<string, string | boolean | undefined>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T
 }
 
@@ -54,6 +55,7 @@ export function TimelineFilters({
         options={[{ id: 'all', label: 'All activity' }, ...TYPE_OPTIONS.map(({ value: id, label }) => ({ id, label }))]}
         onValueChange={(sourceType) => update({ sourceType: sourceType === 'all' ? undefined : sourceType as AccountTimelineSourceType })}
       />
+      <OwnerFilter mine={value.mine ?? false} onChange={(mine) => update({ mine: mine || undefined })} />
       {rootType === 'company' && (
         <>
           <FilterSelect
@@ -70,6 +72,36 @@ export function TimelineFilters({
           />
         </>
       )}
+    </div>
+  )
+}
+
+function OwnerFilter({ mine, onChange }: { mine: boolean; onChange: (mine: boolean) => void }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <Label id="timeline-filter-owner" className="text-xs">Owner</Label>
+      <div role="group" aria-labelledby="timeline-filter-owner" className="flex">
+        <Button
+          type="button"
+          variant={mine ? 'outline' : 'secondary'}
+          size="sm"
+          className="rounded-r-none"
+          aria-pressed={!mine}
+          onClick={() => onChange(false)}
+        >
+          Everyone's
+        </Button>
+        <Button
+          type="button"
+          variant={mine ? 'secondary' : 'outline'}
+          size="sm"
+          className="-ml-px rounded-l-none"
+          aria-pressed={mine}
+          onClick={() => onChange(true)}
+        >
+          Mine
+        </Button>
+      </div>
     </div>
   )
 }
