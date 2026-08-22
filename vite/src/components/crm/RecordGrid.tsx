@@ -37,6 +37,7 @@ import { formatCellValue } from './recordCellValue'
 import { ColumnGroupHeaders } from './ColumnGroupHeaders'
 import { createViewConfig, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
 import { parseGridCommand } from './gridCommands'
+import { coerceCurrency, coerceNumber } from './cellCoercion'
 
 const LEADING_COLUMN_WIDTH = 220
 const DEFAULT_COLUMN_WIDTH = 160
@@ -136,6 +137,18 @@ function hasModifier(event: KeyboardEvent): boolean {
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+}
+
+function isFillWritable(attribute: AttributeDef): boolean {
+  return !attribute.isReadOnly && attribute.type !== 'ai'
+}
+
+function includesItem(range: Rectangle, col: number, row: number): boolean {
+  return col >= range.x && col < range.x + range.width && row >= range.y && row < range.y + range.height
+}
+
+function wrapIndex(index: number, length: number): number {
+  return ((index % length) + length) % length
 }
 
 /**
@@ -385,6 +398,85 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     },
     [cellValue, updateRecordValue, orgId, object],
   )
+
+  // Glide renders the fill handle but delegates the values to us. This keeps
+  // fills on the same typed coercion and optimistic persistence path as edits,
+  // rather than copying a rendered GridCell into a record value.
+  const fillRange = useCallback(
+    (patternSource: Rectangle, fillDestination: Rectangle) => {
+      const flagUpdates: Array<{ key: string; flagged: boolean }> = []
+
+      for (let row = fillDestination.y; row < fillDestination.y + fillDestination.height; row += 1) {
+        for (let col = fillDestination.x; col < fillDestination.x + fillDestination.width; col += 1) {
+          if (includesItem(patternSource, col, row)) continue
+
+          const targetRecord = recordAtRow(row)
+          const targetAttribute = visibleColumns[col]
+          if (!targetRecord || !targetAttribute || !isFillWritable(targetAttribute)) continue
+
+          const sourceCol = patternSource.x + wrapIndex(col - patternSource.x, patternSource.width)
+          const sourceRow = patternSource.y + wrapIndex(row - patternSource.y, patternSource.height)
+          const sourceRecord = recordAtRow(sourceRow)
+          const sourceAttribute = visibleColumns[sourceCol]
+          if (!sourceRecord || !sourceAttribute) continue
+
+          let sourceValue = cellValue(sourceRecord, sourceAttribute)
+          const numericAttribute = targetAttribute.type === 'number' || targetAttribute.type === 'currency' || targetAttribute.type === 'rating'
+          const extendsDown = patternSource.width === 1 && patternSource.height > 1
+          const extendsRight = patternSource.height === 1 && patternSource.width > 1
+          if (numericAttribute && (extendsDown || extendsRight)) {
+            const firstRecord = recordAtRow(patternSource.y)
+            const lastRecord = recordAtRow(patternSource.y + patternSource.height - 1)
+            const firstAttribute = visibleColumns[patternSource.x]
+            const lastAttribute = visibleColumns[patternSource.x + patternSource.width - 1]
+            const first = extendsDown && firstRecord && firstAttribute
+              ? cellValue(firstRecord, firstAttribute)
+              : extendsRight && sourceRecord && firstAttribute
+                ? cellValue(sourceRecord, firstAttribute)
+                : undefined
+            const last = extendsDown && lastRecord && lastAttribute
+              ? cellValue(lastRecord, lastAttribute)
+              : extendsRight && sourceRecord && lastAttribute
+                ? cellValue(sourceRecord, lastAttribute)
+                : undefined
+            if (typeof first === 'number' && typeof last === 'number') {
+              const steps = (extendsDown ? patternSource.height : patternSource.width) - 1
+              const position = extendsDown ? row - patternSource.y : col - patternSource.x
+              sourceValue = first + ((last - first) / steps) * position
+            }
+          }
+
+          const typedValue = numericAttribute && typeof sourceValue !== 'number'
+            ? targetAttribute.type === 'currency'
+              ? coerceCurrency(String(sourceValue ?? ''))
+              : coerceNumber(String(sourceValue ?? ''))
+            : typeof sourceValue === 'string' || sourceValue === null || sourceValue === undefined
+              ? coerceForType(targetAttribute, String(sourceValue ?? ''), cellValue(targetRecord, targetAttribute))
+              : { ok: true, value: sourceValue }
+          const key = `${targetRecord.id}:${targetAttribute.slug}`
+          flagUpdates.push({ key, flagged: !typedValue.ok })
+          commitValue(targetRecord, targetAttribute, typedValue.value)
+        }
+      }
+
+      if (flagUpdates.length > 0) {
+        setFlaggedCells((previous) => {
+          const next = new Set(previous)
+          for (const update of flagUpdates) {
+            if (update.flagged) next.add(update.key)
+            else next.delete(update.key)
+          }
+          return next
+        })
+      }
+    },
+    [recordAtRow, visibleColumns, cellValue, commitValue],
+  )
+
+  const onFillPattern = useCallback((event: { patternSource: Rectangle; fillDestination: Rectangle; preventDefault: () => void }) => {
+    event.preventDefault()
+    fillRange(event.patternSource, event.fillDestination)
+  }, [fillRange])
 
   const onCellEdited = useCallback(
     ([col, row]: Item, newValue: EditableGridCell) => {
@@ -762,6 +854,27 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [rows, undoStack, redoStack, commitValue])
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || isTypingTarget(document.activeElement)) return
+      const range = gridSelection.current?.range
+      const key = event.key.toLowerCase()
+      const isFillDown = key === 'd' && range && range.height > 1
+      const isFillRight = key === 'r' && range && range.width > 1
+      if (!isFillDown && !isFillRight) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      const patternSource = isFillDown
+        ? { ...range, height: 1 }
+        : { ...range, width: 1 }
+      fillRange(patternSource, range)
+    }
+
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [gridSelection, fillRange])
+
   // The ⤢ hover affordance (DECISIONS D3): a small button pinned to the
   // frozen leading column, following whichever row the pointer is over.
   const [hoveredRow, setHoveredRow] = useState<{ row: number; y: number; height: number } | null>(null)
@@ -869,6 +982,8 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         getCellContent={getCellContent}
         onCellEdited={onCellEdited}
         validateCell={validateCell}
+        fillHandle
+        onFillPattern={onFillPattern}
         customRenderers={[chipCellRenderer, fieldEditorCellRenderer]}
         rows={gridRowCount}
         freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
