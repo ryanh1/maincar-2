@@ -14,6 +14,7 @@ const { useGetObjectMock, useGetObjectsMock, useGetViewsMock, useSaveViewMock, u
   useSaveViewMock: vi.fn(),
   useUpdateViewMock: vi.fn(),
 }))
+const recordGridMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/providers/useAuth', () => ({
   useAuth: () => ({ org: { id: 'org-1' } }),
@@ -31,17 +32,21 @@ vi.mock('@/hooks/savedViews', () => ({
 }))
 
 vi.mock('@/components/crm/RecordGrid', () => ({
-  RecordGrid: ({ viewConfig, onViewConfigChange, toolbarLeading }: {
+  RecordGrid: (props: {
     viewConfig: ViewConfig
     onViewConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
     toolbarLeading: ReactNode
-  }) => (
-    <>
-      {toolbarLeading}
-      <div role="grid" aria-label="People grid" data-sort={viewConfig.sorts.map((sort) => `${sort.attributeId}:${sort.direction}`).join(',')} />
-      <button onClick={() => onViewConfigChange((current) => ({ ...current, sorts: [{ attributeId: 'name', direction: 'asc' }] }))}>Change sort</button>
-    </>
-  ),
+    createRequestToken?: number
+  }) => {
+    recordGridMock(props)
+    return (
+      <>
+        {props.toolbarLeading}
+        <div role="grid" aria-label="People grid" data-sort={props.viewConfig.sorts.map((sort) => `${sort.attributeId}:${sort.direction}`).join(',')} />
+        <button onClick={() => props.onViewConfigChange((current) => ({ ...current, sorts: [{ attributeId: 'name', direction: 'asc' }] }))}>Change sort</button>
+      </>
+    )
+  },
 }))
 
 import { Records } from '@/pages/Records'
@@ -70,9 +75,22 @@ function renderRecords(path: string) {
 
 describe('Records', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     useGetViewsMock.mockReturnValue({ data: { views: [] }, isPending: false, isError: false, refetch: vi.fn() })
     useSaveViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
     useUpdateViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
+  })
+
+  it('sends the PageHeader New action to a grid that supports creation', async () => {
+    const user = userEvent.setup()
+    const person = object({ isGridCreateSupported: true })
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+
+    renderRecords('/records/person')
+
+    await user.click(screen.getByRole('button', { name: 'New' }))
+    expect(recordGridMock).toHaveBeenLastCalledWith(expect.objectContaining({ createRequestToken: 1 }))
   })
 
   it('loads the supported object grid', () => {
