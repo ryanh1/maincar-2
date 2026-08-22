@@ -98,3 +98,26 @@ touches_workspace() {
   done < <(staged_files)
   return 1
 }
+
+# Print the useful part of a test command's output without changing the hook's
+# verdict. A test runner is not required to use any one summary format, so an
+# absent match is normal diagnostic output, not a new hook failure.
+test_failure_summary() {
+  local out="$1" indent="$2" limit="$3"
+  local line count=0
+
+  while IFS= read -r line; do
+    case "$line" in
+      *FAIL*|*'✕'*|*'Test Files'*|*'Tests '*)
+        printf '%s%s\n' "$indent" "$line"
+        count=$((count + 1))
+        [ "$count" -lt "$limit" ] || break
+        ;;
+    esac
+  done < "$out"
+
+  if [ "$count" -eq 0 ]; then
+    printf '%s(no recognized test failure summary was emitted)\n' "$indent"
+  fi
+  return 0
+}

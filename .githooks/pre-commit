@@ -98,7 +98,7 @@ workspace_tests() {
 
   if touches_workspace "$ws"; then
     echo ""
-    grep -E "FAIL|✕|Test Files|Tests " "$TMP/out" | sed 's/^/    /' | head -20
+    test_failure_summary "$TMP/out" "    " 20
     fail "$label failed, and this commit touches $ws/.
     A test failure is never written off as another session's when your
     change could have caused it."
@@ -106,7 +106,7 @@ workspace_tests() {
 
   foreign+=("$label")
   echo "  ⚠ $label is red, but this commit stages nothing that reaches $ws/:"
-  grep -E "FAIL|Tests " "$TMP/out" | sed 's/^/      /' | head -6
+  test_failure_summary "$TMP/out" "      " 6
   echo "    Another session is mid-work. Letting the commit through, and"
   echo "    stamping the commit message to say $label did not pass."
 }

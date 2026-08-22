@@ -17,6 +17,14 @@ case "$SOURCE" in
   merge|squash) exit 0 ;;
 esac
 
+# A rebase recreates an existing commit without running pre-commit. Its message
+# already carries the original gate receipt, so do not mistake that absence for
+# a bypass and append a false unverified receipt.
+if [ -d "$(git rev-parse --git-path rebase-merge)" ] || \
+   [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
+  exit 0
+fi
+
 STATUS_FILE="$(git rev-parse --git-dir)/VERIFY_STATUS"
 verdict="$(cat "$STATUS_FILE" 2>/dev/null || true)"
 rm -f "$STATUS_FILE"
