@@ -228,6 +228,44 @@ describe('List + ListEntry (integration, real Postgres, real routes)', () => {
     expect(addA.body.entry.id).not.toBe(addB.body.entry.id)
   })
 
+  it('reorders five entries atomically into contiguous, stable positions', async () => {
+    const { org, admin } = await seedOrgWithPerson()
+    const people = await Promise.all(
+      ['Avery', 'Blake', 'Casey', 'Devon', 'Emery'].map((firstName) =>
+        prisma.person.create({ data: { orgId: org.orgId, firstName, lastName: 'List' } }),
+      ),
+    )
+    const list = await request(app)
+      .post(`/api/orgs/${org.orgId}/lists`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ name: 'Reorderable people', objectSlug: 'person' })
+    expect(list.status).toBe(201)
+
+    const entries = await Promise.all(
+      people.map((person) =>
+        request(app)
+          .post(`/api/orgs/${org.orgId}/lists/${list.body.list.id}/entries`)
+          .set('Authorization', as(admin.firebaseUid))
+          .send({ targetId: person.id }),
+      ),
+    )
+    expect(entries.every((entry) => entry.status === 201)).toBe(true)
+
+    const orderedIds = entries.map((entry) => entry.body.entry.id).reverse()
+    const reordered = await request(app)
+      .patch(`/api/orgs/${org.orgId}/lists/${list.body.list.id}/entries/reorder`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ entryIds: orderedIds })
+
+    expect(reordered.status).toBe(204)
+    const rows = await prisma.listEntry.findMany({
+      where: { orgId: org.orgId, listId: list.body.list.id },
+      orderBy: { position: 'asc' },
+    })
+    expect(rows.map((row) => row.id)).toEqual(orderedIds)
+    expect(rows.map((row) => row.position)).toEqual([0, 1, 2, 3, 4])
+  })
+
   // ============================================================
   // Trash and org isolation
   // ============================================================
