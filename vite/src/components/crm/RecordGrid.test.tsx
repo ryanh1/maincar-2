@@ -6,7 +6,7 @@
  * scroll are verified in the browser (CLAUDE.md → Verification before finishing).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, screen } from '@testing-library/react'
+import { act, fireEvent, screen } from '@testing-library/react'
 
 import { renderWithProviders } from '@/test/utils'
 import type { AttributeDef } from '@/lib/crmTypes'
@@ -15,6 +15,7 @@ import { createViewConfig } from './viewConfig'
 
 const useRecordWindow = vi.hoisted(() => vi.fn())
 const useGetActivity = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: undefined })))
+const dataEditorScrollTo = vi.hoisted(() => vi.fn())
 vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetActivity }))
 
 vi.mock('@/providers/useAuth', () => ({
@@ -29,6 +30,8 @@ const dataEditorProps = vi.hoisted(() => ({ current: null as Record<string, unkn
 vi.mock('@glideapps/glide-data-grid', () => ({
   DataEditor: (props: Record<string, unknown>) => {
     dataEditorProps.current = props
+    const ref = props.ref as { current: { scrollTo: typeof dataEditorScrollTo } | null } | undefined
+    if (ref) ref.current = { scrollTo: dataEditorScrollTo }
     return <div data-testid="data-editor" />
   },
   GridCellKind: { Loading: 'loading', Text: 'text', Number: 'number', Boolean: 'boolean', Custom: 'custom' },
@@ -90,6 +93,7 @@ const ATTRIBUTES: AttributeDef[] = [
 beforeEach(() => {
   useRecordWindow.mockReset()
   dataEditorProps.current = null
+  dataEditorScrollTo.mockReset()
 })
 
 describe('RecordGrid', () => {
@@ -295,6 +299,103 @@ describe('RecordGrid', () => {
     // Within the prefetch margin of the end: fetch the next window.
     onVisibleRegionChanged({ x: 0, y: 60, width: 5, height: 20 })
     expect(fetchNextPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('Cmd-F finds loaded cells, selects the first match, and cycles with Enter', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [
+        { id: 'r1', firstName: 'Ada', lastName: 'Lovelace' },
+        { id: 'r2', firstName: 'Grace', lastName: 'Ada' },
+      ],
+      totalCount: 2,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+
+    fireEvent.keyDown(document, { key: 'f', metaKey: true })
+    const find = screen.getByRole('searchbox', { name: 'Find in grid' })
+    fireEvent.change(find, { target: { value: 'Ada' } })
+
+    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+    expect(dataEditorProps.current!.gridSelection).toMatchObject({ current: { cell: [0, 0] } })
+
+    fireEvent.keyDown(find, { key: 'Enter' })
+    expect(screen.getByText('2 of 2')).toBeInTheDocument()
+    expect(dataEditorProps.current!.gridSelection).toMatchObject({ current: { cell: [1, 1] } })
+    expect(dataEditorScrollTo).toHaveBeenLastCalledWith(1, 1, 'both', 0, 0, {
+      hAlign: 'center',
+      vAlign: 'center',
+      behavior: 'smooth',
+    })
+  })
+
+  it('Cmd-H exposes find and replace controls, then replaces every matching loaded cell', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [
+        { id: 'r1', firstName: 'Ada', lastName: 'Lovelace' },
+        { id: 'r2', firstName: 'Grace', lastName: 'Ada' },
+      ],
+      totalCount: 2,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+
+    fireEvent.keyDown(document, { key: 'h', metaKey: true })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Find in grid' }), { target: { value: 'Ada' } })
+    fireEvent.change(screen.getByLabelText('Replace with'), { target: { value: 'Grace' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Replace all' }))
+
+    const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => Record<string, unknown>
+    expect(getCellContent([0, 0])).toMatchObject({ data: 'Grace' })
+    expect(getCellContent([1, 1])).toMatchObject({ data: 'Grace' })
+    expect(screen.getByRole('checkbox', { name: 'Match case' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Whole cell' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Use regular expression' })).toBeInTheDocument()
+  })
+
+  it('applies match case, whole-cell, and regular-expression options to the finder', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [
+        { id: 'r1', firstName: 'Ada', lastName: 'Lovelace' },
+        { id: 'r2', firstName: 'ada', lastName: 'Byron' },
+        { id: 'r3', firstName: 'Adam', lastName: 'Smith' },
+      ],
+      totalCount: 3,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+
+    fireEvent.keyDown(document, { key: 'h', metaKey: true })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Find in grid' }), { target: { value: 'Ada' } })
+    expect(screen.getByText('1 of 3')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Match case' }))
+    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Whole cell' }))
+    expect(screen.getByText('1 of 1')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Find in grid' }), { target: { value: '[Aa]da' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Use regular expression' }))
+    expect(screen.getByText('1 of 2')).toBeInTheDocument()
   })
 
   describe('the peek drawer (MAI-167)', () => {
