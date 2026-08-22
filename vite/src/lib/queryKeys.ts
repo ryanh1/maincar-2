@@ -142,4 +142,12 @@ export const queryKeys = {
     list: (orgId: string, scope: Record<string, unknown>, page: number) =>
       ['activity', orgId, scope, page] as const,
   },
+  reports: {
+    // Reports are scoped to an organization and may change from every lifecycle
+    // action, so the domain key is a prefix for the list, detail, and run result.
+    all: (orgId: string) => ['reports', orgId] as const,
+    list: (orgId: string, query?: Record<string, unknown>) => ['reports', orgId, 'list', query ?? {}] as const,
+    detail: (orgId: string, reportId: string) => ['reports', orgId, 'detail', reportId] as const,
+    run: (orgId: string, reportId: string) => ['reports', orgId, 'run', reportId] as const,
+  },
 } as const
