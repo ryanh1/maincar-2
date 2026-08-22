@@ -5,7 +5,7 @@ const { prismaMock, verifyTokenMock, putObjectBytesMock, queueTranscodeGreetingM
   prismaMock: {
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
-    voicemailGreeting: { upsert: vi.fn() },
+    voicemailGreeting: { upsert: vi.fn(), findFirst: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
   putObjectBytesMock: vi.fn(),
@@ -55,6 +55,7 @@ beforeEach(() => {
     org: { id: ORG_ID, name: 'Org A', logo: null, enabled: true, createdAt: NOW, updatedAt: NOW },
   })
   prismaMock.voicemailGreeting.upsert.mockResolvedValue(greetingRow())
+  prismaMock.voicemailGreeting.findFirst.mockResolvedValue(null)
   putObjectBytesMock.mockResolvedValue(undefined)
   queueTranscodeGreetingMock.mockResolvedValue('job-a')
 })
@@ -128,5 +129,18 @@ describe('POST /api/orgs/:orgId/voicemail-greeting', () => {
     expect(response.status).toBe(404)
     expect(putObjectBytesMock).not.toHaveBeenCalled()
     expect(prismaMock.voicemailGreeting.upsert).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/orgs/:orgId/voicemail-greeting', () => {
+  it('returns the authorized greeting lifecycle read model', async () => {
+    const response = await request(app)
+      .get(URL)
+      .set('Authorization', AUTH)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      greeting: expect.objectContaining({ active: null, candidates: [] }),
+    })
   })
 })

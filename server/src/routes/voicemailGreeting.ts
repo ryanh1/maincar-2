@@ -56,6 +56,35 @@ function mapGreeting(greeting: {
 
 router.use(requireAuth)
 
+// ============================================================
+// GET /api/orgs/:orgId/voicemail-greeting — inspect greeting lifecycle state
+// ============================================================
+router.get(
+  '/',
+  wrapRoute('GET /api/orgs/:orgId/voicemail-greeting', async (req, res) => {
+    const authReq = req as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    const greeting = await prisma.voicemailGreeting.findFirst({ where: { orgId } })
+
+    // --- Return response ---
+    // This is intentionally a lifecycle-shaped response from day one. The
+    // candidate collection will become multi-row in the next schema slice, but
+    // callers never need to learn the old single-row storage layout.
+    res.json({
+      greeting: {
+        active: greeting?.status === 'ready' ? mapGreeting(greeting) : null,
+        candidates: greeting && greeting.status !== 'ready' ? [mapGreeting(greeting)] : [],
+      },
+    })
+  }),
+)
+
 // Multer errors happen while parsing before the wrapped handler runs, so translate
 // its bounded parser failures into the same user-actionable 400 contract.
 async function parseGreetingUpload(req: Request, res: Response): Promise<void> {
