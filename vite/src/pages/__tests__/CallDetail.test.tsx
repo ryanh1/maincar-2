@@ -57,6 +57,19 @@ function callDetail(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function review() {
+  return {
+    crm: {
+      person: { id: 'person-1', firstName: 'Morgan', lastName: 'Lee', preferredFirstName: null },
+      company: { id: 'company-1', name: 'Acme' },
+      deal: { id: 'deal-1', name: 'Renewal', status: 'open' },
+    },
+    recording: { state: 'ready', source: { kind: 'audio', url: 'https://recordings.example/signed/call-1.mp3', expiresAt: '2026-08-01T13:00:00.000Z' } },
+    transcript: { state: 'ready', pass: { id: 'pass-1', provider: 'test', plainText: 'Hello, this is a test transcript.', segments: [{ id: 'segment-1', position: 0, speakerKey: 'rep', startMs: 0, endMs: 1200, text: 'Hello, this is a test transcript.', words: [] }] } },
+    speakers: [],
+  }
+}
+
 function detailState(overrides: Record<string, unknown> = {}) {
   return {
     data: { call: callDetail() },
@@ -82,7 +95,7 @@ function renderDetail() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useAuthMock.mockReturnValue({ user: { timeZone: 'America/New_York' }, org: ORG })
+  useAuthMock.mockReturnValue({ user: { id: 'user-a', timeZone: 'America/New_York' }, org: ORG })
   useGetCallDetailMock.mockReturnValue(detailState())
   // navigator.clipboard is a getter-only property in jsdom, so it is redefined
   // rather than assigned.
@@ -245,6 +258,46 @@ describe('the controls', () => {
 
     await user.click(screen.getByRole('link', { name: 'Back' }))
     expect(await screen.findByText('Calls history')).toBeInTheDocument()
+  })
+})
+
+describe('the review workbench', () => {
+  beforeEach(() => {
+    useGetCallDetailMock.mockReturnValue(detailState({ data: { call: callDetail({ review: review() }) } }))
+  })
+
+  it('renders CRM context, independent panes, and the balanced layout by default', () => {
+    renderDetail()
+
+    expect(screen.getByRole('navigation', { name: 'Call context' })).toHaveTextContent('Morgan Lee')
+    expect(screen.getByRole('heading', { name: 'Playback' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Comments' })).toBeInTheDocument()
+    expect(screen.getByRole('separator', { name: 'Resize playback and comments panes' })).toHaveAttribute('aria-valuenow', '60')
+  })
+
+  it('switches the desktop layout with a keyboard-adjustable divider and remembers the choice', async () => {
+    const user = userEvent.setup()
+    renderDetail()
+
+    await user.click(screen.getByRole('button', { name: 'Focus comments' }))
+    const divider = screen.getByRole('separator', { name: 'Resize playback and comments panes' })
+    expect(divider).toHaveAttribute('aria-valuenow', '40')
+
+    divider.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(divider).toHaveAttribute('aria-valuenow', '42')
+    expect(window.localStorage.getItem('maincar:call-review-layout:user-a')).toContain('42')
+  })
+
+  it('offers accessible playback and comments navigation for narrow layouts', async () => {
+    const user = userEvent.setup()
+    renderDetail()
+
+    const commentsTab = screen.getByRole('tab', { name: 'Comments' })
+    await user.click(commentsTab)
+
+    expect(commentsTab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel', { name: 'Comments' })).toBeInTheDocument()
   })
 })
 
