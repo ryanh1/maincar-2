@@ -479,7 +479,7 @@ describe('POST /api/orgs/:orgId/phone-numbers/search — Twilio failures', () =>
     const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
 
     expect(res.status).toBe(500)
-    expect(res.body).toEqual({ error: 'Internal server error' })
+    expect(res.body).toEqual({ error: 'Something went wrong. Please try again.' })
   })
 
   it('500s when the pricing call is the one that fails', async () => {
@@ -488,7 +488,7 @@ describe('POST /api/orgs/:orgId/phone-numbers/search — Twilio failures', () =>
     const res = await request(app).post(SEARCH_A).set('Authorization', AUTH).send({})
 
     expect(res.status).toBe(500)
-    expect(res.body).toEqual({ error: 'Internal server error' })
+    expect(res.body).toEqual({ error: 'Something went wrong. Please try again.' })
   })
 
   it('500s, not 200-with-nothing, when Twilio is unconfigured', async () => {
@@ -876,7 +876,7 @@ describe('POST /api/orgs/:orgId/phone-numbers — the queue is down', () => {
     const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
 
     expect(res.status).toBe(500)
-    expect(res.body).toEqual({ error: 'Internal server error' })
+    expect(res.body).toEqual({ error: 'Something went wrong. Please try again.' })
     expect(res.body.error).not.toContain('pg-boss')
   })
 
@@ -907,7 +907,7 @@ describe('POST /api/orgs/:orgId/phone-numbers — the queue is down', () => {
     const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ e164: BUY_E164 })
 
     expect(res.status).toBe(500)
-    expect(res.body).toEqual({ error: 'Internal server error' })
+    expect(res.body).toEqual({ error: 'Something went wrong. Please try again.' })
   })
 })
 
@@ -1764,7 +1764,7 @@ describe('PATCH /api/orgs/:orgId/phone-numbers/:id — the transaction fails for
       .send({ isActiveForOutbound: true })
 
     expect(res.status).toBe(500)
-    expect(res.body).toEqual({ error: 'Internal server error' })
+    expect(res.body).toEqual({ error: 'Something went wrong. Please try again.' })
   })
 
   it('does not leak the database error text to the caller', async () => {

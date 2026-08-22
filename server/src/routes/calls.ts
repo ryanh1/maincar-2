@@ -417,6 +417,7 @@ const callCreationRateLimit = rateLimit({
   max: CALL_CREATION_RATE_LIMIT,
   name: 'POST /api/orgs/:orgId/calls',
   key: (req) => (req as unknown as AuthenticatedRequest).user?.id ?? 'unknown',
+  message: (retryAfterSeconds) => `Too many calls. Try again in ${retryAfterSeconds} seconds.`,
 })
 
 /** Clears the in-memory limiter between route-test examples. */

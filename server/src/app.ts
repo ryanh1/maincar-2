@@ -196,7 +196,7 @@ app.use(
     _next: express.NextFunction,
   ): void => {
     logger.error({ requestId: req.id, error: err }, 'unhandled error')
-    res.status(500).json({ error: 'Internal server error' })
+    res.status(500).json({ error: 'Something went wrong. Please try again.' })
   },
 )
 

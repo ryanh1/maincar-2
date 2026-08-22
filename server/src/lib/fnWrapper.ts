@@ -81,7 +81,7 @@ export function wrapRoute(name: string, handler: RouteHandler, opts: { quiet?: b
       }
       // The real message is never sent to the client: a stack trace is not
       // something a user can act on, and it leaks internals.
-      res.status(500).json({ error: 'Internal server error' })
+      res.status(500).json({ error: 'Something went wrong. Please try again.' })
     }
   }
 }

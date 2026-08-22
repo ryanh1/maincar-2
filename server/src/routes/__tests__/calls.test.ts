@@ -708,9 +708,19 @@ describe('POST /api/orgs/:orgId/calls', () => {
       .send({ toE164: '+13035550193' })
 
     expect(rejected.status).toBe(429)
-    expect(rejected.body).toEqual({ error: 'Too many attempts. Wait a minute and try again.' })
+    expect(rejected.body).toEqual({ error: 'Too many calls. Try again in 60 seconds.' })
     expect(rejected.headers['retry-after']).toBe('60')
     expect(prismaMock.$transaction).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps unexpected call-creation failures generic and free of internal details', async () => {
+    prismaMock.org.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    expect(res.status).toBe(500)
+    expect(res.body).toEqual({ error: 'Something went wrong. Please try again.' })
+    expect(JSON.stringify(res.body)).not.toContain('recording policy')
   })
 
   it('creates a queued call and returns it with no SID yet — the browser Device dials, not this route', async () => {
