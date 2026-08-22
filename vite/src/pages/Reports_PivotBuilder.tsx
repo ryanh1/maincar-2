@@ -1,5 +1,6 @@
 import { type DragEvent, Fragment, type ReactNode } from 'react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -22,10 +23,13 @@ interface ReportsPivotBuilderProps {
   config: ReportConfig
   onChange: (config: ReportConfig) => void
   result: RunReportResponse['report'] | undefined
+  isLoading: boolean
+  hasActiveFilters: boolean
+  onLoosenFilters: () => void
 }
 
 /** Excel-like pivot zones, with the result recomputed whenever a field moves. */
-export function ReportsPivotBuilder({ config, onChange, result }: ReportsPivotBuilderProps) {
+export function ReportsPivotBuilder({ config, onChange, result, isLoading, hasActiveFilters, onLoosenFilters }: ReportsPivotBuilderProps) {
   function moveField(field: string, zone: PivotZone): void {
     if (zone === 'values') {
       if (field === MEASURE.field) onChange({ ...config, values: [{ field: 'amountMinor', aggregation: 'sum' }] })
@@ -63,6 +67,7 @@ export function ReportsPivotBuilder({ config, onChange, result }: ReportsPivotBu
   }
 
   const isRunnable = isRunnablePivot(config)
+  const isBlank = config.rows.length === 0 && config.columns.length === 0 && config.values.length === 0
 
   return (
     <div className="grid gap-6 xl:grid-cols-[224px_minmax(0,1fr)]">
@@ -71,12 +76,13 @@ export function ReportsPivotBuilder({ config, onChange, result }: ReportsPivotBu
           <p className="text-xs font-medium text-text-muted">Data</p>
           <p className="text-sm font-medium">Deals</p>
         </div>
-        <FieldGroup label="Dimensions">
+        <FieldGroup label={isBlank ? 'Suggested starter fields' : 'Dimensions'}>
           {DIMENSIONS.map((dimension) => <DraggableField key={dimension.field} {...dimension} onDragStart={startDrag} onClick={() => moveField(dimension.field, 'rows')} />)}
+          {isBlank && <DraggableField label={MEASURE.label} field={MEASURE.field} onDragStart={startDrag} onClick={() => moveField(MEASURE.field, 'values')} />}
         </FieldGroup>
-        <FieldGroup label="Measures">
+        {!isBlank && <FieldGroup label="Measures">
           <DraggableField label={MEASURE.label} field={MEASURE.field} onDragStart={startDrag} onClick={() => moveField(MEASURE.field, 'values')} />
-        </FieldGroup>
+        </FieldGroup>}
       </aside>
 
       <div className="flex min-w-0 flex-col gap-6">
@@ -86,8 +92,8 @@ export function ReportsPivotBuilder({ config, onChange, result }: ReportsPivotBu
           <DropZone label="Values" zone="values" items={config.values.map((item) => item.field)} onDrop={dropField} onRemove={removeField} />
         </div>
         {config.values.length > 0 && <PivotControls config={config} onChange={onChange} />}
-        {!isRunnable && <p className="text-sm text-text-muted">Drag a dimension to Rows or Columns, then drag Amount to Values.</p>}
-        {isRunnable && <PivotGrid config={config} onChange={onChange} result={result} />}
+        {!isRunnable && <BuilderGuidance config={config} onAddOwner={() => moveField('owner', 'rows')} onAddAmount={() => moveField(MEASURE.field, 'values')} />}
+        {isRunnable && <PivotGrid config={config} onChange={onChange} result={result} isLoading={isLoading} hasActiveFilters={hasActiveFilters} onLoosenFilters={onLoosenFilters} />}
       </div>
     </div>
   )
@@ -137,15 +143,57 @@ function DropZone({ label, zone, items, onDrop, onRemove }: {
   onDrop: (event: DragEvent<HTMLElement>, zone: PivotZone) => void
   onRemove: (field: string, zone: PivotZone) => void
 }) {
+  const placeholder = zone === 'rows'
+    ? 'Drag a field here to group rows.'
+    : zone === 'columns'
+      ? 'Drag a field here to compare columns.'
+      : 'Drag Amount here to calculate a value.'
+
   return (
     <section className="flex min-h-24 flex-col gap-2 rounded-md border border-border bg-bg p-3" aria-label={`${label} drop zone`} data-testid={`drop-zone-${zone}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, zone)}>
       <h3 className="text-sm font-semibold">{label}</h3>
-      {items.length === 0 ? <p className="text-xs text-text-muted">Drag a field here</p> : items.map((field) => (
+      {items.length === 0 ? <p className="text-xs text-text-muted">{placeholder}</p> : items.map((field) => (
         <Button key={field} type="button" size="sm" variant="secondary" onClick={() => onRemove(field, zone)}>
           {field === MEASURE.field ? 'Amount' : DIMENSION_LABELS[field as DealPivotDimension]} ×
         </Button>
       ))}
     </section>
+  )
+}
+
+function BuilderGuidance({ config, onAddOwner, onAddAmount }: {
+  config: ReportConfig
+  onAddOwner: () => void
+  onAddAmount: () => void
+}) {
+  const hasGroup = config.rows.length + config.columns.length > 0
+
+  if (!hasGroup && config.values.length > 0) {
+    return (
+      <EmptyState title="Add a group">
+        <p>Add a Row or Column to break Amount down.</p>
+        <Button size="sm" onClick={onAddOwner}>Add Owner to Rows</Button>
+      </EmptyState>
+    )
+  }
+
+  if (hasGroup) {
+    return (
+      <EmptyState title="Add a value">
+        <p>Add Amount to Values to calculate a result.</p>
+        <Button size="sm" onClick={onAddAmount}>Add Amount to Values</Button>
+      </EmptyState>
+    )
+  }
+
+  return (
+    <EmptyState title="Build a report in 3 steps">
+      <ol className="flex flex-col gap-1">
+        <li>1 Pick data: Deals</li>
+        <li>2 Drag a field to Rows</li>
+        <li>3 Drag Amount to Values</li>
+      </ol>
+    </EmptyState>
   )
 }
 
@@ -178,9 +226,35 @@ function formatAmountMinor(amountMinor: bigint): string {
   return `${sign}$${dollars}.${cents}`
 }
 
-function PivotGrid({ config, onChange, result }: { config: ReportConfig; onChange: (config: ReportConfig) => void; result: RunReportResponse['report'] | undefined }) {
-  if (!result) return <div className="h-32 animate-pulse rounded-md bg-surface" aria-label="Loading pivot" />
-  if (result.rows.length === 0) return <p className="text-sm text-text-muted">No Deals match this pivot.</p>
+function PivotGrid({ config, onChange, result, isLoading, hasActiveFilters, onLoosenFilters }: {
+  config: ReportConfig
+  onChange: (config: ReportConfig) => void
+  result: RunReportResponse['report'] | undefined
+  isLoading: boolean
+  hasActiveFilters: boolean
+  onLoosenFilters: () => void
+}) {
+  if (isLoading || !result) {
+    return (
+      <div className="flex h-32 flex-col justify-center gap-3 rounded-md border border-border bg-surface p-6" aria-busy="true">
+        <p className="text-sm font-medium">Preparing this report…</p>
+        <div className="h-8 animate-pulse rounded-md bg-surface-2" />
+      </div>
+    )
+  }
+  if (result.rows.length === 0) {
+    return (
+      <EmptyState title={hasActiveFilters ? 'No records match these filters.' : 'No records match this pivot.'}>
+        <p>{hasActiveFilters ? 'Remove a filter to see more records.' : 'Change a field or filter to see records.'}</p>
+        {hasActiveFilters && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-border bg-surface px-2 py-1 text-xs text-text-muted">Owner&apos;s team filter</span>
+            <Button size="sm" variant="secondary" onClick={onLoosenFilters}>Loosen filters</Button>
+          </div>
+        )}
+      </EmptyState>
+    )
+  }
 
   const root = newNode('grand-total', 'Grand total')
   const columnHeaders = new Map<string, string>()
