@@ -8,6 +8,7 @@ import { AudioPlayerFixture } from './components/call-review/AudioPlayerFixture'
 import { AccountTimelineFixture } from './components/account-timeline/AccountTimelineFixture'
 import { TooltipProvider } from './components/ui/tooltip'
 import { ReportsFixture } from './pages/ReportsFixture'
+import { CallTranscriptFixture } from './pages/CallTranscriptFixture'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -28,6 +29,8 @@ createRoot(document.getElementById('root')!).render(
       <AccountTimelineFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/reports' ? (
       <ReportsFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/call-transcript' ? (
+      <CallTranscriptFixture />
     ) : (
       <QueryClientProvider client={queryClient}>
         <App />
