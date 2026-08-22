@@ -293,7 +293,7 @@ describe('inbound voicemail', () => {
     prismaMock.voicemailGreeting.findFirst.mockResolvedValue({
       id: 'vg-1',
       orgId: 'org-a',
-      audioUrl: 'maincar-voicemail-greetings/org-a/greeting.mp3',
+      storageKey: 'maincar-voicemail-greetings/org-a/greeting.mp3', status: 'active',
     })
 
     const res = await post({})
@@ -324,7 +324,7 @@ describe('inbound voicemail', () => {
     prismaMock.voicemailGreeting.findFirst.mockResolvedValue({
       id: 'vg-1',
       orgId: 'org-a',
-      audioUrl: 'maincar-voicemail-greetings/org-a/greeting.mp3',
+      storageKey: 'maincar-voicemail-greetings/org-a/greeting.mp3', status: 'active',
     })
 
     await post({ To: '+13035550199', From: '+12025550123' })
