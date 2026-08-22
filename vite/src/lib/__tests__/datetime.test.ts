@@ -5,7 +5,7 @@
 // makes passing the ANCHOR zone rather than the viewer's zone matter.
 import { describe, expect, it } from 'vitest'
 
-import { formatDate, formatDateTime } from '../datetime'
+import { formatDate, formatDateTime, formatTimeZoneName, zonedDateTimeParts, zonedDateTimeToIso } from '../datetime'
 
 // An invite created in New York: the last millisecond of Sep 4 there.
 const NY_END_OF_SEP_4 = '2026-09-05T03:59:59.999Z'
@@ -45,5 +45,13 @@ describe('formatDateTime', () => {
 
   it('renders nothing for a value that is not a date', () => {
     expect(formatDateTime('not-a-date', 'America/New_York')).toBe('')
+  })
+})
+
+describe('zoned timestamp helpers', () => {
+  it('round-trips a viewer-local timestamp with an explicit zone label', () => {
+    expect(zonedDateTimeParts('2026-08-25T19:30:00.000Z', 'America/New_York')).toEqual({ date: new Date(2026, 7, 25), time: '15:30' })
+    expect(zonedDateTimeToIso(new Date(2026, 7, 25), '15:30', 'America/New_York')).toBe('2026-08-25T19:30:00.000Z')
+    expect(formatTimeZoneName(new Date('2026-08-25T19:30:00.000Z'), 'America/New_York')).toBe('EDT')
   })
 })

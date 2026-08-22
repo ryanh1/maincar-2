@@ -1,14 +1,15 @@
 import { useRef, useState } from 'react'
+import { NumericFormat } from 'react-number-format'
 
 import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
-import { Calendar } from '@/components/ui/calendar'
+import { DatePicker } from '@/components/ui/date-picker'
 import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useGetObject, useListRecords } from '@/hooks/crm'
 import { memberDisplayName, useGetMembers } from '@/hooks/orgs'
-import { formatDate } from '@/lib/datetime'
+import { formatEntry } from '@/lib/dialPad'
+import { formatTimeZoneName, zonedDateTimeParts, zonedDateTimeToIso } from '@/lib/datetime'
 import type { AttributeDef } from '@/lib/crmTypes'
 import { coerceCurrency, coerceNumber } from './cellCoercion'
 import { coerceForType, parseOptions } from './cellBuilder'
@@ -28,6 +29,7 @@ function draftValue(value: unknown, attribute: AttributeDef): string {
     const amount = typeof value === 'number' ? value : Number(value)
     return Number.isFinite(amount) ? String(amount / 100) : String(value)
   }
+  if (attribute.type === 'phone' && typeof value === 'string') return formatEntry(value)
   return String(value)
 }
 
@@ -63,6 +65,14 @@ export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, 
     }
     setError(null)
     onCommit(attribute.type === 'currency' && attribute.slug === 'amountMinor' && typeof result.value === 'number' ? result.value * 100 : result.value)
+  }
+
+  function commitOnBlur() {
+    if (cancelled.current) {
+      cancelled.current = false
+      return
+    }
+    commitText()
   }
 
   if (attribute.type === 'select' || attribute.type === 'status') {
@@ -111,7 +121,60 @@ export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, 
   }
 
   if (attribute.type === 'date') {
-    return <DateEditor attribute={attribute} value={draft} timeZone={timeZone} onCommit={onCommit} />
+    return <DateEditor attribute={attribute} value={draft} onCommit={onCommit} />
+  }
+
+  if (attribute.type === 'timestamp') {
+    return <TimestampEditor attribute={attribute} value={draft} timeZone={timeZone} onCommit={onCommit} />
+  }
+
+  if (attribute.type === 'checkbox') {
+    return (
+      <label className="flex h-8 items-center gap-2 text-sm">
+        <Checkbox
+          aria-label={attribute.name}
+          checked={value === true}
+          onCheckedChange={(next) => onCommit(next === true)}
+        />
+        {attribute.name}
+      </label>
+    )
+  }
+
+  if (attribute.type === 'number' || attribute.type === 'currency' || attribute.type === 'rating') {
+    return (
+      <div className="flex flex-col gap-1">
+        <NumericFormat
+          autoFocus
+          aria-label={attribute.name}
+          aria-invalid={error ? 'true' : undefined}
+          aria-describedby={error ? `${attribute.id}-edit-error` : undefined}
+          customInput={Input}
+          className="h-8"
+          decimalScale={attribute.type === 'currency' ? 2 : undefined}
+          inputMode="decimal"
+          thousandSeparator
+          value={draft}
+          onValueChange={({ value: nextDraft }) => {
+            setDraft(nextDraft)
+            setError(null)
+          }}
+          onBlur={commitOnBlur}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              commitText()
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              cancelled.current = true
+              onCancel()
+            }
+          }}
+        />
+        {error && <p id={`${attribute.id}-edit-error`} role="alert" className="text-xs text-danger">{error}</p>}
+      </div>
+    )
   }
 
   const errorId = `${attribute.id}-edit-error`
@@ -119,23 +182,16 @@ export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, 
     <div className="flex flex-col gap-1">
       <Input
         autoFocus
-        aria-label={attribute.type === 'timestamp' ? `${attribute.name} (UTC)` : attribute.name}
+        className="h-8"
+        aria-label={attribute.name}
         aria-invalid={error ? 'true' : undefined}
         aria-describedby={error ? errorId : undefined}
-        inputMode={attribute.type === 'currency' || attribute.type === 'number' || attribute.type === 'rating' ? 'decimal' : undefined}
-        placeholder={attribute.type === 'timestamp' ? 'YYYY-MM-DDTHH:MM:SSZ (UTC)' : undefined}
         value={draft}
         onChange={(event) => {
-          setDraft(event.target.value)
+          setDraft(attribute.type === 'phone' ? formatEntry(event.target.value) : event.target.value)
           setError(null)
         }}
-        onBlur={() => {
-          if (cancelled.current) {
-            cancelled.current = false
-            return
-          }
-          commitText()
-        }}
+        onBlur={commitOnBlur}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.preventDefault()
@@ -163,28 +219,67 @@ function localDateOnly(value: Date): string {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
 }
 
-function DateEditor({ attribute, value, timeZone, onCommit }: Pick<FieldValueEditorProps, 'attribute' | 'timeZone' | 'onCommit'> & { value: string }) {
-  const [open, setOpen] = useState(false)
+function DateEditor({ attribute, value, onCommit }: Pick<FieldValueEditorProps, 'attribute' | 'onCommit'> & { value: string }) {
   const selected = dateOnlyToLocal(value)
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button type="button" variant="secondary" size="sm" className="w-full justify-start" aria-label={attribute.name}>
-          {selected ? formatDate(value, timeZone) : `Choose ${attribute.name}`}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="start">
-        <Calendar
-          mode="single"
-          selected={selected}
-          onSelect={(next) => {
-            if (!next) return
-            onCommit(localDateOnly(next))
-            setOpen(false)
-          }}
-        />
-      </PopoverContent>
-    </Popover>
+    <DatePicker
+      value={selected}
+      onChange={(next) => onCommit(next ? localDateOnly(next) : null)}
+      ariaLabel={attribute.name}
+      placeholder={`Choose ${attribute.name}`}
+    />
+  )
+}
+
+function TimestampEditor({ attribute, value, timeZone, onCommit }: Pick<FieldValueEditorProps, 'attribute' | 'timeZone' | 'onCommit'> & { value: string }) {
+  const initial = zonedDateTimeParts(value, timeZone)
+  const [date, setDate] = useState(initial.date)
+  const [time, setTime] = useState(initial.time)
+  const [error, setError] = useState<string | null>(null)
+
+  function commit(nextDate = date, nextTime = time) {
+    if (!nextDate) return
+    const timestamp = zonedDateTimeToIso(nextDate, nextTime, timeZone)
+    if (!timestamp) {
+      setError(`Enter a time from 00:00 to 23:59 ${formatTimeZoneName(nextDate, timeZone)}.`)
+      return
+    }
+    setError(null)
+    onCommit(timestamp)
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <DatePicker
+        value={date}
+        onChange={(next) => {
+          setDate(next)
+          if (!next) onCommit(null)
+        }}
+        ariaLabel={attribute.name}
+        placeholder={`Choose ${attribute.name}`}
+      />
+      <Input
+        className="h-8"
+        aria-label={`${attribute.name} time (${formatTimeZoneName(date ?? new Date(), timeZone)})`}
+        aria-invalid={error ? 'true' : undefined}
+        aria-describedby={error ? `${attribute.id}-edit-error` : undefined}
+        type="time"
+        value={time}
+        onChange={(event) => {
+          setTime(event.target.value)
+          setError(null)
+        }}
+        onBlur={() => commit()}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            commit()
+          }
+        }}
+      />
+      {error && <p id={`${attribute.id}-edit-error`} role="alert" className="text-xs text-danger">{error}</p>}
+    </div>
   )
 }
 

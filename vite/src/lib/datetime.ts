@@ -63,3 +63,53 @@ export function formatDate(value: string | Date, timeZone: string | null | undef
     year: 'numeric',
   }).format(date)
 }
+
+/** The abbreviated zone name for a moment, such as `EDT`. */
+export function formatTimeZoneName(value: Date, timeZone: string | null | undefined): string {
+  const zone = resolveZone(timeZone)
+  return new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'short' })
+    .formatToParts(value)
+    .find((part) => part.type === 'timeZoneName')?.value ?? zone
+}
+
+function timeZoneOffset(value: Date, timeZone: string): number {
+  const offset = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+    .formatToParts(value)
+    .find((part) => part.type === 'timeZoneName')?.value
+  const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(offset ?? '')
+  if (!match) return 0
+  const minutes = Number(match[2]) * 60 + Number(match[3])
+  return (match[1] === '+' ? 1 : -1) * minutes * 60_000
+}
+
+/** Breaks an ISO timestamp into the viewing user's calendar day and 24-hour time. */
+export function zonedDateTimeParts(value: string, timeZone: string | null | undefined): { date: Date | undefined; time: string } {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return { date: undefined, time: '' }
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: resolveZone(timeZone),
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(parsed)
+  const valueFor = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value)
+  return {
+    date: new Date(valueFor('year'), valueFor('month') - 1, valueFor('day')),
+    time: `${String(valueFor('hour')).padStart(2, '0')}:${String(valueFor('minute')).padStart(2, '0')}`,
+  }
+}
+
+/** Turns a calendar day and time in the viewing user's zone into an ISO timestamp. */
+export function zonedDateTimeToIso(date: Date, time: string, timeZone: string | null | undefined): string | null {
+  if (!/^\d{2}:\d{2}$/.test(time)) return null
+  const [hours, minutes] = time.split(':').map(Number)
+  if (hours > 23 || minutes > 59) return null
+  const zone = resolveZone(timeZone)
+  const wallTime = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes)
+  let instant = new Date(wallTime - timeZoneOffset(new Date(wallTime), zone))
+  instant = new Date(wallTime - timeZoneOffset(instant, zone))
+  return instant.toISOString()
+}

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import type { AttributeDef } from '@/lib/crmTypes'
 import { FieldValueEditor } from './FieldValueEditor'
@@ -50,18 +51,13 @@ describe('FieldValueEditor', () => {
     useGetMembers.mockReturnValue({ data: { members: [] }, isPending: false })
   })
 
-  it('commits a currency value as a number and retains invalid input with an actionable reason', () => {
+  it('commits a currency value as a number', () => {
     render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Amount', type: 'currency' })} value={42} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
 
     const input = screen.getByRole('textbox', { name: 'Amount' })
     fireEvent.change(input, { target: { value: '123.45' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onCommit).toHaveBeenCalledWith(123.45)
-
-    fireEvent.change(input, { target: { value: 'not money' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
-    expect(screen.getByRole('alert')).toHaveTextContent('Enter a valid amount.')
-    expect(input).toHaveValue('not money')
   })
 
   it('edits a deal amount in major units while preserving minor-unit storage', () => {
@@ -74,6 +70,34 @@ describe('FieldValueEditor', () => {
     expect(onCommit).toHaveBeenCalledWith(50005)
   })
 
+  it('uses numeric formatting for number and rating fields', () => {
+    const { rerender } = render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Headcount', type: 'number' })} value={1200} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+
+    const input = screen.getByRole('textbox', { name: 'Headcount' })
+    expect(input).toHaveValue('1,200')
+    fireEvent.change(input, { target: { value: '2,500.5' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onCommit).toHaveBeenCalledWith(2500.5)
+
+    rerender(<FieldValueEditor key="rating" orgId="org-1" attribute={attribute({ name: 'Score', type: 'rating' })} value={4} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+    expect(screen.getByRole('textbox', { name: 'Score' })).toHaveValue('4')
+  })
+
+  it('commits text and a selected option with their stored values', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Notes', type: 'text' })} value={null} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+
+    const text = screen.getByRole('textbox', { name: 'Notes' })
+    await user.type(text, 'Follow up Friday')
+    await user.keyboard('{Enter}')
+    expect(onCommit).toHaveBeenCalledWith('Follow up Friday')
+
+    rerender(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Stage', type: 'select', optionsJson: [{ value: 'qualified', label: 'Qualified' }] })} value={null} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+    await user.click(screen.getByRole('combobox', { name: 'Stage' }))
+    await user.click(screen.getByRole('option', { name: 'Qualified' }))
+    expect(onCommit).toHaveBeenLastCalledWith('qualified')
+  })
+
   it('commits a date-only value without converting it through a timestamp', () => {
     render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Renewal date', type: 'date' })} value="2026-08-24" timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
 
@@ -82,15 +106,43 @@ describe('FieldValueEditor', () => {
     expect(onCommit).toHaveBeenCalledWith('2026-08-25')
   })
 
-  it('commits a timestamp as an explicit UTC ISO value', () => {
+  it('uses the date picker to commit a timestamp in the viewer time zone', () => {
     render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Scheduled at', type: 'timestamp' })} value={null} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
 
-    const input = screen.getByRole('textbox', { name: 'Scheduled at (UTC)' })
-    expect(input).toHaveAttribute('placeholder', 'YYYY-MM-DDTHH:MM:SSZ (UTC)')
-    fireEvent.change(input, { target: { value: '2026-08-25T15:30:00Z' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.click(screen.getByRole('button', { name: 'Scheduled at' }))
+    fireEvent.click(screen.getByRole('button', { name: /August 25th, 2026/ }))
+    fireEvent.change(screen.getByLabelText('Scheduled at time (EDT)'), { target: { value: '15:30' } })
+    fireEvent.keyDown(screen.getByLabelText('Scheduled at time (EDT)'), { key: 'Enter' })
 
-    expect(onCommit).toHaveBeenCalledWith('2026-08-25T15:30:00.000Z')
+    expect(onCommit).toHaveBeenCalledWith('2026-08-25T19:30:00.000Z')
+  })
+
+  it('uses a checkbox for boolean fields', () => {
+    render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Qualified', type: 'checkbox' })} value={false} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Qualified' }))
+    expect(onCommit).toHaveBeenCalledWith(true)
+  })
+
+  it('normalizes a phone number and website before committing', () => {
+    const { rerender } = render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Phone', type: 'phone' })} value={null} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+
+    const phone = screen.getByRole('textbox', { name: 'Phone' })
+    fireEvent.change(phone, { target: { value: '+1 202 555 0123' } })
+    fireEvent.keyDown(phone, { key: 'Enter' })
+    expect(onCommit).toHaveBeenCalledWith('+12025550123')
+
+    rerender(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Website', type: 'url' })} value={null} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+    const website = screen.getByRole('textbox', { name: 'Website' })
+    fireEvent.change(website, { target: { value: 'EXAMPLE.com/path' } })
+    fireEvent.keyDown(website, { key: 'Enter' })
+    expect(onCommit).toHaveBeenLastCalledWith('https://example.com/path')
+
+    rerender(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Email', type: 'email' })} value={null} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+    const email = screen.getByRole('textbox', { name: 'Email' })
+    fireEvent.change(email, { target: { value: 'not an email' } })
+    fireEvent.keyDown(email, { key: 'Enter' })
+    expect(screen.getByRole('alert')).toHaveTextContent('Not a valid email address')
   })
 
   it('cancels a typed edit with Escape without committing the draft', () => {

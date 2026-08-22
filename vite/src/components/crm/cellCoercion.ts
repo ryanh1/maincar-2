@@ -1,4 +1,5 @@
 import type { CountryCode } from 'libphonenumber-js'
+import normalizeUrl from 'normalize-url'
 
 import { defaultCountryOf, formatEntry, readEntry } from '@/lib/dialPad'
 
@@ -96,21 +97,13 @@ export function coerceEmail(raw: string): CoercionResult {
   return { ok: false, value: trimmed, display: trimmed, reason: 'Not a valid email address' }
 }
 
-const SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
-
 /** Normalizes a pasted URL: adds `https://` when missing, lowercases the host. */
 export function coerceUrl(raw: string): CoercionResult {
   const trimmed = raw.trim()
   if (!trimmed) return { ok: true, value: null, display: '' }
 
-  const candidate = SCHEME_PATTERN.test(trimmed) ? trimmed : `https://${trimmed}`
   try {
-    const url = new URL(candidate)
-    url.hostname = url.hostname.toLowerCase()
-    let normalized = url.toString()
-    if (url.pathname === '/' && !url.search && !url.hash && normalized.endsWith('/')) {
-      normalized = normalized.slice(0, -1)
-    }
+    const normalized = normalizeUrl(trimmed, { defaultProtocol: 'https' })
     return { ok: true, value: normalized, display: normalized }
   } catch {
     return { ok: false, value: trimmed, display: trimmed, reason: 'Not a valid URL' }
