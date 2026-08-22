@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { TABLE_STORAGE_TABLES } from '../recordList.js'
+import { TABLE_STORAGE_LIST_CONTRACT } from '../recordList.js'
 
 const schema = readFileSync(path.resolve(import.meta.dirname, '../../../prisma/schema.prisma'), 'utf8')
 
@@ -16,14 +16,13 @@ function modelBlock(name: string): string {
 
 describe('recordList table-storage schema contract', () => {
   it('requires every raw-query table to provide its selected and filtered columns', () => {
-    for (const tableName of Object.values(TABLE_STORAGE_TABLES)) {
+    for (const [objectSlug, { tableName, requiredColumns }] of Object.entries(TABLE_STORAGE_LIST_CONTRACT)) {
       const model = modelBlock(tableName)
-      expect(model).toMatch(/\n\s*id\s+String\s+@id\b/)
-      expect(model).toMatch(/\n\s*orgId\s+String\b/)
-      expect(model).toMatch(/\n\s*customJson\s+Json\b/)
-      expect(model).toMatch(/\n\s*deletedAt\s+DateTime\?/)
-      expect(model).toMatch(/\n\s*createdAt\s+DateTime\b/)
-      expect(model).toMatch(/\n\s*updatedAt\s+DateTime\b/)
+      for (const column of requiredColumns) {
+        expect(model, `${objectSlug} list mapping requires ${tableName}.${column.name}`).toMatch(
+          new RegExp(`\\n\\s*${column.name}\\s+${column.prismaType}\\b`),
+        )
+      }
     }
   })
 })
