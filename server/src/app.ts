@@ -11,6 +11,7 @@ import callsRouter from './routes/calls.js'
 import callCommentsRouter from './routes/callComments.js'
 import companiesRouter from './routes/companies.js'
 import dealsRouter from './routes/deals.js'
+import detailLayoutsRouter from './routes/detailLayouts.js'
 import dispositionsRouter from './routes/dispositions.js'
 import emailRouter from './routes/email.js'
 import emailsRouter from './routes/emails.js'
@@ -139,6 +140,7 @@ app.use('/api/orgs/:orgId/field-history', fieldHistoryRouter)
 // through the one validator; filtering hits the native GIN index via containment.
 app.use('/api/orgs/:orgId/records', recordsRouter)
 app.use('/api/orgs/:orgId/saved-views', savedViewsRouter)
+app.use('/api/orgs/:orgId/detail-layouts', detailLayoutsRouter)
 
 // Work objects (MAI-141 T13) — the two things a rep creates by hand. FULL CRUD,
 // unlike the read-only activity routes above, and the difference is deliberate: an

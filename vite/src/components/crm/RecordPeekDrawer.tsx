@@ -1,14 +1,14 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { ActivityFeedRow } from '@/components/activity-feed/ActivityFeedRow'
 import { mapActivityEntry } from '@/components/activity-feed/activityFeed'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useGetActivity, type ActivityScope } from '@/hooks/crm'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { parseOptions } from './cellBuilder'
 import { FieldValueEditor } from './FieldValueEditor'
+import { OptionChip } from './OptionChip'
 import { formatCellValue } from './recordCellValue'
 
 // The three standard objects the activity feed can be scoped to
@@ -60,6 +60,7 @@ export function RecordPeekDrawer({
   const scopeKey = ACTIVITY_SCOPE_SLUG[object.slug]
   const scope: ActivityScope | null = scopeKey && record ? ({ [scopeKey]: record.id } as ActivityScope) : null
   const activityQuery = useGetActivity(orgId, scope)
+  const fieldButtonRefs = useRef(new Map<string, HTMLButtonElement>())
 
   const detailAttributes = attributes
     .filter((attr) => attr.storage !== 'list' && !attr.isArchived && attr.slug !== identityAttr?.slug)
@@ -82,9 +83,24 @@ export function RecordPeekDrawer({
           <section className="border-b border-border p-4">
             <h3 className="mb-3 text-xs font-medium text-muted-foreground">Details</h3>
             <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-3 text-sm">
-              {detailAttributes.map((attr) => (
-                <FieldRow key={attr.id} orgId={orgId} attr={attr} record={record} timeZone={timeZone} onEdit={onEdit} />
-              ))}
+              {detailAttributes.map((attr, index) => {
+                const nextEditable = detailAttributes.slice(index + 1).find((candidate) => !candidate.isReadOnly)
+                return (
+                  <FieldRow
+                    key={attr.id}
+                    orgId={orgId}
+                    attr={attr}
+                    record={record}
+                    timeZone={timeZone}
+                    onEdit={onEdit}
+                    focusButtonRef={(button) => {
+                      if (button) fieldButtonRefs.current.set(attr.id, button)
+                      else fieldButtonRefs.current.delete(attr.id)
+                    }}
+                    onTabNext={nextEditable ? () => fieldButtonRefs.current.get(nextEditable.id)?.focus() : undefined}
+                  />
+                )
+              })}
             </dl>
           </section>
 
@@ -129,12 +145,16 @@ function FieldRow({
   record,
   timeZone,
   onEdit,
+  focusButtonRef,
+  onTabNext,
 }: {
   orgId: string
   attr: AttributeDef
   record: RecordRow | null
   timeZone: string | null | undefined
   onEdit: (attribute: AttributeDef, value: unknown) => void
+  focusButtonRef: (button: HTMLButtonElement | null) => void
+  onTabNext?: () => void
 }) {
   const rawValue = record ? record[attr.slug] : null
   const [editing, setEditing] = useState(false)
@@ -149,13 +169,14 @@ function FieldRow({
       <dt className="truncate text-muted-foreground">{attr.name}</dt>
       <dd className="min-w-0 break-words text-foreground">
         {editing ? (
-          <FieldValueEditor orgId={orgId} attribute={attr} value={rawValue} timeZone={timeZone} onCommit={commit} onCancel={() => setEditing(false)} />
+          <FieldValueEditor orgId={orgId} attribute={attr} value={rawValue} timeZone={timeZone} onCommit={commit} onCancel={() => setEditing(false)} onTabNext={onTabNext} />
         ) : (
           <Button
             type="button"
             variant="ghost"
             size="sm"
             disabled={attr.isReadOnly}
+            ref={focusButtonRef}
             className="w-full justify-start px-0 text-left disabled:cursor-default"
             onClick={() => setEditing(true)}
           >
@@ -190,9 +211,7 @@ function FieldValue({
         {values.map((value) => {
           const option = options.find((o) => o.value === value)
           return (
-            <Badge key={String(value)} variant="secondary">
-              {option?.label ?? String(value)}
-            </Badge>
+            <OptionChip key={String(value)} label={option?.label ?? String(value)} color={option?.color} />
           )
         })}
       </div>

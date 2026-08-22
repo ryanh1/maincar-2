@@ -82,6 +82,7 @@ model Org {
   objectDefs    ObjectDef[]
   attributeDefs AttributeDef[]
   savedViews    SavedView[]
+  detailLayouts DetailLayout[]
 
   // Custom objects (MAI-135 T7). Back-relations so a deleted org cascades its
   // custom-object rows and their links away — the same onDelete: Cascade the rest
@@ -1576,6 +1577,7 @@ model ObjectDef {
 
   attributes AttributeDef[]
   savedViews SavedView[]
+  detailLayouts DetailLayout[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1670,6 +1672,29 @@ model SavedView {
   @@index([orgId, objectId, sortOrder])
   @@index([orgId, objectId, isShared])
   @@index([orgId, objectId, ownerUserId])
+}
+
+// One organization-wide record-page arrangement per object. The read route
+// supplies a safe default until someone saves a custom arrangement.
+model DetailLayout {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  objectId String
+  object   ObjectDef @relation(fields: [objectId], references: [id], onDelete: Cascade)
+
+  // [{ name, fields: [{ slug, width: 1 | 2 }], order }]
+  sectionsJson    Json
+  railObjectsJson Json?
+  feedKindsJson   Json?
+  isDefault       Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, objectId])
+  @@index([orgId])
 }
 
 // -----------------------------------------------------------------------------
