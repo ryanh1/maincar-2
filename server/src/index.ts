@@ -7,6 +7,7 @@ import { registerReleaseNumberWorker } from './jobs/releaseNumber.js'
 import { registerUploadRecordingWorker } from './jobs/uploadRecording.js'
 import { registerTranscribeRecordingWorker } from './jobs/transcribeRecording.js'
 import { registerReapStaleCallsWorker, scheduleReapStaleCalls } from './jobs/reapStaleCalls.js'
+import { registerUploadVoicemailWorker } from './jobs/uploadVoicemail.js'
 import { startQueue, stopQueue } from './jobs/queue.js'
 import { registerOAuthTokenRefresher } from './lib/mail/oauthProviders.js'
 
@@ -45,6 +46,7 @@ async function startWorkers(): Promise<void> {
   await registerTranscribeRecordingWorker()
   await registerReapStaleCallsWorker()
   await scheduleReapStaleCalls()
+  await registerUploadVoicemailWorker()
   logger.info(
     {
       workers: [
@@ -52,6 +54,7 @@ async function startWorkers(): Promise<void> {
         'upload-recording',
         'transcribe-recording',
         'reap-stale-calls',
+        'upload-voicemail',
       ],
     },
     'job queue workers started',

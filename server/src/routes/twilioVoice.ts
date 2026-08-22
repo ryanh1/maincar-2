@@ -13,28 +13,41 @@
  * scoped to the route rather than added globally, so nothing else starts
  * accepting form posts.
  *
- * This file owns three Twilio endpoints. POST /voice returns TwiML for a call the
+ * This file owns four Twilio endpoints. POST /voice returns TwiML for a call the
  * rep's browser Voice SDK Device originated (`Device.connect({ params: { callId }
  * })`, vite/src/components/dialer/DialerProvider.tsx) — it is TOLD which call by
  * the `callId` param that connect() carries, not by Twilio's `Direction`, because
  * that param can only be present on a request WE built. The same URL is where
- * purchased numbers point their INBOUND calls (a later phase), so a request with
- * no `callId` — including every real inbound call — hears an honest unavailable
- * message rather than silence. It tells Twilio to record the bridged call only
- * when the row's `recordingConsent` is `"granted"`. POST /voice/status is the
- * call-progress status callback: it maps Twilio's CallStatus onto Call.status and
- * records duration and end time. POST /voice/recording-status is the
- * recording-progress callback — the only place Twilio delivers a `RecordingSid`
- * for a `<Dial record>` call — and is where `recordingEnabled` is set from
- * Twilio's own confirmation and the upload/transcribe pipeline is kicked off.
+ * purchased numbers point their INBOUND calls: a request with no `callId` and
+ * `Direction: "inbound"` for a `To` we recognize (handleInboundCall below) plays
+ * the org's personal voicemail greeting — or a default, if it has none — and
+ * records the caller with `<Record>`. Anything else with no `callId` (a stray
+ * request, an unrecognized `To`) hears an honest "not accepting calls" message
+ * instead. POST /voice tells Twilio to record the bridged call only when the
+ * row's `recordingConsent` is `"granted"`. POST /voice/status is the call-progress
+ * status callback: it maps Twilio's CallStatus onto Call.status and records
+ * duration and end time. POST /voice/recording-status is the recording-progress
+ * callback — the only place Twilio delivers a `RecordingSid` for a `<Dial
+ * record>` call — and is where `recordingEnabled` is set from Twilio's own
+ * confirmation and the upload/transcribe pipeline is kicked off. POST
+ * /voice/voicemail-recording is its inbound-voicemail twin: the only place Twilio
+ * delivers a `RecordingSid` for an inbound `<Record>`, and where the voicemail
+ * upload pipeline is kicked off.
  */
 import express, { Router, type NextFunction, type Request, type Response } from 'express'
 
 import { logger } from '../../dependencies/logger.js'
-import { buildBridgeTwiml, buildInboundUnavailableTwiml, verifyTwilioSignature } from '../../dependencies/twilio.js'
+import {
+  buildBridgeTwiml,
+  buildInboundUnavailableTwiml,
+  buildVoicemailTwiml,
+  verifyTwilioSignature,
+} from '../../dependencies/twilio.js'
+import { getRecordingDownloadUrl } from '../../dependencies/s3.js'
 import { PUBLIC_BASE_URL } from '../config.js'
 import prisma from '../db.js'
 import { queueUploadRecording } from '../jobs/uploadRecording.js'
+import { queueUploadVoicemail } from '../jobs/uploadVoicemail.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { TERMINAL_CALL_STATUSES, TWILIO_TO_CALL_STATUS } from '../lib/callStatus.js'
 
@@ -76,6 +89,70 @@ function verifyTwilioWebhook(routeLabel: string) {
   }
 }
 
+/**
+ * Handle a request to POST /voice that carries no `callId` — a real inbound call
+ * to a purchased number, or anything else that isn't one of our browser-originated
+ * calls.
+ *
+ * Only a genuine inbound call (`Direction === 'inbound'`, and `To` matching a
+ * `PhoneNumber` row we know about) gets the voicemail flow. Anything else — a
+ * stray request, an unrecognized `To` — gets the same honest "not accepting
+ * calls" TwiML the outbound handler already returned here, and touches no row.
+ */
+async function handleInboundCall(
+  req: Request,
+  res: Response,
+  params: Record<string, string>,
+): Promise<void> {
+  const callSid = params.CallSid
+  const fromE164 = params.From
+  const toE164 = params.To
+
+  const phoneNumber =
+    params.Direction === 'inbound' && toE164
+      ? await prisma.phoneNumber.findFirst({ where: { e164: toE164 } })
+      : null
+
+  if (!phoneNumber || !callSid) {
+    logger.info(
+      { route: 'POST /api/twilio/voice', requestId: req.id, direction: params.Direction, toE164 },
+      'twilio voice webhook: not a recognized inbound call; returning unavailable TwiML',
+    )
+    res.status(200).type('text/xml').send(buildInboundUnavailableTwiml())
+    return
+  }
+
+  // --- Fetch the org's personal greeting, or fall back to the default ---
+  // A presigned GET URL, not the bare S3 key: Twilio's <Play> fetches it directly
+  // over HTTPS, exactly as a browser would a recording download link.
+  const greeting = await prisma.voicemailGreeting.findFirst({ where: { orgId: phoneNumber.orgId } })
+  const greetingAudioUrl = greeting?.audioUrl ? await getRecordingDownloadUrl(greeting.audioUrl) : null
+
+  // --- Create the Voicemail row ---
+  // Upserted on callSid (unique): Twilio's webhook delivery is at-least-once, so a
+  // retried request must not fail on a duplicate-key error. `greeting` records the
+  // bare S3 key the caller actually heard, not a relation, since the org's
+  // greeting can be replaced later (see schema.prisma).
+  await prisma.voicemail.upsert({
+    where: { callSid },
+    create: {
+      orgId: phoneNumber.orgId,
+      callSid,
+      fromE164: fromE164 ?? '',
+      toE164,
+      greeting: greeting?.audioUrl ?? null,
+    },
+    update: {},
+  })
+
+  logger.info(
+    { route: 'POST /api/twilio/voice', requestId: req.id, orgId: phoneNumber.orgId, callSid },
+    'inbound call answered; playing greeting and recording voicemail',
+  )
+
+  res.status(200).type('text/xml').send(buildVoicemailTwiml({ greetingAudioUrl }))
+}
+
 // ============================================================
 // POST /api/twilio/voice — TwiML for a call the rep's browser Device placed
 // ============================================================
@@ -95,16 +172,10 @@ router.post(
     // --- Recognize a call WE originated ---
     // callId is a custom param `Device.connect({ params: { callId } })` sends —
     // nothing else can produce it, so its absence means this request is not one of
-    // our browser-originated calls (a real inbound call to a purchased number,
-    // most likely — a later phase). Tell the caller the number is unavailable
-    // instead of dropping them into silence. No row is touched: the future inbound
-    // and voicemail flow owns persistence.
+    // our browser-originated calls. A real inbound call to a purchased number is
+    // exactly this case, and is handled below.
     if (!callId) {
-      logger.info(
-        { route: 'POST /api/twilio/voice', requestId: req.id },
-        'twilio voice webhook with no callId; returning inbound unavailable TwiML',
-      )
-      return void res.status(200).type('text/xml').send(buildInboundUnavailableTwiml())
+      return void (await handleInboundCall(req, res, params))
     }
 
     // --- Find the queued call ---
@@ -324,6 +395,57 @@ router.post(
           callId: call.id,
         },
         'twilio recording-status callback: recording complete, queued upload',
+      )
+    }
+
+    // --- Return response ---
+    // Twilio ignores the body; a keyed 200 acknowledges receipt.
+    res.status(200).json({ received: true })
+  }),
+)
+
+// ============================================================
+// POST /api/twilio/voice/voicemail-recording — inbound voicemail recording-progress callback
+// ============================================================
+// Twilio POSTs here once an inbound voicemail `<Record>` finishes (wired in as
+// `recordingStatusCallback`, buildVoicemailTwiml, scoped to `completed` only — an
+// `in-progress` delivery has no media yet). This is where the Voicemail row
+// actually gets a recording: the upload job fetches the MP3 from Twilio and
+// stores it in S3, the outbound twin of POST /voice/recording-status.
+router.post(
+  '/voice/voicemail-recording',
+  express.urlencoded({ extended: false }),
+  verifyTwilioWebhook('POST /api/twilio/voice/voicemail-recording'),
+  wrapRoute('POST /api/twilio/voice/voicemail-recording', async (req, res) => {
+    // --- Parse & validate params ---
+    const params = (req.body ?? {}) as Record<string, string>
+    const callSid = params.CallSid
+    const recordingSid = params.RecordingSid
+
+    // --- Find the voicemail ---
+    // By callSid alone: it is the unique key stamped on the row when the inbound
+    // call was first answered (POST /voice above), and it is the only key Twilio
+    // hands this callback.
+    const voicemail = await prisma.voicemail.findFirst({ where: { callSid } })
+    if (!voicemail) {
+      logger.warn(
+        { route: 'POST /api/twilio/voice/voicemail-recording', requestId: req.id, callSid },
+        'twilio voicemail-recording callback for an unknown CallSid',
+      )
+      return void res.status(404).json({ error: 'Voicemail not found' })
+    }
+
+    // --- Chain the upload pipeline ---
+    if (recordingSid) {
+      await queueUploadVoicemail(voicemail.id, recordingSid)
+      logger.info(
+        {
+          route: 'POST /api/twilio/voice/voicemail-recording',
+          requestId: req.id,
+          orgId: voicemail.orgId,
+          voicemailId: voicemail.id,
+        },
+        'voicemail recording complete, queued upload',
       )
     }
 

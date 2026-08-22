@@ -28,12 +28,15 @@ export const JOB_TRANSCRIBE_RECORDING = 'transcribe-recording'
 
 export const JOB_REAP_STALE_CALLS = 'reap-stale-calls'
 
+export const JOB_UPLOAD_VOICEMAIL = 'upload-voicemail'
+
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
   JOB_RELEASE_NUMBER,
   JOB_UPLOAD_RECORDING,
   JOB_TRANSCRIBE_RECORDING,
   JOB_REAP_STALE_CALLS,
+  JOB_UPLOAD_VOICEMAIL,
 ] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
@@ -66,6 +69,9 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }
   // minutes regardless — a failed run is caught by the next tick, and retrying
   // immediately would just repeat the same Twilio/database failure sooner.
   [JOB_REAP_STALE_CALLS]: { retryLimit: 0, retryDelay: 0 },
+  // One retry, thirty seconds later — the same shape as JOB_UPLOAD_RECORDING,
+  // its outbound twin. See jobs/uploadVoicemail.ts.
+  [JOB_UPLOAD_VOICEMAIL]: { retryLimit: 1, retryDelay: 30 },
 }
 
 let boss: PgBoss | null = null

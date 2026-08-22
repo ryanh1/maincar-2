@@ -14,7 +14,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
-const { prismaMock, verifySignatureMock, queueUploadRecordingMock } = vi.hoisted(() => ({
+const {
+  prismaMock,
+  verifySignatureMock,
+  queueUploadRecordingMock,
+  queueUploadVoicemailMock,
+  getRecordingDownloadUrlMock,
+} = vi.hoisted(() => ({
   prismaMock: {
     call: {
       findFirst: vi.fn(),
@@ -22,9 +28,21 @@ const { prismaMock, verifySignatureMock, queueUploadRecordingMock } = vi.hoisted
       // Present only so a test can prove nothing ever calls them.
       update: vi.fn(),
     },
+    phoneNumber: {
+      findFirst: vi.fn(),
+    },
+    voicemailGreeting: {
+      findFirst: vi.fn(),
+    },
+    voicemail: {
+      findFirst: vi.fn(),
+      upsert: vi.fn(),
+    },
   },
   verifySignatureMock: vi.fn(),
   queueUploadRecordingMock: vi.fn(),
+  queueUploadVoicemailMock: vi.fn(),
+  getRecordingDownloadUrlMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
@@ -33,6 +51,15 @@ vi.mock('../../db.js', () => ({ default: prismaMock }))
 // enqueue can be asserted with its exact arguments.
 vi.mock('../../jobs/uploadRecording.js', () => ({
   queueUploadRecording: queueUploadRecordingMock,
+}))
+// Same reasoning, for the inbound voicemail upload job.
+vi.mock('../../jobs/uploadVoicemail.js', () => ({
+  queueUploadVoicemail: queueUploadVoicemailMock,
+}))
+// Swap the S3 presigner for a mock: signing a real URL needs real S3/MinIO
+// credentials, and the assertion only needs to prove the route asked for one.
+vi.mock('../../../dependencies/s3.js', () => ({
+  getRecordingDownloadUrl: getRecordingDownloadUrlMock,
 }))
 // Keep the real TwiML builders (so the response body is genuine TwiML) and swap
 // only the signature check for a mock — the one seam that would otherwise need a
@@ -86,6 +113,14 @@ beforeEach(() => {
   prismaMock.call.findFirst.mockResolvedValue(callRow())
   prismaMock.call.updateMany.mockResolvedValue({ count: 1 })
   queueUploadRecordingMock.mockResolvedValue('upload_job_1')
+  // No recognized number and no voicemail by default; the inbound-voicemail
+  // tests override these to prove the recognized-number path.
+  prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+  prismaMock.voicemailGreeting.findFirst.mockResolvedValue(null)
+  prismaMock.voicemail.findFirst.mockResolvedValue(null)
+  prismaMock.voicemail.upsert.mockResolvedValue({ id: 'voicemail-1' })
+  queueUploadVoicemailMock.mockResolvedValue('voicemail_job_1')
+  getRecordingDownloadUrlMock.mockResolvedValue('https://s3.example.com/signed-greeting.mp3')
 })
 
 // ============================================================
@@ -208,6 +243,196 @@ describe('a request with no callId', () => {
     // No callId means neither looking up nor advancing a row.
     expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
     expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('tells the caller the number is unavailable when Direction is inbound but To matches no PhoneNumber', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+
+    const res = await post({ CallSid: CALL_SID, Direction: 'inbound', To: '+15005550006', From: '+12025550123' })
+
+    expect(res.status).toBe(200)
+    expect(res.text).toContain('This number is not accepting calls. Please try again later.')
+    expect(prismaMock.voicemail.upsert).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// A real inbound call — Direction is "inbound" and To matches a PhoneNumber
+// ============================================================
+describe('inbound voicemail', () => {
+  function post(body: Record<string, string>, signature: string | null = SIG) {
+    const req = request(app).post(URL).type('form')
+    if (signature !== null) req.set('X-Twilio-Signature', signature)
+    return req.send({ Direction: 'inbound', CallSid: CALL_SID, To: '+13035550199', From: '+12025550123', ...body })
+  }
+
+  beforeEach(() => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue({ id: 'pn-1', orgId: 'org-a', e164: '+13035550199' })
+  })
+
+  it('answers and records, without the browser-originated bridge TwiML', async () => {
+    const res = await post({})
+
+    expect(res.status).toBe(200)
+    expect(res.type).toBe('text/xml')
+    expect(res.text).toContain('<Response')
+    expect(res.text).toContain('<Record')
+    expect(res.text).not.toContain('<Dial')
+  })
+
+  it('looks the org up by the called number (To)', async () => {
+    await post({})
+
+    expect(prismaMock.phoneNumber.findFirst).toHaveBeenCalledWith({ where: { e164: '+13035550199' } })
+  })
+
+  it('plays the org’s personal greeting when one is uploaded', async () => {
+    prismaMock.voicemailGreeting.findFirst.mockResolvedValue({
+      id: 'vg-1',
+      orgId: 'org-a',
+      audioUrl: 'maincar-voicemail-greetings/org-a/greeting.mp3',
+    })
+
+    const res = await post({})
+
+    expect(getRecordingDownloadUrlMock).toHaveBeenCalledWith('maincar-voicemail-greetings/org-a/greeting.mp3')
+    expect(res.text).toContain('<Play>https://s3.example.com/signed-greeting.mp3</Play>')
+    expect(res.text).not.toContain("We can't take your call")
+  })
+
+  it('plays the default greeting when the org has none uploaded', async () => {
+    prismaMock.voicemailGreeting.findFirst.mockResolvedValue(null)
+
+    const res = await post({})
+
+    expect(getRecordingDownloadUrlMock).not.toHaveBeenCalled()
+    expect(res.text).toContain("We can't take your call right now. Please leave a message after the tone.")
+    expect(res.text).not.toContain('<Play>')
+  })
+
+  it('records with the voicemail-recording callback, scoped to completed', async () => {
+    const res = await post({})
+
+    expect(res.text).toMatch(/recordingStatusCallback="[^"]*\/api\/twilio\/voice\/voicemail-recording"/)
+    expect(res.text).toContain('recordingStatusCallbackEvent="completed"')
+  })
+
+  it('creates the Voicemail row scoped to the org, keyed by callSid', async () => {
+    prismaMock.voicemailGreeting.findFirst.mockResolvedValue({
+      id: 'vg-1',
+      orgId: 'org-a',
+      audioUrl: 'maincar-voicemail-greetings/org-a/greeting.mp3',
+    })
+
+    await post({ To: '+13035550199', From: '+12025550123' })
+
+    expect(prismaMock.voicemail.upsert).toHaveBeenCalledWith({
+      where: { callSid: CALL_SID },
+      create: {
+        orgId: 'org-a',
+        callSid: CALL_SID,
+        fromE164: '+12025550123',
+        toE164: '+13035550199',
+        greeting: 'maincar-voicemail-greetings/org-a/greeting.mp3',
+      },
+      update: {},
+    })
+  })
+
+  it('upserts rather than creates, so a Twilio retry of the same CallSid does not fail on a duplicate key', async () => {
+    await post({})
+    await post({})
+
+    expect(prismaMock.voicemail.upsert).toHaveBeenCalledTimes(2)
+    // Both calls key on the same callSid — never a bare create that would collide.
+    for (const call of prismaMock.voicemail.upsert.mock.calls) {
+      expect(call[0].where).toEqual({ callSid: CALL_SID })
+    }
+  })
+})
+
+// ============================================================
+// POST /api/twilio/voice/voicemail-recording — inbound voicemail recording-progress callback
+// ============================================================
+const VOICEMAIL_RECORDING_URL = '/api/twilio/voice/voicemail-recording'
+
+/** POSTs a Twilio-shaped voicemail recording-status callback with a signature header. */
+function postVoicemailRecording(body: Record<string, string>, signature: string | null = SIG) {
+  const req = request(app).post(VOICEMAIL_RECORDING_URL).type('form')
+  if (signature !== null) req.set('X-Twilio-Signature', signature)
+  return req.send(body)
+}
+
+describe('voicemail-recording callback — signature', () => {
+  it('403s on a bad signature, before any lookup', async () => {
+    verifySignatureMock.mockReturnValue(false)
+
+    const res = await postVoicemailRecording({ CallSid: CALL_SID, RecordingSid: 'RE0123456789abcdef' })
+
+    expect(res.status).toBe(403)
+    expect(res.body).toEqual({ error: 'Invalid Twilio signature' })
+    expect(prismaMock.voicemail.findFirst).not.toHaveBeenCalled()
+    expect(queueUploadVoicemailMock).not.toHaveBeenCalled()
+  })
+
+  it('403s when the signature header is absent', async () => {
+    verifySignatureMock.mockReturnValue(false)
+
+    const res = await postVoicemailRecording({ CallSid: CALL_SID, RecordingSid: 'RE0123456789abcdef' }, null)
+
+    expect(res.status).toBe(403)
+    expect(prismaMock.voicemail.findFirst).not.toHaveBeenCalled()
+  })
+})
+
+describe('voicemail-recording callback — lookup', () => {
+  it('looks the voicemail up by CallSid', async () => {
+    prismaMock.voicemail.findFirst.mockResolvedValue({ id: 'voicemail-1', orgId: 'org-a', callSid: CALL_SID })
+
+    await postVoicemailRecording({ CallSid: CALL_SID, RecordingSid: 'RE0123456789abcdef' })
+
+    expect(prismaMock.voicemail.findFirst).toHaveBeenCalledWith({ where: { callSid: CALL_SID } })
+  })
+
+  it('404s when no voicemail matches the CallSid, and enqueues nothing', async () => {
+    prismaMock.voicemail.findFirst.mockResolvedValue(null)
+
+    const res = await postVoicemailRecording({ CallSid: 'CAunknownSID', RecordingSid: 'RE0123456789abcdef' })
+
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Voicemail not found' })
+    expect(queueUploadVoicemailMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('voicemail-recording callback — upload pipeline', () => {
+  it('queues the upload job with the voicemail id and RecordingSid', async () => {
+    prismaMock.voicemail.findFirst.mockResolvedValue({ id: 'voicemail-1', orgId: 'org-a', callSid: CALL_SID })
+
+    const res = await postVoicemailRecording({ CallSid: CALL_SID, RecordingSid: 'RE0123456789abcdef' })
+
+    expect(res.status).toBe(200)
+    expect(queueUploadVoicemailMock).toHaveBeenCalledTimes(1)
+    expect(queueUploadVoicemailMock).toHaveBeenCalledWith('voicemail-1', 'RE0123456789abcdef')
+  })
+
+  it('does not queue the upload job when there is no RecordingSid', async () => {
+    prismaMock.voicemail.findFirst.mockResolvedValue({ id: 'voicemail-1', orgId: 'org-a', callSid: CALL_SID })
+
+    await postVoicemailRecording({ CallSid: CALL_SID })
+
+    expect(queueUploadVoicemailMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('voicemail-recording callback — acknowledgement', () => {
+  it('200s with a keyed body Twilio can ignore', async () => {
+    prismaMock.voicemail.findFirst.mockResolvedValue({ id: 'voicemail-1', orgId: 'org-a', callSid: CALL_SID })
+
+    const res = await postVoicemailRecording({ CallSid: CALL_SID, RecordingSid: 'RE0123456789abcdef' })
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ received: true })
   })
 })
 
