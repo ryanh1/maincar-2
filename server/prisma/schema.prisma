@@ -113,6 +113,13 @@ model Org {
   // spine already uses.
   lists       List[]
   listEntries ListEntry[]
+
+  // Inbound voicemail (MAI-39, MAI-40, MAI-41). Back-relations so a deleted org
+  // cascades its voicemails and greeting away — the same onDelete: Cascade the
+  // rest of the dialer models already use. voicemailGreeting is a single object,
+  // not an array, because VoicemailGreeting.orgId is @unique.
+  voicemails        Voicemail[]
+  voicemailGreeting VoicemailGreeting?
 }
 
 model User {
@@ -370,6 +377,69 @@ model Call {
   @@index([orgId, personId, createdAt])
   @@index([orgId, companyId, createdAt])
   @@index([orgId, dealId, createdAt])
+}
+
+// An org's single outgoing voicemail greeting, played to inbound callers before
+// <Record> starts (MAI-39). One per org — orgId is @unique so an upload always
+// updates the existing row instead of accumulating history.
+model VoicemailGreeting {
+  id String @id @default(cuid())
+
+  orgId String            @unique
+  org   Org               @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // The bare S3 object KEY for the MP3 (e.g.
+  // "maincar-voicemail-greetings/{orgId}/greeting.mp3"), written by the
+  // transcode job (MAI-43). Null until the org has uploaded and converted one.
+  audioUrl String?
+
+  uploadedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// One inbound call that went to voicemail, and what was learned from it after
+// (MAI-39, MAI-40, MAI-41).
+model Voicemail {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Twilio's CallSid for the inbound call, known at row-creation time (the
+  // voice webhook, MAI-39). Unique so the recording-completion webhook
+  // (MAI-40) can look the row up by CallSid alone.
+  callSid String @unique
+
+  // E.164 both sides, same meaning as Call.fromE164 / Call.toE164.
+  fromE164 String
+  toE164   String
+
+  // Which greeting the caller heard: the bare S3 key of the org's
+  // VoicemailGreeting.audioUrl at record time, or null if the org has none
+  // and the default greeting played instead. Not a relation, since the org's
+  // greeting can be replaced later and this should keep recording what THIS
+  // caller actually heard.
+  greeting String?
+
+  // The bare S3 object KEY for the MP3 (e.g.
+  // "maincar-voicemail-drops/{orgId}/{voicemailId}.mp3"), written by the
+  // recording callback (MAI-40). Null until the recording has been stored.
+  recordingUrl String?
+
+  // Allowed values: "pending", "done", "failed".
+  transcriptStatus String  @default("pending")
+  transcript       String?
+
+  // Billed duration in whole seconds, from Twilio's recording callback.
+  durationS Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([orgId, createdAt])
 }
 
 // -----------------------------------------------------------------------------
