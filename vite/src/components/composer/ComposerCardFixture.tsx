@@ -8,6 +8,7 @@ import { ComposerCard } from './ComposerCard'
 import { ComposerContext } from './composerContext'
 
 type ComposeMode = 'new' | 'reply' | 'forward'
+type FixtureTheme = 'light' | 'dark'
 
 const BODY_BY_MODE: Record<ComposeMode, string | null> = {
   new: null,
@@ -18,6 +19,10 @@ const BODY_BY_MODE: Record<ComposeMode, string | null> = {
 function fixtureMode(): ComposeMode {
   const value = new URLSearchParams(window.location.search).get('mode')
   return value === 'reply' || value === 'forward' ? value : 'new'
+}
+
+function fixtureTheme(): FixtureTheme {
+  return new URLSearchParams(window.location.search).get('theme') === 'dark' ? 'dark' : 'light'
 }
 
 function fixtureDraft(mode: ComposeMode): EmailDraft {
@@ -41,6 +46,7 @@ function fixtureDraft(mode: ComposeMode): EmailDraft {
 /** Development-only shell for the real-browser composer focus journey. */
 export function ComposerCardFixture() {
   const mode = fixtureMode()
+  const theme = fixtureTheme()
   const client = useMemo(
     () => new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }),
     [],
@@ -62,6 +68,11 @@ export function ComposerCardFixture() {
     })
     return () => useAuthStore.getState().reset()
   }, [])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    return () => document.documentElement.classList.remove('dark')
+  }, [theme])
 
   return (
     <QueryClientProvider client={client}>

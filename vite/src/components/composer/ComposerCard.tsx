@@ -157,11 +157,19 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
   const { org } = useAuth()
   const draftId = draft.id
 
-  // Every template in the org, in the order the route sorted them. One cache
-  // entry serves both this menu and Settings → Email templates, so opening a
-  // card costs nothing once the list is warm.
-  const templatesQuery = useGetEmailTemplates(org?.id ?? null)
-  const templates = templatesQuery.data?.templates ?? []
+  // The insert menu deliberately keeps the rep's own templates as direct
+  // actions. Organization templates are a second menu, so a shared library
+  // cannot turn the first picker into a long mixed list. Each list is scoped by
+  // the server and separately keyed in React Query. Their union powers
+  // overwrite, where a shared template can be manageable by its creator or an
+  // organization admin, without adding a third request when a composer opens.
+  const privateTemplatesQuery = useGetEmailTemplates(org?.id ?? null, { scope: 'private', limit: 100 })
+  const organizationTemplatesQuery = useGetEmailTemplates(org?.id ?? null, { scope: 'organization', limit: 100 })
+  const privateTemplates = privateTemplatesQuery.data?.templates ?? []
+  const organizationTemplates = organizationTemplatesQuery.data?.templates ?? []
+  const allTemplates = [...privateTemplates, ...organizationTemplates]
+  const overwriteTemplatesReady = privateTemplatesQuery.isSuccess && organizationTemplatesQuery.isSuccess
+  const overwriteTemplatesError = privateTemplatesQuery.isError || organizationTemplatesQuery.isError
   const signaturesQuery = useGetEmailSignatures(org?.id ?? null)
   const signatures = useMemo(
     () => signaturesQuery.data?.signatures ?? [],
@@ -577,30 +585,51 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>Templates</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>Insert template</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    {templatesQuery.isPending && <DropdownMenuItem disabled>Loading templates…</DropdownMenuItem>}
-                    {templatesQuery.isError && (
-                      <DropdownMenuItem onSelect={(event) => {
-                        event.preventDefault()
-                        void templatesQuery.refetch()
-                      }}>
-                        Could not load your templates. Try again.
-                      </DropdownMenuItem>
-                    )}
-                    {templatesQuery.isSuccess && templates.length === 0 && (
-                      <DropdownMenuItem disabled>
-                        Write your first template in Settings → Email templates.
-                      </DropdownMenuItem>
-                    )}
-                    {templates.map((template) => (
-                      <DropdownMenuItem key={template.id} onSelect={() => pickTemplate(template)}>
-                        {template.name}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
+                {privateTemplatesQuery.isPending && <DropdownMenuItem disabled>Loading templates…</DropdownMenuItem>}
+                {privateTemplatesQuery.isError && (
+                  <DropdownMenuItem onSelect={(event) => {
+                    event.preventDefault()
+                    void privateTemplatesQuery.refetch()
+                  }}>
+                    Could not load your templates. Try again.
+                  </DropdownMenuItem>
+                )}
+                {privateTemplates.map((template) => (
+                  <DropdownMenuItem key={template.id} onSelect={() => pickTemplate(template)}>
+                    {template.name}
+                  </DropdownMenuItem>
+                ))}
+                {organizationTemplatesQuery.isPending && (
+                  <DropdownMenuItem disabled>Loading organization templates…</DropdownMenuItem>
+                )}
+                {organizationTemplatesQuery.isError && (
+                  <DropdownMenuItem onSelect={(event) => {
+                    event.preventDefault()
+                    void organizationTemplatesQuery.refetch()
+                  }}>
+                    Could not load organization templates. Try again.
+                  </DropdownMenuItem>
+                )}
+                {organizationTemplatesQuery.isSuccess && organizationTemplates.length > 0 && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      Organization templates · {organizationTemplatesQuery.data?.total ?? organizationTemplates.length}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {organizationTemplates.map((template) => (
+                        <DropdownMenuItem key={template.id} onSelect={() => pickTemplate(template)}>
+                          {template.name}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
+                {privateTemplatesQuery.isSuccess && organizationTemplatesQuery.isSuccess &&
+                  privateTemplates.length === 0 && organizationTemplates.length === 0 && (
+                  <DropdownMenuItem disabled>
+                    Write your first template in Settings → Email templates.
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>Save draft as template</DropdownMenuSubTrigger>
@@ -611,19 +640,21 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger>Overwrite template</DropdownMenuSubTrigger>
                       <DropdownMenuSubContent>
-                        {templatesQuery.isPending && <DropdownMenuItem disabled>Loading templates…</DropdownMenuItem>}
-                        {templatesQuery.isError && (
+                        {!overwriteTemplatesReady && !overwriteTemplatesError && (
+                          <DropdownMenuItem disabled>Loading templates…</DropdownMenuItem>
+                        )}
+                        {overwriteTemplatesError && (
                           <DropdownMenuItem onSelect={(event) => {
                             event.preventDefault()
-                            void templatesQuery.refetch()
+                            void Promise.all([privateTemplatesQuery.refetch(), organizationTemplatesQuery.refetch()])
                           }}>
                             Could not load your templates. Try again.
                           </DropdownMenuItem>
                         )}
-                        {templatesQuery.isSuccess && templates.length === 0 && (
+                        {overwriteTemplatesReady && allTemplates.length === 0 && (
                           <DropdownMenuItem disabled>No templates to overwrite.</DropdownMenuItem>
                         )}
-                        {templates.map((template) => (
+                        {overwriteTemplatesReady && allTemplates.map((template) => (
                           <DropdownMenuItem key={template.id} onSelect={() => void saveTemplate(template.id)}>
                             {template.name}
                           </DropdownMenuItem>
