@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { DataEditor, GridCellKind, emptyGridSelection } from '@glideapps/glide-data-grid'
 import type {
   DataEditorRef,
@@ -22,6 +22,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { useCreateRecord, useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
 import { useAuth } from '@/providers/useAuth'
+import { useDialer } from '@/components/dialer/dialerContext'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { buildGridCell, coerceForType, FLAGGED_THEME, parseOptions } from './cellBuilder'
 import { chipCellRenderer, type ChipCellData } from './chipCell'
@@ -42,6 +43,7 @@ const ROW_HEIGHTS = { compact: 34, comfortable: 44, tall: 56 } as const
 // Glide asks for the next window once the reader has scrolled within this many
 // rows of the end of what is loaded, so the fetch lands before blank rows do.
 const PREFETCH_MARGIN = 60
+const JUST_CALLED_MARKER_MS = 5_000
 
 interface FindMatch {
   col: number
@@ -150,6 +152,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
  */
 export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfigChange }: RecordGridProps) {
   const { user } = useAuth()
+  const { activeCall, dialing } = useDialer()
   const colors = useGridColors()
 
   // list-storage attributes (ListEntry-scoped) never appear in a row payload
@@ -245,6 +248,31 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     const displayRow = displayRows[row]
     return displayRow?.kind === 'record' ? displayRow.record : null
   }, [displayRows])
+
+  // Calls are standard CRM records, so the dialer's call id is the row identity
+  // for the Calls grid. Do not apply it to another object whose record id merely
+  // happens to match a call id.
+  const liveCallRecordId = object.slug === 'call' && dialing ? activeCall?.callId ?? null : null
+  const previousLiveCallRecordId = useRef<string | null>(null)
+  const [justCalledRecordId, setJustCalledRecordId] = useState<string | null>(null)
+
+  useLayoutEffect(() => {
+    if (liveCallRecordId) {
+      previousLiveCallRecordId.current = liveCallRecordId
+      queueMicrotask(() => setJustCalledRecordId(null))
+      return
+    }
+
+    const endedRecordId = previousLiveCallRecordId.current
+    previousLiveCallRecordId.current = null
+    if (!endedRecordId) return
+
+    queueMicrotask(() => setJustCalledRecordId(endedRecordId))
+    const timeout = window.setTimeout(() => {
+      setJustCalledRecordId((current) => current === endedRecordId ? null : current)
+    }, JUST_CALLED_MARKER_MS)
+    return () => window.clearTimeout(timeout)
+  }, [liveCallRecordId])
 
   // Local-only edit state (see the class doc comment): a per-record patch of
   // slug → value, plus which cells are currently flagged (accept-but-flag,
@@ -476,6 +504,35 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const focusedRow = gridSelection.current?.cell[1] ?? null
   const dataEditorRef = useRef<DataEditorRef>(null)
   const findInputRef = useRef<HTMLInputElement>(null)
+
+  const getRowThemeOverride = useCallback((row: number): Partial<Theme> | undefined => {
+    const record = recordAtRow(row)
+    if (!record) return undefined
+    if (record.id === liveCallRecordId) {
+      return {
+        // Glide renders this row's accent at the leading edge. It deliberately
+        // uses the active-status token, rather than the primary selection token.
+        accentColor: colors.activeCallAccent,
+        accentLight: colors.activeCallTint,
+        bgCell: colors.activeCallTint,
+      }
+    }
+    if (record.id === justCalledRecordId) return { bgCell: colors.recentCallTint }
+    return undefined
+  }, [recordAtRow, liveCallRecordId, justCalledRecordId, colors])
+
+  useEffect(() => {
+    if (!liveCallRecordId) return
+    const row = displayRows.findIndex((displayRow) => displayRow.kind === 'record' && displayRow.record.id === liveCallRecordId)
+    if (row < 0) return
+    // The call owns this motion. It never writes gridSelection, so a rep can
+    // keep editing or inspecting any other row while the call remains visible.
+    dataEditorRef.current?.scrollTo(0, row, 'both', 0, 0, {
+      hAlign: 'center',
+      vAlign: 'center',
+      behavior: 'smooth',
+    })
+  }, [liveCallRecordId, displayRows])
 
   const focusCell = useCallback((col: number, row: number) => {
     setGridSelection({
@@ -780,6 +837,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         gridSelection={finderSelection ?? gridSelection}
         onGridSelectionChange={setGridSelection}
         onMouseMove={onMouseMove}
+        getRowThemeOverride={getRowThemeOverride}
         theme={theme}
         width="100%"
         height="100%"
@@ -906,6 +964,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
               headerHeight={0}
               scrollOffsetX={scrollOffsetX}
               smoothScrollX
+              getRowThemeOverride={getRowThemeOverride}
               theme={theme}
               verticalBorder={config.gridLines}
               width="100%"
