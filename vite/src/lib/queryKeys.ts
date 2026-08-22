@@ -156,6 +156,9 @@ export const queryKeys = {
     all: (orgId: string) => ['savedViews', orgId] as const,
     list: (orgId: string, objectId: string) => ['savedViews', orgId, 'list', objectId] as const,
   },
+  detailLayouts: {
+    detail: (orgId: string, objectId: string) => ['detailLayouts', orgId, objectId] as const,
+  },
   activity: {
     all: ['activity'] as const,
     // Keyed by org and the scope (companyId/personId/dealId): the feed route
