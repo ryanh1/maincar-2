@@ -19,27 +19,27 @@ cd mai-123-short-title
 ### 2. Assign a port slot
 
 ```bash
-eval "$(./scripts/coord/mc-slot --env)"
+eval "$(./.claude/scripts/coord/mc-slot --env)"
 # Now your shell has: API_PORT, VITE_PORT, FB_AUTH_PORT, etc.
 ```
 
 ### 3. Run tests with the queue
 
 ```bash
-./scripts/coord/mc-gate
+./.claude/scripts/coord/mc-gate
 # Runs: typecheck, lint, build, test, test:integration
 # Queues if 4+ are already running
 ```
 
 Or run specific tests:
 ```bash
-./scripts/coord/mc-gate npm run test:server
+./.claude/scripts/coord/mc-gate npm run test:server
 ```
 
 ### 4. Merge safely
 
 ```bash
-./scripts/coord/mc-merge -m "MAI-123: Your commit message"
+./.claude/scripts/coord/mc-merge --gate -m "MAI-123: Your commit message"
 # Takes the merge lock
 # Checks main hasn't moved since you last rebased
 # Merges and pushes
@@ -48,7 +48,7 @@ Or run specific tests:
 ### 5. Check health
 
 ```bash
-./scripts/coord/mc-doctor
+./.claude/scripts/coord/mc-doctor
 # Shows: load, merge lock, stuck worktrees, databases, etc.
 ```
 
@@ -75,7 +75,7 @@ git clone /path/to/maincar-2 mai-123-feature
 cd mai-123-feature
 
 # Assign ports (slot 0 = 3010, 5183, 9140, etc.)
-eval "$(./scripts/coord/mc-slot --env)"
+eval "$(./.claude/scripts/coord/mc-slot --env)"
 
 # Make changes, commit
 git checkout -b mai-123-feature
@@ -84,12 +84,12 @@ git add file.ts
 git commit -m "MAI-123: Feature description"
 
 # Run tests (queued if needed)
-./scripts/coord/mc-gate
+./.claude/scripts/coord/mc-gate
 # [mc-gate] running (slot 1, limit 4)
 # ... typecheck, lint, build, tests run ...
 
 # If tests pass, merge
-./scripts/coord/mc-merge -m "MAI-123: Feature description"
+./.claude/scripts/coord/mc-merge --gate -m "MAI-123: Feature description"
 # [mc-merge] waiting for the merge lock...
 # [mc-merge] lock held. Merging mai-123-feature.
 # [mc-merge] merged and pushed. mai-123-feature is on main.
@@ -157,11 +157,19 @@ MC_STATE_HOME=~/my-coord-state mc-slot
 **Leftover test databases accumulating**
 → Check `mc-doctor`. A stale migration or database issue. Usually harmless.
 
-## Not using the scripts?
+## Required delivery workflow
 
-If you prefer to work without worktrees or the queue:
-- Work in `/Users/ryanhollander/Documents/Coding/My Projects/maincar-2` directly
-- Run `npm run verify` instead of `mc-gate`
-- Use `git merge` and `git push` instead of `mc-merge`
+The coordination scripts are not optional for a feature branch's closeout:
 
-The scripts just make parallel safe and fast. Serial work in the main folder still works.
+1. Run focused tests during implementation, then `MC_GATE_FULL=1
+   ./.claude/scripts/coord/mc-gate` before committing.
+2. Commit the feature with its tests.
+3. Run `./.claude/scripts/coord/mc-merge --gate -m "MAI-123: ..."`; it is the
+   only supported merge-and-push route to `main`.
+4. Confirm `main` and `origin/main` are at ahead/behind `0/0`.
+5. Delete the merged feature branch (including an existing remote branch), then
+   remove the clean, exact feature worktree and confirm `git worktree list` is
+   free of stale entries.
+6. Update the Linear issue after those delivery and cleanup receipts exist.
+
+Do not replace `mc-merge` with raw `git merge` or a direct push to `main`.

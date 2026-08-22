@@ -5,8 +5,13 @@ When working on a Linear issue:
 ## Issue Status Transitions
 
 - **When starting work:** Move issue to **"In Progress"**
-- **When work is complete:** Move issue to **"In Review"** (tests pass, code is ready for review, build succeeds)
-- **Never leave an issue in "In Progress" after the work is done** — always transition to "In Review" before closing the session
+- **When implementation is ready for review:** Move the issue to **"In Review"** (tests pass, code is committed, and it awaits review or merge).
+- **When the session merges and pushes the issue itself:** after the required merge,
+  GitHub push, feature-branch deletion, and worktree cleanup, move the issue to
+  **"Done"** (or the team's final equivalent). Do not leave a merged issue in
+  "In Progress" or "In Review".
+- **Never leave an issue in "In Progress" after the work is done.** Update its
+  status as part of closeout, after the repository cleanup rather than before it.
 
 **One issue "In Progress" at a time.** Normally a session works one issue. Before you move a new issue to "In Progress", make sure your last one is out of "In Progress" (moved to "In Review" or back to its prior status). There may be exceptions, but treat one as the rule.
 
@@ -29,7 +34,8 @@ The `linear-execute-issue` skill is your workflow for taking an issue from Linea
 
 1. **Input:** Issue key (MAI-123) or Linear URL
 2. **Process:** Read spec → plan → branch → code → test → verify
-3. **Output:** Move issue to "In Review" and report status
+3. **Output:** After the required merge/push/cleanup, move the issue to "Done";
+   otherwise move it to "In Review" when it is genuinely awaiting review.
 
 Use this skill whenever you're working on an existing Linear issue.
 
