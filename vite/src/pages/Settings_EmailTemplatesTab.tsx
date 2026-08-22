@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, MoreHorizontal, Pencil, Search, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -20,18 +20,41 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { IconButton } from '@/components/ui/icon-button'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useDeleteEmailTemplate, useGetEmailTemplates } from '@/hooks/email'
-import type { EmailTemplate } from '@/hooks/email'
+import type { EmailTemplate, EmailTemplateScope, EmailTemplateSort } from '@/hooks/email'
 import { memberDisplayName, useGetMembers } from '@/hooks/orgs'
 import type { OrgMember } from '@/hooks/orgs'
+import { useSetUrlParams, useUrlInt, useUrlString } from '@/hooks/urlState'
 import { ApiError } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
 
 import { Settings_EmailTemplates_Form } from './Settings_EmailTemplates_Form'
 
 /** The whole org fits in one page at the server's cap, which is what the map needs. */
 const MEMBER_PAGE_SIZE = 200
+const PAGE_SIZE = 25
+
+const COLUMNS: { label: string; sort: EmailTemplateSort | null; className?: string }[] = [
+  { label: 'Name', sort: 'name', className: 'w-[28%]' },
+  { label: 'Subject', sort: 'subject', className: 'w-[28%]' },
+  { label: 'Author', sort: 'author', className: 'w-44' },
+  { label: 'Sharing', sort: null, className: 'w-36' },
+]
+
+const TEMPLATE_SCOPES: { value: Extract<EmailTemplateScope, 'private' | 'all'>; label: string }[] = [
+  { value: 'private', label: 'Private templates' },
+  { value: 'all', label: 'Private and organization templates' },
+]
 
 /**
  * Who wrote a template, in words a person can read.
@@ -86,7 +109,27 @@ export function Settings_EmailTemplatesTab() {
   const { org, user, isAdmin } = useAuth()
   const orgId = org?.id ?? null
 
-  const templatesQuery = useGetEmailTemplates(orgId)
+  // Like Members, the table reads its whole view from the URL. These values are
+  // deliberately passed straight to the server: filtering or sorting rows after
+  // they reach the browser would make the count and pagination lie.
+  const setUrlParams = useSetUrlParams()
+  const [search] = useUrlString('q', '')
+  const [scopeParam] = useUrlString('scope', 'private')
+  const [sort] = useUrlString('sort', 'name')
+  const [dir] = useUrlString('dir', 'asc')
+  const [page, setPage] = useUrlInt('page', 1)
+  const scope = scopeParam === 'all' ? 'all' : 'private'
+  const sortColumn = (COLUMNS.find((column) => column.sort === sort)?.sort ?? 'name') as EmailTemplateSort
+  const sortDir = dir === 'desc' ? 'desc' : 'asc'
+
+  const templatesQuery = useGetEmailTemplates(orgId, {
+    scope,
+    page,
+    limit: PAGE_SIZE,
+    sort: sortColumn,
+    dir: sortDir,
+    q: search || undefined,
+  })
   // Attribution only. Any member may read the member list, so this is not an
   // admin-gated call, and a failure here costs the author column and nothing else.
   const membersQuery = useGetMembers(orgId, { limit: MEMBER_PAGE_SIZE })
@@ -101,6 +144,9 @@ export function Settings_EmailTemplatesTab() {
 
   const data = templatesQuery.data
   const templates = data?.templates ?? []
+  const total = data?.total ?? 0
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const hasFilters = search !== '' || scope !== 'private'
   const membersById = new Map(
     (membersQuery.data?.members ?? []).map((member) => [member.userId, member]),
   )
@@ -119,6 +165,16 @@ export function Settings_EmailTemplatesTab() {
           ),
       },
     )
+  }
+
+  function clickHeader(column: EmailTemplateSort | null): void {
+    if (!column) return
+    const nextDir = column === sortColumn && sortDir === 'asc' ? 'desc' : 'asc'
+    setUrlParams({ sort: column, dir: nextDir, page: null })
+  }
+
+  function selectScope(nextScope: Extract<EmailTemplateScope, 'private' | 'all'>): void {
+    setUrlParams({ scope: nextScope === 'private' ? null : nextScope, page: null })
   }
 
   if (editing) {
@@ -143,9 +199,48 @@ export function Settings_EmailTemplatesTab() {
             Organization templates can be managed by their creator or an admin.
           </p>
         </div>
-        {templates.length > 0 && (
-          <Button size="sm" onClick={() => setEditing({ template: null })}>
-            New template
+        <Button size="sm" onClick={() => setEditing({ template: null })}>
+          New template
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-56 max-w-sm flex-1">
+          <Search
+            size={16}
+            aria-hidden
+            className="absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            className="h-8 pl-8"
+            placeholder="Search templates"
+            aria-label="Search templates"
+            value={search}
+            onChange={(event) => setUrlParams({ q: event.target.value, page: null })}
+          />
+        </div>
+
+        <Select value={scope} onValueChange={(value) => selectScope(value as Extract<EmailTemplateScope, 'private' | 'all'>)}>
+          <SelectTrigger size="sm" aria-label="Template visibility">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {TEMPLATE_SCOPES.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {hasFilters && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setUrlParams({ q: null, scope: null, page: null })}
+          >
+            <X size={16} aria-hidden />
+            Clear
           </Button>
         )}
       </div>
@@ -169,31 +264,54 @@ export function Settings_EmailTemplatesTab() {
 
       {data && templates.length === 0 && (
         <div className="flex flex-col items-center gap-3 rounded-md border border-border py-12 text-center">
-          <p className="text-base font-semibold">Write a template you can reuse.</p>
-          <Button size="sm" onClick={() => setEditing({ template: null })}>
-            New template
-          </Button>
+          <p className="text-base font-semibold">
+            {hasFilters
+              ? 'No template matches this search. Clear the filters to see your templates.'
+              : 'Write a template you can reuse.'}
+          </p>
+          {hasFilters ? (
+            <Button variant="secondary" size="sm" onClick={() => setUrlParams({ q: null, scope: null, page: null })}>
+              Clear filters
+            </Button>
+          ) : null}
         </div>
       )}
 
       {data && templates.length > 0 && (
         <div className="overflow-x-auto rounded-md border border-border">
-          <table className="w-full">
+          <table className="w-full min-w-[720px] table-fixed text-sm">
             <caption className="sr-only">Email templates for {org.name}</caption>
             <thead>
               <tr className="border-b border-border bg-surface">
-                <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-text-muted">
-                  Name
-                </th>
-                <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-text-muted">
-                  Subject
-                </th>
-                <th scope="col" className="w-48 px-3 py-2 text-left text-xs font-medium text-text-muted">
-                  Author
-                </th>
-                <th scope="col" className="w-32 px-3 py-2 text-left text-xs font-medium text-text-muted">
-                  Sharing
-                </th>
+                {COLUMNS.map((column) => (
+                  <th
+                    key={column.label}
+                    scope="col"
+                    className={cn(
+                      'px-3 py-2 text-left text-xs font-medium text-text-muted',
+                      column.className,
+                    )}
+                  >
+                    {column.sort ? (
+                      <button
+                        type="button"
+                        className="inline-flex cursor-pointer items-center gap-1 hover:text-foreground"
+                        onClick={() => clickHeader(column.sort)}
+                        aria-label={`Sort by ${column.label}`}
+                      >
+                        {column.label}
+                        {sortColumn === column.sort &&
+                          (sortDir === 'asc' ? (
+                            <ArrowUp size={14} aria-hidden />
+                          ) : (
+                            <ArrowDown size={14} aria-hidden />
+                          ))}
+                      </button>
+                    ) : (
+                      column.label
+                    )}
+                  </th>
+                ))}
                 {/* The actions column has no heading a reader needs, but a th
                     still has to say something for a screen reader walking it. */}
                 <th scope="col" className="w-12 px-2 py-2">
@@ -250,6 +368,32 @@ export function Settings_EmailTemplatesTab() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs tabular-nums text-muted-foreground">
+            Page {page} of {lastPage}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={page <= 1}
+              onClick={() => setPage(page - 1)}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={page >= lastPage}
+              onClick={() => setPage(page + 1)}
+            >
+              Next
+            </Button>
+          </div>
         </div>
       )}
 

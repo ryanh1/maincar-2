@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test'
 test('creates, shares, and unshares a template in both themes on a narrow Settings viewport', async ({ page }) => {
   const consoleErrors: string[] = []
   const templateRequests: Array<{ method: string; body: Record<string, unknown> | null }> = []
+  const templateListRequests: URL[] = []
   const draftRequests: string[] = []
   const templates: Array<Record<string, unknown>> = [
     {
@@ -30,7 +31,24 @@ test('creates, shares, and unshares a template in both themes on a narrow Settin
   await page.route('**/api/email/orgs/org-fixture/templates**', async (route) => {
     const request = route.request()
     const templateId = new URL(request.url()).pathname.split('/').at(-1)
-    if (request.method() === 'GET') return route.fulfill({ json: { templates, total: templates.length, page: 1, limit: 25 } })
+    if (request.method() === 'GET') {
+      const url = new URL(request.url())
+      templateListRequests.push(url)
+      const scope = url.searchParams.get('scope') ?? 'private'
+      const q = (url.searchParams.get('q') ?? '').toLowerCase()
+      const visible = templates.filter((template) =>
+        (scope === 'all' || template.visibility === 'PRIVATE') &&
+        (!q || String(template.name).toLowerCase().includes(q) || String(template.subject).toLowerCase().includes(q)),
+      )
+      return route.fulfill({
+        json: {
+          templates: visible,
+          total: visible.length,
+          page: Number(url.searchParams.get('page') ?? '1'),
+          limit: Number(url.searchParams.get('limit') ?? '25'),
+        },
+      })
+    }
 
     const body = request.postDataJSON() as Record<string, unknown> | null
     templateRequests.push({ method: request.method(), body })
@@ -62,6 +80,12 @@ test('creates, shares, and unshares a template in both themes on a narrow Settin
   await page.goto('/__fixtures/email-templates')
   await expect(page.getByRole('heading', { name: 'Email templates' })).toBeVisible()
   await expect(page.getByText('Organization templates can be managed by their creator or an admin.')).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Template visibility' })).toHaveText('Private templates')
+  await expect.poll(() => templateListRequests.some((url) =>
+    url.searchParams.get('scope') === 'private' &&
+    url.searchParams.get('sort') === 'name' &&
+    url.searchParams.get('dir') === 'asc',
+  )).toBe(true)
 
   await page.getByRole('button', { name: 'New template' }).click()
   const sharing = page.getByRole('checkbox', { name: 'Share with organization' })
@@ -78,6 +102,13 @@ test('creates, shares, and unshares a template in both themes on a narrow Settin
   await expect.poll(() => templateRequests).toHaveLength(2)
   expect(templateRequests[1]).toEqual({ method: 'POST', body: expect.objectContaining({ visibility: 'ORGANIZATION' }) })
 
+  await page.getByRole('combobox', { name: 'Template visibility' }).click()
+  await page.getByRole('option', { name: 'Private and organization templates' }).click()
+  await expect.poll(() => templateListRequests.some((url) => url.searchParams.get('scope') === 'all')).toBe(true)
+
+  const tableScroller = page.getByRole('table', { name: 'Email templates for Fixture organization' }).locator('..')
+  await expect.poll(() => tableScroller.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true)
+  await tableScroller.evaluate((element) => { element.scrollLeft = element.scrollWidth })
   await page.getByRole('button', { name: 'Show actions for Shareable follow-up' }).click()
   await page.getByRole('menuitem', { name: 'Edit' }).click()
   await expect(sharing).toBeChecked()
@@ -87,6 +118,13 @@ test('creates, shares, and unshares a template in both themes on a narrow Settin
   await expect.poll(() => templateRequests).toHaveLength(3)
   expect(templateRequests[2]).toEqual({ method: 'PATCH', body: expect.objectContaining({ visibility: 'PRIVATE' }) })
   expect(draftRequests).toEqual([])
+
+  await tableScroller.evaluate((element) => { element.scrollLeft = 0 })
+  await page.getByRole('button', { name: 'Sort by Name' }).click()
+  await expect.poll(() => templateListRequests.some((url) => url.searchParams.get('dir') === 'desc')).toBe(true)
+
+  await page.getByLabel('Search templates').fill('Shareable')
+  await expect.poll(() => templateListRequests.some((url) => url.searchParams.get('q') === 'Shareable')).toBe(true)
 
   await page.getByRole('button', { name: 'Use dark theme' }).click()
   await expect(page.locator('html')).toHaveClass(/dark/)
