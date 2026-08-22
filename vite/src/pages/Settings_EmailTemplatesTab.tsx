@@ -55,13 +55,23 @@ function templateAuthorLabel(
   return member ? memberDisplayName(member) : 'A teammate'
 }
 
+/** The UI mirrors the server's policy but never substitutes for its checks. */
+function canManageTemplate(
+  template: EmailTemplate,
+  viewerId: string | null | undefined,
+  isAdmin: boolean,
+): boolean {
+  if (template.visibility === 'PRIVATE') return template.createdById === viewerId
+  return template.createdById === viewerId || isAdmin
+}
+
 /**
  * Settings → Email templates: the subject-and-body shells this organization
  * reuses, and where they are written.
  *
- * **Templates are org-shared** (SPEC-composer-templates.md § 2). Every member
- * sees the same list and any member may write, edit, or delete any row —
- * including one they did not write. There is no "my templates".
+ * Private templates belong to the rep who wrote them. Organization templates
+ * are visible to every member, but only their creator or an organization admin
+ * may manage them.
  *
  * The screen is a list OR a form, never both: the form hosts a full rich-text
  * editor, which wants the width, and swapping in place keeps the editor out of a
@@ -73,7 +83,7 @@ function templateAuthorLabel(
  * does nothing that CLAUDE.md forbids.
  */
 export function Settings_EmailTemplatesTab() {
-  const { org, user } = useAuth()
+  const { org, user, isAdmin } = useAuth()
   const orgId = org?.id ?? null
 
   const templatesQuery = useGetEmailTemplates(orgId)
@@ -127,7 +137,12 @@ export function Settings_EmailTemplatesTab() {
   return (
     <section className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-base font-semibold">Email templates</h2>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-base font-semibold">Email templates</h2>
+          <p className="text-xs text-text-muted">
+            Organization templates can be managed by their creator or an admin.
+          </p>
+        </div>
         {templates.length > 0 && (
           <Button size="sm" onClick={() => setEditing({ template: null })}>
             New template
@@ -154,7 +169,7 @@ export function Settings_EmailTemplatesTab() {
 
       {data && templates.length === 0 && (
         <div className="flex flex-col items-center gap-3 rounded-md border border-border py-12 text-center">
-          <p className="text-base font-semibold">Write a template your team can reuse.</p>
+          <p className="text-base font-semibold">Write a template you can reuse.</p>
           <Button size="sm" onClick={() => setEditing({ template: null })}>
             New template
           </Button>
@@ -164,7 +179,7 @@ export function Settings_EmailTemplatesTab() {
       {data && templates.length > 0 && (
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full">
-            <caption className="sr-only">Email templates shared across {org.name}</caption>
+            <caption className="sr-only">Email templates for {org.name}</caption>
             <thead>
               <tr className="border-b border-border bg-surface">
                 <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-text-muted">
@@ -175,6 +190,9 @@ export function Settings_EmailTemplatesTab() {
                 </th>
                 <th scope="col" className="w-48 px-3 py-2 text-left text-xs font-medium text-text-muted">
                   Author
+                </th>
+                <th scope="col" className="w-32 px-3 py-2 text-left text-xs font-medium text-text-muted">
+                  Sharing
                 </th>
                 {/* The actions column has no heading a reader needs, but a th
                     still has to say something for a screen reader walking it. */}
@@ -201,27 +219,32 @@ export function Settings_EmailTemplatesTab() {
                       templateAuthorLabel(template.createdById, membersById, user?.id)
                     )}
                   </td>
+                  <td className="px-3 py-1 text-sm text-muted-foreground">
+                    {template.visibility === 'ORGANIZATION' ? 'Organization' : 'Private'}
+                  </td>
                   <td className="px-2 py-1 text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <IconButton tooltip={`Show actions for ${template.name}`}>
-                          <MoreHorizontal size={16} aria-hidden />
-                        </IconButton>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onSelect={() => setEditing({ template })}>
-                          <Pencil size={16} aria-hidden />
-                          Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          variant="destructive"
-                          onSelect={() => setConfirmDelete(template)}
-                        >
-                          <Trash2 size={16} aria-hidden />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {canManageTemplate(template, user?.id, isAdmin) && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <IconButton tooltip={`Show actions for ${template.name}`}>
+                            <MoreHorizontal size={16} aria-hidden />
+                          </IconButton>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onSelect={() => setEditing({ template })}>
+                            <Pencil size={16} aria-hidden />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onSelect={() => setConfirmDelete(template)}
+                          >
+                            <Trash2 size={16} aria-hidden />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -240,8 +263,10 @@ export function Settings_EmailTemplatesTab() {
             {/* The consequence, and the honest limit of it: a template is copied
                 into a card when it is picked, so nothing already written changes. */}
             <AlertDialogDescription>
-              Everyone in this organization loses this template. Emails already written from it stay
-              as they are.
+              {confirmDelete?.visibility === 'ORGANIZATION'
+                ? 'Everyone in this organization loses this template.'
+                : 'This removes your private template.'}{' '}
+              Emails already written from it stay as they are.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

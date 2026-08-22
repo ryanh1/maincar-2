@@ -152,7 +152,7 @@ function membersState(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useAuthMock.mockReturnValue({ org: ORG, user: VIEWER })
+  useAuthMock.mockReturnValue({ org: ORG, user: VIEWER, isAdmin: false })
   useGetEmailTemplatesMock.mockReturnValue(listState())
   useGetMembersMock.mockReturnValue(membersState())
   useSaveEmailTemplateMock.mockReturnValue({ mutate: saveMutateMock, isPending: false })
@@ -212,7 +212,7 @@ describe('the empty state', () => {
     const user = userEvent.setup()
 
     renderWithProviders(<Settings_EmailTemplatesTab />)
-    expect(screen.getByText('Write a template your team can reuse.')).toBeInTheDocument()
+    expect(screen.getByText('Write a template you can reuse.')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'New template' }))
 
@@ -222,6 +222,38 @@ describe('the empty state', () => {
 })
 
 describe('writing a template', () => {
+  it('keeps a new template private until the creator explicitly shares it', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_EmailTemplatesTab />)
+
+    await user.click(screen.getByRole('button', { name: 'New template' }))
+    const sharing = screen.getByRole('checkbox', { name: 'Share with organization' })
+    expect(sharing).not.toBeChecked()
+
+    await user.type(screen.getByLabelText(/^Name/), 'Cold outreach')
+    await user.click(screen.getByRole('button', { name: 'Save template' }))
+
+    await waitFor(() => expect(saveMutateMock).toHaveBeenCalled())
+    expect(saveMutateMock.mock.calls[0][0]).toMatchObject({
+      orgId: 'org-a',
+      name: 'Cold outreach',
+      visibility: 'PRIVATE',
+    })
+  })
+
+  it('shares a new template only when the creator turns sharing on', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_EmailTemplatesTab />)
+
+    await user.click(screen.getByRole('button', { name: 'New template' }))
+    await user.type(screen.getByLabelText(/^Name/), 'Cold outreach')
+    await user.click(screen.getByRole('checkbox', { name: 'Share with organization' }))
+    await user.click(screen.getByRole('button', { name: 'Save template' }))
+
+    await waitFor(() => expect(saveMutateMock).toHaveBeenCalled())
+    expect(saveMutateMock.mock.calls[0][0]).toMatchObject({ visibility: 'ORGANIZATION' })
+  })
+
   it('saves a new one with no templateId', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_EmailTemplatesTab />)
@@ -254,6 +286,19 @@ describe('writing a template', () => {
 
     expect(toastErrorMock).toHaveBeenCalledWith('Name the template to save it.')
     expect(saveMutateMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the form open and explains how to recover when saving fails', async () => {
+    saveMutateMock.mockImplementation((_variables, options) => options.onError(new Error('offline')))
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_EmailTemplatesTab />)
+
+    await user.click(screen.getByRole('button', { name: 'New template' }))
+    await user.type(screen.getByLabelText(/^Name/), 'Cold outreach')
+    await user.click(screen.getByRole('button', { name: 'Save template' }))
+
+    expect(toastErrorMock).toHaveBeenCalledWith('Could not save the template. Try again.')
+    expect(screen.getByRole('heading', { name: 'New template' })).toBeInTheDocument()
   })
 
   it('returns to the list on cancel without saving', async () => {
@@ -302,6 +347,43 @@ describe('editing a template', () => {
       templateId: 'tpl-1',
       name: 'Discovery recap',
     })
+  })
+
+  it('seeds sharing from the stored template and unshares through the same save', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_EmailTemplatesTab />)
+
+    await user.click(screen.getByRole('button', { name: 'Show actions for Discovery follow-up' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Edit' }))
+    const sharing = screen.getByRole('checkbox', { name: 'Share with organization' })
+    expect(sharing).toBeChecked()
+
+    await user.click(sharing)
+    await user.click(screen.getByRole('button', { name: 'Save template' }))
+
+    await waitFor(() => expect(saveMutateMock).toHaveBeenCalled())
+    expect(saveMutateMock.mock.calls[0][0]).toMatchObject({
+      orgId: 'org-a',
+      templateId: 'tpl-1',
+      visibility: 'PRIVATE',
+    })
+  })
+})
+
+describe('template management', () => {
+  it('hides management actions for an organization template the viewer did not create', () => {
+    renderWithProviders(<Settings_EmailTemplatesTab />)
+
+    expect(screen.queryByRole('button', { name: 'Show actions for Pricing recap' })).not.toBeInTheDocument()
+    expect(screen.getByText('Organization templates can be managed by their creator or an admin.')).toBeInTheDocument()
+  })
+
+  it('lets an organization admin manage a teammate\'s shared template', () => {
+    useAuthMock.mockReturnValue({ org: ORG, user: VIEWER, isAdmin: true })
+
+    renderWithProviders(<Settings_EmailTemplatesTab />)
+
+    expect(screen.getByRole('button', { name: 'Show actions for Pricing recap' })).toBeInTheDocument()
   })
 })
 
