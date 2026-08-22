@@ -20,6 +20,8 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     person: { findFirst: vi.fn() },
     pipeline: { findFirst: vi.fn() },
     pipelineStage: { findFirst: vi.fn() },
+    activityEntry: { upsert: vi.fn() },
+    $transaction: vi.fn(),
     deal: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
@@ -153,6 +155,8 @@ beforeEach(() => {
   prismaMock.person.findFirst.mockResolvedValue({ id: 'person-1' })
   prismaMock.dealPersonRole.upsert.mockResolvedValue(roleRow())
   prismaMock.dealPersonRole.deleteMany.mockResolvedValue({ count: 1 })
+  prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'activity-1' })
+  prismaMock.$transaction.mockImplementation(async (action: (tx: typeof prismaMock) => unknown) => action(prismaMock))
   stageBelongs()
 })
 
@@ -464,6 +468,38 @@ describe('PATCH /api/orgs/:orgId/deals/:id', () => {
     expect(res.status).toBe(422)
     expect(res.body.error).toContain('does not belong')
     expect(prismaMock.deal.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('writes a stage-change timeline row in the same transaction as the deal update', async () => {
+    prismaMock.deal.findFirst
+      .mockResolvedValueOnce(dealRow({ id: 'deal-1', stageId: 'stage-1', updatedAt: NOW }))
+      .mockResolvedValueOnce(dealRow({ id: 'deal-1', stageId: 'stage-2' }))
+    prismaMock.pipelineStage.findFirst
+      .mockResolvedValueOnce({ id: 'stage-2', pipelineId: 'pipe-1' })
+      .mockResolvedValueOnce({ id: 'stage-1', name: 'Discovery' })
+      .mockResolvedValueOnce({ id: 'stage-2', name: 'Proposal' })
+
+    const res = await request(app)
+      .patch(`${URL_A}/deal-1`)
+      .set('Authorization', AUTH)
+      .send({ stageId: 'stage-2' })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(prismaMock.deal.updateMany).toHaveBeenCalledWith({
+      where: { id: 'deal-1', orgId: ORG_A, deletedAt: null },
+      data: { stageId: 'stage-2' },
+    })
+    const upsert = prismaMock.activityEntry.upsert.mock.calls[0][0]
+    expect(upsert.create).toMatchObject({
+      sourceType: 'stage_change',
+      summary: 'Moved Acme renewal from Discovery to Proposal',
+      createdByUserId: 'user-a',
+      dealId: 'deal-1',
+      timelineTitle: 'Moved Acme renewal to Proposal',
+      timelineSubtype: 'stage_changed',
+      timelineMarker: { type: 'stage_moved', before: 'Discovery', after: 'Proposal' },
+    })
   })
 
   it('clears amountMinor to NULL when sent empty, and writes a BigInt when set', async () => {

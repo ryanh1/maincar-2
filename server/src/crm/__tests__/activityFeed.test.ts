@@ -17,6 +17,7 @@ import {
   activityFromMeeting,
   activityFromNote,
   activityFromSms,
+  activityFromStageChange,
   condense,
   formatDuration,
   isActivityDirection,
@@ -348,6 +349,19 @@ describe('activityFromCall', () => {
   it('leaves direction null rather than storing a value the union does not allow', () => {
     expect(activityFromCall(callRow({ direction: 'sideways' })).direction).toBeNull()
   })
+
+  it('projects the completed call into a self-rendering timeline event', () => {
+    const built = activityFromCall(callRow({ status: 'completed', durationS: 252 }))
+
+    expect(built.timeline).toEqual({
+      version: 1,
+      title: 'Called +12025550123 — 4m 12s',
+      preview: 'completed',
+      subtype: 'completed',
+      intensity: 3,
+      display: {},
+    })
+  })
 })
 
 describe('activityFromEmail', () => {
@@ -393,6 +407,17 @@ describe('activityFromEmail', () => {
     )
     expect(activityFromEmail(emailRow({ sentAt: null, receivedAt: null })).occurredAt).toBe(NOW)
   })
+
+  it('projects inbound and outbound mail with a meaningful timeline subtype', () => {
+    expect(activityFromEmail(emailRow()).timeline).toMatchObject({
+      title: 'Following up on the demo',
+      subtype: 'sent',
+      intensity: 3,
+    })
+    expect(activityFromEmail(emailRow({ direction: 'inbound' })).timeline).toMatchObject({
+      subtype: 'received',
+    })
+  })
 })
 
 describe('activityFromSms', () => {
@@ -413,6 +438,17 @@ describe('activityFromSms', () => {
     const built = activityFromSms(smsRow({ body: null, numMedia: 2 }))
     expect(built.summary).toBe('Texted +12025550123 — 2 attached')
     expect(built.preview).toBeNull()
+  })
+
+  it('projects SMS direction and delivery state into the timeline', () => {
+    expect(activityFromSms(smsRow()).timeline).toMatchObject({
+      title: 'Texted +12025550123',
+      subtype: 'sent',
+      intensity: 3,
+    })
+    expect(activityFromSms(smsRow({ direction: 'inbound', status: 'received' })).timeline).toMatchObject({
+      subtype: 'received',
+    })
   })
 })
 
@@ -445,6 +481,17 @@ describe('activityFromMeeting', () => {
     expect(activityFromMeeting(meetingRow({ organizerPersonId: 'person-3' })).personId).toBe(
       'person-3',
     )
+  })
+
+  it('projects meeting status into the timeline without inventing a direction', () => {
+    expect(activityFromMeeting(meetingRow()).timeline).toMatchObject({
+      title: 'Discovery call',
+      subtype: 'scheduled',
+      intensity: 3,
+    })
+    expect(activityFromMeeting(meetingRow({ status: 'cancelled' })).timeline).toMatchObject({
+      subtype: 'cancelled',
+    })
   })
 })
 
@@ -507,6 +554,53 @@ describe('activityFromNote', () => {
     expect(built.companyId).toBeNull()
     expect(built.personId).toBeNull()
     expect(built.dealId).toBeNull()
+  })
+
+  it('projects the note as an internal timeline event', () => {
+    expect(activityFromNote(noteRow()).timeline).toEqual({
+      version: 1,
+      title: 'Note: They want pricing by Friday.',
+      preview: 'They want pricing by Friday. Send the deck first.',
+      subtype: 'created',
+      intensity: 2,
+      display: {},
+    })
+  })
+})
+
+describe('activityFromStageChange', () => {
+  it('preserves the before and after stage names for the ribbon and detail panel', () => {
+    const built = activityFromStageChange({
+      id: 'deal-1',
+      orgId: 'org-a',
+      name: 'Enterprise renewal',
+      companyId: 'co-1',
+      updatedAt: NOW,
+    }, {
+      sourceId: 'deal-1:stage-2',
+      before: 'Discovery',
+      after: 'Proposal',
+      createdByUserId: 'user-a',
+    })
+
+    expect(built).toMatchObject({
+      sourceType: 'stage_change',
+      sourceId: 'deal-1:stage-2',
+      summary: 'Moved Enterprise renewal from Discovery to Proposal',
+      direction: null,
+      occurredAt: NOW,
+      createdByUserId: 'user-a',
+      companyId: 'co-1',
+      dealId: 'deal-1',
+      timeline: {
+        version: 1,
+        title: 'Moved Enterprise renewal to Proposal',
+        subtype: 'stage_changed',
+        intensity: 3,
+        display: { dealName: 'Enterprise renewal' },
+        marker: { type: 'stage_moved', before: 'Discovery', after: 'Proposal' },
+      },
+    })
   })
 })
 

@@ -34,6 +34,7 @@ import { logger } from '../../dependencies/logger.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { activityFromStageChange, recordActivityInTx } from '../crm/activityFeed.js'
 import type { Deal, DealPersonRole, Prisma } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
@@ -462,7 +463,40 @@ router.patch(
     }
 
     // --- Execute query ---
-    const result = await prisma.deal.updateMany({ where: { id, orgId, deletedAt: null }, data })
+    // A stage move is both a Deal update and a timeline event. Keep them in one
+    // transaction so a row cannot claim a move that did not commit, nor can a
+    // committed move disappear from the account history.
+    const stageChanged = body.stageId !== undefined && body.stageId !== existing.stageId
+    const changedAt = new Date()
+    const result = await prisma.$transaction(async (tx) => {
+      const updated = await tx.deal.updateMany({ where: { id, orgId, deletedAt: null }, data })
+      if (updated.count === 0 || !stageChanged) return updated
+
+      // Both names are captured at write time: the timeline and deal ribbon read
+      // the durable before/after snapshot without joining PipelineStage later.
+      const [beforeStage, afterStage] = await Promise.all([
+        tx.pipelineStage.findFirst({ where: { id: existing.stageId, orgId }, select: { name: true } }),
+        tx.pipelineStage.findFirst({ where: { id: body.stageId, orgId }, select: { name: true } }),
+      ])
+      if (!beforeStage || !afterStage) throw new Error('A deal stage vanished while recording its move.')
+
+      await recordActivityInTx(
+        tx,
+        activityFromStageChange(
+          { ...existing, updatedAt: changedAt },
+          {
+            // This one transition is immutable. A retry that replays this exact
+            // write uses the same source identity while a later move gets its
+            // own timeline row rather than overwriting account history.
+            sourceId: `${existing.id}:${existing.stageId}:${body.stageId}:${existing.updatedAt.toISOString()}`,
+            before: beforeStage.name,
+            after: afterStage.name,
+            createdByUserId: userId,
+          },
+        ),
+      )
+      return updated
+    })
     if (result.count === 0) {
       return void res.status(404).json({ error: 'Deal not found' })
     }

@@ -34,6 +34,7 @@
 import { Prisma } from '../generated/prisma/client.js'
 import type {
   Call,
+  Deal,
   Email,
   Meeting,
   SmsMessage,
@@ -476,12 +477,13 @@ export function activityFromCall(call: Call): NewActivityEntry {
   const counterparty = inbound ? call.fromE164 : call.toE164
   const duration = formatDuration(call.durationS)
   const lead = inbound ? `Call from ${counterparty}` : `Called ${counterparty}`
+  const summary = duration ? `${lead} — ${duration}` : lead
 
   return {
     orgId: call.orgId,
     sourceType: 'call',
     sourceId: call.id,
-    summary: duration ? `${lead} — ${duration}` : lead,
+    summary,
     // The call's own lifecycle state, so a feed row can say "no answer" without a
     // join back to the Call row.
     preview: call.status,
@@ -493,6 +495,14 @@ export function activityFromCall(call: Call): NewActivityEntry {
     companyId: call.companyId,
     personId: call.personId,
     dealId: call.dealId,
+    timeline: {
+      version: TIMELINE_EVENT_VERSION,
+      title: summary,
+      preview: call.status,
+      subtype: call.status === 'completed' ? 'completed' : call.status === 'canceled' ? 'cancelled' : 'scheduled',
+      intensity: 3,
+      display: {},
+    },
   }
 }
 
@@ -513,21 +523,31 @@ export function activityFromEmail(
 ): NewActivityEntry {
   const subject = condense(email.subject, SUMMARY_MAX_LENGTH) ?? '(no subject)'
   const inbound = email.direction === 'inbound'
+  const summary = inbound ? `Email received: ${subject}` : `Email sent: ${subject}`
+  const preview = condense(email.snippet ?? email.bodyText, PREVIEW_MAX_LENGTH)
 
   return {
     orgId: email.orgId,
     sourceType: 'email',
     sourceId: email.id,
-    summary: inbound ? `Email received: ${subject}` : `Email sent: ${subject}`,
+    summary,
     // The provider's own snippet when there is one, the plaintext body when there
     // is not. Never the HTML: a feed row must not render markup it did not build.
-    preview: condense(email.snippet ?? email.bodyText, PREVIEW_MAX_LENGTH),
+    preview,
     direction: isActivityDirection(email.direction) ? email.direction : null,
     occurredAt: email.sentAt ?? email.receivedAt ?? email.createdAt,
     createdByUserId: links.createdByUserId ?? null,
     companyId: email.companyId,
     personId: links.personId ?? null,
     dealId: email.dealId,
+    timeline: {
+      version: TIMELINE_EVENT_VERSION,
+      title: subject,
+      preview,
+      subtype: inbound ? 'received' : 'sent',
+      intensity: 3,
+      display: {},
+    },
   }
 }
 
@@ -545,13 +565,15 @@ export function activityFromSms(message: SmsMessage): NewActivityEntry {
   // An MMS with no body is a picture, and "Texted +1… — 2 images" says more than a
   // blank line does.
   const mediaNote = message.numMedia > 0 ? `${message.numMedia} attached` : null
+  const summary = mediaNote ? `${lead} — ${mediaNote}` : lead
+  const preview = condense(message.body, PREVIEW_MAX_LENGTH)
 
   return {
     orgId: message.orgId,
     sourceType: 'sms',
     sourceId: message.id,
-    summary: mediaNote ? `${lead} — ${mediaNote}` : lead,
-    preview: condense(message.body, PREVIEW_MAX_LENGTH),
+    summary,
+    preview,
     direction: isActivityDirection(message.direction) ? message.direction : null,
     occurredAt: message.sentAt ?? message.createdAt,
     // The rep whose number carried it. Null on a shared or unassigned number, which
@@ -560,6 +582,14 @@ export function activityFromSms(message: SmsMessage): NewActivityEntry {
     companyId: message.companyId,
     personId: message.personId,
     dealId: message.dealId,
+    timeline: {
+      version: TIMELINE_EVENT_VERSION,
+      title: summary,
+      preview,
+      subtype: inbound ? 'received' : 'sent',
+      intensity: 3,
+      display: {},
+    },
   }
 }
 
@@ -579,6 +609,7 @@ export function activityFromMeeting(
 ): NewActivityEntry {
   const title = condense(meeting.title, SUMMARY_MAX_LENGTH) ?? '(no title)'
   const lead = meeting.status === 'cancelled' ? `Meeting cancelled: ${title}` : `Meeting: ${title}`
+  const preview = condense(meeting.location ?? meeting.conferenceProvider, PREVIEW_MAX_LENGTH)
 
   return {
     orgId: meeting.orgId,
@@ -587,7 +618,7 @@ export function activityFromMeeting(
     summary: lead,
     // Where it was — the room OR the video product, never the raw joinUrl, which is
     // a link a feed row has no business rendering as text.
-    preview: condense(meeting.location ?? meeting.conferenceProvider, PREVIEW_MAX_LENGTH),
+    preview,
     direction: null,
     occurredAt: meeting.startsAt,
     createdByUserId: links.createdByUserId ?? null,
@@ -596,6 +627,14 @@ export function activityFromMeeting(
     // is a MeetingAttendee row.
     personId: meeting.organizerPersonId,
     dealId: meeting.dealId,
+    timeline: {
+      version: TIMELINE_EVENT_VERSION,
+      title,
+      preview,
+      subtype: meeting.status === 'cancelled' ? 'cancelled' : 'scheduled',
+      intensity: 3,
+      display: {},
+    },
   }
 }
 
@@ -636,19 +675,64 @@ export function activityFromNote(
   links: { companyId?: string | null; personId?: string | null; dealId?: string | null } = {},
 ): NewActivityEntry {
   const firstLine = condense(note.bodyText.split('\n')[0], SUMMARY_MAX_LENGTH - 'Note: '.length)
+  const summary = firstLine ? `Note: ${firstLine}` : 'Note added'
+  const preview = condense(note.bodyText, PREVIEW_MAX_LENGTH)
 
   return {
     orgId: note.orgId,
     sourceType: 'note',
     sourceId: note.id,
-    summary: firstLine ? `Note: ${firstLine}` : 'Note added',
-    preview: condense(note.bodyText, PREVIEW_MAX_LENGTH),
+    summary,
+    preview,
     direction: null,
     occurredAt: note.createdAt,
     createdByUserId: note.authorUserId,
     companyId: links.companyId ?? null,
     personId: links.personId ?? null,
     dealId: links.dealId ?? null,
+    timeline: {
+      version: TIMELINE_EVENT_VERSION,
+      title: summary,
+      preview,
+      subtype: 'created',
+      intensity: 2,
+      display: {},
+    },
+  }
+}
+
+/**
+ * The feed row for a deal moving between pipeline stages.
+ *
+ * The caller supplies a stable source id for the specific move. The Deal remains
+ * canonical; this row stores just the transition snapshot a timeline needs.
+ */
+export function activityFromStageChange(
+  deal: Pick<Deal, 'id' | 'orgId' | 'name' | 'companyId' | 'updatedAt'>,
+  change: { sourceId: string; before: string; after: string; createdByUserId?: string | null },
+): NewActivityEntry {
+  const dealName = condense(deal.name, SUMMARY_MAX_LENGTH) ?? 'Deal'
+  const before = condense(change.before, SUMMARY_MAX_LENGTH) ?? 'Unknown stage'
+  const after = condense(change.after, SUMMARY_MAX_LENGTH) ?? 'Unknown stage'
+
+  return {
+    orgId: deal.orgId,
+    sourceType: 'stage_change',
+    sourceId: change.sourceId,
+    summary: `Moved ${dealName} from ${before} to ${after}`,
+    direction: null,
+    occurredAt: deal.updatedAt,
+    createdByUserId: change.createdByUserId ?? null,
+    companyId: deal.companyId,
+    dealId: deal.id,
+    timeline: {
+      version: TIMELINE_EVENT_VERSION,
+      title: `Moved ${dealName} to ${after}`,
+      subtype: 'stage_changed',
+      intensity: 3,
+      display: { dealName },
+      marker: { type: 'stage_moved', before, after },
+    },
   }
 }
 
