@@ -27,6 +27,7 @@ import peopleRouter from './routes/people.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
 import recordsRouter from './routes/records.js'
 import recordingSettingsRouter from './routes/recordingSettings.js'
+import reportsRouter from './routes/reports.js'
 import tasksRouter from './routes/tasks.js'
 import teamRouter from './routes/team.js'
 import twilioVoiceRouter from './routes/twilioVoice.js'
@@ -85,6 +86,7 @@ app.use('/api/orgs/:orgId/voicemails', voicemailsRouter)
 app.use('/api/orgs/:orgId/companies', companiesRouter)
 app.use('/api/orgs/:orgId/people', peopleRouter)
 app.use('/api/orgs/:orgId/deals', dealsRouter)
+app.use('/api/orgs/:orgId/reports', reportsRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
 app.use('/api/orgs/:orgId/settings/recording', recordingSettingsRouter)
 
