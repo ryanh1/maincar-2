@@ -239,6 +239,47 @@ router.get(
 )
 
 // ============================================================
+// GET /api/orgs/:orgId/attributes/:id/impact — delete confirmation summary
+// ============================================================
+router.get(
+  '/:id/impact',
+  wrapRoute('GET /api/orgs/:orgId/attributes/:id/impact', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Verify the field is in this org ---
+    const attribute = await prisma.attributeDef.findFirst({
+      where: { id, orgId, deletedAt: null },
+      select: { objectId: true, slug: true },
+    })
+    if (!attribute) {
+      return void res.status(404).json({ error: 'Field not found' })
+    }
+
+    // --- Execute query ---
+    // Custom-record values are JSONB. The validator removes empty values, but this
+    // query also excludes a legacy explicit empty string defensively.
+    const [result] = await prisma.$queryRaw<{ valueCount: number }[]>`
+      SELECT COUNT(*)::int AS "valueCount"
+      FROM "Record"
+      WHERE "orgId" = ${orgId}
+        AND "objectId" = ${attribute.objectId}
+        AND "deletedAt" IS NULL
+        AND "valuesJson" ? ${attribute.slug}
+        AND "valuesJson" ->> ${attribute.slug} <> ''
+    `
+
+    // --- Return response ---
+    res.json({ valueCount: Number(result?.valueCount ?? 0) })
+  }),
+)
+
+// ============================================================
 // POST /api/orgs/:orgId/attributes — create a custom field (no migration!)
 // ============================================================
 // A user-created field is always isSystem=false and never storage="column": a

@@ -30,7 +30,8 @@ import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { getObjectSurfaceCapabilities } from '../crm/objectCapabilities.js'
 import { isRecordGridCreateSupported, listRecords, ListQueryError } from '../crm/recordList.js'
-import type { ObjectDef, AttributeDef, Prisma } from '../generated/prisma/client.js'
+import { Prisma } from '../generated/prisma/client.js'
+import type { ObjectDef, AttributeDef } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
 // the tenant filter would silently read undefined.
@@ -257,6 +258,82 @@ router.get(
 
     // --- Return response ---
     res.json({ object: mapObjectToApi(object) })
+  }),
+)
+
+// ============================================================
+// GET /api/orgs/:orgId/objects/:id/impact — delete confirmation summary
+// ============================================================
+router.get(
+  '/:id/impact',
+  wrapRoute('GET /api/orgs/:orgId/objects/:id/impact', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Verify the object is in this org ---
+    const object = await prisma.objectDef.findFirst({
+      where: { id, orgId, deletedAt: null },
+      select: { id: true, slug: true },
+    })
+    if (!object) {
+      return void res.status(404).json({ error: 'Object not found' })
+    }
+
+    // --- Execute query ---
+    const [recordCount, inboundAttributes] = await Promise.all([
+      prisma.record.count({ where: { orgId, objectId: id, deletedAt: null } }),
+      prisma.attributeDef.findMany({
+        where: { orgId, refObjectId: id, deletedAt: null, isArchived: false },
+        select: {
+          objectId: true,
+          slug: true,
+          name: true,
+          object: { select: { name: true } },
+        },
+      }),
+    ])
+
+    const sourceObjectIds = [...new Set(inboundAttributes.map((attribute) => attribute.objectId))]
+    const attributeSlugs = [...new Set(inboundAttributes.map((attribute) => attribute.slug))]
+    // RecordLink stores a source record id, not its ObjectDef id. Join it to
+    // Record so same-named fields on different objects never get merged, while
+    // returning only grouped counts instead of every source record/link pair.
+    const linkCounts = sourceObjectIds.length > 0 && attributeSlugs.length > 0
+      ? await prisma.$queryRaw<{ objectId: string; attribute: string; count: number }[]>(Prisma.sql`
+        SELECT record."objectId", link."attribute", COUNT(*)::int AS count
+        FROM "RecordLink" AS link
+        INNER JOIN "Record" AS record
+          ON record."id" = link."fromId"
+          AND record."orgId" = link."orgId"
+        WHERE link."orgId" = ${orgId}
+          AND link."fromObject" = 'record'
+          AND link."toObject" = ${object.slug}
+          AND link."attribute" IN (${Prisma.join(attributeSlugs)})
+          AND record."objectId" IN (${Prisma.join(sourceObjectIds)})
+          AND record."deletedAt" IS NULL
+        GROUP BY record."objectId", link."attribute"
+      `)
+      : []
+    const countBySourceAndAttribute = new Map<string, number>()
+    for (const link of linkCounts) {
+      const key = `${link.objectId}:${link.attribute}`
+      countBySourceAndAttribute.set(key, link.count)
+    }
+    const references = inboundAttributes
+      .map((attribute) => ({
+        objectName: attribute.object.name,
+        fieldName: attribute.name,
+        count: countBySourceAndAttribute.get(`${attribute.objectId}:${attribute.slug}`) ?? 0,
+      }))
+      .filter((reference) => reference.count > 0)
+
+    // --- Return response ---
+    res.json({ recordCount, references })
   }),
 )
 

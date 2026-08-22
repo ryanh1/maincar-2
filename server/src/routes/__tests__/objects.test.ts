@@ -9,6 +9,7 @@ import request from 'supertest'
 
 const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   prismaMock: {
+    $queryRaw: vi.fn(),
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
     objectDef: {
@@ -21,6 +22,8 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
       delete: vi.fn(),
       deleteMany: vi.fn(),
     },
+    attributeDef: { findMany: vi.fn() },
+    record: { count: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
 }))
@@ -109,6 +112,9 @@ beforeEach(() => {
   prismaMock.objectDef.findMany.mockResolvedValue([objectRow()])
   prismaMock.objectDef.create.mockResolvedValue(objectRow())
   prismaMock.objectDef.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.attributeDef.findMany.mockResolvedValue([])
+  prismaMock.record.count.mockResolvedValue(0)
+  prismaMock.$queryRaw.mockResolvedValue([])
 })
 
 // ============================================================
@@ -301,6 +307,50 @@ describe('GET /api/orgs/:orgId/objects', () => {
 
     expect(res.status).toBe(404)
     expect(res.body.error).toBe('Object not found')
+  })
+})
+
+// ============================================================
+// GET — delete impact
+// ============================================================
+describe('GET /api/orgs/:orgId/objects/:id/impact', () => {
+  it('returns active record and inbound-reference counts without conflating like-named fields', async () => {
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(objectRow({ id: 'obj-client', slug: 'client' }))
+    prismaMock.record.count.mockResolvedValueOnce(2)
+    prismaMock.attributeDef.findMany.mockResolvedValueOnce([
+      { id: 'attr-project-client', objectId: 'obj-project', slug: 'client', name: 'Client', object: { name: 'Project' } },
+      { id: 'attr-task-client', objectId: 'obj-task', slug: 'client', name: 'Client', object: { name: 'Task' } },
+    ])
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      { objectId: 'obj-project', attribute: 'client', count: 1 },
+      { objectId: 'obj-task', attribute: 'client', count: 1 },
+    ])
+
+    const res = await request(app).get(`${URL_A}/obj-client/impact`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({
+      recordCount: 2,
+      references: [
+        { objectName: 'Project', fieldName: 'Client', count: 1 },
+        { objectName: 'Task', fieldName: 'Client', count: 1 },
+      ],
+    })
+    expect(prismaMock.record.count).toHaveBeenCalledWith({
+      where: { orgId: ORG_A, objectId: 'obj-client', deletedAt: null },
+    })
+  })
+
+  it('returns zero counts for an empty object and 404s an object in another org', async () => {
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(objectRow())
+    const empty = await request(app).get(`${URL_A}/obj-1/impact`).set('Authorization', AUTH)
+    expect(empty.status).toBe(200)
+    expect(empty.body).toEqual({ recordCount: 0, references: [] })
+
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(null)
+    const foreign = await request(app).get(`${URL_A}/obj-in-b/impact`).set('Authorization', AUTH)
+    expect(foreign.status).toBe(404)
+    expect(foreign.body).toEqual({ error: 'Object not found' })
   })
 })
 
