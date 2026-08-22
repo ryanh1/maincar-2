@@ -4,6 +4,13 @@ import { ACTIVITY_EVENT_COUNT_FIELD_REGISTRY, DEAL_FIELD_REGISTRY } from './fiel
 
 export type DealPivotDimension = 'owner' | 'stage' | 'createdAt'
 
+export interface ReportChartConfig {
+  type: 'bar' | 'line' | 'area' | 'pie' | 'funnel' | 'heatmap' | 'scatter' | 'kpi'
+  color: 'chart-1' | 'chart-2' | 'chart-3' | 'chart-4'
+  labels: boolean
+  yAxisMax?: number
+}
+
 export interface DealPivotReportConfig {
   baseObject: 'deal'
   rows: Array<{ field: DealPivotDimension }>
@@ -14,6 +21,8 @@ export interface DealPivotReportConfig {
   filters?: { ownerTeam: OwnerTeamScope }
   compareTo?: PeriodComparison
   summaryRows?: Array<{ rowKey: string; showAs: 'percentOfGrandTotal' | 'percentOfParent' | 'samePeriodLastYear' }>
+  /** Display settings persist with the report but do not affect its SQL query. */
+  chart?: ReportChartConfig
 }
 
 export type PivotValueTransform = 'none' | 'percentOfGrandTotal' | 'percentOfColumn' | 'percentOfRow' | 'percentOfParent' | 'runningTotal' | 'rankLargestToSmallest'

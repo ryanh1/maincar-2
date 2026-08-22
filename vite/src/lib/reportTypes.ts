@@ -8,6 +8,17 @@ export type DealPivotDimension = 'owner' | 'stage' | 'createdAt'
 export type PivotValueTransform = 'none' | 'percentOfGrandTotal' | 'percentOfColumn' | 'percentOfRow' | 'percentOfParent' | 'runningTotal' | 'rankLargestToSmallest'
 export type PeriodComparison = 'previousPeriod' | 'samePeriodLastYear'
 
+export type ReportChartType = 'bar' | 'line' | 'area' | 'pie' | 'funnel' | 'heatmap' | 'scatter' | 'kpi'
+export type ReportChartColor = 'chart-1' | 'chart-2' | 'chart-3' | 'chart-4'
+
+/** Display-only chart settings. The report query remains the pivot configuration above. */
+export interface ReportChartConfig {
+  type: ReportChartType
+  color: ReportChartColor
+  labels: boolean
+  yAxisMax?: number
+}
+
 /** The interactive Deals pivot shape. */
 export interface ReportConfig {
   baseObject: 'deal'
@@ -19,6 +30,7 @@ export interface ReportConfig {
   filters?: { ownerTeam: OwnerTeamScope }
   compareTo?: PeriodComparison
   summaryRows?: Array<{ rowKey: string; showAs: 'percentOfGrandTotal' | 'percentOfParent' | 'samePeriodLastYear' }>
+  chart?: ReportChartConfig
 }
 
 /** A saved report returned by the reports lifecycle API. */

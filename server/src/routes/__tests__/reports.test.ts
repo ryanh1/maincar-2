@@ -421,6 +421,23 @@ describe('saved reports', () => {
     })
   })
 
+  it('persists optional chart controls without changing the report query shape', async () => {
+    const chartConfig = { ...CONFIG, chart: { type: 'bar', color: 'chart-1', labels: false, yAxisMax: 10000 } }
+    prismaMock.report.create.mockResolvedValue({
+      id: 'report-1', name: 'Pipeline by stage', kind: 'pivot', configJson: chartConfig, ownerId: 'user-a', createdAt: NOW, updatedAt: NOW,
+    })
+
+    const saved = await request(app)
+      .post(`/api/orgs/${ORG_ID}/reports`)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ name: 'Pipeline by stage', config: chartConfig })
+
+    expect(saved.status).toBe(201)
+    expect(prismaMock.report.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ configJson: chartConfig }),
+    })
+  })
+
   it('updates a saved report’s structured owner team selection', async () => {
     const scopedConfig = {
       ...CONFIG,

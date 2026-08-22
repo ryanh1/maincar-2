@@ -1,12 +1,14 @@
-import { type DragEvent, Fragment, type ReactNode } from 'react'
+import { type DragEvent, Fragment, type ReactNode, useState } from 'react'
 
 import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { isRunnablePivot } from '@/lib/reportConfig'
 import { calculatePivotValue, comparisonColumns, type PivotValueTransform } from '@/lib/pivotCalculations'
+import { DEFAULT_REPORT_CHART } from '@/lib/reportChart'
+import { isRunnablePivot } from '@/lib/reportConfig'
 import type { DealPivotDimension, PeriodComparison, ReportConfig, RunReportResponse } from '@/lib/reportTypes'
+import { ReportsChart } from './Reports_Chart'
 
 type PivotZone = 'rows' | 'columns' | 'values'
 
@@ -30,6 +32,7 @@ interface ReportsPivotBuilderProps {
 
 /** Excel-like pivot zones, with the result recomputed whenever a field moves. */
 export function ReportsPivotBuilder({ config, onChange, result, isLoading, hasActiveFilters, onLoosenFilters }: ReportsPivotBuilderProps) {
+  const [view, setView] = useState<'table' | 'chart'>('table')
   function moveField(field: string, zone: PivotZone): void {
     if (zone === 'values') {
       if (field === MEASURE.field) onChange({ ...config, values: [{ field: 'amountMinor', aggregation: 'sum' }] })
@@ -66,6 +69,11 @@ export function ReportsPivotBuilder({ config, onChange, result, isLoading, hasAc
     moveField(event.dataTransfer.getData('text/plain'), zone)
   }
 
+  function showChart(): void {
+    if (!config.chart) onChange({ ...config, chart: DEFAULT_REPORT_CHART })
+    setView('chart')
+  }
+
   const isRunnable = isRunnablePivot(config)
   const isBlank = config.rows.length === 0 && config.columns.length === 0 && config.values.length === 0
 
@@ -93,7 +101,17 @@ export function ReportsPivotBuilder({ config, onChange, result, isLoading, hasAc
         </div>
         {config.values.length > 0 && <PivotControls config={config} onChange={onChange} />}
         {!isRunnable && <BuilderGuidance config={config} onAddOwner={() => moveField('owner', 'rows')} onAddAmount={() => moveField(MEASURE.field, 'values')} />}
-        {isRunnable && <PivotGrid config={config} onChange={onChange} result={result} isLoading={isLoading} hasActiveFilters={hasActiveFilters} onLoosenFilters={onLoosenFilters} />}
+        {isRunnable && (
+          <>
+            <div className="flex items-center gap-2" role="group" aria-label="Report view">
+              <Button type="button" size="sm" variant={view === 'table' ? 'default' : 'secondary'} onClick={() => setView('table')}>Table</Button>
+              <Button type="button" size="sm" variant={view === 'chart' ? 'default' : 'secondary'} onClick={showChart}>Chart</Button>
+            </div>
+            {view === 'table'
+              ? <PivotGrid config={config} onChange={onChange} result={result} isLoading={isLoading} hasActiveFilters={hasActiveFilters} onLoosenFilters={onLoosenFilters} />
+              : <ReportsChart config={config} result={result} onChange={onChange} />}
+          </>
+        )}
       </div>
     </div>
   )
