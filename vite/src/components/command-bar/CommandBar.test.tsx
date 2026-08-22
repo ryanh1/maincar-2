@@ -10,6 +10,11 @@ import { CommandBar } from './CommandBar'
 
 const { useDialerMock } = vi.hoisted(() => ({ useDialerMock: vi.fn() }))
 vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }))
+vi.mock('@/components/composer/ComposerCard', () => ({
+  ComposerCard: ({ fullScreen }: { fullScreen?: boolean }) => (
+    <article aria-label="Mobile composer" className={fullScreen ? 'inset-0 h-[100dvh] w-full' : ''} />
+  ),
+}))
 
 function draft(overrides: Partial<EmailDraft> = {}): EmailDraft {
   return {
@@ -23,7 +28,7 @@ function renderBar(drafts: EmailDraft[] = [], width = 1440) {
   window.innerWidth = width
   const composer: ComposerContextValue = {
     drafts, openDrafts: drafts.filter((item) => item.isOpen), keptDrafts: drafts.filter((item) => !item.isOpen),
-    openComposer: vi.fn().mockResolvedValue(null), saveDraft: vi.fn().mockResolvedValue(undefined),
+    openComposer: vi.fn().mockResolvedValue(drafts.find((item) => item.isOpen) ?? null), saveDraft: vi.fn().mockResolvedValue(undefined),
     closeCard: vi.fn().mockResolvedValue(undefined), reopenCard: vi.fn().mockResolvedValue(undefined),
     discardDraft: vi.fn().mockResolvedValue(undefined),
   }
@@ -69,5 +74,28 @@ describe('CommandBar', () => {
   it('changes to a horizontal bottom bar on a narrow screen', () => {
     renderBar([], 375)
     expect(screen.getByRole('toolbar', { name: 'Outreach actions' })).toHaveClass('bottom-0', 'left-0', 'right-0', 'flex-row')
+  })
+
+  it('uses a full-screen composer below the desktop dock threshold', async () => {
+    const user = userEvent.setup()
+    renderBar([draft({ isOpen: true })], 900)
+
+    await user.click(screen.getByRole('button', { name: 'Write an email' }))
+    expect(screen.getByRole('article', { name: 'Mobile composer' })).toHaveClass('inset-0', 'h-[100dvh]', 'w-full')
+  })
+
+  it('opens recoverable drafts in a dialog on a compact screen', async () => {
+    const user = userEvent.setup()
+    renderBar([draft()], 900)
+
+    await user.click(screen.getByRole('button', { name: 'Open 1 email draft' }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Drafts' })).toBeInTheDocument()
+  })
+
+  it('keeps drafts that were already open recoverable on a compact screen', () => {
+    renderBar([draft({ isOpen: true })], 900)
+
+    expect(screen.getByRole('button', { name: 'Open 1 email draft' })).toBeInTheDocument()
   })
 })

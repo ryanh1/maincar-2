@@ -26,6 +26,10 @@ function modelBlock(name: string): string {
 }
 
 const emailDraft = modelBlock('EmailDraft')
+const savedStateMigration = readFileSync(
+  path.resolve(import.meta.dirname, '../../prisma/migrations/20260822050000_simplify_email_draft_saved_state/migration.sql'),
+  'utf8',
+)
 
 /** The one line that declares a field, whitespace collapsed. */
 function fieldLine(block: string, field: string): string {
@@ -67,6 +71,13 @@ describe('EmailDraft schema', () => {
   it('documents that putting a draft away keeps it', () => {
     expect(emailDraft).toContain('put away but kept')
     expect(emailDraft).toContain('Discarding is a DELETE')
+  })
+
+  it('preserves legacy minimized drafts as saved before dropping their old field', () => {
+    expect(savedStateMigration).toMatch(/UPDATE "EmailDraft"\s+SET "isOpen" = false\s+WHERE "isMinimized" = true;/)
+    expect(savedStateMigration.indexOf('UPDATE "EmailDraft"')).toBeLessThan(
+      savedStateMigration.indexOf('DROP COLUMN "isMinimized"'),
+    )
   })
 
   it('indexes the dock’s only query', () => {
