@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Health of the shared machine. Run it when something feels wrong.
 source "$(dirname "$0")/mc-common.sh"
-cd "$(mc_worktree)" 2>/dev/null || cd "/Users/ryanhollander/Documents/Coding/My Projects/maincar-2"
+cd "$(mc_worktree)" 2>/dev/null || cd "$PRIMARY_CHECKOUT"
 
 echo "=== load (check if >8 — higher means tests will fail at random) ==="; uptime
 echo; echo "=== gate runners busy ==="; ls "$STATE/locks/gate" 2>/dev/null | wc -l | tr -d ' '
@@ -21,14 +21,9 @@ while IFS= read -r d; do
 done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
 [ "$found" = 0 ] && echo "  none"
 
-echo; echo "=== SHARED MAIN TREE (the primary checkout — not a worktree — should stay on main, clean, in sync) ==="
-# Every other worktree is expendable and issue-scoped; this one is not. Sessions
-# have repeatedly bypassed the worktree-per-issue rule (CLAUDE.md) and checked
-# out a feature branch, or merged locally, directly in this checkout. That is
-# invisible until someone notices the app is serving stale code — this is the
-# check that used to be missing and let it happen silently more than once.
-main_tree="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
-if [ -z "$main_tree" ]; then
+echo; echo "=== PRIMARY CHECKOUT (reference only; never a ticket remote) ==="
+main_tree="$PRIMARY_CHECKOUT"
+if [ ! -d "$main_tree/.git" ]; then
   echo "  could not determine the primary checkout"
 else
   mt_branch="$(git -C "$main_tree" rev-parse --abbrev-ref HEAD 2>/dev/null)"
@@ -37,21 +32,21 @@ else
   if [ "$mt_branch" = "main" ]; then
     echo "  branch: main (ok)"
   else
-    echo "  BRANCH: checked out to '$mt_branch', not main — a session bypassed the worktree-per-issue rule; work should happen in its own worktree instead"
+    echo "  BRANCH: checked out to '$mt_branch', not main — identify its owner; do not reset or clean it"
   fi
   if [ "$mt_dirty" = "0" ]; then
     echo "  working tree: clean"
   else
-    echo "  DIRTY: $mt_dirty uncommitted/untracked path(s) — should be clean, or is stray WIP from a session that skipped its own worktree"
+    echo "  DIRTY: $mt_dirty uncommitted/untracked path(s) — identify its owner; do not reset, stash, or clean it"
   fi
   if [ "$mt_branch" = "main" ]; then
     git -C "$main_tree" fetch origin --quiet 2>/dev/null
     ahead="$(git -C "$main_tree" rev-list --count origin/main..main 2>/dev/null || echo 0)"
     behind="$(git -C "$main_tree" rev-list --count main..origin/main 2>/dev/null || echo 0)"
     if [ "$ahead" != "0" ] && [ "$behind" != "0" ]; then
-      echo "  DIVERGED: local main is $ahead ahead / $behind behind origin/main — plain 'git pull' will refuse; needs 'git merge origin/main' then push. Someone committed/merged locally on main without going through mc-merge."
+      echo "  DIVERGED: local main is $ahead ahead / $behind behind origin/main — do not merge here; recover the owner’s work in an issue clone."
     elif [ "$ahead" != "0" ]; then
-      echo "  UNPUSHED: local main is $ahead commit(s) ahead of origin/main — push it (mc-merge, or 'git push' if solo)"
+      echo "  UNPUSHED: local main is $ahead commit(s) ahead of origin/main — do not push here; recover the owner’s work in an issue clone."
     elif [ "$behind" != "0" ]; then
       echo "  behind: local main is $behind commit(s) behind origin/main (safe fast-forward — 'git pull --ff-only')"
     else
@@ -59,6 +54,31 @@ else
     fi
   fi
 fi
+
+echo; echo "=== LOCAL MAIN MIRROR ==="
+if [ -d "$LOCAL_MAIN_REPO" ] && git -C "$LOCAL_MAIN_REPO" rev-parse --is-bare-repository >/dev/null 2>&1; then
+  mirror_main="$(git -C "$LOCAL_MAIN_REPO" rev-parse --short main 2>/dev/null || echo missing)"
+  echo "  $LOCAL_MAIN_REPO (bare, main: $mirror_main)"
+else
+  echo "  MISSING: $LOCAL_MAIN_REPO — run ./.claude/scripts/coord/mc-local-main sync"
+fi
+
+echo; echo "=== TICKET CLONES (must fetch from the local mirror) ==="
+ticket_root="${MC_TICKET_ROOT:-$HOME/code/maincar-2-worktrees}"
+found=0
+if [ -d "$ticket_root" ]; then
+  while IFS= read -r d; do
+    [ -d "$d/.git" ] || continue
+    found=1
+    ticket_origin="$(git -C "$d" remote get-url origin 2>/dev/null || echo missing)"
+    if [ "$ticket_origin" = "$LOCAL_MAIN_REPO" ]; then
+      echo "  ok: $d"
+    else
+      echo "  LEGACY ORIGIN: $d → $ticket_origin (expected $LOCAL_MAIN_REPO; mc-merge will migrate it)"
+    fi
+  done < <(find "$ticket_root" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)
+fi
+[ "$found" = 0 ] && echo "  none"
 
 echo; echo "=== ORPHANED WORKTREES (commits not on origin/main) ==="
 # Sub-agent waves (Agent tool isolation:"worktree", or /linear-execute-project)

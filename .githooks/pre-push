@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Never let the editable primary checkout publish a session's work.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+primary_checkout="${MC_MAIN_CHECKOUT:-$HOME/Documents/Coding/My Projects/maincar-2}"
+if [ "$(cd "$root" && pwd -P)" = "$(cd "$primary_checkout" && pwd -P)" ]; then
+  echo "pre-push: BLOCKED — push from an issue clone via mc-merge, never the primary checkout." >&2
+  exit 1
+fi

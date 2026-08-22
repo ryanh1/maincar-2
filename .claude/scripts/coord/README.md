@@ -1,22 +1,29 @@
 # maincar-2 Coordination Scripts
 
-Seven scripts that let many sessions work on maincar-2 in parallel, one issue per session.
+Eight scripts that let many sessions work on maincar-2 in parallel, one issue per session.
 
 **State location:** `~/code/maincar-2-coord/` (outside the repo, so git never touches it)
 **Worktree location:** `~/code/maincar-2-worktrees/` (one folder per issue)
 **Scripts location:** `.claude/scripts/coord/` (tracked in the repo)
 
-Ticket checkouts can be cloned from the shared delivery checkout. The merge
-helper resolves that local clone chain to the delivery checkout's canonical
-remote, so unrelated WIP in the shared checkout never blocks a ticket's push.
+Ticket checkouts fetch from a local bare mirror. The primary checkout is never a
+remote: it can contain a person's unfinished files, while a bare mirror cannot.
+`mc-merge` refreshes the mirror from GitHub under its merge lock and refreshes it
+again after pushing, so tickets retain a local fetch source without inheriting
+the primary checkout's state. The mirror rejects every push; only `mc-merge`
+may deliver to GitHub under the merge lock.
+
+Running `mc-local-main sync` also installs hard-block hooks in the primary
+checkout, so a commit or push there fails immediately.
 
 ## Quick start
 
 ### 1. Create a worktree for an issue
 
 ```bash
+./.claude/scripts/coord/mc-local-main sync
 cd ~/code/maincar-2-worktrees
-git clone /path/to/maincar-2 mai-123-short-title
+git clone ~/code/maincar-2-coord/local-main.git mai-123-short-title
 cd mai-123-short-title
 ```
 
@@ -60,7 +67,8 @@ Or run specific tests:
 
 | Script | What it does | When to use |
 | --- | --- | --- |
-| `mc-common.sh` | Shared toolbox (lock, log, classify) | Never run directly; sourced by others |
+| `mc-common.sh` | Shared toolbox (lock, log, local-mirror sync) | Never run directly; sourced by others |
+| `mc-local-main` | Creates/refreshes the local bare `main` mirror | Before creating ticket clones; safe to rerun |
 | `mc-slot` | Assigns stable ports for your worktree | `eval "$(mc-slot --env)"` at the start |
 | `mc-gate` | Runs tests with a queue (max 4 at once) | Before every merge |
 | `mc-merge` | Merges your branch safely, with a lock | When work is done and tests pass |
@@ -74,8 +82,9 @@ Or run specific tests:
 
 ```bash
 # Create worktree
+./.claude/scripts/coord/mc-local-main sync
 cd ~/code/maincar-2-worktrees
-git clone /path/to/maincar-2 mai-123-feature
+git clone ~/code/maincar-2-coord/local-main.git mai-123-feature
 cd mai-123-feature
 
 # Assign ports (slot 0 = 3010, 5183, 9140, etc.)

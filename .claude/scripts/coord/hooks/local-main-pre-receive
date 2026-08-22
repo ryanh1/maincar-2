@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# The local bare mirror is a fetch source, never a delivery destination.
+echo "local main mirror: push rejected — use mc-merge to deliver through the merge lock." >&2
+exit 1
