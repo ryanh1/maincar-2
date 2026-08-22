@@ -20,13 +20,14 @@ export function Records() {
 
   const objectsQuery = useGetObjects(orgId)
   const object = objectsQuery.data?.objects.find((o) => o.slug === slug) ?? null
+  const isUnavailable = object !== null && (object.isHidden || object.isArchived || !object.isListSupported)
 
-  const objectQuery = useGetObject(orgId, object?.id ?? null)
+  const objectQuery = useGetObject(orgId, isUnavailable ? null : object?.id ?? null)
   const detail = objectQuery.data?.object ?? null
   const [viewConfig, setViewConfig] = useViewConfig(detail?.attributes ?? [])
 
-  const isPending = objectsQuery.isPending || (object !== null && objectQuery.isPending)
-  const isError = objectsQuery.isError || objectQuery.isError
+  const isPending = objectsQuery.isPending || (!isUnavailable && object !== null && objectQuery.isPending)
+  const isError = objectsQuery.isError || (!isUnavailable && objectQuery.isError)
 
   function retry() {
     void objectsQuery.refetch()
@@ -59,7 +60,13 @@ export function Records() {
           </div>
         )}
 
-        {!isPending && !isError && orgId && detail && (
+        {!isPending && !isError && isUnavailable && (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            This object is not available.
+          </div>
+        )}
+
+        {!isPending && !isError && !isUnavailable && orgId && detail && (
           <RecordGrid
             orgId={orgId}
             object={detail}
