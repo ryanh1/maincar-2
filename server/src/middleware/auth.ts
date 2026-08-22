@@ -23,6 +23,7 @@ export interface AuthUser {
   lastName: string | null
   roles: UserRole[]
   enabled: boolean
+  timeZone: string | null
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -213,6 +214,7 @@ export async function requireAuth(
     lastName: user.lastName,
     roles: user.roles as UserRole[],
     enabled: user.enabled,
+    timeZone: user.timeZone,
   }
 
   next()
