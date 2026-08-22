@@ -49,8 +49,8 @@ describe('jsonFetch', () => {
     await jsonFetch('/api/health')
 
     const [, init] = fetchMock.mock.calls[0]
-    expect(init.headers.Authorization).toBe('Bearer test-token')
-    expect(init.headers['Content-Type']).toBe('application/json')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer test-token')
+    expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
   })
 
   it('omits the Authorization header when nobody is signed in', async () => {
@@ -60,7 +60,16 @@ describe('jsonFetch', () => {
     await jsonFetch('/api/health')
 
     const [, init] = fetchMock.mock.calls[0]
-    expect(init.headers.Authorization).toBeUndefined()
+    expect(new Headers(init.headers).get('Authorization')).toBeNull()
+  })
+
+  it('lets the browser set the multipart boundary for FormData uploads', async () => {
+    fetchMock.mockResolvedValue(mockResponse({ ok: true, status: 200, body: { ok: true } }))
+
+    await jsonFetch('/api/orgs/org-1/voicemail-greeting', { method: 'POST', body: new FormData() })
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(new Headers(init.headers).get('Content-Type')).toBeNull()
   })
 
   it('returns the parsed body on success', async () => {

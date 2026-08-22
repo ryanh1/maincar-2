@@ -24,6 +24,7 @@ import { Settings_EmailTemplatesTab } from './Settings_EmailTemplatesTab'
 import { Settings_EmailSignaturesTab } from './Settings_EmailSignaturesTab'
 import { Settings_IntegrationsTab } from './Settings_IntegrationsTab'
 import { Settings_CallRecordingsTab } from './Settings_CallRecordingsTab'
+import { Settings_VoicemailGreetingTab } from './Settings_VoicemailGreetingTab'
 
 type TabId =
   | 'profile'
@@ -31,6 +32,7 @@ type TabId =
   | 'members'
   | 'numbers'
   | 'call-recordings'
+  | 'voicemail-greeting'
   | 'email-templates'
   | 'signatures'
   | 'integrations'
@@ -51,6 +53,7 @@ const TABS: TabDef[] = [
   { id: 'members', label: 'Members', icon: Users, needsOrg: true, adminOnly: true },
   { id: 'numbers', label: 'Phone numbers', icon: Phone, needsOrg: true },
   { id: 'call-recordings', label: 'Call recordings', icon: Radio, needsOrg: true },
+  { id: 'voicemail-greeting', label: 'Voicemail greeting', icon: Radio, needsOrg: true, adminOnly: true },
   // Not adminOnly: a template belongs to the ORG and any member may write, edit,
   // or delete any of them (SPEC-composer-templates.md § 2).
   { id: 'email-templates', label: 'Email templates', icon: FileText, needsOrg: true },
@@ -66,6 +69,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
   members: Settings_MembersTab,
   numbers: Settings_PhoneNumbersTab,
   'call-recordings': Settings_CallRecordingsTab,
+  'voicemail-greeting': Settings_VoicemailGreetingTab,
   'email-templates': Settings_EmailTemplatesTab,
   signatures: Settings_EmailSignaturesTab,
   integrations: Settings_IntegrationsTab,
