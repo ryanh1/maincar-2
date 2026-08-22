@@ -65,6 +65,11 @@ export const queryKeys = {
     detail: (orgId: string, voicemailId: string) =>
       ['voicemails', 'detail', orgId, voicemailId] as const,
   },
+  notifications: {
+    all: ['notifications'] as const,
+    list: (orgId: string, query?: Record<string, unknown>) =>
+      ['notifications', 'list', orgId, query ?? {}] as const,
+  },
   phoneNumbers: {
     all: ['phoneNumbers'] as const,
     // Keyed by org only, not by any query: the list is not paginated (the route

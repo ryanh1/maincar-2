@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Database, Home, List, LogOut, Phone, Settings, Voicemail } from 'lucide-react'
 import { Link, NavLink } from 'react-router-dom'
 
@@ -33,7 +34,7 @@ function brokenBadgeLabel(count: number): string {
     : `Reconnect ${count} broken email connections in Integrations.`
 }
 
-export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function Sidebar({ open, onClose, notificationCenter }: { open: boolean; onClose: () => void; notificationCenter?: ReactNode }) {
   const { user, signOut, org } = useAuth()
   const keyboard = useKeyboardSystemOptional()
   const displayName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.email
@@ -65,8 +66,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
-        <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
+        <div className="flex h-14 items-center justify-between gap-2 border-b border-sidebar-border px-4">
           <span className="display font-bold tracking-tight text-white">{APP_NAME}</span>
+          {notificationCenter}
         </div>
 
         <div className="border-b border-sidebar-border p-3">
