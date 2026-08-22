@@ -171,6 +171,9 @@ describe('Reports', () => {
     await user.click(screen.getByRole('button', { name: 'New report' }))
     await user.click(screen.getByRole('checkbox', { name: 'Revenue' }))
     await user.click(screen.getByRole('checkbox', { name: 'Teams led by Jordan Lee' }))
+    dragFieldToZone('Owner', 'rows')
+    dragFieldToZone('Stage', 'columns')
+    dragFieldToZone('Amount', 'values')
 
     expect(screen.getByText('Owner is on Revenue or teams led by Jordan Lee.')).toBeInTheDocument()
 
@@ -183,7 +186,7 @@ describe('Reports', () => {
         orgId: 'org-a',
         name: 'Jordan pipeline',
         config: {
-          ...CONFIG,
+          ...OWNER_BY_STAGE_CONFIG,
           filters: { ownerTeam: { teamIds: ['team-revenue'], leadUserIds: ['lead-jordan'] } },
         },
       },

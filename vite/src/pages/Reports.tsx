@@ -165,20 +165,6 @@ export function Reports() {
     else setNewConfig(config)
   }
 
-  function saveChanges(): void {
-    if (!orgId || !openedReport || !draftConfig) return
-    updateReportConfig.mutate(
-      { orgId, reportId: openedReport.id, config: draftConfig },
-      {
-        onSuccess: () => {
-          setDraftConfig(null)
-          toast.success('Report saved.')
-        },
-        onError: () => toast.error('Could not save the report. Try again.'),
-      },
-    )
-  }
-
   function beginRename(): void {
     if (!openedReport) return
     setName(openedReport.name)

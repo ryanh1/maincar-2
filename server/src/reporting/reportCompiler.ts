@@ -49,12 +49,6 @@ export interface ActivityMetricsGridReportConfig {
   timeBucket: { field: 'occurredAt'; grain: 'week' }
 }
 
-export type ReportConfig =
-  | DealStageAmountReportConfig
-  | ActivityEventCountsGridReportConfig
-  | ActivityMetricsGridReportConfig
-  | DialerConnectRateReportConfig
-
 /** A persisted selection resolved by the shared Team scope at query time. */
 export interface OwnerTeamScope {
   teamIds?: readonly string[]
@@ -65,6 +59,7 @@ export type ReportConfig =
   | DealPivotReportConfig
   | ActivityEventCountsGridReportConfig
   | ActivityMetricsGridReportConfig
+  | DialerConnectRateReportConfig
 
 export type ReportTimeZone =
   | { mode: 'pinned'; displayZone: string }
@@ -321,7 +316,9 @@ FROM "${DEAL_FIELD_REGISTRY.table}" AS "deal"
 ${joins}
 WHERE "deal"."orgId" = `,
       `
-  AND "deal"."deletedAt" IS NULL`,
+  AND "deal"."deletedAt" IS NULL
+`,
+      `
 GROUP BY 1, ${groupBy}
 ORDER BY "createdDay" ASC, ${orderBy}`,
     ], timeZone, orgId, ownerTeamPredicate)
@@ -333,7 +330,9 @@ FROM "${DEAL_FIELD_REGISTRY.table}" AS "deal"
 ${joins}
 WHERE "deal"."orgId" = `,
     `
-  AND "deal"."deletedAt" IS NULL`,
+  AND "deal"."deletedAt" IS NULL
+`,
+    `
 GROUP BY ${groupBy}
 ORDER BY ${orderBy}`,
   ], orgId, ownerTeamPredicate)
@@ -344,7 +343,6 @@ function compileOwnerTeamPredicate(ownerUserIds: readonly string[] | undefined):
   if (ownerUserIds === undefined) return Prisma.empty
   if (ownerUserIds.length === 0) return Prisma.sql` AND FALSE`
   return Prisma.sql` AND "deal"."ownerUserId" IN (${Prisma.join(ownerUserIds)})`
-}
 }
 
 function compileActivityEventCountsGrid(
