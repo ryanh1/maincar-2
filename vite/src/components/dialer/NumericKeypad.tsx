@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type KeyboardEvent } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Headphones, Phone } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -27,6 +27,8 @@ import { useDialer } from '@/components/dialer/dialerContext'
 
 export interface NumericKeypadProps {
   className?: string
+  /** A known number supplied by the action that opened the dialer. */
+  initialEntry?: string
 }
 
 /**
@@ -64,11 +66,11 @@ export interface NumericKeypadProps {
  * opens for a call that was never going out anyway.
  *
  */
-export function NumericKeypad({ className }: NumericKeypadProps) {
+export function NumericKeypad({ className, initialEntry = '' }: NumericKeypadProps) {
   // The entry as digits plus an optional leading `+` — never the formatted text.
   // Formatting is derived on every render, so one keystroke is always one
   // character here and Backspace never has to step over a bracket or a dash.
-  const [entry, setEntry] = useState('')
+  const [entry, setEntry] = useState(() => sanitizeEntry(initialEntry))
   const { org } = useAuth()
   const { dialing, sendDigits } = useDialer()
   const createCall = useCreateCall()
@@ -76,6 +78,11 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
 
   const [greenRoomOpen, setGreenRoomOpen] = useState(false)
   const [gatingCall, setGatingCall] = useState(false)
+  const numberInputRef = useRef<HTMLInputElement>(null)
+  const callButtonRef = useRef<HTMLButtonElement>(null)
+  const deviceCheckButtonRef = useRef<HTMLButtonElement>(null)
+  const greenRoomReturnTargetRef = useRef<'call' | 'devices' | null>(null)
+  const initialFocusPendingRef = useRef(true)
 
   // The org's numbers, so the rep sees which line the call goes out on and cannot
   // reach a Call button when there is no line to call from. The active number's
@@ -141,6 +148,7 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
     }
     if (parsed.status !== 'valid') return
     if (shouldShowGreenRoom) {
+      greenRoomReturnTargetRef.current = 'call'
       setGatingCall(true)
       setGreenRoomOpen(true)
       return
@@ -154,6 +162,7 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
   // otherwise read 'retry' and render nothing, by design (see its docstring).
   const openDeviceCheck = useCallback(() => {
     clearGreenRoomCheckInStore()
+    greenRoomReturnTargetRef.current = 'devices'
     setGatingCall(false)
     setGreenRoomOpen(true)
   }, [])
@@ -205,6 +214,32 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
   const messageId = 'keypad-number-error'
   const keys = dialing ? IN_CALL_KEYS : ENTRY_KEYS
 
+  // A valid number supplied before opening goes straight to its action; an empty
+  // dialer goes to the field. The prefill can wait for the caller ID query, but
+  // it never retargets after a rep edits the field.
+  useLayoutEffect(() => {
+    if (!initialFocusPendingRef.current) return
+    const initial = readEntry(sanitizeEntry(initialEntry), defaultCountry)
+    if (initial.status === 'valid' && !callButtonRef.current?.disabled) {
+      initialFocusPendingRef.current = false
+      callButtonRef.current?.focus()
+      return
+    }
+    if (initial.status !== 'valid') initialFocusPendingRef.current = false
+    numberInputRef.current?.focus()
+  }, [defaultCountry, initialEntry])
+
+  const handleGreenRoomCloseAutoFocus = useCallback((event: Event) => {
+    const returnTarget = greenRoomReturnTargetRef.current
+    greenRoomReturnTargetRef.current = null
+    if (!returnTarget) return
+
+    const target = returnTarget === 'call' ? callButtonRef.current : deviceCheckButtonRef.current
+    if (!target?.isConnected || target.disabled) return
+    event.preventDefault()
+    target.focus()
+  }, [])
+
   return (
     <div className={cn('flex flex-col gap-3', className)}>
       <div className="flex items-center gap-2">
@@ -212,6 +247,7 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
           {activeNumber ? `From ${activeNumber.e164}` : null}
         </p>
         <IconButton
+          ref={deviceCheckButtonRef}
           type="button"
           variant="outline"
           tooltip="Check your microphone and speaker"
@@ -222,13 +258,17 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
       </div>
       <div className="flex flex-col gap-1">
         <Input
+          ref={numberInputRef}
           aria-label="Phone number"
           inputMode="tel"
           placeholder="Enter a number"
           value={display}
           aria-invalid={invalidMessage ? true : undefined}
           aria-describedby={invalidMessage ? messageId : undefined}
-          onChange={(e) => setEntry(dialing ? e.target.value : sanitizeEntry(e.target.value))}
+          onChange={(e) => {
+            initialFocusPendingRef.current = false
+            setEntry(dialing ? e.target.value : sanitizeEntry(e.target.value))
+          }}
           onKeyDown={handleKeyDown}
           className="text-center tabular-nums"
         />
@@ -257,6 +297,7 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
       ) : (
         <>
           <Button
+            ref={callButtonRef}
             type="button"
             variant="success"
             size="sm"
@@ -274,6 +315,7 @@ export function NumericKeypad({ className }: NumericKeypadProps) {
         onOpenChange={handleGreenRoomOpenChange}
         onConfirm={handleGreenRoomConfirm}
         confirmLabel={gatingCall ? undefined : 'Done'}
+        onCloseAutoFocus={handleGreenRoomCloseAutoFocus}
       />
     </div>
   )

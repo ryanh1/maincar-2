@@ -29,7 +29,7 @@ const BODY_ID = 'dialer-dock-body'
  * corner's width so the two never overlap.
  */
 export function DialerDock() {
-  const { view, mode, phase, elapsedSeconds, activeCall, toggleView, collapseDialer } = useDialer()
+  const { view, mode, phase, elapsedSeconds, activeCall, prefilledNumber, toggleView, collapseDialer } = useDialer()
   const expanded = view === 'expanded'
   const inCall = mode === 'call'
 
@@ -78,7 +78,7 @@ export function DialerDock() {
             recording={activeCall.recording}
           />
         ) : (
-          <NumericKeypad />
+          <NumericKeypad initialEntry={prefilledNumber} />
         )}
       </div>
     </div>
