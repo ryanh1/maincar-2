@@ -13,12 +13,11 @@
  * write filters on `userId` as well as `orgId`. Another member's draft is a
  * 404, never a 403: a 403 would confirm that it exists.
  *
- * A TEMPLATE is the deliberate inverse (SPEC-composer-templates.md § 2): it is
- * org-scoped and NOT private to its author, so every query filters on `orgId`
- * ALONE and any member may read, edit, or delete any of them. "A template a
- * teammate cannot use is a note to self." `createdById` is attribution and
- * nothing else — never a filter — and it is nullable, so a null author means
- * the rep who wrote it has left, not that anything is wrong.
+ * A TEMPLATE is org-scoped, but its visibility is the data boundary: private
+ * templates belong to their creator and organization templates can be used by
+ * every member. `createdById` is the private owner and the attribution for a
+ * shared template; a null author is valid only for an organization template
+ * that outlived the rep who wrote it.
  *
  * The 404-never-403 rule is the same for both, and comes from the same
  * `requireMembership` gate: a caller outside the org is told the org does not
@@ -30,6 +29,7 @@ import { z } from 'zod'
 import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { hasAdminAuthority } from '../lib/roles.js'
 import { sanitizeOptionalRichTextHtml, sanitizeRichTextHtml } from '../lib/sanitizeHtml.js'
 import { MailApiError, MailAuthError, MailboxNotFoundError, RateLimitedError } from '../lib/mail/mailErrors.js'
 import { BadRecipientError, NoMailboxError, sendDraftEmail } from '../lib/mail/sendEmail.js'
@@ -487,14 +487,8 @@ router.delete(
 // ============================================================
 // Templates (SPEC-composer-templates.md)
 // ============================================================
-// Everything below is ORG-SHARED. Read the module header before changing a
-// where clause here: the absence of `userId` is the design, not an omission.
-
-// A settings screen lists every template at once, so there is no page to ask
-// for. The cap is the same runaway guard the draft list carries — one org that
-// scripts ten thousand templates must not turn the Templates screen into a full
-// table scan.
-export const TEMPLATE_LIST_LIMIT = 200
+export const TEMPLATE_DEFAULT_PAGE_SIZE = 25
+export const TEMPLATE_MAX_PAGE_SIZE = 100
 
 // Long enough for "Follow-up after a discovery call — enterprise", short enough
 // that the list stays readable.
@@ -548,6 +542,7 @@ export const templateInputSchema = z.object({
   name: templateNameSchema,
   subject: templateSubjectSchema.optional(),
   bodyHtml: templateBodySchema.optional(),
+  visibility: z.enum(['PRIVATE', 'ORGANIZATION']).optional(),
 })
 
 /** What PATCH accepts: the same fields, with the name optional but never blank. */
@@ -555,7 +550,100 @@ export const templatePatchSchema = z.object({
   name: templateNameSchema.optional(),
   subject: templateSubjectSchema.optional(),
   bodyHtml: templateBodySchema.optional(),
+  visibility: z.enum(['PRIVATE', 'ORGANIZATION']).optional(),
 })
+
+const templateListQuery = z.object({
+  scope: z.enum(['private', 'organization', 'all']).catch('all'),
+  page: z.coerce.number().int().min(1).catch(1),
+  limit: z.coerce.number().int().min(1).max(TEMPLATE_MAX_PAGE_SIZE).catch(TEMPLATE_DEFAULT_PAGE_SIZE),
+  sort: z.enum(['name', 'subject', 'author']).catch('name'),
+  dir: z.enum(['asc', 'desc']).catch('asc'),
+  q: z.string().trim().max(120).catch(''),
+})
+
+function templateOrderBy(
+  sort: 'name' | 'subject' | 'author',
+  dir: 'asc' | 'desc',
+): Prisma.EmailTemplateOrderByWithRelationInput[] {
+  switch (sort) {
+    case 'subject':
+      return [{ subject: dir }, { id: 'asc' }]
+    case 'author':
+      return [
+        { createdBy: { firstName: { sort: dir, nulls: 'last' } } },
+        { createdBy: { lastName: { sort: dir, nulls: 'last' } } },
+        { createdBy: { email: dir } },
+        { id: 'asc' },
+      ]
+    case 'name':
+      return [{ name: dir }, { id: 'asc' }]
+  }
+}
+
+function templateListWhere(
+  orgId: string,
+  userId: string,
+  scope: 'private' | 'organization' | 'all',
+  q: string,
+): Prisma.EmailTemplateWhereInput {
+  const visibilityWhere: Prisma.EmailTemplateWhereInput =
+    scope === 'private'
+      ? { visibility: 'PRIVATE', createdById: userId }
+      : scope === 'organization'
+        ? { visibility: 'ORGANIZATION' }
+        : {
+            OR: [
+              { visibility: 'PRIVATE', createdById: userId },
+              { visibility: 'ORGANIZATION' },
+            ],
+          }
+
+  const searchWhere: Prisma.EmailTemplateWhereInput | null = q
+    ? {
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { subject: { contains: q, mode: 'insensitive' } },
+          { createdBy: { firstName: { contains: q, mode: 'insensitive' } } },
+          { createdBy: { lastName: { contains: q, mode: 'insensitive' } } },
+          { createdBy: { email: { contains: q, mode: 'insensitive' } } },
+        ],
+      }
+    : null
+
+  if (!searchWhere) return { orgId, ...visibilityWhere }
+  return { orgId, AND: [visibilityWhere, searchWhere] }
+}
+
+type TemplateManagement =
+  | { outcome: 'not-found' }
+  | { outcome: 'forbidden' }
+  | { outcome: 'allowed'; where: Prisma.EmailTemplateWhereInput }
+
+function templateManagement(
+  template: EmailTemplate,
+  orgId: string,
+  userId: string,
+  membershipRoles: readonly string[],
+): TemplateManagement {
+  if (template.visibility === 'PRIVATE') {
+    if (template.createdById !== userId) return { outcome: 'not-found' }
+    return {
+      outcome: 'allowed',
+      where: { id: template.id, orgId, visibility: 'PRIVATE', createdById: userId },
+    }
+  }
+
+  if (template.createdById === userId) {
+    return {
+      outcome: 'allowed',
+      where: { id: template.id, orgId, visibility: 'ORGANIZATION', createdById: userId },
+    }
+  }
+
+  if (!hasAdminAuthority(membershipRoles)) return { outcome: 'forbidden' }
+  return { outcome: 'allowed', where: { id: template.id, orgId, visibility: 'ORGANIZATION' } }
+}
 
 // --- Mappers: database row → API shape ---
 
@@ -569,6 +657,7 @@ function mapTemplateToApi(template: EmailTemplate) {
     name: template.name,
     subject: template.subject,
     bodyHtml: template.bodyHtml,
+    visibility: template.visibility,
     createdById: template.createdById,
     fieldsJson: template.fieldsJson,
     createdAt: template.createdAt.toISOString(),
@@ -577,7 +666,7 @@ function mapTemplateToApi(template: EmailTemplate) {
 }
 
 // ============================================================
-// GET /api/email/orgs/:orgId/templates — every template in this org
+// GET /api/email/orgs/:orgId/templates — safely scoped templates in this org
 // ============================================================
 router.get(
   '/orgs/:orgId/templates',
@@ -589,19 +678,26 @@ router.get(
     const membership = await requireMembership(authReq, res, orgId)
     if (!membership) return
 
+    // --- Parse & validate params ---
+    const { scope, page, limit, sort, dir, q } = templateListQuery.parse(req.query ?? {})
+
+    // --- Build filters ---
+    const where = templateListWhere(orgId, authReq.user!.id, scope, q)
+
     // --- Execute query ---
-    // `orgId` alone, and alphabetically, which is both what the screen shows
-    // (SPEC-composer-templates.md § 1) and exactly the @@index([orgId, name]).
-    // `id` breaks a tie so two templates with the same name keep a stable order.
-    const rows = await prisma.emailTemplate.findMany({
-      where: { orgId },
-      orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      take: TEMPLATE_LIST_LIMIT,
-    })
+    const [total, rows] = await Promise.all([
+      prisma.emailTemplate.count({ where }),
+      prisma.emailTemplate.findMany({
+        where,
+        orderBy: templateOrderBy(sort, dir),
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ])
 
     // --- Return response ---
     const templates = rows.map(mapTemplateToApi)
-    res.json({ templates, total: templates.length })
+    res.json({ templates, total, page, limit })
   }),
 )
 
@@ -638,6 +734,7 @@ router.post(
         name: parsed.data.name,
         subject: parsed.data.subject ?? '',
         bodyHtml: sanitizeRichTextHtml(parsed.data.bodyHtml ?? ''),
+        visibility: parsed.data.visibility ?? 'PRIVATE',
       },
     })
 
@@ -649,10 +746,9 @@ router.post(
 // ============================================================
 // PATCH /api/email/orgs/:orgId/templates/:templateId — edit one
 // ============================================================
-// Any member may edit any template in the org, including one they did not
-// write. Editing a template never touches a draft that was made from it: a
-// template is copied into a card at pick time, and there is no link back
-// (SPEC-composer-templates.md § Boundaries).
+// A private template is managed only by its creator. An organization template
+// is managed by its creator or an organization admin. Editing never touches a
+// draft that was made from it: a template is copied into a card at pick time.
 router.patch(
   '/orgs/:orgId/templates/:templateId',
   wrapRoute('PATCH /api/email/orgs/:orgId/templates/:templateId', async (req, res) => {
@@ -670,6 +766,21 @@ router.patch(
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
 
+    // --- Verify ownership ---
+    const existing = await prisma.emailTemplate.findFirst({ where: { id: templateId, orgId } })
+    if (!existing) return void res.status(404).json({ error: 'Template not found' })
+
+    const management = templateManagement(existing, orgId, authReq.user!.id, membership.roles)
+    if (management.outcome === 'not-found') {
+      return void res.status(404).json({ error: 'Template not found' })
+    }
+    if (management.outcome === 'forbidden') {
+      return void res.status(403).json({ error: 'Only the creator or an admin can manage this template' })
+    }
+    if (parsed.data.visibility === 'PRIVATE' && existing.createdById === null) {
+      return void res.status(409).json({ error: 'A template without a creator cannot be private' })
+    }
+
     // --- Build filters ---
     // Key by key, only the keys that are present — the editor may save the name
     // alone, and defaulting the absent ones would blank the body.
@@ -681,18 +792,18 @@ router.patch(
     // a template body is rendered again in the composer and in the sent email,
     // so unsanitised HTML in this column is stored XSS.
     if ('bodyHtml' in body) data.bodyHtml = sanitizeRichTextHtml(body.bodyHtml ?? '')
+    if ('visibility' in body) data.visibility = body.visibility
 
     if (Object.keys(data).length === 0) {
       return void res.status(400).json({ error: 'Name a field to save.' })
     }
 
     // --- Execute query ---
-    // updateMany filtered on `orgId`, never `update({ where: { id } })`: the
-    // where clause IS the tenant boundary, so another org's template comes back
-    // as count 0 even if the gate above were bypassed. Count 0 is a 404, never
-    // a 403 — a 403 would confirm the caller had guessed a real id.
+    // updateMany keeps the org and visibility/owner constraints in the write
+    // itself. A concurrent visibility change cannot turn an authorized shared
+    // write into an unauthorized private one.
     const result = await prisma.emailTemplate.updateMany({
-      where: { id: templateId, orgId },
+      where: management.where,
       data,
     })
     if (result.count === 0) {
@@ -727,9 +838,22 @@ router.delete(
     const membership = await requireMembership(authReq, res, orgId)
     if (!membership) return
 
+    // --- Verify ownership ---
+    const existing = await prisma.emailTemplate.findFirst({ where: { id: templateId, orgId } })
+    if (!existing) return void res.status(404).json({ error: 'Template not found' })
+
+    const management = templateManagement(existing, orgId, authReq.user!.id, membership.roles)
+    if (management.outcome === 'not-found') {
+      return void res.status(404).json({ error: 'Template not found' })
+    }
+    if (management.outcome === 'forbidden') {
+      return void res.status(403).json({ error: 'Only the creator or an admin can manage this template' })
+    }
+
     // --- Execute query ---
-    // deleteMany with the tenant key, for the same reason PATCH uses updateMany.
-    const result = await prisma.emailTemplate.deleteMany({ where: { id: templateId, orgId } })
+    // deleteMany keeps org and permission conditions in the write itself, so a
+    // concurrent visibility change cannot widen the caller's authority.
+    const result = await prisma.emailTemplate.deleteMany({ where: management.where })
     if (result.count === 0) {
       return void res.status(404).json({ error: 'Template not found' })
     }
