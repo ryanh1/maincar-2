@@ -9,6 +9,7 @@ import { registerTranscribeRecordingWorker } from './jobs/transcribeRecording.js
 import { registerReapStaleCallsWorker, scheduleReapStaleCalls } from './jobs/reapStaleCalls.js'
 import { registerUploadVoicemailWorker } from './jobs/uploadVoicemail.js'
 import { registerTranscribeVoicemailWorker } from './jobs/transcribeVoicemail.js'
+import { registerTranscodeGreetingWorker } from './jobs/transcodeGreeting.js'
 import { startQueue, stopQueue } from './jobs/queue.js'
 import { registerOAuthTokenRefresher } from './lib/mail/oauthProviders.js'
 
@@ -49,6 +50,7 @@ async function startWorkers(): Promise<void> {
   await scheduleReapStaleCalls()
   await registerUploadVoicemailWorker()
   await registerTranscribeVoicemailWorker()
+  await registerTranscodeGreetingWorker()
   logger.info(
     {
       workers: [
@@ -58,6 +60,7 @@ async function startWorkers(): Promise<void> {
         'reap-stale-calls',
         'upload-voicemail',
         'transcribe-voicemail',
+        'transcode-greeting',
       ],
     },
     'job queue workers started',
