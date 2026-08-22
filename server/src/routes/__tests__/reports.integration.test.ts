@@ -226,6 +226,58 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
     ])
   })
 
+  it('counts Deal stage entries from seeded FieldHistory and calculates their conversion from calls', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    await prisma.user.update({ where: { id: orgA.adminUserId }, data: { timeZone: 'America/New_York' } })
+    const { discovery, proposal } = await createPipelineAndStages(orgA.orgId)
+    const orgB = await seedOrgWithAdmin(prisma)
+    const foreign = await createPipelineAndStages(orgB.orgId)
+
+    await prisma.activityEntry.createMany({
+      data: [
+        { orgId: orgA.orgId, sourceType: 'call', sourceId: 'call-1', summary: 'Called', timelineTitle: 'Called', occurredAt: new Date('2026-08-17T12:00:00.000Z') },
+        { orgId: orgA.orgId, sourceType: 'call', sourceId: 'call-2', summary: 'Called', timelineTitle: 'Called', occurredAt: new Date('2026-08-18T12:00:00.000Z') },
+      ],
+    })
+    await prisma.fieldHistory.createMany({
+      data: [
+        // Two qualifying moves: one in each local-week bucket.
+        { orgId: orgA.orgId, objectSlug: 'deal', recordId: 'deal-a', attribute: 'stageId', oldJson: discovery.id, newJson: proposal.id, changedAt: new Date('2026-08-19T12:00:00.000Z') },
+        { orgId: orgA.orgId, objectSlug: 'deal', recordId: 'deal-b', attribute: 'stageId', oldJson: discovery.id, newJson: proposal.id, changedAt: new Date('2026-08-24T12:00:00.000Z') },
+        // Same org but the wrong target stage is not a Proposal entry.
+        { orgId: orgA.orgId, objectSlug: 'deal', recordId: 'deal-c', attribute: 'stageId', oldJson: proposal.id, newJson: discovery.id, changedAt: new Date('2026-08-19T12:00:00.000Z') },
+        // A foreign org's history must never reach this report.
+        { orgId: orgB.orgId, objectSlug: 'deal', recordId: 'deal-d', attribute: 'stageId', oldJson: foreign.discovery.id, newJson: foreign.proposal.id, changedAt: new Date('2026-08-19T12:00:00.000Z') },
+      ],
+    })
+
+    const response = await request(app)
+      .post(`/api/orgs/${orgA.orgId}/reports/run`)
+      .set('Authorization', authorization(orgA.adminFirebaseUid))
+      .send({
+        config: {
+          baseObject: 'activityGrid',
+          metrics: [
+            { key: 'calls', type: 'event_count', sourceType: 'call' },
+            { key: 'entered-proposal', type: 'stage_entry', stageId: proposal.id },
+            { key: 'proposal-per-call', type: 'conversion', numeratorKey: 'entered-proposal', denominatorKey: 'calls' },
+          ],
+          timeZone: { mode: 'viewer' },
+          timeBucket: { field: 'occurredAt', grain: 'week' },
+        },
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.report.rows).toEqual([
+      { weekStart: '2026-08-17', metricKey: 'calls', metricType: 'event_count', count: '2' },
+      { weekStart: '2026-08-17', metricKey: 'entered-proposal', metricType: 'stage_entry', count: '1' },
+      { weekStart: '2026-08-17', metricKey: 'proposal-per-call', metricType: 'conversion', ratio: 0.5 },
+      { weekStart: '2026-08-24', metricKey: 'calls', metricType: 'event_count', count: '0' },
+      { weekStart: '2026-08-24', metricKey: 'entered-proposal', metricType: 'stage_entry', count: '1' },
+      { weekStart: '2026-08-24', metricKey: 'proposal-per-call', metricType: 'conversion', ratio: null },
+    ])
+  })
+
   it('re-buckets the same report for New York and London viewers', async () => {
     const org = await seedOrgWithAdmin(prisma)
     const { pipeline, discovery } = await createPipelineAndStages(org.orgId)

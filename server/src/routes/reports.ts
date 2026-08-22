@@ -7,7 +7,14 @@ import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { resolveOwnerTeamScope } from '../lib/teamScope.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
-import { compileReport, InvalidReportConfigError, type ReportConfig } from '../reporting/reportCompiler.js'
+import {
+  buildActivityGridRows,
+  compileReport,
+  InvalidReportConfigError,
+  type ActivityMetricsGridReportConfig,
+  type RawActivityGridCount,
+  type ReportConfig,
+} from '../reporting/reportCompiler.js'
 
 const router = Router({ mergeParams: true })
 
@@ -46,7 +53,37 @@ const activityGridConfigSchema = z.object({
   timeBucket: z.object({ field: z.literal('occurredAt'), grain: z.literal('week') }).strict(),
 }).strict()
 
-const reportConfigSchema = z.discriminatedUnion('baseObject', [dealReportConfigSchema, activityGridConfigSchema])
+const activityGridMetricSchema = z.discriminatedUnion('type', [
+  z.object({
+    key: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
+    type: z.literal('event_count'),
+    sourceType: z.enum(['call', 'email', 'meeting']),
+  }).strict(),
+  z.object({
+    key: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
+    type: z.literal('stage_entry'),
+    stageId: z.string().trim().min(1).max(100),
+  }).strict(),
+  z.object({
+    key: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
+    type: z.literal('conversion'),
+    numeratorKey: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
+    denominatorKey: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
+  }).strict(),
+])
+
+const activityMetricsGridConfigSchema = z.object({
+  baseObject: z.literal('activityGrid'),
+  metrics: z.array(activityGridMetricSchema).min(1).max(25),
+  timeZone: timeZoneSchema,
+  timeBucket: z.object({ field: z.literal('occurredAt'), grain: z.literal('week') }).strict(),
+}).strict()
+
+const reportConfigSchema = z.discriminatedUnion('baseObject', [
+  dealReportConfigSchema,
+  activityGridConfigSchema,
+  activityMetricsGridConfigSchema,
+])
 
 const runReportBodySchema = z.object({ config: reportConfigSchema }).strict()
 const reportNameSchema = z.string().trim().min(1, 'Name the report to save it.').max(200)
@@ -134,6 +171,14 @@ router.post(
       subjectTimeZone,
       ownerTeamUserIds: ownerTeamPredicate?.ownerUserId.in,
     })
+    if (parsed.data.config.baseObject === 'activityGrid') {
+      const rows = await prisma.$queryRaw<RawActivityGridCount[]>(query)
+      return void res.json({
+        report: {
+          rows: buildActivityGridRows(parsed.data.config as ActivityMetricsGridReportConfig, rows),
+        },
+      })
+    }
     if (parsed.data.config.baseObject === 'activity') {
       const rows = await prisma.$queryRaw<RawActivityWeekCount[]>(query)
       return void res.json({

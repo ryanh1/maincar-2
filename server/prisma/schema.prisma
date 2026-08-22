@@ -1724,6 +1724,11 @@ model FieldHistory {
 
   // The one read this table exists for: "show me this record's history, newest first".
   @@index([orgId, objectSlug, recordId, changedAt])
+
+  // Reporting asks the inverse question: which records changed this attribute in
+  // a time range? `newJson` then narrows those indexed transition candidates to
+  // the target stage (SPEC-REPORTING-ENGINE.md §3B-1 / MAI-159).
+  @@index([orgId, objectSlug, attribute, changedAt])
 }
 
 model Provenance {

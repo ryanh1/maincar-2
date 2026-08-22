@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   ACTIVITY_EVENT_COUNTS_GRID_REPORT,
+  buildActivityGridRows,
   DEAL_STAGE_AMOUNT_REPORT,
   compileReport,
   type ReportConfig,
@@ -86,5 +87,56 @@ describe('compileReport', () => {
     expect(query.sql).toContain('"activity"."orgId" = ?')
     expect(query.sql).toContain('COUNT(*)::text AS "count"')
     expect(query.values).toEqual(['America/New_York', 'org-a'])
+  })
+
+  it('compiles stage-entry counts from indexed Deal.stageId history and keeps metric input bound', () => {
+    const config = {
+      baseObject: 'activityGrid',
+      metrics: [
+        { key: 'calls', type: 'event_count', sourceType: 'call' },
+        { key: 'entered-qualified', type: 'stage_entry', stageId: 'stage-qualified' },
+        { key: 'qualified-per-call', type: 'conversion', numeratorKey: 'entered-qualified', denominatorKey: 'calls' },
+      ],
+      timeZone: { mode: 'viewer' },
+      timeBucket: { field: 'occurredAt', grain: 'week' },
+    } as const satisfies ReportConfig
+
+    const query = compileReport(config, 'org-a', { viewerTimeZone: 'America/New_York' })
+
+    expect(query.sql).toContain('FROM "FieldHistory" AS "history"')
+    expect(query.sql).toContain('"history"."objectSlug" = \'deal\'')
+    expect(query.sql).toContain('"history"."attribute" = \'stageId\'')
+    expect(query.sql).toContain('"history"."newJson" = to_jsonb(?::text)')
+    expect(query.sql).toContain('UNION ALL')
+    expect(query.values).toEqual([
+      'America/New_York', 'calls', 'org-a', 'call',
+      'America/New_York', 'entered-qualified', 'org-a', 'stage-qualified',
+    ])
+  })
+
+  it('adds conversion rows from the two named count rows and leaves zero denominators unavailable', () => {
+    const config = {
+      baseObject: 'activityGrid',
+      metrics: [
+        { key: 'calls', type: 'event_count', sourceType: 'call' },
+        { key: 'entered-qualified', type: 'stage_entry', stageId: 'stage-qualified' },
+        { key: 'qualified-per-call', type: 'conversion', numeratorKey: 'entered-qualified', denominatorKey: 'calls' },
+      ],
+      timeZone: { mode: 'viewer' },
+      timeBucket: { field: 'occurredAt', grain: 'week' },
+    } as const satisfies ReportConfig
+
+    expect(buildActivityGridRows(config, [
+      { weekStart: '2026-08-17', metricKey: 'calls', metricType: 'event_count', count: '4' },
+      { weekStart: '2026-08-17', metricKey: 'entered-qualified', metricType: 'stage_entry', count: '2' },
+      { weekStart: '2026-08-24', metricKey: 'entered-qualified', metricType: 'stage_entry', count: '1' },
+    ])).toEqual([
+      { weekStart: '2026-08-17', metricKey: 'calls', metricType: 'event_count', count: '4' },
+      { weekStart: '2026-08-17', metricKey: 'entered-qualified', metricType: 'stage_entry', count: '2' },
+      { weekStart: '2026-08-17', metricKey: 'qualified-per-call', metricType: 'conversion', ratio: 0.5 },
+      { weekStart: '2026-08-24', metricKey: 'calls', metricType: 'event_count', count: '0' },
+      { weekStart: '2026-08-24', metricKey: 'entered-qualified', metricType: 'stage_entry', count: '1' },
+      { weekStart: '2026-08-24', metricKey: 'qualified-per-call', metricType: 'conversion', ratio: null },
+    ])
   })
 })
