@@ -5,6 +5,42 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Each issue clone has its own ignored dependency trees. An interrupted install
+# can leave an executable present while a transitive module is missing, which
+# otherwise turns into an opaque Firebase stack trace after startup begins.
+check_local_dependencies() {
+  local missing=()
+
+  check_resolvable() {
+    local label="$1"
+    local module_path="$2"
+    node -e 'require.resolve(process.argv[1])' "$module_path" >/dev/null 2>&1 ||
+      missing+=("$label")
+  }
+
+  check_resolvable 'root (concurrently)' "$ROOT/node_modules/concurrently/package.json"
+  check_resolvable 'server (prisma)' "$ROOT/server/node_modules/prisma/package.json"
+  check_resolvable 'server (tsx)' "$ROOT/server/node_modules/tsx/package.json"
+  check_resolvable 'web (vite)' "$ROOT/vite/node_modules/vite/package.json"
+  check_resolvable 'Firebase (firebase-tools)' "$ROOT/firebase/node_modules/firebase-tools/package.json"
+
+  if ! node -e 'require(process.argv[1])' \
+    "$ROOT/firebase/node_modules/firebase-tools/lib/emulator/controller.js" \
+    >/dev/null 2>&1; then
+    missing+=('Firebase emulator dependency tree')
+  fi
+
+  [ "${#missing[@]}" -eq 0 ] && return 0
+
+  printf '[dev] Local dependencies are missing or incomplete: %s\n' "${missing[*]}" >&2
+  printf '[dev] Restore this worktree from its lockfiles:\n' >&2
+  printf '[dev]   npm ci && npm --prefix server ci && npm --prefix vite ci && npm --prefix firebase ci\n' >&2
+  exit 1
+}
+
+check_local_dependencies
+
 READY_FILE="$(mktemp "${TMPDIR:-/tmp}/maincar-firebase-ready.XXXXXX")"
 rm -f "$READY_FILE"
 FIREBASE_PID=""
