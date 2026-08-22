@@ -427,6 +427,17 @@ export function buildEmptyTwiml(): string {
   return new twilio.twiml.VoiceResponse().toString()
 }
 
+/**
+ * Temporary, truthful response for calls to a purchased number while inbound
+ * voicemail is not available yet. The caller hears the explanation before
+ * Twilio ends the call, rather than reaching silence and disconnecting.
+ */
+export function buildInboundUnavailableTwiml(): string {
+  const response = new twilio.twiml.VoiceResponse()
+  response.say('This number is not accepting calls. Please try again later.')
+  return response.toString()
+}
+
 /** What Twilio echoed back when it accepted the hang-up. */
 export interface HungUpCall {
   /** The `CA…` SID of the call that was ended. */
