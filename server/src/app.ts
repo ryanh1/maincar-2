@@ -28,6 +28,7 @@ import recordingSettingsRouter from './routes/recordingSettings.js'
 import tasksRouter from './routes/tasks.js'
 import teamRouter from './routes/team.js'
 import twilioVoiceRouter from './routes/twilioVoice.js'
+import voicemailGreetingRouter from './routes/voicemailGreeting.js'
 import voicemailsRouter from './routes/voicemails.js'
 
 // The app is assembled here and started in index.ts. Keeping them apart is what
@@ -74,6 +75,7 @@ app.use('/api/email', emailRouter)
 // than read from the caller's currentOrgId preference.
 app.use('/api/orgs/:orgId/phone-numbers', phoneNumbersRouter)
 app.use('/api/orgs/:orgId/calls', callsRouter)
+app.use('/api/orgs/:orgId/voicemail-greeting', voicemailGreetingRouter)
 app.use('/api/orgs/:orgId/voicemails', voicemailsRouter)
 app.use('/api/orgs/:orgId/companies', companiesRouter)
 app.use('/api/orgs/:orgId/people', peopleRouter)
