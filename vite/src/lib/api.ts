@@ -69,14 +69,17 @@ export async function jsonFetch<T>(input: RequestInfo, init?: RequestInit): Prom
   }
 
   const { headers: customHeaders, ...restInit } = init ?? {}
+  // The browser owns a multipart boundary. Supplying application/json (or a
+  // bare multipart value) makes multer receive an unreadable upload.
+  const headers = new Headers(customHeaders)
+  if (!(typeof FormData !== 'undefined' && restInit.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
+  }
+  if (idToken) headers.set('Authorization', `Bearer ${idToken}`)
 
   const res = await fetch(resolveUrl(input), {
     ...restInit,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
-      ...customHeaders,
-    },
+    headers,
   })
 
   if (!res.ok) {

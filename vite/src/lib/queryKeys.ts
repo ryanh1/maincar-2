@@ -65,6 +65,10 @@ export const queryKeys = {
     detail: (orgId: string, voicemailId: string) =>
       ['voicemails', 'detail', orgId, voicemailId] as const,
   },
+  voicemailGreeting: {
+    all: ['voicemailGreeting'] as const,
+    detail: (orgId: string) => ['voicemailGreeting', orgId] as const,
+  },
   notifications: {
     all: ['notifications'] as const,
     list: (orgId: string, query?: Record<string, unknown>) =>
