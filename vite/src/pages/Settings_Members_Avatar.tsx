@@ -7,16 +7,16 @@
 export function Settings_Members_Avatar({
   name,
   email,
-  imageUrl,
+  avatarUrl,
 }: {
   name: string | null
   email: string
-  imageUrl?: string | null
+  avatarUrl?: string | null
 }) {
-  if (imageUrl) {
+  if (avatarUrl) {
     return (
       <img
-        src={imageUrl}
+        src={avatarUrl}
         alt=""
         aria-hidden
         className="size-6 shrink-0 rounded-full border border-border object-cover"

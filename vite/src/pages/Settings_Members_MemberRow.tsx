@@ -77,7 +77,7 @@ export function Settings_Members_MemberRow({
           <Settings_Members_Avatar
             name={name === member.email ? null : name}
             email={member.email}
-            imageUrl={member.imageUrl}
+            avatarUrl={member.avatarUrl}
           />
           <span className="min-w-0">
             <span className="block truncate text-sm font-medium">

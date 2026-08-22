@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 import {
@@ -72,6 +72,56 @@ export function getRecordingDownloadUrl(
 ): Promise<string> {
   const command = new GetObjectCommand({ Bucket: S3_BUCKET, Key: objectKey })
   return getSignedUrl(getS3Client(), command, { expiresIn: ttlSeconds })
+}
+
+/** A short-lived URL for a private avatar. The key is stored, never this URL. */
+export function getAvatarDownloadUrl(objectKey: string): Promise<string> {
+  const command = new GetObjectCommand({ Bucket: S3_BUCKET, Key: objectKey })
+  return getSignedUrl(getS3Client(), command, { expiresIn: 300 })
+}
+
+/** A short-lived presigned PUT lets the browser upload directly to MinIO/S3. */
+export function presignPut(args: { key: string; contentType: string }): Promise<string> {
+  const command = new PutObjectCommand({
+    Bucket: S3_BUCKET,
+    Key: args.key,
+    ContentType: args.contentType,
+  })
+  return getSignedUrl(getS3Client(), command, { expiresIn: 300 })
+}
+
+export async function headObject(
+  key: string,
+): Promise<{ contentType: string | undefined; contentLength: number } | null> {
+  try {
+    const output = await getS3Client().send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+    return { contentType: output.ContentType, contentLength: output.ContentLength ?? 0 }
+  } catch {
+    return null
+  }
+}
+
+export async function getObjectBytes(key: string): Promise<Buffer> {
+  const output = await getS3Client().send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+  const chunks: Buffer[] = []
+  for await (const chunk of output.Body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(chunk))
+  return Buffer.concat(chunks)
+}
+
+export async function putObjectBytes(args: { key: string; body: Buffer; contentType: string }): Promise<void> {
+  await getS3Client().send(
+    new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: args.key,
+      Body: args.body,
+      ContentType: args.contentType,
+      CacheControl: 'private, max-age=0, no-store',
+    }),
+  )
+}
+
+export async function deleteObject(key: string): Promise<void> {
+  await getS3Client().send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: key }))
 }
 
 /**

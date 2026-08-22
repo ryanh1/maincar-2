@@ -3,6 +3,7 @@
 export { useGetOrgs } from './useGetOrgs'
 export { useCreateOrg } from './useCreateOrg'
 export { useUpdateOrg } from './useUpdateOrg'
+export { useUpdateOrgAvatar } from './useUpdateOrgAvatar'
 export { useSwitchOrg } from './useSwitchOrg'
 export { useGetMembers } from './useGetMembers'
 export { useUpdateMemberRoles } from './useUpdateMemberRoles'

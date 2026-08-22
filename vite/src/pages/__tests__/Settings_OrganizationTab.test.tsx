@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
 
-const { useAuthMock, updateOrgMock, toastErrorMock, toastSuccessMock } = vi.hoisted(() => ({
+const { updateAvatarMock, useAuthMock, updateOrgMock, toastErrorMock, toastSuccessMock } = vi.hoisted(() => ({
+  updateAvatarMock: vi.fn(),
   useAuthMock: vi.fn(),
   updateOrgMock: vi.fn(),
   toastErrorMock: vi.fn(),
@@ -14,6 +15,7 @@ const { useAuthMock, updateOrgMock, toastErrorMock, toastSuccessMock } = vi.hois
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/hooks/orgs', () => ({
   useUpdateOrg: () => ({ mutateAsync: updateOrgMock, isPending: false }),
+  useUpdateOrgAvatar: () => ({ mutateAsync: updateAvatarMock, isPending: false }),
 }))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock, success: toastSuccessMock } }))
 

@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
 
-const { useAuthMock, updateProfileMock, toastErrorMock, toastSuccessMock } = vi.hoisted(() => ({
+const { updateAvatarMock, useAuthMock, updateProfileMock, toastErrorMock, toastSuccessMock } = vi.hoisted(() => ({
+  updateAvatarMock: vi.fn(),
   useAuthMock: vi.fn(),
   updateProfileMock: vi.fn(),
   toastErrorMock: vi.fn(),
@@ -14,6 +15,7 @@ const { useAuthMock, updateProfileMock, toastErrorMock, toastSuccessMock } = vi.
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/hooks/profile', () => ({
   useUpdateProfile: () => ({ mutateAsync: updateProfileMock, isPending: false }),
+  useUpdateAvatar: () => ({ mutateAsync: updateAvatarMock, isPending: false }),
 }))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock, success: toastSuccessMock } }))
 
@@ -45,6 +47,13 @@ describe('Settings_ProfileTab', () => {
 
     const nameFields = screen.getByLabelText(/First name/).parentElement?.parentElement
     expect(nameFields).toHaveClass('grid', 'grid-cols-1', 'sm:grid-cols-2')
+  })
+
+  it('offers the initials tile and photo upload control', () => {
+    renderWithProviders(<Settings_ProfileTab />)
+
+    expect(screen.getByRole('button', { name: 'Upload photo' })).toBeInTheDocument()
+    expect(screen.getByText('AP')).toBeInTheDocument()
   })
 
   it('fills the form from the signed-in user', () => {
