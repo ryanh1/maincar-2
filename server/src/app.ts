@@ -29,6 +29,7 @@ import phoneNumbersRouter from './routes/phoneNumbers.js'
 import recordsRouter from './routes/records.js'
 import recordingSettingsRouter from './routes/recordingSettings.js'
 import reportsRouter from './routes/reports.js'
+import savedViewsRouter from './routes/savedViews.js'
 import tasksRouter from './routes/tasks.js'
 import teamRouter from './routes/team.js'
 import teamsRouter from './routes/teams.js'
@@ -133,6 +134,7 @@ app.use('/api/orgs/:orgId/attributes', attributesRouter)
 // Rows of custom (record-backed) objects (MAI-135 T7). Every valuesJson write goes
 // through the one validator; filtering hits the native GIN index via containment.
 app.use('/api/orgs/:orgId/records', recordsRouter)
+app.use('/api/orgs/:orgId/saved-views', savedViewsRouter)
 
 // Work objects (MAI-141 T13) — the two things a rep creates by hand. FULL CRUD,
 // unlike the read-only activity routes above, and the difference is deliberate: an
