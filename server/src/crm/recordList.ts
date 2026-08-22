@@ -357,7 +357,7 @@ function mapRow(
 
 export interface ListRecordsArgs {
   orgId: string
-  object: ObjectDef
+  object: Pick<ObjectDef, 'id' | 'slug' | 'storage'>
   attributes: AttributeDef[]
   query: ListQuery
 }

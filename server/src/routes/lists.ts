@@ -40,6 +40,7 @@ import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { validateRecordValues, type ValidatorAttribute } from '../crm/valuesValidator.js'
 import { verifyLinkTargets } from '../crm/workLinks.js'
+import { listRecords } from '../crm/recordList.js'
 import type { AttributeDef, List, ListEntry, Prisma } from '../generated/prisma/client.js'
 
 // mergeParams, or :orgId from the mount path never reaches req.params here —
@@ -131,10 +132,10 @@ async function ownerIsMember(orgId: string, userId: string): Promise<boolean> {
 async function resolveObjectBySlug(
   orgId: string,
   slug: string,
-): Promise<{ id: string; slug: string } | null> {
+): Promise<{ id: string; slug: string; storage: string } | null> {
   return prisma.objectDef.findFirst({
     where: { orgId, slug, deletedAt: null },
-    select: { id: true, slug: true },
+    select: { id: true, slug: true, storage: true },
   })
 }
 
@@ -486,6 +487,33 @@ async function loadOwningList(orgId: string, listId: string): Promise<List | nul
   return prisma.list.findFirst({ where: { id: listId, orgId, deletedAt: null } })
 }
 
+/**
+ * Load the compatible target rows for one page of list membership. The list
+ * entry remains the source of manual order and list-only values; this is a
+ * read-only join so opening a list can never write through to a record.
+ */
+async function loadEntryTargets(orgId: string, list: List, entries: ListEntry[]): Promise<Map<string, Record<string, unknown>>> {
+  if (entries.length === 0) return new Map()
+
+  const object = await resolveObjectBySlug(orgId, list.objectSlug)
+  if (!object) return new Map()
+
+  const attributes = await prisma.attributeDef.findMany({
+    where: { orgId, objectId: object.id, deletedAt: null, isArchived: false },
+  })
+  const result = await listRecords(prisma, {
+    orgId,
+    object,
+    attributes,
+    query: {
+      filter: { type: 'condition', field: 'id', operator: 'in', value: entries.map((entry) => entry.targetId) },
+      limit: LIST_MAX_LIMIT,
+    },
+  })
+
+  return new Map(result.rows.map((row) => [String(row.id), row] as const))
+}
+
 // ============================================================
 // GET /api/orgs/:orgId/lists/:id/entries — the list's rows
 // ============================================================
@@ -525,9 +553,15 @@ router.get(
       prisma.listEntry.count({ where }),
       prisma.listEntry.findMany({ where, orderBy, skip: (page - 1) * limit, take: limit }),
     ])
+    const targets = await loadEntryTargets(orgId, list, entries)
 
     // --- Return response ---
-    res.json({ entries: entries.map((entry) => mapEntryToApi(entry)), total, page, limit })
+    res.json({
+      entries: entries.map((entry) => ({ ...mapEntryToApi(entry), target: targets.get(entry.targetId) ?? null })),
+      total,
+      page,
+      limit,
+    })
   }),
 )
 

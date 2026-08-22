@@ -113,6 +113,18 @@ describe('List + ListEntry (integration, real Postgres, real routes)', () => {
     expect(entryA.body.entry.values).toEqual({ stage: 'contacted' })
     expect(entryB.body.entry.values).toEqual({ stage: 'untouched' })
 
+    // The list read model carries both sources without merging list-only stage
+    // onto the Person record: the grid can render the membership as-is.
+    const listed = await request(app)
+      .get(`/api/orgs/${org.orgId}/lists/${listA.body.list.id}/entries`)
+      .set('Authorization', as(admin.firebaseUid))
+    expect(listed.status).toBe(200)
+    expect(listed.body.entries[0]).toMatchObject({
+      targetId: person.id,
+      values: { stage: 'contacted' },
+      target: { id: person.id, firstName: 'Jane', lastName: 'Doe' },
+    })
+
     // Confirmed against the real rows, not just the response.
     const rows = await prisma.listEntry.findMany({ where: { orgId: org.orgId, targetId: person.id } })
     expect(rows).toHaveLength(2)

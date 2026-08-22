@@ -115,11 +115,42 @@ export type CrmObject = ObjectDef
 export interface CrmList {
   id: string
   name: string
+  slug: string
   objectSlug: string
+  description: string | null
+  icon: string | null
+  ownerUserId: string | null
   isArchived: boolean
+  createdAt: string
+  updatedAt: string
 }
 
 export type GetCrmObjectsResponse = GetObjectsResponse
+
+export interface GetCrmListResponse {
+  list: CrmList
+}
+
+/** One saved-list membership row, its list-only values, and its read-only target record. */
+export interface CrmListEntry {
+  id: string
+  listId: string
+  objectSlug: string
+  targetId: string
+  values: Record<string, unknown>
+  position: number | null
+  addedByUserId: string
+  createdAt: string
+  updatedAt: string
+  target: RecordRow | null
+}
+
+export interface GetCrmListEntriesResponse {
+  entries: CrmListEntry[]
+  total: number
+  page: number
+  limit: number
+}
 
 export interface GetCrmListsResponse {
   lists: CrmList[]

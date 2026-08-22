@@ -15,6 +15,27 @@ vi.mock('@/hooks/crm', () => ({
   useGetLists: () => ({
     data: { lists: [{ id: 'list-1', name: 'Q3 targets' }] },
   }),
+  useGetList: () => ({
+    data: { list: { id: 'list-1', name: 'Q3 targets', objectSlug: 'person' } },
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(),
+  }),
+  useGetListEntries: () => ({
+    data: { pages: [{ entries: [], total: 0 }] },
+    isPending: false,
+    isError: false,
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
+    refetch: vi.fn(),
+  }),
+  useGetObject: () => ({
+    data: { object: { attributes: [] } },
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(),
+  }),
 }))
 
 import { CrmGrid } from '@/pages/CrmGrid'
@@ -32,7 +53,7 @@ describe('CrmGrid', () => {
     expect(screen.getByText('0 records')).toBeInTheDocument()
   })
 
-  it('renders the selected list as a grid', () => {
+  it('renders a truthful empty state for the selected list', () => {
     renderWithProviders(
       <Routes>
         <Route path="/lists/:listId" element={<CrmGrid />} />
@@ -40,6 +61,7 @@ describe('CrmGrid', () => {
       { initialEntries: ['/lists/list-1'] },
     )
 
-    expect(screen.getByRole('grid', { name: 'Q3 targets grid' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Q3 targets' })).toBeInTheDocument()
+    expect(screen.getByText('No records are in this list.')).toBeInTheDocument()
   })
 })
