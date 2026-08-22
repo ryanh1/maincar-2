@@ -6,6 +6,10 @@ Seven scripts that let many sessions work on maincar-2 in parallel, one issue pe
 **Worktree location:** `~/code/maincar-2-worktrees/` (one folder per issue)
 **Scripts location:** `.claude/scripts/coord/` (tracked in the repo)
 
+Ticket checkouts can be cloned from the shared delivery checkout. The merge
+helper resolves that local clone chain to the delivery checkout's canonical
+remote, so unrelated WIP in the shared checkout never blocks a ticket's push.
+
 ## Quick start
 
 ### 1. Create a worktree for an issue
