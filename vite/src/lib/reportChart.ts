@@ -29,7 +29,7 @@ function pointsFor(config: ReportConfig, result: RunReportResponse['report']): C
   return result.rows.map((row) => ({
     label: fieldLabel(row, primary),
     series: breakout ? fieldLabel(row, breakout) : 'Amount',
-    amount: Number(BigInt(row.amountMinor)) / 100,
+    amount: Number(BigInt(row.amountMinor ?? '0')) / 100,
   }))
 }
 

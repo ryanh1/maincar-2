@@ -147,7 +147,7 @@ export function Reports() {
       return
     }
     if (!orgId || !activeConfig || !isRunnablePivot(activeConfig)) {
-      toast.error('Add a group and Amount before saving.')
+      toast.error('Add a group and measure before saving.')
       return
     }
 

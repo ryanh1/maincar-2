@@ -4,10 +4,10 @@ import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { isRunnablePivot } from '@/lib/reportConfig'
 import { calculatePivotValue, comparisonColumns, type PivotValueTransform } from '@/lib/pivotCalculations'
 import { DEFAULT_REPORT_CHART } from '@/lib/reportChart'
-import { isRunnablePivot } from '@/lib/reportConfig'
-import type { DealDrillFilter, DealPivotDimension, PeriodComparison, ReportConfig, ReportDrillSelection, RunReportResponse } from '@/lib/reportTypes'
+import type { DealPivotDimension, DealPivotValue, PeriodComparison, ReportConfig, ReportDrillSelection, RunReportResponse } from '@/lib/reportTypes'
 import { ReportsChart } from './Reports_Chart'
 
 type PivotZone = 'rows' | 'columns' | 'values'
@@ -20,7 +20,22 @@ const DIMENSIONS: Array<{ field: DealPivotDimension; label: string }> = [
 ]
 
 const DIMENSION_LABELS: Record<DealPivotDimension, string> = { owner: 'Owner', stage: 'Stage', segment: 'Segment', createdAt: 'Created date' }
-const MEASURE = { field: 'amountMinor', label: 'Amount' } as const
+const MEASURES: Array<{ id: string; label: string; value: DealPivotValue }> = [
+  { id: 'amountMinor:sum', label: 'Amount', value: { field: 'amountMinor', aggregation: 'sum' } },
+  { id: 'id:count', label: 'Deal count', value: { field: 'id', aggregation: 'count' } },
+  { id: 'amountMinor:average', label: 'Average amount', value: { field: 'amountMinor', aggregation: 'average' } },
+  { id: 'amountMinor:distinctCount', label: 'Distinct amounts', value: { field: 'amountMinor', aggregation: 'distinctCount' } },
+  { id: 'amountMinor:median', label: 'Median amount', value: { field: 'amountMinor', aggregation: 'median' } },
+  { id: 'amountMinor:percentile', label: '90th percentile amount', value: { field: 'amountMinor', aggregation: 'percentile' } },
+]
+
+function measureId(value: DealPivotValue): string {
+  return `${value.field}:${value.aggregation}`
+}
+
+function measureLabel(value: DealPivotValue): string {
+  return MEASURES.find((measure) => measure.id === measureId(value))?.label ?? 'Measure'
+}
 
 interface ReportsPivotBuilderProps {
   config: ReportConfig
@@ -37,7 +52,8 @@ export function ReportsPivotBuilder({ config, onChange, result, isLoading, hasAc
   const [view, setView] = useState<'table' | 'chart'>('table')
   function moveField(field: string, zone: PivotZone): void {
     if (zone === 'values') {
-      if (field === MEASURE.field) onChange({ ...config, values: [{ field: 'amountMinor', aggregation: 'sum' }] })
+      const measure = MEASURES.find((candidate) => candidate.id === field)
+      if (measure) onChange({ ...config, values: [measure.value], compareTo: undefined, summaryRows: undefined })
       return
     }
     if (!DIMENSIONS.some((dimension) => dimension.field === field)) return
@@ -88,10 +104,10 @@ export function ReportsPivotBuilder({ config, onChange, result, isLoading, hasAc
         </div>
         <FieldGroup label={isBlank ? 'Suggested starter fields' : 'Dimensions'}>
           {DIMENSIONS.map((dimension) => <DraggableField key={dimension.field} {...dimension} onDragStart={startDrag} onClick={() => moveField(dimension.field, 'rows')} />)}
-          {isBlank && <DraggableField label={MEASURE.label} field={MEASURE.field} onDragStart={startDrag} onClick={() => moveField(MEASURE.field, 'values')} />}
+          {isBlank && <DraggableField label={MEASURES[0]!.label} field={MEASURES[0]!.id} onDragStart={startDrag} onClick={() => moveField(MEASURES[0]!.id, 'values')} />}
         </FieldGroup>
         {!isBlank && <FieldGroup label="Measures">
-          <DraggableField label={MEASURE.label} field={MEASURE.field} onDragStart={startDrag} onClick={() => moveField(MEASURE.field, 'values')} />
+          {MEASURES.map((measure) => <DraggableField key={measure.id} label={measure.label} field={measure.id} onDragStart={startDrag} onClick={() => moveField(measure.id, 'values')} />)}
         </FieldGroup>}
       </aside>
 
@@ -99,28 +115,27 @@ export function ReportsPivotBuilder({ config, onChange, result, isLoading, hasAc
         <div role="group" className="grid gap-3 md:grid-cols-3" aria-label="Pivot drop zones">
           <DropZone label="Rows" zone="rows" items={config.rows.map((item) => item.field)} onDrop={dropField} onRemove={removeField} />
           <DropZone label="Columns" zone="columns" items={config.columns.map((item) => item.field)} onDrop={dropField} onRemove={removeField} />
-          <DropZone label="Values" zone="values" items={config.values.map((item) => item.field)} onDrop={dropField} onRemove={removeField} />
+          <DropZone label="Values" zone="values" items={config.values.map(measureId)} onDrop={dropField} onRemove={removeField} />
         </div>
-        {config.values.length > 0 && <PivotControls config={config} onChange={onChange} />}
-        {!isRunnable && <BuilderGuidance config={config} onAddOwner={() => moveField('owner', 'rows')} onAddAmount={() => moveField(MEASURE.field, 'values')} />}
-        {isRunnable && (
-          <>
-            <div className="flex items-center gap-2" role="group" aria-label="Report view">
-              <Button type="button" size="sm" variant={view === 'table' ? 'default' : 'secondary'} onClick={() => setView('table')}>Table</Button>
-              <Button type="button" size="sm" variant={view === 'chart' ? 'default' : 'secondary'} onClick={showChart}>Chart</Button>
-            </div>
-            {view === 'table'
-              ? <PivotGrid config={config} onChange={onChange} result={result} isLoading={isLoading} hasActiveFilters={hasActiveFilters} onLoosenFilters={onLoosenFilters} onDrill={onDrill} />
-              : <ReportsChart config={config} result={result} onChange={onChange} />}
-          </>
-        )}
+        {config.values[0]?.aggregation === 'sum' && <PivotControls config={config} onChange={onChange} />}
+        {!isRunnable && <BuilderGuidance config={config} onAddOwner={() => moveField('owner', 'rows')} onAddAmount={() => moveField(MEASURES[0]!.id, 'values')} />}
+        {isRunnable && <>
+          <div className="flex items-center gap-2" role="group" aria-label="Report view">
+            <Button type="button" size="sm" variant={view === 'table' ? 'default' : 'secondary'} onClick={() => setView('table')}>Table</Button>
+            <Button type="button" size="sm" variant={view === 'chart' ? 'default' : 'secondary'} onClick={showChart}>Chart</Button>
+          </div>
+          {view === 'table'
+            ? <PivotGrid config={config} onChange={onChange} result={result} isLoading={isLoading} hasActiveFilters={hasActiveFilters} onLoosenFilters={onLoosenFilters} onDrill={onDrill} />
+            : <ReportsChart config={config} result={result} onChange={onChange} />}
+        </>}
       </div>
     </div>
   )
 }
 
 function PivotControls({ config, onChange }: Pick<ReportsPivotBuilderProps, 'config' | 'onChange'>) {
-  const showAs = config.values[0]?.showAs ?? 'none'
+  const value = config.values[0]
+  const showAs = value?.field === 'amountMinor' && value.aggregation === 'sum' ? value.showAs ?? 'none' : 'none'
   const hasDate = [...config.rows, ...config.columns].some((item) => item.field === 'createdAt')
   return <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-surface p-3">
     <span className="text-sm font-medium">Show values as</span>
@@ -174,7 +189,7 @@ function DropZone({ label, zone, items, onDrop, onRemove }: {
       <h3 className="text-sm font-semibold">{label}</h3>
       {items.length === 0 ? <p className="text-xs text-text-muted">{placeholder}</p> : items.map((field) => (
         <Button key={field} type="button" size="sm" variant="secondary" onClick={() => onRemove(field, zone)}>
-          {field === MEASURE.field ? 'Amount' : DIMENSION_LABELS[field as DealPivotDimension]} ×
+          {MEASURES.find((measure) => measure.id === field)?.label ?? DIMENSION_LABELS[field as DealPivotDimension]} ×
         </Button>
       ))}
     </section>
@@ -220,20 +235,25 @@ function BuilderGuidance({ config, onAddOwner, onAddAmount }: {
 interface PivotNode {
   key: string
   label: string
-  filters: DealDrillFilter[]
-  values: Map<string, bigint>
+  filters: ReportDrillSelection['filters']
+  values: Map<string, MetricValue>
   children: Map<string, PivotNode>
 }
 
-function newNode(key: string, label: string, filters: DealDrillFilter[] = []): PivotNode {
+type MetricValue = bigint | string
+type PivotResultRow = RunReportResponse['report']['rows'][number] | NonNullable<RunReportResponse['report']['rollups']>[number]
+
+function newNode(key: string, label: string, filters: ReportDrillSelection['filters'] = []): PivotNode {
   return { key, label, filters, values: new Map(), children: new Map() }
 }
 
-function addAmount(node: PivotNode, columnKey: string, amount: bigint): void {
-  node.values.set(columnKey, (node.values.get(columnKey) ?? 0n) + amount)
+function addValue(node: PivotNode, columnKey: string, value: MetricValue): void {
+  const current = node.values.get(columnKey)
+  if (typeof value !== 'bigint') return
+  node.values.set(columnKey, (typeof current === 'bigint' ? current : 0n) + value)
 }
 
-function fieldValue(row: RunReportResponse['report']['rows'][number], field: DealPivotDimension, suffix: 'Id' | 'Name'): string {
+function fieldValue(row: PivotResultRow, field: DealPivotDimension, suffix: 'Id' | 'Name'): string {
   if (field === 'createdAt') return row.createdDay ?? 'Unknown date'
   const key = `${field}${suffix}` as keyof typeof row
   const fallback = field === 'segment'
@@ -248,6 +268,56 @@ function formatAmountMinor(amountMinor: bigint): string {
   const dollars = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(absolute / 100n)
   const cents = String(absolute % 100n).padStart(2, '0')
   return `${sign}$${dollars}.${cents}`
+}
+
+function measureValue(row: PivotResultRow, config: ReportConfig): MetricValue {
+  return config.values[0]?.aggregation === 'sum'
+    ? BigInt(row.amountMinor ?? '0')
+    : row.value ?? '0'
+}
+
+function formatMeasureValue(value: MetricValue, measure: DealPivotValue | undefined): string {
+  if (measure?.field === 'id' || measure?.aggregation === 'distinctCount') {
+    return new Intl.NumberFormat('en-US').format(typeof value === 'bigint' ? value : BigInt(value.split('.')[0] || '0'))
+  }
+  if (typeof value === 'bigint') return formatAmountMinor(value)
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value)
+  if (!match) return '—'
+
+  const sign = match[1] === '-' ? '-' : ''
+  let minor = BigInt(match[2])
+  if (match[3]?.[0] && match[3][0] >= '5') minor += 1n
+  const dollars = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(minor / 100n)
+  const cents = String(minor % 100n).padStart(2, '0')
+  return `${sign}$${dollars}.${cents}`
+}
+
+function hasGroupedField(row: PivotResultRow, field: DealPivotDimension): boolean {
+  return !('groupedFields' in row) || row.groupedFields.includes(field)
+}
+
+function pivotNodesForRow(root: PivotNode, row: PivotResultRow, rowFields: DealPivotDimension[]): PivotNode[] | null {
+  let prefixLength = 0
+  while (prefixLength < rowFields.length && hasGroupedField(row, rowFields[prefixLength]!)) prefixLength += 1
+  if (rowFields.slice(prefixLength).some((field) => hasGroupedField(row, field))) return null
+
+  let node = root
+  const nodes = [root]
+  for (const field of rowFields.slice(0, prefixLength)) {
+    const key = `${node.key}\u0001${fieldValue(row, field, 'Id')}`
+    let child = node.children.get(key)
+    if (!child) {
+      child = newNode(key, fieldValue(row, field, 'Name'), [...node.filters, { field, value: fieldValue(row, field, 'Id'), label: fieldValue(row, field, 'Name') }])
+      node.children.set(key, child)
+    }
+    node = child
+    nodes.push(node)
+  }
+  return nodes
+}
+
+function bigintValue(value: MetricValue | undefined): bigint {
+  return typeof value === 'bigint' ? value : 0n
 }
 
 function PivotGrid({ config, onChange, result, isLoading, hasActiveFilters, onLoosenFilters, onDrill }: {
@@ -288,61 +358,61 @@ function PivotGrid({ config, onChange, result, isLoading, hasActiveFilters, onLo
 
   for (const row of result.rows) {
     const columnKey = columnFields.length === 0 ? 'total' : columnFields.map((field) => fieldValue(row, field, 'Id')).join('\u0001')
-    const columnLabel = columnFields.length === 0 ? 'Amount' : columnFields.map((field) => fieldValue(row, field, 'Name')).join(' · ')
+    const columnLabel = columnFields.length === 0 ? measureLabel(config.values[0]!) : columnFields.map((field) => fieldValue(row, field, 'Name')).join(' · ')
     columnHeaders.set(columnKey, columnLabel)
-    const amount = BigInt(row.amountMinor)
-    addAmount(root, columnKey, amount)
-    let parent = root
-    for (const field of rowFields) {
-      const key = `${parent.key}\u0001${fieldValue(row, field, 'Id')}`
-      let child = parent.children.get(key)
-      if (!child) {
-        child = newNode(key, fieldValue(row, field, 'Name'), [...parent.filters, {
-          field,
-          value: fieldValue(row, field, 'Id'),
-          label: fieldValue(row, field, 'Name'),
-        }])
-        parent.children.set(key, child)
-      }
-      addAmount(child, columnKey, amount)
-      parent = child
-    }
+  }
+
+  const rollups = result.rollups
+  const exactRollups = rollups !== undefined
+  const aggregateRows: PivotResultRow[] = rollups === undefined ? result.rows : [...result.rows, ...rollups]
+  for (const row of aggregateRows) {
+    const hasEveryColumn = columnFields.every((field) => hasGroupedField(row, field))
+    const hasNoColumns = columnFields.every((field) => !hasGroupedField(row, field))
+    if (!hasEveryColumn && !hasNoColumns) continue
+
+    const columnKey = hasNoColumns ? 'total' : columnFields.map((field) => fieldValue(row, field, 'Id')).join('\u0001')
+    const nodes = pivotNodesForRow(root, row, rowFields)
+    if (!nodes) continue
+    const value = measureValue(row, config)
+    if (exactRollups) nodes.at(-1)!.values.set(columnKey, value)
+    else nodes.forEach((node) => addValue(node, columnKey, value))
   }
 
   const columns = [...columnHeaders.entries()]
   const showGrandTotalColumn = columnFields.length > 0
-  const renderedRows = rowFields.length === 0 ? [] : [...root.children.values()].flatMap((node) => renderNode(node, 0, columns, root, undefined, config, onChange, columnFields, onDrill))
+  const supportsClientCalculations = config.values[0]?.aggregation === 'sum'
+  const renderedRows = rowFields.length === 0 ? [] : [...root.children.values()].flatMap((node) => renderNode(node, 0, columns, root, undefined, config, onChange, supportsClientCalculations, columnFields, onDrill))
 
   return (
     <div className="overflow-x-auto rounded-md border border-border">
       <table className="w-full">
         <caption className="sr-only">Deals pivot</caption>
         <thead><tr className="border-b border-border bg-surface">
-          <th scope="col" aria-label="Summary rows" className="w-8 px-2 py-2 text-left text-xs font-medium text-text-muted" />
+          {supportsClientCalculations && <th scope="col" aria-label="Summary rows" className="w-8 px-2 py-2 text-left text-xs font-medium text-text-muted" />}
           <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-text-muted">{rowFields.map((field) => DIMENSION_LABELS[field]).join(' / ') || 'Total'}</th>
-          {columns.flatMap(([key, label]) => config.compareTo ? [<th key={key} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">{label}</th>, <th key={`${key}-delta`} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">Δ</th>, <th key={`${key}-percent`} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">Δ %</th>] : [<th key={key} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">{label}</th>])}
+          {columns.flatMap(([key, label]) => supportsClientCalculations && config.compareTo ? [<th key={key} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">{label}</th>, <th key={`${key}-delta`} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">Δ</th>, <th key={`${key}-percent`} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">Δ %</th>] : [<th key={key} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">{label}</th>])}
           {showGrandTotalColumn && <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">Grand total</th>}
         </tr></thead>
-        <tbody>{renderedRows}{renderPivotRow(root, 0, columns, root, undefined, config, onChange, columnFields, onDrill, true, showGrandTotalColumn)}</tbody>
+        <tbody>{renderedRows}{renderPivotRow(root, 0, columns, root, undefined, config, onChange, supportsClientCalculations, columnFields, onDrill, true, showGrandTotalColumn)}</tbody>
       </table>
     </div>
   )
 }
 
-function renderNode(node: PivotNode, level: number, columns: Array<[string, string]>, root: PivotNode, parent: PivotNode | undefined, config: ReportConfig, onChange: (config: ReportConfig) => void, columnFields: DealPivotDimension[], onDrill: (selection: ReportDrillSelection) => void): ReactNode[] {
+function renderNode(node: PivotNode, level: number, columns: Array<[string, string]>, root: PivotNode, parent: PivotNode | undefined, config: ReportConfig, onChange: (config: ReportConfig) => void, supportsClientCalculations: boolean, columnFields: DealPivotDimension[], onDrill: (selection: ReportDrillSelection) => void): ReactNode[] {
   const showGrandTotalColumn = columns.some(([key]) => key !== 'total')
   const summary = config.summaryRows?.find((row) => row.rowKey === node.key)
-  return [<Fragment key={node.key}>{renderPivotRow(node, level, columns, root, parent, config, onChange, columnFields, onDrill, false, showGrandTotalColumn)}</Fragment>, ...(summary ? [renderSummaryRow(node, columns, root, config, summary.showAs)] : []), ...[...node.children.values()].flatMap((child) => renderNode(child, level + 1, columns, root, node, config, onChange, columnFields, onDrill))]
+  return [<Fragment key={node.key}>{renderPivotRow(node, level, columns, root, parent, config, onChange, supportsClientCalculations, columnFields, onDrill, false, showGrandTotalColumn)}</Fragment>, ...(supportsClientCalculations && summary ? [renderSummaryRow(node, columns, root, config, summary.showAs)] : []), ...[...node.children.values()].flatMap((child) => renderNode(child, level + 1, columns, root, node, config, onChange, supportsClientCalculations, columnFields, onDrill))]
 }
 
 function renderSummaryRow(node: PivotNode, columns: Array<[string, string]>, root: PivotNode, config: ReportConfig, showAs: NonNullable<ReportConfig['summaryRows']>[number]['showAs']) {
-  const grandTotal = [...root.values.values()].reduce((sum, value) => sum + value, 0n)
-  const total = [...node.values.values()].reduce((sum, value) => sum + value, 0n)
+  const grandTotal = [...root.values.values()].reduce<bigint>((sum, value) => sum + bigintValue(value), 0n)
+  const total = [...node.values.values()].reduce<bigint>((sum, value) => sum + bigintValue(value), 0n)
   return <tr key={`${node.key}-summary`} className="border-b border-border bg-surface-2">
     <td className="px-2 py-2" /><th scope="row" className="py-2 pr-3 pl-6 text-left text-sm font-medium">{showAs === 'samePeriodLastYear' ? `${node.label} YoY %` : `${node.label} % of grand total`}</th>
     {columns.flatMap(([key], index) => {
-      const value = node.values.get(key) ?? 0n
-      const comparison = showAs === 'samePeriodLastYear' ? comparisonColumns(columns.map(([column]) => ({ key: column, value: node.values.get(column) ?? 0n })), 'samePeriodLastYear')[index]?.percentDelta ?? null : calculatePivotValue({ transform: 'percentOfGrandTotal', value, grandTotal })
+      const value = bigintValue(node.values.get(key))
+      const comparison = showAs === 'samePeriodLastYear' ? comparisonColumns(columns.map(([column]) => ({ key: column, value: bigintValue(node.values.get(column)) })), 'samePeriodLastYear')[index]?.percentDelta ?? null : calculatePivotValue({ transform: 'percentOfGrandTotal', value, grandTotal })
       const text = comparison === null ? '—' : new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 }).format(comparison)
       return config.compareTo ? [<td key={key} className="px-3 py-2 text-right text-sm tabular-nums">{text}</td>, <td key={`${key}-delta`} className="px-3 py-2 text-right text-sm tabular-nums">—</td>, <td key={`${key}-percent`} className="px-3 py-2 text-right text-sm tabular-nums">—</td>] : [<td key={key} className="px-3 py-2 text-right text-sm tabular-nums">{text}</td>]
     })}
@@ -350,41 +420,52 @@ function renderSummaryRow(node: PivotNode, columns: Array<[string, string]>, roo
   </tr>
 }
 
-function renderPivotRow(node: PivotNode, level: number, columns: Array<[string, string]>, root: PivotNode, parent: PivotNode | undefined, config: ReportConfig, onChange: (config: ReportConfig) => void, columnFields: DealPivotDimension[], onDrill: (selection: ReportDrillSelection) => void, grandTotal = false, showGrandTotalColumn = false) {
-  const transform = config.values[0]?.showAs ?? 'none'
-  const total = [...node.values.values()].reduce((sum, value) => sum + value, 0n)
-  const grandTotalAmount = [...root.values.values()].reduce((sum, value) => sum + value, 0n)
-  const selected = config.summaryRows?.some((row) => row.rowKey === node.key) ?? false
-  const comparisons = config.compareTo ? new Map(comparisonColumns(columns.map(([key]) => ({ key, value: node.values.get(key) ?? 0n })), config.compareTo).map((value) => [value.key, value])) : undefined
+function renderPivotRow(node: PivotNode, level: number, columns: Array<[string, string]>, root: PivotNode, parent: PivotNode | undefined, config: ReportConfig, onChange: (config: ReportConfig) => void, supportsClientCalculations: boolean, columnFields: DealPivotDimension[], onDrill: (selection: ReportDrillSelection) => void, grandTotal = false, showGrandTotalColumn = false) {
   const rowLabel = node.filters.map((filter) => filter.label).join(' / ') || 'all Deals'
-
-  function toggleSummary(checked: boolean): void {
-    const current = config.summaryRows ?? []
-    onChange({ ...config, summaryRows: checked ? [...current, { rowKey: node.key, showAs: 'percentOfGrandTotal' }] : current.filter((row) => row.rowKey !== node.key) })
-  }
-
   function drill(columnKey?: string): void {
     const columnFilters = columnKey && columnKey !== 'total'
       ? columnKey.split('\u0001').map((value, index) => ({ field: columnFields[index]!, value, label: columns.find(([key]) => key === columnKey)?.[1].split(' · ')[index] ?? value }))
       : []
     onDrill({ filters: [...node.filters, ...columnFilters] })
   }
+  const measure = config.values[0]
+  if (!supportsClientCalculations) {
+    const emptyValue: MetricValue = '0'
+    const grandTotalValue = node.values.get('total') ?? [...node.values.values()].reduce<bigint>((total, value) => total + bigintValue(value), 0n)
+    return (
+      <tr key={`${node.key}-${grandTotal ? 'total' : 'row'}`} className="border-b border-border last:border-0">
+        <th scope="row" className={`py-2 pr-3 text-left text-sm ${grandTotal || node.children.size > 0 ? 'font-medium' : 'font-normal'} ${level === 0 ? 'pl-3' : 'pl-6'}`}><Button type="button" size="sm" variant="ghost" aria-label={`See Deals for ${rowLabel}`} onClick={() => drill()} onDoubleClick={() => drill()}>{node.label}</Button></th>
+        {columns.map(([key]) => <td key={key} className="px-3 py-2 text-right text-sm tabular-nums"><Button type="button" size="sm" variant="ghost" aria-label={`See Deals for ${rowLabel}`} onClick={() => drill(key)} onDoubleClick={() => drill(key)}>{formatMeasureValue(node.values.get(key) ?? emptyValue, measure)}</Button></td>)}
+        {showGrandTotalColumn && <td className="px-3 py-2 text-right text-sm font-medium tabular-nums"><Button type="button" size="sm" variant="ghost" aria-label={`See Deals for ${rowLabel}`} onClick={() => drill()} onDoubleClick={() => drill()}>{formatMeasureValue(grandTotalValue, measure)}</Button></td>}
+      </tr>
+    )
+  }
 
+  const selectedValue = config.values[0]
+  const transform = selectedValue?.field === 'amountMinor' && selectedValue.aggregation === 'sum' ? selectedValue.showAs ?? 'none' : 'none'
+  const total = [...node.values.values()].reduce<bigint>((sum, value) => sum + bigintValue(value), 0n)
+  const grandTotalAmount = [...root.values.values()].reduce<bigint>((sum, value) => sum + bigintValue(value), 0n)
+  const selected = config.summaryRows?.some((row) => row.rowKey === node.key) ?? false
+  const comparisons = config.compareTo ? new Map(comparisonColumns(columns.map(([key]) => ({ key, value: bigintValue(node.values.get(key)) })), config.compareTo).map((value) => [value.key, value])) : undefined
+  function toggleSummary(checked: boolean) {
+    const current = config.summaryRows ?? []
+    onChange({ ...config, summaryRows: checked ? [...current, { rowKey: node.key, showAs: 'percentOfGrandTotal' }] : current.filter((row) => row.rowKey !== node.key) })
+  }
   return (
     <tr key={`${node.key}-${grandTotal ? 'total' : 'row'}`} className="border-b border-border last:border-0">
       <td className="px-2 py-2">{!grandTotal && <Checkbox aria-label={`Add summary row under ${node.label}`} checked={selected} onCheckedChange={(checked) => toggleSummary(checked === true)} />}</td>
-      <th scope="row" className={`py-1 pr-1 text-left text-sm ${grandTotal || node.children.size > 0 ? 'font-medium' : 'font-normal'} ${level === 0 ? 'pl-1' : 'pl-4'}`}><Button type="button" size="sm" variant="ghost" className="w-full justify-start px-2" aria-label={`See Deals for ${rowLabel}`} onClick={() => drill()} onDoubleClick={() => drill()}>{node.label}</Button></th>
+      <th scope="row" className={`py-2 pr-3 text-left text-sm ${grandTotal || node.children.size > 0 ? 'font-medium' : 'font-normal'} ${level === 0 ? 'pl-3' : 'pl-6'}`}><Button type="button" size="sm" variant="ghost" aria-label={`See Deals for ${rowLabel}`} onClick={() => drill()} onDoubleClick={() => drill()}>{node.label}</Button></th>
       {columns.flatMap(([key], index) => {
-        const value = node.values.get(key) ?? 0n
-        const rank = [...node.values.values()].filter((candidate) => candidate > value).length + 1
-        const runningTotal = columns.slice(0, index + 1).reduce((sum, [column]) => sum + (node.values.get(column) ?? 0n), 0n)
-        const displayed = calculatePivotValue({ transform, value, rowTotal: total, columnTotal: root.values.get(key), parentTotal: parent?.values.get(key), grandTotal: grandTotalAmount, rank, runningTotal })
+        const value = bigintValue(node.values.get(key))
+        const rank = [...node.values.values()].filter((candidate) => bigintValue(candidate) > value).length + 1
+        const runningTotal = columns.slice(0, index + 1).reduce<bigint>((sum, [column]) => sum + bigintValue(node.values.get(column)), 0n)
+        const displayed = calculatePivotValue({ transform, value, rowTotal: total, columnTotal: bigintValue(root.values.get(key)), parentTotal: bigintValue(parent?.values.get(key)), grandTotal: grandTotalAmount, rank, runningTotal })
         const text = displayed === null ? '—' : typeof displayed === 'number' ? new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 }).format(displayed) : formatAmountMinor(displayed)
         const comparison = comparisons?.get(key)
-        const valueCell = <td key={key} className="px-1 py-1 text-right text-sm tabular-nums"><Button type="button" size="sm" variant="ghost" className="w-full justify-end px-2 tabular-nums" aria-label={`See Deals for ${rowLabel}`} onClick={() => drill(key)} onDoubleClick={() => drill(key)}>{text}</Button></td>
+        const valueCell = <td key={key} className="px-3 py-2 text-right text-sm tabular-nums"><Button type="button" size="sm" variant="ghost" aria-label={`See Deals for ${rowLabel}`} onClick={() => drill(key)} onDoubleClick={() => drill(key)}>{text}</Button></td>
         return config.compareTo ? [valueCell, <td key={`${key}-delta`} className="px-3 py-2 text-right text-sm tabular-nums">{comparison?.delta === null || !comparison ? '—' : formatAmountMinor(comparison.delta)}</td>, <td key={`${key}-percent`} className="px-3 py-2 text-right text-sm tabular-nums">{comparison?.percentDelta === null || !comparison ? '—' : new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 }).format(comparison.percentDelta)}</td>] : [valueCell]
       })}
-      {showGrandTotalColumn && <td className="px-1 py-1 text-right text-sm font-medium tabular-nums"><Button type="button" size="sm" variant="ghost" className="w-full justify-end px-2 tabular-nums" aria-label={`See Deals for ${rowLabel}`} onClick={() => drill()} onDoubleClick={() => drill()}>{formatAmountMinor(total)}</Button></td>}
+      {showGrandTotalColumn && <td className="px-3 py-2 text-right text-sm font-medium tabular-nums"><Button type="button" size="sm" variant="ghost" aria-label={`See Deals for ${rowLabel}`} onClick={() => drill()} onDoubleClick={() => drill()}>{formatAmountMinor([...node.values.values()].reduce<bigint>((total, amount) => total + bigintValue(amount), 0n))}</Button></td>}
     </tr>
   )
 }

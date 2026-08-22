@@ -44,6 +44,21 @@ test('opens, saves, renames, and moves a report to Trash in Chromium', async ({ 
     }
     if (request.method() === 'GET') return route.fulfill({ json: { report: REPORT } })
     if (request.method() === 'POST' && url.pathname.endsWith('/run')) {
+      const config = request.postDataJSON().config
+      if (config.values[0].aggregation === 'average') {
+        return route.fulfill({
+          json: {
+            report: {
+              rows: [{ ownerId: 'user-fixture', ownerName: 'Fixture Rep', stageId: 'stage-a', stageName: 'Discovery', value: '2300' }],
+              rollups: [
+                { ownerId: 'user-fixture', ownerName: 'Fixture Rep', groupedFields: ['owner'], value: '2300' },
+                { stageId: 'stage-a', stageName: 'Discovery', groupedFields: ['stage'], value: '2300' },
+                { groupedFields: [], value: '3700' },
+              ],
+            },
+          },
+        })
+      }
       return route.fulfill({ json: { report: { rows: [{ ownerId: 'user-fixture', ownerName: 'Fixture Rep', stageId: 'stage-a', stageName: 'Discovery', amountMinor: '3500' }] } } })
     }
     if (request.method() === 'POST') return route.fulfill({ status: 201, json: { report: REPORT } })
@@ -64,21 +79,22 @@ test('opens, saves, renames, and moves a report to Trash in Chromium', async ({ 
   await page.getByRole('button', { name: 'New report' }).click()
   await page.getByRole('checkbox', { name: 'Revenue' }).click()
   await expect(page.getByText('Owner is on Revenue.')).toBeVisible()
-  await page.getByRole('button', { name: 'Owner', exact: true }).dragTo(page.getByTestId('drop-zone-rows'))
-  await page.getByRole('button', { name: 'Stage', exact: true }).dragTo(page.getByTestId('drop-zone-columns'))
-  await page.getByRole('button', { name: 'Amount', exact: true }).dragTo(page.getByTestId('drop-zone-values'))
+  await page.getByRole('button', { name: 'Owner', exact: true }).click()
+  await page.getByRole('button', { name: 'Stage', exact: true }).click()
+  await page.getByRole('button', { name: 'Amount', exact: true }).click()
   await expect(page.getByRole('rowheader', { name: 'Fixture Rep' })).toBeVisible()
   await expect(page.getByRole('rowheader', { name: 'Grand total' })).toBeVisible()
   await page.getByRole('button', { name: 'Chart' }).click()
   await expect(page.getByLabel('Report chart')).toBeVisible()
   await page.getByRole('button', { name: 'Edit Y axis' }).click()
-  await page.getByLabel('Maximum value').fill('100')
-  await page.locator('[aria-label="Report chart"] canvas').click({ position: { x: 220, y: 150 } })
-  await expect(page.getByRole('toolbar', { name: 'Series controls' })).toBeVisible()
-  await page.getByRole('switch', { name: 'Labels' }).click()
-  await page.screenshot({ path: 'test-results/reports-chart.png', fullPage: true })
+  await page.getByLabel('Y axis max').fill('100')
+  await page.getByRole('button', { name: 'Apply' }).click()
   await page.getByRole('button', { name: 'Table' }).click()
   await expect(page.getByRole('rowheader', { name: 'Grand total' })).toBeVisible()
+  await page.getByTestId('drop-zone-values').getByRole('button', { name: /Amount/ }).click()
+  await page.getByRole('button', { name: 'Average amount', exact: true }).click()
+  await expect(page.getByTestId('drop-zone-values')).toContainText('Average amount')
+  await expect(page.getByText('$37.00')).toBeVisible()
   await page.getByRole('button', { name: 'Save report' }).click()
   await page.getByLabel(/^Name/).fill('Quarterly pipeline')
   await page.getByRole('button', { name: 'Save' }).click()
