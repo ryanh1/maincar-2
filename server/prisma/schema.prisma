@@ -22,13 +22,13 @@ datasource db {
 // -----------------------------------------------------------------------------
 
 model Org {
-  id      String  @id @default(cuid())
-  name    String?
-  logo    String?
+  id        String  @id @default(cuid())
+  name      String?
+  logo      String?
   // Private MinIO/S3 object key for the organization photo. API responses sign
   // a short-lived URL from this key rather than storing a browser-readable URL.
   avatarKey String?
-  enabled Boolean @default(true)
+  enabled   Boolean @default(true)
 
   // Organization-level outbound call recording policy. An empty allowlist means
   // every mapped US state is eligible, subject to the other two settings.
@@ -45,14 +45,17 @@ model Org {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships      Membership[]
-  invitations      Invitation[]
-  phoneNumbers     PhoneNumber[]
-  calls            Call[]
-  emailDrafts      EmailDraft[]
-  emailTemplates   EmailTemplate[]
-  oauthConnections OAuthConnection[]
-  mailAccounts     MailAccount[]
+  memberships        Membership[]
+  invitations        Invitation[]
+  phoneNumbers       PhoneNumber[]
+  calls              Call[]
+  transcripts        Transcript[]
+  transcriptSegments TranscriptSegment[]
+  callSpeakers       CallSpeaker[]
+  emailDrafts        EmailDraft[]
+  emailTemplates     EmailTemplate[]
+  oauthConnections   OAuthConnection[]
+  mailAccounts       MailAccount[]
 
   // CRM spine (MAI-129 T1, MAI-130 T2). Back-relations so a deleted org cascades
   // its CRM rows away — the same onDelete: Cascade the dialer models already use.
@@ -364,6 +367,11 @@ model Call {
   transcriptStatus String  @default("pending")
   transcript       String?
 
+  // The canonical final pass. The legacy flat `transcript` stays temporarily so
+  // existing readers remain compatible while consumers move to timed segments.
+  finalTranscript Transcript?
+  speakers        CallSpeaker[]
+
   // Billed duration in whole seconds, from Twilio's status callback.
   durationS Int?
 
@@ -400,14 +408,100 @@ model Call {
   @@index([orgId, dealId, createdAt])
 }
 
+// One canonical final pass for a call. Provider-owned text and timing live below
+// this row; human identity decisions live in CallSpeaker so reprocessing does
+// not silently replace them.
+model Transcript {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // One row means one final pass per call. A later provider run updates this row
+  // atomically instead of accumulating competing "final" versions.
+  callId String @unique
+  call   Call   @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  // Allowed values: "deepgram", "legacy".
+  provider  String
+  plainText String
+
+  segments TranscriptSegment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+}
+
+// A provider-owned, timed utterance within a final transcript. `words` is the
+// provider's per-word timing payload; callers replace these rows as a set when a
+// transcript is regenerated, without touching CallSpeaker.
+model TranscriptSegment {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  transcriptId String
+  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+
+  position   Int
+  speakerKey String
+  startMs    Int
+  endMs      Int
+  text       String
+  words      Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([transcriptId, position])
+  @@index([orgId])
+  @@index([transcriptId, speakerKey])
+}
+
+// A durable identity decision for one provider speaker key on a call. This is
+// deliberately independent of TranscriptSegment so provider replacement cannot
+// overwrite a rep's confirmed identity or manual override.
+model CallSpeaker {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  callId String
+  call   Call   @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  speakerKey  String
+  displayName String?
+  // Allowed values: "provider", "crm", "manual".
+  source      String
+  evidence    Json?
+  confidence  Float?
+
+  personId String?
+  person   Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  confirmedAt    DateTime?
+  manualOverride Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([callId, speakerKey])
+  @@index([orgId])
+  @@index([orgId, personId])
+}
+
 // An org's single outgoing voicemail greeting, played to inbound callers before
 // <Record> starts (MAI-39). One per org — orgId is @unique so an upload always
 // updates the existing row instead of accumulating history.
 model VoicemailGreeting {
   id String @id @default(cuid())
 
-  orgId String            @unique
-  org   Org               @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String @unique
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   // The bare S3 object KEY for the MP3 (e.g.
   // "maincar-voicemail-greetings/{orgId}/greeting.mp3"), written by the
@@ -855,6 +949,9 @@ model Person {
   // Calls with this person (Call.personId → Person). SetNull on that side, so
   // deleting a person never destroys call history (MAI-132 T4).
   calls               Call[]
+  // Call-speaker identity can point at this CRM person. SetNull on that side,
+  // so the call's manual correction stays auditable if the person is deleted.
+  callSpeakers        CallSpeaker[]
   // Every email this person was a from/to/cc/bcc on (EmailParticipant.personId →
   // Person). SetNull on that side: deleting a person leaves the participant row
   // and its RAW address intact, so the message still reads correctly (MAI-137 T9).
