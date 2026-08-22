@@ -51,6 +51,17 @@ const ACTIVITY_GRID_CONFIG = {
   timeBucket: { field: 'occurredAt', grain: 'week' },
 }
 
+const ACTIVITY_METRICS_GRID_CONFIG = {
+  baseObject: 'activityGrid',
+  metrics: [
+    { key: 'calls', type: 'event_count', sourceType: 'call' },
+    { key: 'entered-qualified', type: 'stage_entry', stageId: 'stage-qualified' },
+    { key: 'qualified-per-call', type: 'conversion', numeratorKey: 'entered-qualified', denominatorKey: 'calls' },
+  ],
+  timeZone: { mode: 'viewer' },
+  timeBucket: { field: 'occurredAt', grain: 'week' },
+}
+
 function authAsMember(): void {
   verifyTokenMock.mockResolvedValue({ uid: 'firebase-a' })
   prismaMock.user.findUnique.mockResolvedValue({
@@ -140,6 +151,37 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
       },
     })
     expect(prismaMock.$queryRaw.mock.calls[0][0].values).toEqual(['America/New_York', ORG_ID])
+  })
+
+  it('returns stage-entry and conversion rows from the named activity-grid metrics', async () => {
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      { weekStart: '2026-08-17', metricKey: 'calls', metricType: 'event_count', count: '4' },
+      { weekStart: '2026-08-17', metricKey: 'entered-qualified', metricType: 'stage_entry', count: '2' },
+      { weekStart: '2026-08-24', metricKey: 'entered-qualified', metricType: 'stage_entry', count: '1' },
+    ])
+
+    const response = await request(app)
+      .post(URL)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ config: ACTIVITY_METRICS_GRID_CONFIG })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      report: {
+        rows: [
+          { weekStart: '2026-08-17', metricKey: 'calls', metricType: 'event_count', count: '4' },
+          { weekStart: '2026-08-17', metricKey: 'entered-qualified', metricType: 'stage_entry', count: '2' },
+          { weekStart: '2026-08-17', metricKey: 'qualified-per-call', metricType: 'conversion', ratio: 0.5 },
+          { weekStart: '2026-08-24', metricKey: 'calls', metricType: 'event_count', count: '0' },
+          { weekStart: '2026-08-24', metricKey: 'entered-qualified', metricType: 'stage_entry', count: '1' },
+          { weekStart: '2026-08-24', metricKey: 'qualified-per-call', metricType: 'conversion', ratio: null },
+        ],
+      },
+    })
+    expect(prismaMock.$queryRaw.mock.calls[0][0].values).toEqual([
+      'America/New_York', 'calls', ORG_ID, 'call',
+      'America/New_York', 'entered-qualified', ORG_ID, 'stage-qualified',
+    ])
   })
 
   it('uses an active subject member zone instead of the viewer zone', async () => {

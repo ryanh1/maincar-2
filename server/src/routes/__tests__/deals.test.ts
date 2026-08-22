@@ -21,6 +21,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     pipeline: { findFirst: vi.fn() },
     pipelineStage: { findFirst: vi.fn() },
     activityEntry: { upsert: vi.fn() },
+    fieldHistory: { createMany: vi.fn() },
     $transaction: vi.fn(),
     deal: {
       findFirst: vi.fn(),
@@ -156,6 +157,7 @@ beforeEach(() => {
   prismaMock.dealPersonRole.upsert.mockResolvedValue(roleRow())
   prismaMock.dealPersonRole.deleteMany.mockResolvedValue({ count: 1 })
   prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'activity-1' })
+  prismaMock.fieldHistory.createMany.mockResolvedValue({ count: 1 })
   prismaMock.$transaction.mockImplementation(async (action: (tx: typeof prismaMock) => unknown) => action(prismaMock))
   stageBelongs()
 })
@@ -489,6 +491,20 @@ describe('PATCH /api/orgs/:orgId/deals/:id', () => {
     expect(prismaMock.deal.updateMany).toHaveBeenCalledWith({
       where: { id: 'deal-1', orgId: ORG_A, deletedAt: null },
       data: { stageId: 'stage-2' },
+    })
+    expect(prismaMock.fieldHistory.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          orgId: ORG_A,
+          objectSlug: 'deal',
+          recordId: 'deal-1',
+          attribute: 'stageId',
+          oldJson: 'stage-1',
+          newJson: 'stage-2',
+          changedByUserId: 'user-a',
+          changeSource: 'user',
+        }),
+      ],
     })
     const upsert = prismaMock.activityEntry.upsert.mock.calls[0][0]
     expect(upsert.create).toMatchObject({

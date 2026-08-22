@@ -19,7 +19,27 @@ export interface ActivityEventCountsGridReportConfig {
   timeBucket: { field: 'occurredAt'; grain: 'week' }
 }
 
-export type ReportConfig = DealStageAmountReportConfig | ActivityEventCountsGridReportConfig
+export type ActivityGridMetric =
+  | { key: string; type: 'event_count'; sourceType: 'call' | 'email' | 'meeting' }
+  | { key: string; type: 'stage_entry'; stageId: string }
+  | { key: string; type: 'conversion'; numeratorKey: string; denominatorKey: string }
+
+/**
+ * The next R4 slice: explicitly named metric rows so values sourced from
+ * ActivityEntry and FieldHistory can share one weekly grid. Conversion rows are
+ * calculated from the two named count rows after the database aggregation.
+ */
+export interface ActivityMetricsGridReportConfig {
+  baseObject: 'activityGrid'
+  metrics: readonly ActivityGridMetric[]
+  timeZone: ReportTimeZone
+  timeBucket: { field: 'occurredAt'; grain: 'week' }
+}
+
+export type ReportConfig =
+  | DealStageAmountReportConfig
+  | ActivityEventCountsGridReportConfig
+  | ActivityMetricsGridReportConfig
 
 /** A persisted selection resolved by the shared Team scope at query time. */
 export interface OwnerTeamScope {
@@ -55,6 +75,27 @@ export const ACTIVITY_EVENT_COUNTS_GRID_REPORT: ActivityEventCountsGridReportCon
   timeZone: { mode: 'viewer' },
   timeBucket: { field: 'occurredAt', grain: 'week' },
 }
+
+export interface RawActivityGridCount {
+  weekStart: string
+  metricKey: string
+  metricType: 'event_count' | 'stage_entry'
+  count: string | number | bigint
+}
+
+export type ActivityGridResultRow =
+  | {
+    weekStart: string
+    metricKey: string
+    metricType: 'event_count' | 'stage_entry'
+    count: string
+  }
+  | {
+    weekStart: string
+    metricKey: string
+    metricType: 'conversion'
+    ratio: number | null
+  }
 
 export class InvalidReportConfigError extends Error {
   status = 400
@@ -108,11 +149,57 @@ export function compileReport(
   orgId: string,
   context: ReportExecutionContext = {},
 ): Prisma.Sql {
+  if (config.baseObject === 'activityGrid') {
+    return compileActivityMetricsGrid(config, orgId, context)
+  }
   if (config.baseObject === 'activity') {
     return compileActivityEventCountsGrid(config, orgId, context)
   }
 
   return compileDealStageAmountReport(config, orgId, context)
+}
+
+/** Builds every configured source and conversion row for each observed week. */
+export function buildActivityGridRows(
+  config: ActivityMetricsGridReportConfig,
+  sourceRows: readonly RawActivityGridCount[],
+): ActivityGridResultRow[] {
+  validateActivityMetricsGrid(config)
+
+  const valuesByWeek = new Map<string, Map<string, bigint>>()
+  for (const row of sourceRows) {
+    let counts = valuesByWeek.get(row.weekStart)
+    if (!counts) {
+      counts = new Map()
+      valuesByWeek.set(row.weekStart, counts)
+    }
+    counts.set(row.metricKey, BigInt(row.count))
+  }
+
+  return [...valuesByWeek.keys()].sort().flatMap((weekStart) => {
+    const counts = valuesByWeek.get(weekStart)!
+    return config.metrics.map((metric): ActivityGridResultRow => {
+      if (metric.type !== 'conversion') {
+        return {
+          weekStart,
+          metricKey: metric.key,
+          metricType: metric.type,
+          count: (counts.get(metric.key) ?? 0n).toString(),
+        }
+      }
+
+      const numerator = counts.get(metric.numeratorKey) ?? 0n
+      const denominator = counts.get(metric.denominatorKey) ?? 0n
+      return {
+        weekStart,
+        metricKey: metric.key,
+        metricType: 'conversion',
+        // A missing denominator is not 0%; it is an unavailable ratio. The
+        // renderer can present this as an em dash rather than NaN or Infinity.
+        ratio: denominator === 0n ? null : Number(numerator) / Number(denominator),
+      }
+    })
+  })
 }
 
 function compileDealStageAmountReport(
@@ -214,4 +301,82 @@ WHERE "activity"."orgId" = `,
 GROUP BY 1, 2
 ORDER BY "weekStart" ASC, "sourceType" ASC`,
   ], timeZone, orgId)
+}
+
+function compileActivityMetricsGrid(
+  config: ActivityMetricsGridReportConfig,
+  orgId: string,
+  context: ReportExecutionContext,
+): Prisma.Sql {
+  validateActivityMetricsGrid(config)
+  const timeZone = resolveReportTimeZone(config.timeZone, context)
+
+  const sourceQueries = config.metrics.flatMap((metric): Prisma.Sql[] => {
+    if (metric.type === 'event_count') {
+      return [Prisma.sql`
+SELECT date_trunc('week', "activity"."occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${timeZone})::date::text AS "weekStart",
+  ${metric.key}::text AS "metricKey",
+  'event_count'::text AS "metricType",
+  COUNT(*)::text AS "count"
+FROM "ActivityEntry" AS "activity"
+WHERE "activity"."orgId" = ${orgId}
+  AND "activity"."sourceType" = ${metric.sourceType}
+GROUP BY 1`]
+    }
+    if (metric.type === 'stage_entry') {
+      return [Prisma.sql`
+SELECT date_trunc('week', "history"."changedAt" AT TIME ZONE 'UTC' AT TIME ZONE ${timeZone})::date::text AS "weekStart",
+  ${metric.key}::text AS "metricKey",
+  'stage_entry'::text AS "metricType",
+  COUNT(*)::text AS "count"
+FROM "FieldHistory" AS "history"
+WHERE "history"."orgId" = ${orgId}
+  AND "history"."objectSlug" = 'deal'
+  AND "history"."attribute" = 'stageId'
+  AND "history"."newJson" = to_jsonb(${metric.stageId}::text)
+GROUP BY 1`]
+    }
+    return []
+  })
+
+  return Prisma.sql`
+SELECT "weekStart", "metricKey", "metricType", "count"
+FROM (${Prisma.join(sourceQueries, ' UNION ALL ')}) AS "metric"
+ORDER BY "weekStart" ASC, "metricKey" ASC`
+}
+
+function validateActivityMetricsGrid(config: ActivityMetricsGridReportConfig): void {
+  if (config.timeBucket.field !== 'occurredAt' || config.timeBucket.grain !== 'week') {
+    throw new InvalidReportConfigError('Only activity occurred-at week buckets are available yet.')
+  }
+  if (config.metrics.length === 0) {
+    throw new InvalidReportConfigError('An activity grid needs at least one metric row.')
+  }
+
+  const metricByKey = new Map<string, ActivityGridMetric>()
+  for (const metric of config.metrics) {
+    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(metric.key)) {
+      throw new InvalidReportConfigError('Activity grid metric keys must be lowercase letters, numbers, hyphens, or underscores.')
+    }
+    if (metricByKey.has(metric.key)) {
+      throw new InvalidReportConfigError(`Activity grid metric key "${metric.key}" is duplicated.`)
+    }
+    metricByKey.set(metric.key, metric)
+  }
+
+  for (const metric of config.metrics) {
+    if (metric.type !== 'conversion') continue
+    const numerator = metricByKey.get(metric.numeratorKey)
+    const denominator = metricByKey.get(metric.denominatorKey)
+    if (!numerator || !denominator || numerator.type === 'conversion' || denominator.type === 'conversion') {
+      throw new InvalidReportConfigError('A conversion row must reference two count metric rows.')
+    }
+    if (metric.numeratorKey === metric.denominatorKey) {
+      throw new InvalidReportConfigError('A conversion row needs two different metric rows.')
+    }
+  }
+
+  if (!config.metrics.some((metric) => metric.type !== 'conversion')) {
+    throw new InvalidReportConfigError('An activity grid needs at least one count metric row.')
+  }
 }

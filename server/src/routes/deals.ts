@@ -35,6 +35,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { activityFromRecordCreated, activityFromStageChange, recordActivityInTx } from '../crm/activityFeed.js'
+import { recordFieldHistoryInTx } from '../crm/fieldHistory.js'
 import type { Deal, DealPersonRole, Prisma } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
@@ -483,6 +484,17 @@ router.patch(
     const result = await prisma.$transaction(async (tx) => {
       const updated = await tx.deal.updateMany({ where: { id, orgId, deletedAt: null }, data })
       if (updated.count === 0 || !stageChanged) return updated
+
+      // Reporting's stage-entry rows read FieldHistory, while the deal and its
+      // activity feed keep their own purposes. Writing all three in this one
+      // transaction makes a committed move visible to every consumer together.
+      await recordFieldHistoryInTx(tx, {
+        orgId,
+        objectSlug: 'deal',
+        recordId: existing.id,
+        changes: [{ attribute: 'stageId', oldValue: existing.stageId, newValue: body.stageId }],
+        changedByUserId: userId,
+      })
 
       // Both names are captured at write time: the timeline and deal ribbon read
       // the durable before/after snapshot without joining PipelineStage later.
