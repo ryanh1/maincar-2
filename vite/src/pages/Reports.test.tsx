@@ -252,6 +252,19 @@ describe('Reports', () => {
     expect(await screen.findAllByText('$50.00')).toHaveLength(2)
   })
 
+  it('adds a percent summary row only under the selected pivot row', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    dragFieldToZone('Owner', 'rows')
+    dragFieldToZone('Stage', 'columns')
+    dragFieldToZone('Amount', 'values')
+    await user.click(screen.getByRole('checkbox', { name: 'Add summary row under Avery Admin' }))
+
+    expect(screen.getByRole('rowheader', { name: 'Avery Admin % of grand total' })).toBeInTheDocument()
+  })
+
   it('lets a keyboard user add fields to the builder', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Reports />)

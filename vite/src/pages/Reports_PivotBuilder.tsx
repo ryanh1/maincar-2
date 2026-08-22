@@ -1,17 +1,21 @@
 import { type DragEvent, Fragment, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { isRunnablePivot } from '@/lib/reportConfig'
-import type { DealPivotDimension, ReportConfig, RunReportResponse } from '@/lib/reportTypes'
+import { calculatePivotValue, comparisonColumns, type PivotValueTransform } from '@/lib/pivotCalculations'
+import type { DealPivotDimension, PeriodComparison, ReportConfig, RunReportResponse } from '@/lib/reportTypes'
 
 type PivotZone = 'rows' | 'columns' | 'values'
 
 const DIMENSIONS: Array<{ field: DealPivotDimension; label: string }> = [
   { field: 'owner', label: 'Owner' },
   { field: 'stage', label: 'Stage' },
+  { field: 'createdAt', label: 'Created date' },
 ]
 
-const DIMENSION_LABELS: Record<DealPivotDimension, string> = { owner: 'Owner', stage: 'Stage' }
+const DIMENSION_LABELS: Record<DealPivotDimension, string> = { owner: 'Owner', stage: 'Stage', createdAt: 'Created date' }
 const MEASURE = { field: 'amountMinor', label: 'Amount' } as const
 
 interface ReportsPivotBuilderProps {
@@ -35,7 +39,7 @@ export function ReportsPivotBuilder({ config, onChange, result }: ReportsPivotBu
       rows: config.rows.filter((item) => item.field !== dimension),
       columns: config.columns.filter((item) => item.field !== dimension),
     }
-    onChange({ ...withoutDimension, [zone]: [...withoutDimension[zone], { field: dimension }] })
+    onChange({ ...withoutDimension, [zone]: [...withoutDimension[zone], { field: dimension }], ...(dimension === 'createdAt' ? { timeBucket: { field: 'createdAt', grain: 'day' } } : {}) })
   }
 
   function removeField(field: string, zone: PivotZone): void {
@@ -44,7 +48,8 @@ export function ReportsPivotBuilder({ config, onChange, result }: ReportsPivotBu
       return
     }
     const dimension = field as DealPivotDimension
-    onChange({ ...config, [zone]: config[zone].filter((item) => item.field !== dimension) })
+    const next = { ...config, [zone]: config[zone].filter((item) => item.field !== dimension) }
+    onChange(dimension === 'createdAt' ? { ...next, timeBucket: undefined, compareTo: undefined } : next)
   }
 
   function startDrag(event: DragEvent<HTMLButtonElement>, field: string): void {
@@ -80,11 +85,32 @@ export function ReportsPivotBuilder({ config, onChange, result }: ReportsPivotBu
           <DropZone label="Columns" zone="columns" items={config.columns.map((item) => item.field)} onDrop={dropField} onRemove={removeField} />
           <DropZone label="Values" zone="values" items={config.values.map((item) => item.field)} onDrop={dropField} onRemove={removeField} />
         </div>
+        {config.values.length > 0 && <PivotControls config={config} onChange={onChange} />}
         {!isRunnable && <p className="text-sm text-text-muted">Drag a dimension to Rows or Columns, then drag Amount to Values.</p>}
-        {isRunnable && <PivotGrid config={config} result={result} />}
+        {isRunnable && <PivotGrid config={config} onChange={onChange} result={result} />}
       </div>
     </div>
   )
+}
+
+function PivotControls({ config, onChange }: Pick<ReportsPivotBuilderProps, 'config' | 'onChange'>) {
+  const showAs = config.values[0]?.showAs ?? 'none'
+  const hasDate = [...config.rows, ...config.columns].some((item) => item.field === 'createdAt')
+  return <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-surface p-3">
+    <span className="text-sm font-medium">Show values as</span>
+    <Select value={showAs} onValueChange={(value) => onChange({ ...config, values: [{ field: 'amountMinor', aggregation: 'sum', showAs: value as PivotValueTransform }] })}>
+      <SelectTrigger size="sm" aria-label="Show values as"><SelectValue /></SelectTrigger>
+      <SelectContent>{[
+        ['none', 'No calculation'], ['percentOfGrandTotal', '% of grand total'], ['percentOfColumn', '% of column total'], ['percentOfRow', '% of row total'], ['percentOfParent', '% of parent'], ['runningTotal', 'Running total'], ['rankLargestToSmallest', 'Rank, largest to smallest'],
+      ].map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
+    </Select>
+    <span className="text-sm font-medium">Compare to</span>
+    <Select value={config.compareTo ?? 'none'} disabled={!hasDate} onValueChange={(value) => onChange({ ...config, compareTo: value === 'none' ? undefined : value as PeriodComparison })}>
+      <SelectTrigger size="sm" aria-label="Compare to"><SelectValue /></SelectTrigger>
+      <SelectContent><SelectItem value="none">No comparison</SelectItem><SelectItem value="previousPeriod">Previous period</SelectItem><SelectItem value="samePeriodLastYear">Same period last year</SelectItem></SelectContent>
+    </Select>
+    {!hasDate && <span className="text-xs text-text-muted">Add Created date to compare periods.</span>}
+  </div>
 }
 
 function FieldGroup({ label, children }: { label: string; children: ReactNode }) {
@@ -139,6 +165,7 @@ function addAmount(node: PivotNode, columnKey: string, amount: bigint): void {
 }
 
 function fieldValue(row: RunReportResponse['report']['rows'][number], field: DealPivotDimension, suffix: 'Id' | 'Name'): string {
+  if (field === 'createdAt') return row.createdDay ?? 'Unknown date'
   const key = `${field}${suffix}` as keyof typeof row
   return String(row[key] ?? (suffix === 'Name' ? 'Unassigned' : 'unassigned'))
 }
@@ -151,7 +178,7 @@ function formatAmountMinor(amountMinor: bigint): string {
   return `${sign}$${dollars}.${cents}`
 }
 
-function PivotGrid({ config, result }: { config: ReportConfig; result: RunReportResponse['report'] | undefined }) {
+function PivotGrid({ config, onChange, result }: { config: ReportConfig; onChange: (config: ReportConfig) => void; result: RunReportResponse['report'] | undefined }) {
   if (!result) return <div className="h-32 animate-pulse rounded-md bg-surface" aria-label="Loading pivot" />
   if (result.rows.length === 0) return <p className="text-sm text-text-muted">No Deals match this pivot.</p>
 
@@ -181,33 +208,68 @@ function PivotGrid({ config, result }: { config: ReportConfig; result: RunReport
 
   const columns = [...columnHeaders.entries()]
   const showGrandTotalColumn = columnFields.length > 0
-  const renderedRows = rowFields.length === 0 ? [] : [...root.children.values()].flatMap((node) => renderNode(node, 0, columns))
+  const renderedRows = rowFields.length === 0 ? [] : [...root.children.values()].flatMap((node) => renderNode(node, 0, columns, root, undefined, config, onChange))
 
   return (
     <div className="overflow-x-auto rounded-md border border-border">
       <table className="w-full">
         <caption className="sr-only">Deals pivot</caption>
         <thead><tr className="border-b border-border bg-surface">
+          <th scope="col" aria-label="Summary rows" className="w-8 px-2 py-2 text-left text-xs font-medium text-text-muted" />
           <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-text-muted">{rowFields.map((field) => DIMENSION_LABELS[field]).join(' / ') || 'Total'}</th>
-          {columns.map(([key, label]) => <th key={key} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">{label}</th>)}
+          {columns.flatMap(([key, label]) => config.compareTo ? [<th key={key} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">{label}</th>, <th key={`${key}-delta`} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">Δ</th>, <th key={`${key}-percent`} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">Δ %</th>] : [<th key={key} scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">{label}</th>])}
           {showGrandTotalColumn && <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">Grand total</th>}
         </tr></thead>
-        <tbody>{renderedRows}{renderPivotRow(root, 0, columns, true, showGrandTotalColumn)}</tbody>
+        <tbody>{renderedRows}{renderPivotRow(root, 0, columns, root, undefined, config, onChange, true, showGrandTotalColumn)}</tbody>
       </table>
     </div>
   )
 }
 
-function renderNode(node: PivotNode, level: number, columns: Array<[string, string]>): ReactNode[] {
+function renderNode(node: PivotNode, level: number, columns: Array<[string, string]>, root: PivotNode, parent: PivotNode | undefined, config: ReportConfig, onChange: (config: ReportConfig) => void): ReactNode[] {
   const showGrandTotalColumn = columns.some(([key]) => key !== 'total')
-  return [<Fragment key={node.key}>{renderPivotRow(node, level, columns, false, showGrandTotalColumn)}</Fragment>, ...[...node.children.values()].flatMap((child) => renderNode(child, level + 1, columns))]
+  const summary = config.summaryRows?.find((row) => row.rowKey === node.key)
+  return [<Fragment key={node.key}>{renderPivotRow(node, level, columns, root, parent, config, onChange, false, showGrandTotalColumn)}</Fragment>, ...(summary ? [renderSummaryRow(node, columns, root, config, summary.showAs)] : []), ...[...node.children.values()].flatMap((child) => renderNode(child, level + 1, columns, root, node, config, onChange))]
 }
 
-function renderPivotRow(node: PivotNode, level: number, columns: Array<[string, string]>, grandTotal = false, showGrandTotalColumn = false) {
+function renderSummaryRow(node: PivotNode, columns: Array<[string, string]>, root: PivotNode, config: ReportConfig, showAs: NonNullable<ReportConfig['summaryRows']>[number]['showAs']) {
+  const grandTotal = [...root.values.values()].reduce((sum, value) => sum + value, 0n)
+  const total = [...node.values.values()].reduce((sum, value) => sum + value, 0n)
+  return <tr key={`${node.key}-summary`} className="border-b border-border bg-surface-2">
+    <td className="px-2 py-2" /><th scope="row" className="py-2 pr-3 pl-6 text-left text-sm font-medium">{showAs === 'samePeriodLastYear' ? `${node.label} YoY %` : `${node.label} % of grand total`}</th>
+    {columns.flatMap(([key], index) => {
+      const value = node.values.get(key) ?? 0n
+      const comparison = showAs === 'samePeriodLastYear' ? comparisonColumns(columns.map(([column]) => ({ key: column, value: node.values.get(column) ?? 0n })), 'samePeriodLastYear')[index]?.percentDelta ?? null : calculatePivotValue({ transform: 'percentOfGrandTotal', value, grandTotal })
+      const text = comparison === null ? '—' : new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 }).format(comparison)
+      return config.compareTo ? [<td key={key} className="px-3 py-2 text-right text-sm tabular-nums">{text}</td>, <td key={`${key}-delta`} className="px-3 py-2 text-right text-sm tabular-nums">—</td>, <td key={`${key}-percent`} className="px-3 py-2 text-right text-sm tabular-nums">—</td>] : [<td key={key} className="px-3 py-2 text-right text-sm tabular-nums">{text}</td>]
+    })}
+    {columns.some(([key]) => key !== 'total') && <td className="px-3 py-2 text-right text-sm tabular-nums">{showAs === 'samePeriodLastYear' ? '—' : new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 }).format(calculatePivotValue({ transform: 'percentOfGrandTotal', value: total, grandTotal }) ?? 0)}</td>}
+  </tr>
+}
+
+function renderPivotRow(node: PivotNode, level: number, columns: Array<[string, string]>, root: PivotNode, parent: PivotNode | undefined, config: ReportConfig, onChange: (config: ReportConfig) => void, grandTotal = false, showGrandTotalColumn = false) {
+  const transform = config.values[0]?.showAs ?? 'none'
+  const total = [...node.values.values()].reduce((sum, value) => sum + value, 0n)
+  const grandTotalAmount = [...root.values.values()].reduce((sum, value) => sum + value, 0n)
+  const selected = config.summaryRows?.some((row) => row.rowKey === node.key) ?? false
+  const comparisons = config.compareTo ? new Map(comparisonColumns(columns.map(([key]) => ({ key, value: node.values.get(key) ?? 0n })), config.compareTo).map((value) => [value.key, value])) : undefined
+  function toggleSummary(checked: boolean) {
+    const current = config.summaryRows ?? []
+    onChange({ ...config, summaryRows: checked ? [...current, { rowKey: node.key, showAs: 'percentOfGrandTotal' }] : current.filter((row) => row.rowKey !== node.key) })
+  }
   return (
     <tr key={`${node.key}-${grandTotal ? 'total' : 'row'}`} className="border-b border-border last:border-0">
+      <td className="px-2 py-2">{!grandTotal && <Checkbox aria-label={`Add summary row under ${node.label}`} checked={selected} onCheckedChange={(checked) => toggleSummary(checked === true)} />}</td>
       <th scope="row" className={`py-2 pr-3 text-left text-sm ${grandTotal || node.children.size > 0 ? 'font-medium' : 'font-normal'} ${level === 0 ? 'pl-3' : 'pl-6'}`}>{node.label}</th>
-      {columns.map(([key]) => <td key={key} className="px-3 py-2 text-right text-sm tabular-nums">{formatAmountMinor(node.values.get(key) ?? 0n)}</td>)}
+      {columns.flatMap(([key], index) => {
+        const value = node.values.get(key) ?? 0n
+        const rank = [...node.values.values()].filter((candidate) => candidate > value).length + 1
+        const runningTotal = columns.slice(0, index + 1).reduce((sum, [column]) => sum + (node.values.get(column) ?? 0n), 0n)
+        const displayed = calculatePivotValue({ transform, value, rowTotal: total, columnTotal: root.values.get(key), parentTotal: parent?.values.get(key), grandTotal: grandTotalAmount, rank, runningTotal })
+        const text = displayed === null ? '—' : typeof displayed === 'number' ? new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 }).format(displayed) : formatAmountMinor(displayed)
+        const comparison = comparisons?.get(key)
+        return config.compareTo ? [<td key={key} className="px-3 py-2 text-right text-sm tabular-nums">{text}</td>, <td key={`${key}-delta`} className="px-3 py-2 text-right text-sm tabular-nums">{comparison?.delta === null || !comparison ? '—' : formatAmountMinor(comparison.delta)}</td>, <td key={`${key}-percent`} className="px-3 py-2 text-right text-sm tabular-nums">{comparison?.percentDelta === null || !comparison ? '—' : new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 }).format(comparison.percentDelta)}</td>] : [<td key={key} className="px-3 py-2 text-right text-sm tabular-nums">{text}</td>]
+      })}
       {showGrandTotalColumn && <td className="px-3 py-2 text-right text-sm font-medium tabular-nums">{formatAmountMinor([...node.values.values()].reduce((total, amount) => total + amount, 0n))}</td>}
     </tr>
   )

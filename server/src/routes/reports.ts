@@ -36,16 +36,23 @@ const ownerTeamScopeSchema = z.object({
 
 const dealReportFiltersSchema = z.object({ ownerTeam: ownerTeamScopeSchema }).strict()
 
-const pivotDimensionSchema = z.object({ field: z.enum(['owner', 'stage']) }).strict()
+const pivotDimensionSchema = z.object({ field: z.enum(['owner', 'stage', 'createdAt']) }).strict()
+
+const pivotValueTransformSchema = z.enum(['none', 'percentOfGrandTotal', 'percentOfColumn', 'percentOfRow', 'percentOfParent', 'runningTotal', 'rankLargestToSmallest'])
 
 const dealReportConfigSchema = z.object({
   baseObject: z.literal('deal'),
   rows: z.array(pivotDimensionSchema).max(2),
   columns: z.array(pivotDimensionSchema).max(2).default([]),
-  values: z.tuple([z.object({ field: z.literal('amountMinor'), aggregation: z.literal('sum') }).strict()]),
+  values: z.tuple([z.object({ field: z.literal('amountMinor'), aggregation: z.literal('sum'), showAs: pivotValueTransformSchema.optional() }).strict()]),
   timeZone: timeZoneSchema,
   timeBucket: z.object({ field: z.literal('createdAt'), grain: z.literal('day') }).strict().optional(),
   filters: dealReportFiltersSchema.optional(),
+  compareTo: z.enum(['previousPeriod', 'samePeriodLastYear']).optional(),
+  summaryRows: z.array(z.object({
+    rowKey: z.string().min(1).max(500),
+    showAs: z.enum(['percentOfGrandTotal', 'percentOfParent', 'samePeriodLastYear']),
+  }).strict()).max(100).optional(),
 }).strict()
 
 const activityGridConfigSchema = z.object({
