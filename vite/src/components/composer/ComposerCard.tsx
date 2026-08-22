@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FileSignature, FileText, Trash2, X } from 'lucide-react'
+import { FileSignature, MoreVertical, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { RichTextEditor, type LinkRequest, type RichTextEditorActions } from '@/components/editor/RichTextEditor'
@@ -17,15 +17,28 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
-import { useGetEmailSignatures, useGetEmailTemplates, useSendEmailDraft } from '@/hooks/email'
+import { useGetEmailSignatures, useGetEmailTemplates, useSaveEmailTemplate, useSendEmailDraft } from '@/hooks/email'
 import type { EmailSignature, EmailTemplate } from '@/hooks/email'
 import { useGetMailboxes } from '@/hooks/mailboxes'
 import { ApiError } from '@/lib/api'
@@ -196,6 +209,9 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
   // they answer. Null the rest of the time, including for a template going into
   // an empty card, which needs no question.
   const [confirmTemplate, setConfirmTemplate] = useState<EmailTemplate | null>(null)
+  const [saveTemplateDialogOpen, setSaveTemplateDialogOpen] = useState(false)
+  const [templateName, setTemplateName] = useState('')
+  const { mutateAsync: saveEmailTemplate, isPending: isSavingTemplate } = useSaveEmailTemplate()
 
   // A default belongs in a genuinely new, blank draft. The effect waits for the
   // editor action surface rather than re-seeding it, so a late query response
@@ -382,6 +398,30 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
     applyTemplate(template)
   }
 
+  /** Save the current local draft values, never the possibly stale dock copy. */
+  async function saveTemplate(templateId?: string) {
+    if (!org?.id || isSavingTemplate) return
+
+    const name = templateName.trim()
+    if (!templateId && !name) {
+      toast.error('Name the template to save it.')
+      return
+    }
+
+    try {
+      if (templateId) {
+        await saveEmailTemplate({ orgId: org.id, templateId, subject, bodyHtml: body })
+      } else {
+        await saveEmailTemplate({ orgId: org.id, name, subject, bodyHtml: body })
+        setSaveTemplateDialogOpen(false)
+        setTemplateName('')
+      }
+      toast.success('Template saved.')
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not save the template. Try again.')
+    }
+  }
+
   /** Replaces only the signature block this card inserted, never the rep's message. */
   function pickSignature(nextSignature: EmailSignature | null) {
     const currentSignatureHtml = insertedSignature ? sanitizeStoredHtml(insertedSignature.bodyHtml) : ''
@@ -517,44 +557,71 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
         </p>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <IconButton tooltip="Insert a saved template into this email">
-              <FileText size={16} aria-hidden />
+            <IconButton tooltip="Show email actions">
+              <MoreVertical size={16} aria-hidden />
             </IconButton>
           </DropdownMenuTrigger>
-          {/* Opens upward and right-aligned: the footer sits on the bottom edge
-              of the screen, and a menu that dropped down would land off it. */}
           <DropdownMenuContent align="end" side="top">
-            {templatesQuery.isPending && (
-              <DropdownMenuItem disabled>Loading templates…</DropdownMenuItem>
-            )}
-
-            {templatesQuery.isError && (
-              <DropdownMenuItem
-                // Kept open, so the retry lands in front of the rep rather than
-                // closing the menu and leaving them to open it again.
-                onSelect={(event) => {
-                  event.preventDefault()
-                  void templatesQuery.refetch()
-                }}
-              >
-                Could not load your templates. Try again.
-              </DropdownMenuItem>
-            )}
-
-            {/* Nothing to insert yet. A disabled row naming where templates are
-                written, never an empty menu (SPEC-composer-templates.md →
-                Acceptance criteria, 8). */}
-            {templatesQuery.isSuccess && templates.length === 0 && (
-              <DropdownMenuItem disabled>
-                Write your first template in Settings → Email templates.
-              </DropdownMenuItem>
-            )}
-
-            {templates.map((template) => (
-              <DropdownMenuItem key={template.id} onSelect={() => pickTemplate(template)}>
-                {template.name}
-              </DropdownMenuItem>
-            ))}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Templates</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Insert template</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {templatesQuery.isPending && <DropdownMenuItem disabled>Loading templates…</DropdownMenuItem>}
+                    {templatesQuery.isError && (
+                      <DropdownMenuItem onSelect={(event) => {
+                        event.preventDefault()
+                        void templatesQuery.refetch()
+                      }}>
+                        Could not load your templates. Try again.
+                      </DropdownMenuItem>
+                    )}
+                    {templatesQuery.isSuccess && templates.length === 0 && (
+                      <DropdownMenuItem disabled>
+                        Write your first template in Settings → Email templates.
+                      </DropdownMenuItem>
+                    )}
+                    {templates.map((template) => (
+                      <DropdownMenuItem key={template.id} onSelect={() => pickTemplate(template)}>
+                        {template.name}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Save draft as template</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem onSelect={() => setSaveTemplateDialogOpen(true)}>
+                      Save as new template
+                    </DropdownMenuItem>
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>Overwrite template</DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        {templatesQuery.isPending && <DropdownMenuItem disabled>Loading templates…</DropdownMenuItem>}
+                        {templatesQuery.isError && (
+                          <DropdownMenuItem onSelect={(event) => {
+                            event.preventDefault()
+                            void templatesQuery.refetch()
+                          }}>
+                            Could not load your templates. Try again.
+                          </DropdownMenuItem>
+                        )}
+                        {templatesQuery.isSuccess && templates.length === 0 && (
+                          <DropdownMenuItem disabled>No templates to overwrite.</DropdownMenuItem>
+                        )}
+                        {templates.map((template) => (
+                          <DropdownMenuItem key={template.id} onSelect={() => void saveTemplate(template.id)}>
+                            {template.name}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
           </DropdownMenuContent>
         </DropdownMenu>
         <DropdownMenu>
@@ -613,6 +680,43 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={saveTemplateDialogOpen} onOpenChange={setSaveTemplateDialogOpen}>
+        <DialogContent className="rounded-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">Save draft as template</DialogTitle>
+            <DialogDescription>
+              Name the template so you can insert it later.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void saveTemplate()
+            }}
+          >
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={`template-name-${draftId}`}>Template name</Label>
+              <Input
+                id={`template-name-${draftId}`}
+                autoFocus
+                maxLength={200}
+                value={templateName}
+                onChange={(event) => setTemplateName(event.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="secondary" size="sm" onClick={() => setSaveTemplateDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={isSavingTemplate}>
+                {isSavingTemplate ? 'Saving…' : 'Save template'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
         <AlertDialogContent>

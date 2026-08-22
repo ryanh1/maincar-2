@@ -21,7 +21,9 @@ const {
   useGetEmailTemplatesMock,
   useGetEmailSignaturesMock,
   useGetMailboxesMock,
+  useSaveEmailTemplateMock,
   useSendEmailDraftMock,
+  saveEmailTemplateMock,
   sendEmailDraftMock,
   toastSuccessMock,
   toastErrorMock,
@@ -31,7 +33,9 @@ const {
   useGetEmailTemplatesMock: vi.fn(),
   useGetEmailSignaturesMock: vi.fn(),
   useGetMailboxesMock: vi.fn(),
+  useSaveEmailTemplateMock: vi.fn(),
   useSendEmailDraftMock: vi.fn(),
+  saveEmailTemplateMock: vi.fn(),
   sendEmailDraftMock: vi.fn(),
   toastSuccessMock: vi.fn(),
   toastErrorMock: vi.fn(),
@@ -42,6 +46,7 @@ vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/hooks/email', () => ({
   useGetEmailTemplates: useGetEmailTemplatesMock,
   useGetEmailSignatures: useGetEmailSignaturesMock,
+  useSaveEmailTemplate: useSaveEmailTemplateMock,
   useSendEmailDraft: useSendEmailDraftMock,
 }))
 vi.mock('@/hooks/mailboxes', () => ({ useGetMailboxes: useGetMailboxesMock }))
@@ -147,7 +152,9 @@ beforeEach(() => {
   useGetEmailTemplatesMock.mockReturnValue(templatesQuery())
   useGetEmailSignaturesMock.mockReturnValue(signaturesQuery())
   useGetMailboxesMock.mockReturnValue(mailboxesQuery())
+  useSaveEmailTemplateMock.mockReturnValue({ mutateAsync: saveEmailTemplateMock, isPending: false })
   useSendEmailDraftMock.mockReturnValue({ mutateAsync: sendEmailDraftMock, isPending: false })
+  saveEmailTemplateMock.mockResolvedValue({ template: makeTemplate() })
   sendEmailDraftMock.mockResolvedValue({
     message: { id: 'email-1', providerMsgId: 'p-1', threadId: null, sentAt: '2026-08-21T09:00:00.000Z' },
   })
@@ -770,10 +777,24 @@ describe('ComposerCard recipients', () => {
  *   - and the caret rule still holds afterwards: a save response cannot reach
  *     the newly mounted editor either
  */
-const TEMPLATE_BUTTON = 'Insert a saved template into this email'
+const COMPOSER_ACTIONS_BUTTON = 'Show email actions'
 
-function openTemplateMenu(user: ReturnType<typeof userEvent.setup>) {
-  return user.click(screen.getByRole('button', { name: TEMPLATE_BUTTON }))
+async function openSubmenu(name: string) {
+  const trigger = await screen.findByRole('menuitem', { name })
+  trigger.focus()
+  fireEvent.keyDown(trigger, { key: 'ArrowRight' })
+}
+
+async function openTemplateMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: COMPOSER_ACTIONS_BUTTON }))
+  await openSubmenu('Templates')
+  await openSubmenu('Insert template')
+}
+
+async function openSaveTemplateMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: COMPOSER_ACTIONS_BUTTON }))
+  await openSubmenu('Templates')
+  await openSubmenu('Save draft as template')
 }
 
 describe('ComposerCard templates', () => {
@@ -792,12 +813,9 @@ describe('ComposerCard templates', () => {
 
     await openTemplateMenu(user)
 
-    const items = await screen.findAllByRole('menuitem')
-    expect(items.map((item) => item.textContent)).toEqual([
-      'Aged quote',
-      'Discovery follow-up',
-      'Rate confirmation',
-    ])
+    expect(await screen.findByRole('menuitem', { name: 'Aged quote' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Discovery follow-up' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Rate confirmation' })).toBeInTheDocument()
   })
 
   it('replaces the subject and the body and leaves every recipient alone', async () => {
@@ -963,6 +981,60 @@ describe('ComposerCard templates', () => {
     )
 
     expect(refetchMock).toHaveBeenCalled()
+  })
+
+  it('saves the current subject and message as a new template', async () => {
+    const user = userEvent.setup()
+    renderCard(makeDraft({ subject: 'Quote follow-up', bodyHtml: '<p>Thanks, Casey.</p>' }))
+
+    await openSaveTemplateMenu(user)
+    await user.click(await screen.findByRole('menuitem', { name: 'Save as new template' }))
+    await user.type(screen.getByLabelText('Template name'), 'Quote follow-up')
+    await user.click(screen.getByRole('button', { name: 'Save template' }))
+
+    await waitFor(() => expect(saveEmailTemplateMock).toHaveBeenCalledWith({
+      orgId: 'org-a',
+      name: 'Quote follow-up',
+      subject: 'Quote follow-up',
+      bodyHtml: '<p>Thanks, Casey.</p>',
+    }))
+    expect(toastSuccessMock).toHaveBeenCalledWith('Template saved.')
+  })
+
+  it('requires the rep to choose an overwrite target before updating a template', async () => {
+    const user = userEvent.setup()
+    const existing = makeTemplate({ id: 'tpl-existing', name: 'Existing follow-up' })
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [existing] }))
+    renderCard(makeDraft({ subject: 'New subject', bodyHtml: '<p>New message.</p>' }))
+
+    await openSaveTemplateMenu(user)
+    await openSubmenu('Overwrite template')
+    await user.click(await screen.findByRole('menuitem', { name: 'Existing follow-up' }))
+
+    await waitFor(() => expect(saveEmailTemplateMock).toHaveBeenCalledWith({
+      orgId: 'org-a',
+      templateId: 'tpl-existing',
+      subject: 'New subject',
+      bodyHtml: '<p>New message.</p>',
+    }))
+  })
+
+  it('shows the server permission error when overwriting a template is denied', async () => {
+    const user = userEvent.setup()
+    const existing = makeTemplate({ id: 'tpl-shared', name: 'Shared follow-up' })
+    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [existing] }))
+    saveEmailTemplateMock.mockRejectedValue(
+      new ApiError('Only the creator or an admin can manage this template', 403),
+    )
+    renderCard()
+
+    await openSaveTemplateMenu(user)
+    await openSubmenu('Overwrite template')
+    await user.click(await screen.findByRole('menuitem', { name: 'Shared follow-up' }))
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      'Only the creator or an admin can manage this template',
+    ))
   })
 })
 
