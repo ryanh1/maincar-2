@@ -22,6 +22,8 @@ export type { ReleaseNumberVariables } from './useReleaseNumber'
 export type {
   PhoneNumber,
   PhoneNumberStatus,
+  PhoneNumberSortColumn,
+  GetPhoneNumbersParams,
   AvailableNumber,
   GetNumbersResponse,
   SearchNumbersInput,

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MoreHorizontal, UserMinus, UserPlus } from 'lucide-react'
+import { Loader2, MoreHorizontal, UserMinus, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -79,7 +79,14 @@ export function Settings_PhoneNumbers_OrgRow({ orgId, number, timeZone, viewerId
           <span className="text-muted-foreground">Unassigned</span>
         )}
       </td>
-      <td className="px-4 py-2 text-sm">{getPhoneNumberStatusLabel(number)}</td>
+      <td className="px-4 py-2 text-sm">
+        <span className="inline-flex items-center gap-1.5">
+          {number.status === 'searching' && (
+            <Loader2 size={14} aria-hidden className="animate-spin text-muted-foreground" />
+          )}
+          {getPhoneNumberStatusLabel(number)}
+        </span>
+      </td>
       <td className="px-4 py-2 text-sm tabular-nums text-muted-foreground">
         {formatDate(number.createdAt, timeZone)}
       </td>

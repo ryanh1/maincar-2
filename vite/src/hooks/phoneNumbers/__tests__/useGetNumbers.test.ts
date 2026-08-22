@@ -5,7 +5,7 @@ import type { QueryClient } from '@tanstack/react-query'
 
 import { ApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
-import type { PhoneNumber } from '@/lib/phoneNumberTypes'
+import type { GetPhoneNumbersParams, PhoneNumber } from '@/lib/phoneNumberTypes'
 import { makeTestQueryClient, withProviders } from '@/test/utils'
 import { useGetNumbers } from '../useGetNumbers'
 
@@ -30,10 +30,11 @@ function number(id: string, active: boolean): PhoneNumber {
 
 function renderGetNumbers(
   orgId: string | null | undefined,
+  params?: GetPhoneNumbersParams,
   client: QueryClient = makeTestQueryClient(),
 ) {
   const wrapper = ({ children }: { children: ReactNode }) => withProviders(children, { client })
-  return { client, ...renderHook(() => useGetNumbers(orgId), { wrapper }) }
+  return { client, ...renderHook(() => useGetNumbers(orgId, params), { wrapper }) }
 }
 
 beforeEach(() => {
@@ -72,6 +73,23 @@ describe('useGetNumbers', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(client.getQueryData(queryKeys.phoneNumbers.list('org-1'))).toBeDefined()
+  })
+
+  it('uses the server table query for a filtered page', async () => {
+    jsonFetch.mockResolvedValue({ numbers: [], total: 30, activeCount: 1, readyCount: 4, page: 2, limit: 25 })
+
+    const { result } = renderGetNumbers('org-1', {
+      page: 2,
+      limit: 25,
+      sort: 'e164',
+      dir: 'asc',
+      q: '202',
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(jsonFetch).toHaveBeenCalledWith(
+      '/api/orgs/org-1/phone-numbers?page=2&limit=25&sort=e164&dir=asc&q=202',
+    )
   })
 
   it('surfaces the server own message when the read fails', async () => {

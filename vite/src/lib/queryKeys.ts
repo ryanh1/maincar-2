@@ -76,16 +76,18 @@ export const queryKeys = {
   },
   phoneNumbers: {
     all: ['phoneNumbers'] as const,
-    // Keyed by org only, not by any query: the list is not paginated (the route
-    // returns every number the caller owns so the caller-ID picker can show them
-    // all), so there is one answer per org. Switching orgs reads a different
-    // entry rather than showing the previous org's numbers. Searching Twilio's
-    // for-sale numbers is a mutation, not a cached read, so it has no key here.
+    // The bare list is the caller-ID picker's complete inventory. It deliberately
+    // prefixes every paginated caller table query so a number mutation refreshes
+    // the picker and every visible page together.
     list: (orgId: string) => ['phoneNumbers', 'list', orgId] as const,
+    listPage: (orgId: string, query: Record<string, unknown>) =>
+      ['phoneNumbers', 'list', orgId, query] as const,
     // The admin-only org-wide view. A separate key from `list` above: they are
     // different server routes with different shapes (every number vs. mine
     // alone), so a write to one must not be mistaken for satisfying the other.
     orgList: (orgId: string) => ['phoneNumbers', 'orgList', orgId] as const,
+    orgListPage: (orgId: string, query: Record<string, unknown>) =>
+      ['phoneNumbers', 'orgList', orgId, query] as const,
   },
   invitations: {
     all: ['invitations'] as const,

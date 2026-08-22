@@ -7,7 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useGetNumbers } from '@/hooks/phoneNumbers'
-import type { PhoneNumber } from '@/hooks/phoneNumbers'
+import type { PhoneNumberSortColumn } from '@/hooks/phoneNumbers'
 import { useSetUrlParams, useUrlInt, useUrlString } from '@/hooks/urlState'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
@@ -18,25 +18,16 @@ import { Settings_PhoneNumbers_Row } from './Settings_PhoneNumbers_Row'
 
 const PAGE_SIZE = 25
 
-type SortColumn = 'e164' | 'status' | 'createdAt'
+type SortColumn = PhoneNumberSortColumn
 
-// The server intentionally returns every number the caller owns, unpaginated —
-// GET /api/orgs/:orgId/phone-numbers feeds the caller-ID radio picker, which
-// has to show all of them at once, so paging that route would hide a number
-// the rep owns. Search, sort, and paging below all run over the full list the
-// hook already fetched, rather than asking the server for a page of it.
+// This table opts into the server's list query. The caller-ID picker omits that
+// query and continues to receive the caller's complete number list.
 const COLUMNS: { label: string; sort: SortColumn | null; className?: string }[] = [
   { label: 'Number', sort: 'e164' },
   { label: 'Status', sort: 'status', className: 'w-40' },
   { label: 'Bought on', sort: 'createdAt', className: 'w-32' },
   { label: 'Primary', sort: null, className: 'w-36' },
 ]
-
-function compareNumbers(a: PhoneNumber, b: PhoneNumber, column: SortColumn): number {
-  if (column === 'e164') return a.e164.localeCompare(b.e164)
-  if (column === 'status') return a.status.localeCompare(b.status)
-  return a.createdAt.localeCompare(b.createdAt)
-}
 
 /**
  * Settings → Phone numbers: the numbers this organization owns, and the number
@@ -51,16 +42,12 @@ function compareNumbers(a: PhoneNumber, b: PhoneNumber, column: SortColumn): num
  * Each row also carries the one action that stops the org paying for a number:
  * releasing it. That lives in Settings_PhoneNumbers_Row, behind a confirm.
  *
- * Search, sort, and page all live in the query string, so a reload or a pasted
- * link restores the same view — the same pattern Calls uses, but run over the
- * already-fetched list rather than against the server (see the note on
- * `COLUMNS` above for why).
+ * Search, sort, and page all live in the query string and run on the server, so
+ * a reload or a pasted link restores the same bounded view.
  */
 export function Settings_PhoneNumbersTab() {
   const { org, user, isAdmin } = useAuth()
   const orgId = org?.id ?? null
-
-  const numbersQuery = useGetNumbers(orgId)
 
   const [buyOpen, setBuyOpen] = useState(false)
   const [myNumbersFilter, setMyNumbersFilter] = useState({ orgId, isAdmin, value: !isAdmin })
@@ -78,27 +65,26 @@ export function Settings_PhoneNumbersTab() {
   const [dir] = useUrlString('dir', 'desc')
   const [page, setPage] = useUrlInt('page', 1)
 
-  if (!org || !orgId) return null
-
-  const data = numbersQuery.data
-  const numbers = data?.numbers ?? []
-
   const sortColumn: SortColumn = ['e164', 'status', 'createdAt'].includes(sort)
     ? (sort as SortColumn)
     : 'createdAt'
   const sortDir = dir === 'asc' ? 'asc' : 'desc'
+  const numbersQuery = useGetNumbers(orgId, {
+    page,
+    limit: PAGE_SIZE,
+    sort: sortColumn,
+    dir: sortDir,
+    q: search.trim() || undefined,
+  })
+
+  if (!org || !orgId) return null
+
+  const data = numbersQuery.data
+  const numbers = data?.numbers ?? []
   const hasSearch = search.trim() !== ''
   const showMyNumbers = !isAdmin || myNumbersOnly
-
-  const filtered = hasSearch
-    ? numbers.filter((number) => number.e164.includes(search.trim()))
-    : numbers
-  const sorted = [...filtered].sort((a, b) =>
-    sortDir === 'asc' ? compareNumbers(a, b, sortColumn) : compareNumbers(b, a, sortColumn),
-  )
-  const total = sorted.length
+  const total = data?.total ?? 0
   const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const pageRows = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   function clickHeader(column: SortColumn | null): void {
     if (!column) return
@@ -112,7 +98,7 @@ export function Settings_PhoneNumbersTab() {
     <section className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-base font-semibold">Phone numbers</h2>
-        {numbers.length > 0 && (
+        {total > 0 && (
           <Button size="sm" onClick={() => setBuyOpen(true)}>
             Buy a number
           </Button>
@@ -139,7 +125,7 @@ export function Settings_PhoneNumbersTab() {
         </Tooltip>
       </div>
 
-      {showMyNumbers && numbers.length > 0 && (
+      {showMyNumbers && (total > 0 || hasSearch) && (
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-56 flex-1">
             <Search
@@ -182,7 +168,7 @@ export function Settings_PhoneNumbersTab() {
         </div>
       )}
 
-      {showMyNumbers && data && numbers.length === 0 && (
+      {showMyNumbers && data && total === 0 && !hasSearch && (
         <div className="flex flex-col items-center gap-3 rounded-md border border-border py-12 text-center">
           <p className="text-base font-semibold">You need a number to call out.</p>
           <Button size="sm" onClick={() => setBuyOpen(true)}>
@@ -191,7 +177,7 @@ export function Settings_PhoneNumbersTab() {
         </div>
       )}
 
-      {showMyNumbers && data && numbers.length > 0 && (
+      {showMyNumbers && data && (numbers.length > 0 || hasSearch) && (
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full">
             <caption className="sr-only">Phone numbers owned by {org.name}</caption>
@@ -232,22 +218,19 @@ export function Settings_PhoneNumbersTab() {
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((number) => (
+              {numbers.map((number) => (
                 <Settings_PhoneNumbers_Row
                   key={number.id}
                   number={number}
                   orgId={orgId}
                   timeZone={user?.timeZone}
-                  // Counted over the FULL list, never the current page — whether
-                  // releasing THIS number would leave the rep with no number to
-                  // fall back on is a fact about every number they own, not just
-                  // the ones on screen.
-                  hasOtherActiveNumber={numbers.some(
-                    (other) => other.id !== number.id && other.status === 'active',
-                  )}
+                  // `readyCount` is computed against the whole server-side
+                  // result, not only this page, so the release warning remains
+                  // accurate when the fallback number is elsewhere in the list.
+                  hasOtherActiveNumber={number.status === 'active' && data.readyCount > 1}
                 />
               ))}
-              {pageRows.length === 0 && (
+              {numbers.length === 0 && (
                 <tr>
                   <td colSpan={COLUMNS.length + 1} className="px-3 py-6 text-center text-sm">
                     No number matches this search. Clear the search to see them all.

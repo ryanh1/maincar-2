@@ -77,20 +77,22 @@ function number(overrides: Record<string, unknown> = {}) {
 }
 
 function numbersResponse(overrides: Record<string, unknown> = {}) {
+  const numbers = overrides.numbers ?? [
+    number(),
+    number({ id: 'num-ready', e164: '+12025550122', isActiveForOutbound: false }),
+    number({
+      id: 'num-searching',
+      e164: '+12025550133',
+      status: 'searching',
+      twilioSid: null,
+      isActiveForOutbound: false,
+    }),
+  ]
   return {
-    numbers: [
-      number(),
-      number({ id: 'num-ready', e164: '+12025550122', isActiveForOutbound: false }),
-      number({
-        id: 'num-searching',
-        e164: '+12025550133',
-        status: 'searching',
-        twilioSid: null,
-        isActiveForOutbound: false,
-      }),
-    ],
-    total: 3,
-    activeCount: 1,
+    numbers,
+    total: numbers.length,
+    activeCount: numbers.filter((item) => item.isActiveForOutbound).length,
+    readyCount: numbers.filter((item) => item.status === 'active').length,
     ...overrides,
   }
 }
@@ -121,7 +123,12 @@ function searchState(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   useAuthMock.mockReturnValue({ org: ORG, user: USER, isAdmin: false })
-  useGetNumbersMock.mockReturnValue(listState())
+  useGetNumbersMock.mockImplementation((_orgId, params) =>
+    listState({
+      data:
+        params?.q === 'nope' ? numbersResponse({ numbers: [], total: 0, activeCount: 0, readyCount: 0 }) : numbersResponse(),
+    }),
+  )
   useGetOrgNumbersMock.mockReturnValue({ isPending: false, isError: false, data: { numbers: [], total: 0, unassignedCount: 0 } })
   useSetActiveNumberMock.mockReturnValue({ mutate: setActiveMutateMock, isPending: false })
   useReleaseNumberMock.mockReturnValue({ mutate: releaseMutateMock, isPending: false })
@@ -244,14 +251,28 @@ describe('the numbers list', () => {
 })
 
 describe('search', () => {
-  it('filters the list by number as the search box is typed into', async () => {
+  it('sends the typed number to the server list query', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
     await user.type(screen.getByRole('textbox', { name: 'Search phone numbers' }), '0122')
 
-    expect(screen.queryByText('+12025550111')).not.toBeInTheDocument()
-    expect(screen.getByText('+12025550122')).toBeInTheDocument()
+    expect(useGetNumbersMock).toHaveBeenLastCalledWith(
+      'org-a',
+      expect.objectContaining({ page: 1, limit: 25, q: '0122' }),
+    )
+  })
+
+  it('resets the server result to page one when the search changes', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    await user.type(screen.getByRole('textbox', { name: 'Search phone numbers' }), '0122')
+
+    expect(useGetNumbersMock).toHaveBeenLastCalledWith(
+      'org-a',
+      expect.objectContaining({ page: 1, q: '0122' }),
+    )
   })
 
   it('says so, and offers to clear, when nothing matches', async () => {
@@ -271,7 +292,7 @@ describe('search', () => {
 })
 
 describe('sort', () => {
-  it('reorders the rows and flips direction on a second click', async () => {
+  it('sends the selected sort and direction to the server', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
@@ -282,10 +303,16 @@ describe('sort', () => {
     expect(rowsInOrder()).toEqual(['+12025550111', '+12025550122', '+12025550133'])
 
     await user.click(screen.getByRole('button', { name: 'Sort by Number' }))
-    expect(rowsInOrder()).toEqual(['+12025550111', '+12025550122', '+12025550133'])
+    expect(useGetNumbersMock).toHaveBeenLastCalledWith(
+      'org-a',
+      expect.objectContaining({ page: 1, sort: 'e164', dir: 'asc' }),
+    )
 
     await user.click(screen.getByRole('button', { name: 'Sort by Number' }))
-    expect(rowsInOrder()).toEqual(['+12025550133', '+12025550122', '+12025550111'])
+    expect(useGetNumbersMock).toHaveBeenLastCalledWith(
+      'org-a',
+      expect.objectContaining({ page: 1, sort: 'e164', dir: 'desc' }),
+    )
   })
 })
 
@@ -301,8 +328,16 @@ describe('pagination', () => {
   }
 
   it('shows 25 rows a page, and pages through the rest', async () => {
-    useGetNumbersMock.mockReturnValue(
-      listState({ data: numbersResponse({ numbers: manyNumbers(30), total: 30 }) }),
+    const allNumbers = manyNumbers(30)
+    useGetNumbersMock.mockImplementation((_orgId, params) =>
+      listState({
+        data: numbersResponse({
+          numbers: params?.page === 2 ? allNumbers.slice(25) : allNumbers.slice(0, 25),
+          total: 30,
+          activeCount: 1,
+          readyCount: 30,
+        }),
+      }),
     )
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)
@@ -382,6 +417,7 @@ describe('releasing a number', () => {
               isActiveForOutbound: false,
             }),
           ],
+          readyCount: 1,
         }),
       }),
     )
