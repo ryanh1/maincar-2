@@ -10,7 +10,7 @@ export interface UpdateReportConfigVariables {
   config: ReportConfig
 }
 
-/** Persists an edited saved-report configuration, including structured filters. */
+/** Persists a builder edit, including structured filters, then refreshes the report. */
 export function useUpdateReportConfig() {
   const queryClient = useQueryClient()
   return useMutation({

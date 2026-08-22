@@ -4,11 +4,15 @@ export interface OwnerTeamScope {
   leadUserIds?: string[]
 }
 
-/** The first engine-supported report shape (MAI-143). */
+export type DealPivotDimension = 'owner' | 'stage'
+
+/** The interactive Deals pivot shape. */
 export interface ReportConfig {
   baseObject: 'deal'
-  rows: [{ field: 'stage' }]
-  values: [{ field: 'amountMinor'; aggregation: 'sum' }]
+  rows: Array<{ field: DealPivotDimension }>
+  columns: Array<{ field: DealPivotDimension }>
+  values: Array<{ field: 'amountMinor'; aggregation: 'sum' }>
+  timeZone: { mode: 'viewer' }
   filters?: { ownerTeam: OwnerTeamScope }
 }
 
@@ -35,6 +39,12 @@ export interface ReportResponse {
 
 export interface RunReportResponse {
   report: {
-    rows: Array<{ stageId: string; stageName: string; amountMinor: string }>
+    rows: Array<{
+      ownerId?: string
+      ownerName?: string
+      stageId?: string
+      stageName?: string
+      amountMinor: string
+    }>
   }
 }

@@ -37,16 +37,18 @@ import {
 import { useUrlInt } from '@/hooks/urlState'
 import { formatDateTime } from '@/lib/datetime'
 import type { OwnerTeamScope, ReportConfig, SavedReport } from '@/lib/reportTypes'
+import { isRunnablePivot } from '@/lib/reportConfig'
 import { PageHeader } from '@/components/PageHeader'
 import { useAuth } from '@/providers/useAuth'
 import { Reports_OwnerTeamScope } from './Reports_OwnerTeamScope'
+import { ReportsPivotBuilder } from './Reports_PivotBuilder'
 
-// The only config MAI-143's engine accepts. P1.4 replaces this starter with
-// the pivot builder; saving still uses the same stored config contract.
 const DEFAULT_REPORT_CONFIG: ReportConfig = {
   baseObject: 'deal',
-  rows: [{ field: 'stage' }],
-  values: [{ field: 'amountMinor', aggregation: 'sum' }],
+  rows: [],
+  columns: [],
+  values: [],
+  timeZone: { mode: 'viewer' },
 }
 const PAGE_SIZE = 50
 
@@ -54,11 +56,10 @@ function kindLabel(kind: string): string {
   return kind === 'pivot' ? 'Pivot' : 'Report'
 }
 
-function formatAmountMinor(amountMinor: string): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(Number(amountMinor) / 100)
+// MAI-145 briefly stored the one-dimension config before Columns existed.
+// Keep those reports runnable while new saves always carry the full shape.
+function normalizeReportConfig(config: ReportConfig): ReportConfig {
+  return { ...config, columns: config.columns ?? [] }
 }
 
 /**
@@ -78,8 +79,8 @@ export function Reports() {
 
   const [openReportId, setOpenReportId] = useState<string | null>(null)
   const [isNewReport, setIsNewReport] = useState(false)
-  const [newReportConfig, setNewReportConfig] = useState<ReportConfig>(DEFAULT_REPORT_CONFIG)
-  const [editedConfig, setEditedConfig] = useState<ReportConfig | null>(null)
+  const [newConfig, setNewConfig] = useState<ReportConfig>(DEFAULT_REPORT_CONFIG)
+  const [draftConfig, setDraftConfig] = useState<ReportConfig | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<SavedReport | null>(null)
@@ -87,47 +88,47 @@ export function Reports() {
 
   const reportQuery = useGetReport(orgId, openReportId)
   const openedReport = reportQuery.data?.report
-  const activeConfig = isNewReport ? newReportConfig : (editedConfig ?? openedReport?.config ?? null)
+  const activeConfig = openedReport ? normalizeReportConfig(draftConfig ?? openedReport.config) : (isNewReport ? newConfig : null)
   const activeReportId = openReportId ?? (isNewReport ? 'new-report' : null)
-  const runQuery = useRunReport(orgId, activeReportId, activeConfig)
+  const runQuery = useRunReport(orgId, activeReportId, activeConfig && isRunnablePivot(activeConfig) ? activeConfig : null)
 
   function startNewReport(): void {
     setOpenReportId(null)
-    setEditedConfig(null)
-    setNewReportConfig(DEFAULT_REPORT_CONFIG)
+    setDraftConfig(null)
+    setNewConfig(DEFAULT_REPORT_CONFIG)
     setIsNewReport(true)
   }
 
   function openReport(reportId: string): void {
     setIsNewReport(false)
-    setEditedConfig(null)
+    setDraftConfig(null)
     setOpenReportId(reportId)
   }
 
   function closeActiveReport(): void {
     setOpenReportId(null)
-    setEditedConfig(null)
     setIsNewReport(false)
+    setDraftConfig(null)
   }
 
   function setOwnerTeamScope(scope: OwnerTeamScope | undefined): void {
     if (!activeConfig) return
     const { filters: _filters, ...withoutFilters } = activeConfig
     const nextConfig = scope ? { ...withoutFilters, filters: { ownerTeam: scope } } : withoutFilters
-    if (isNewReport) setNewReportConfig(nextConfig)
-    else setEditedConfig(nextConfig)
+    if (isNewReport) setNewConfig(nextConfig)
+    else setDraftConfig(nextConfig)
   }
 
-  function saveFilters(): void {
-    if (!orgId || !openedReport || !editedConfig) return
+  function saveChanges(): void {
+    if (!orgId || !openedReport || !draftConfig) return
     updateReportConfig.mutate(
-      { orgId, reportId: openedReport.id, config: editedConfig },
+      { orgId, reportId: openedReport.id, config: draftConfig },
       {
         onSuccess: () => {
-          setEditedConfig(null)
-          toast.success('Report filters saved.')
+          setDraftConfig(null)
+          toast.success('Report saved.')
         },
-        onError: () => toast.error('Could not save the report filters. Try again.'),
+        onError: () => toast.error('Could not save the report. Try again.'),
       },
     )
   }
@@ -139,7 +140,10 @@ export function Reports() {
       toast.error('Name the report to save it.')
       return
     }
-    if (!orgId || !activeConfig) return
+    if (!orgId || !activeConfig || !isRunnablePivot(activeConfig)) {
+      toast.error('Add a group and Amount before saving.')
+      return
+    }
 
     createReport.mutate(
       { orgId, name: trimmed, config: activeConfig },
@@ -154,6 +158,11 @@ export function Reports() {
         onError: () => toast.error('Could not save the report. Try again.'),
       },
     )
+  }
+
+  function changeConfig(config: ReportConfig): void {
+    if (openedReport) setDraftConfig(config)
+    else setNewConfig(config)
   }
 
   function beginRename(): void {
@@ -227,14 +236,14 @@ export function Reports() {
             </div>
             <div className="flex items-center gap-2">
               {isNewReport ? (
-                <Button size="sm" onClick={() => setSaveOpen(true)}>
+                <Button size="sm" disabled={!isRunnablePivot(activeConfig)} onClick={() => setSaveOpen(true)}>
                   Save report
                 </Button>
               ) : (
                 <>
-                  {editedConfig && (
-                    <Button size="sm" onClick={saveFilters} disabled={updateReportConfig.isPending}>
-                      {updateReportConfig.isPending ? 'Saving…' : 'Save filters'}
+                  {draftConfig && (
+                    <Button size="sm" onClick={saveChanges} disabled={updateReportConfig.isPending}>
+                      {updateReportConfig.isPending ? 'Saving…' : 'Save changes'}
                     </Button>
                   )}
                   <Button size="sm" variant="secondary" onClick={beginRename}>
@@ -259,29 +268,8 @@ export function Reports() {
 
           {reportQuery.isPending && openReportId && <Skeleton className="h-32 w-full" />}
           {reportQuery.isError && <p className="text-sm text-destructive">Could not open this report. Try again.</p>}
-          {runQuery.isPending && <Skeleton className="h-32 w-full" />}
           {runQuery.isError && <p className="text-sm text-destructive">Could not run this report. Try again.</p>}
-          {runQuery.data && (
-            <div className="overflow-x-auto rounded-md border border-border">
-              <table className="w-full">
-                <caption className="sr-only">Deals by stage</caption>
-                <thead>
-                  <tr className="border-b border-border bg-surface">
-                    <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-text-muted">Stage</th>
-                    <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-text-muted">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {runQuery.data.report.rows.map((row) => (
-                    <tr key={row.stageId} className="border-b border-border last:border-0">
-                      <td className="px-3 py-2 text-sm">{row.stageName}</td>
-                      <td className="px-3 py-2 text-right text-sm tabular-nums">{formatAmountMinor(row.amountMinor)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <ReportsPivotBuilder config={activeConfig} onChange={changeConfig} result={runQuery.data?.report} />
         </section>
       ) : (
         <section className="flex flex-col gap-3" aria-labelledby="my-reports-title">
