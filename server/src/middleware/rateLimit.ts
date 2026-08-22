@@ -34,6 +34,8 @@ export interface RateLimitOptions {
    * authenticated routes can pass a verified user id instead.
    */
   key?: (req: Request) => string
+  /** Formats the client-safe 429 message from the remaining retry delay. */
+  message?: (retryAfterSeconds: number) => string
 }
 
 export type RateLimitMiddleware = ((req: Request, res: Response, next: NextFunction) => void) & {
@@ -65,8 +67,11 @@ export function rateLimit(options: RateLimitOptions): RateLimitMiddleware {
       // The route name, never the path: the path carries the invite token
       // (MAI-7 → "No token appears in any log line or logged URL").
       logger.warn({ route: options.name }, 'rate limit hit')
-      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))))
-      res.status(429).json({ error: 'Too many attempts. Wait a minute and try again.' })
+      const retryAfterSeconds = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))
+      res.setHeader('Retry-After', String(retryAfterSeconds))
+      res.status(429).json({
+        error: options.message?.(retryAfterSeconds) ?? 'Too many attempts. Wait a minute and try again.',
+      })
       return
     }
 

@@ -334,7 +334,7 @@ describe('GET /api/auth/me', () => {
     const res = await request(app).get('/api/auth/me').set('Authorization', 'Bearer fake-token')
 
     expect(res.status).toBe(500)
-    expect(res.body.error).toBe('Internal server error')
+    expect(res.body.error).toBe('Something went wrong. Please try again.')
     expect(JSON.stringify(res.body)).not.toContain('does not exist')
   })
 
