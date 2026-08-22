@@ -47,6 +47,7 @@ const { prismaMock, verifyTokenMock, revokeTokensMock, loggerMock, logCalls } = 
       },
       org: { updateMany: vi.fn(), findUniqueOrThrow: vi.fn() },
       emailTemplate: { deleteMany: vi.fn() },
+      team: { count: vi.fn() },
       $transaction: vi.fn(),
       $queryRaw: vi.fn(),
     },
@@ -194,6 +195,7 @@ beforeEach(() => {
   prismaMock.membership.findMany.mockResolvedValue([])
   prismaMock.membership.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.membership.upsert.mockResolvedValue({})
+  prismaMock.team.count.mockResolvedValue(0)
   prismaMock.user.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.user.update.mockResolvedValue(userRow())
   prismaMock.invitation.findFirst.mockResolvedValue(null)

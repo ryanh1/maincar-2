@@ -30,6 +30,7 @@ import recordingSettingsRouter from './routes/recordingSettings.js'
 import reportsRouter from './routes/reports.js'
 import tasksRouter from './routes/tasks.js'
 import teamRouter from './routes/team.js'
+import teamsRouter from './routes/teams.js'
 import twilioVoiceRouter from './routes/twilioVoice.js'
 import voicemailDropsRouter from './routes/voicemailDrops.js'
 import voicemailGreetingRouter from './routes/voicemailGreeting.js'
@@ -88,6 +89,7 @@ app.use('/api/orgs/:orgId/people', peopleRouter)
 app.use('/api/orgs/:orgId/deals', dealsRouter)
 app.use('/api/orgs/:orgId/reports', reportsRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
+app.use('/api/orgs/:orgId/teams', teamsRouter)
 app.use('/api/orgs/:orgId/settings/recording', recordingSettingsRouter)
 
 // Logged email activity (MAI-137 T9). READ ONLY: composing and mailbox sync are a

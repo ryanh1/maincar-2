@@ -134,6 +134,12 @@ model Org {
   notificationObjects NotificationObject[]
   notifications       Notification[]
 
+  // Teams are organization-scoped working groups. The lead is a coordination
+  // attribute, never a permission grant; TeamMember is the roster that proves
+  // the lead belongs to the team (MAI-290).
+  teams       Team[]
+  teamMembers TeamMember[]
+
   // Inbound voicemail and pre-recorded drops (MAI-39 through MAI-53). Greeting
   // candidates keep the active greeting playable while a replacement validates.
   // All relations cascade when the tenant is deleted, like the other dialer data.
@@ -173,6 +179,8 @@ model User {
   currentOrgId String?
 
   memberships         Membership[]
+  teamsLed            Team[]           @relation("TeamLead")
+  teamMemberships     TeamMember[]
   invitationsSent     Invitation[]      @relation("InvitationSender")
   invitationsAccepted Invitation[]      @relation("InvitationAcceptor")
   phoneNumbers        PhoneNumber[]
@@ -241,6 +249,55 @@ model Membership {
   @@unique([userId, orgId])
   @@index([orgId])
   @@index([orgId, isActive])
+}
+
+// A reusable team for Settings, shared filters, and reporting. A team is
+// archived rather than deleted so historical references can remain intact.
+// `leadUserId` is required; routes verify the lead has an active Membership in
+// this org and a matching TeamMember row before every create or roster change.
+model Team {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  name String
+
+  leadUserId String
+  lead       User @relation("TeamLead", fields: [leadUserId], references: [id], onDelete: Restrict)
+
+  // Soft archive: catalog records remain stable and no CRM row is changed.
+  archivedAt DateTime?
+
+  members TeamMember[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([orgId, archivedAt])
+  @@index([orgId, leadUserId])
+}
+
+// One active-roster entry per person per team. `orgId` is intentionally copied
+// here so every tenant-scoped roster query has a direct tenant boundary.
+model TeamMember {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([teamId, userId])
+  @@index([orgId])
+  @@index([orgId, userId])
+  @@index([orgId, teamId])
 }
 
 // Member invitations to orgs.
