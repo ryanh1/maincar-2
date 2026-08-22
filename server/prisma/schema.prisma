@@ -1657,6 +1657,8 @@ model SavedView {
   configJson  Json
 
   isShared  Boolean @default(false)
+  // A system default is a recoverable service fallback, never a persisted row
+  // that a user can delete. SavedViewService enforces that policy.
   isDefault Boolean @default(false)
   sortOrder Int     @default(0)
   // Soft delete preserves the short undo window while leaving CRM data untouched.
