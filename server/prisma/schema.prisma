@@ -126,6 +126,12 @@ model Org {
   lists       List[]
   listEntries ListEntry[]
 
+  // Shared in-app notifications (MAI-235). A source event is one durable object
+  // with one recipient-owned lifecycle row per teammate; deleting the org clears
+  // both halves together.
+  notificationObjects NotificationObject[]
+  notifications       Notification[]
+
   // Inbound voicemail (MAI-39, MAI-40, MAI-41). Back-relations so a deleted org
   // cascades its voicemails and greeting away — the same onDelete: Cascade the
   // rest of the dialer models already use. voicemailGreeting is a single object,
@@ -190,6 +196,12 @@ model User {
   // unassigned task and an authorless note are both real states.
   tasksAssigned Task[] @relation("TaskAssignee")
   notesAuthored Note[] @relation("NoteAuthor")
+
+  // Notification actors and recipients are separate relations. Removing an actor
+  // keeps the event (with a null actor); removing a recipient removes only that
+  // person's private inbox row.
+  notificationObjectsAuthored NotificationObject[] @relation("NotificationActor")
+  notificationsReceived       Notification[]       @relation("NotificationRecipient")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2091,6 +2103,78 @@ model ActivityEntry {
   @@index([orgId, createdByUserId, occurredAt])
   // The unscoped org feed — "what happened today" with no account chosen.
   @@index([orgId, occurredAt])
+}
+
+// -----------------------------------------------------------------------------
+// Notifications — one event object, then one private lifecycle row per recipient.
+//
+// NotificationObject is the durable, deduplicated actor/verb/object event. It is
+// intentionally separate from Notification so every recipient can independently
+// read, archive, or snooze the same event without changing anyone else's inbox.
+// `sourceSnapshot` is the narrowly-shaped safe fallback rendered when the source
+// no longer exists or is unavailable; its exact accepted shape is enforced by
+// server/src/crm/notifications.ts before it reaches this JSON column.
+// -----------------------------------------------------------------------------
+model NotificationObject {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // A deterministic, server-derived key. A retry of the same event upserts this
+  // object instead of creating another fan-out batch.
+  eventKey String
+
+  // The source actor. SetNull preserves the notification event if an account is
+  // removed; the writer only accepts an active member as the initial actor.
+  actorUserId String?
+  actor       User?  @relation("NotificationActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  // Validated strings, never Prisma enums. `verb` names what happened; the typed
+  // object pair is the source contract that later resolves a deep-link destination.
+  verb       String
+  objectType String
+  objectId   String
+
+  // Exactly { title: string, preview?: string | null }, validated and normalized
+  // by the event writer. It must remain safe to render after the live source is
+  // deleted or access-checked as unavailable.
+  sourceSnapshot Json
+
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, eventKey])
+  @@index([orgId, actorUserId])
+  @@index([orgId, objectType, objectId])
+}
+
+model Notification {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  notificationObjectId String
+  notificationObject   NotificationObject @relation(fields: [notificationObjectId], references: [id], onDelete: Cascade)
+
+  recipientUserId String
+  recipient       User   @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+
+  // Recipient-owned lifecycle state. Null means unread, active, or not snoozed.
+  readAt       DateTime?
+  archivedAt   DateTime?
+  snoozedUntil DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Retrying the same event can never give one person two inbox rows.
+  @@unique([notificationObjectId, recipientUserId])
+  // All inbox views start with tenant and recipient, then use lifecycle state and
+  // newest-first pagination.
+  @@index([orgId, recipientUserId, archivedAt, snoozedUntil, createdAt])
+  @@index([orgId, recipientUserId, readAt])
 }
 
 // -----------------------------------------------------------------------------
