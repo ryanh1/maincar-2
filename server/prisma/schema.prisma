@@ -414,6 +414,11 @@ model VoicemailGreeting {
   // transcode job (MAI-43). Null until the org has uploaded and converted one.
   audioUrl String?
 
+  // Allowed values: "pending", "ready", "failed". The transcode worker sets
+  // this so a failed conversion remains visible after pg-boss has spent its
+  // single retry (jobs/transcodeGreeting.ts).
+  status String @default("pending")
+
   uploadedAt DateTime?
 
   createdAt DateTime @default(now())

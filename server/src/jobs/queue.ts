@@ -32,6 +32,8 @@ export const JOB_UPLOAD_VOICEMAIL = 'upload-voicemail'
 
 export const JOB_TRANSCRIBE_VOICEMAIL = 'transcribe-voicemail'
 
+export const JOB_TRANSCODE_GREETING = 'transcode-greeting'
+
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
   JOB_RELEASE_NUMBER,
@@ -40,6 +42,7 @@ export const JOB_NAMES = [
   JOB_REAP_STALE_CALLS,
   JOB_UPLOAD_VOICEMAIL,
   JOB_TRANSCRIBE_VOICEMAIL,
+  JOB_TRANSCODE_GREETING,
 ] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
@@ -76,6 +79,9 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }
   // its outbound twin. See jobs/uploadVoicemail.ts.
   [JOB_UPLOAD_VOICEMAIL]: { retryLimit: 1, retryDelay: 30 },
   [JOB_TRANSCRIBE_VOICEMAIL]: { retryLimit: 1, retryDelay: 30 },
+  // One retry, thirty seconds later. A greeting is retried once before the
+  // greeting row records the failed state (jobs/transcodeGreeting.ts).
+  [JOB_TRANSCODE_GREETING]: { retryLimit: 1, retryDelay: 30 },
 }
 
 let boss: PgBoss | null = null
