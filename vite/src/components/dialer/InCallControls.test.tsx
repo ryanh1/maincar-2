@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 
 import { ApiError } from '@/lib/api'
 import { renderWithProviders, withProviders } from '@/test/utils'
@@ -52,7 +52,8 @@ describe('InCallControls', () => {
     })
     renderControls()
 
-    expect(screen.getByLabelText('Call duration')).toHaveTextContent('01:15')
+    expect(screen.getByText('Call duration', { selector: '.sr-only' })).toBeInTheDocument()
+    expect(screen.getByText('01:15')).toBeInTheDocument()
   })
 
   it('shows status text derived from the phase', () => {
@@ -145,12 +146,23 @@ describe('InCallControls', () => {
     expect(endButton).toBeDisabled()
   })
 
-  it('shows the recording dot only when the call is being recorded', () => {
+  it('shows an accessible recording dot and announces recording state changes', async () => {
     const { rerender } = renderControls({ recording: false })
-    expect(screen.queryByText('Recording')).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'Recording' })).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
 
     rerender(withProviders(<InCallControls orgId="org-1" callId="call-1" recording />))
-    expect(screen.getByText('Recording')).toBeInTheDocument()
+    const indicator = screen.getByRole('img', { name: 'Recording' })
+    expect(indicator).toHaveClass('size-2', 'bg-destructive')
+    expect(indicator).toHaveAttribute('tabindex', '0')
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Recording started.'))
+
+    fireEvent.focus(indicator)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Recording')
+
+    rerender(withProviders(<InCallControls orgId="org-1" callId="call-1" recording={false} />))
+    expect(screen.queryByRole('img', { name: 'Recording' })).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Recording stopped.'))
   })
 
   it('renders no hold control — the Voice SDK Call has no hold method to wire it to', () => {
@@ -183,7 +195,7 @@ describe('InCallControls', () => {
     const endCall = screen.getByRole('button', { name: 'End the call' })
     expect(endCall).toBeInTheDocument()
     expect(endCall.querySelector('svg.lucide-phone')).toHaveClass('rotate-[135deg]')
-    expect(screen.getByLabelText('Call duration')).toBeInTheDocument()
+    expect(screen.getByText('Call duration', { selector: '.sr-only' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Call controls' })).toBeInTheDocument()
   })
 })

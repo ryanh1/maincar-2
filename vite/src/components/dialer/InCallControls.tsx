@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, Phone } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { ApiError } from '@/lib/api'
 import { formatElapsed } from '@/lib/duration'
 import { IconButton } from '@/components/ui/icon-button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CallPhase } from '@/components/dialer/dialerContext'
 import { useDialer } from '@/components/dialer/dialerContext'
 import { useEndCall } from '@/hooks/dialer'
@@ -58,6 +59,15 @@ export function InCallControls({ orgId, callId, recording = false, className }: 
   const endCall = useEndCall()
 
   const [muted, setMuted] = useState(false)
+  const previousRecording = useRef(recording)
+  const [recordingAnnouncement, setRecordingAnnouncement] = useState('')
+
+  useEffect(() => {
+    if (previousRecording.current === recording) return
+
+    previousRecording.current = recording
+    setRecordingAnnouncement(recording ? 'Recording started.' : 'Recording stopped.')
+  }, [recording])
 
   const toggleMute = useCallback(() => {
     setMuted((current) => {
@@ -85,17 +95,28 @@ export function InCallControls({ orgId, callId, recording = false, className }: 
       <div className="flex items-center gap-3">
         <Phone aria-hidden="true" size={16} className="text-muted-foreground shrink-0" />
         <div className="flex flex-1 flex-col">
-          <span className="text-sm font-medium tabular-nums" aria-label="Call duration">
+          <p className="text-sm font-medium tabular-nums">
+            <span className="sr-only">Call duration </span>
             {formatElapsed(elapsedSeconds)}
-          </span>
+          </p>
           <span className="text-xs text-muted-foreground">{STATUS_LABEL[phase]}</span>
         </div>
         {recording ? (
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
-            <span aria-hidden="true" className="size-2 rounded-full bg-destructive" />
-            Recording
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                aria-label="Recording"
+                className="size-2 rounded-full bg-destructive focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                role="img"
+                tabIndex={0}
+              />
+            </TooltipTrigger>
+            <TooltipContent>Recording</TooltipContent>
+          </Tooltip>
         ) : null}
+        <span aria-atomic="true" className="sr-only" role="status">
+          {recordingAnnouncement}
+        </span>
       </div>
 
       <div className="flex items-center gap-2" role="group" aria-label="Call controls">
