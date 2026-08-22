@@ -157,6 +157,7 @@ model User {
   calls               Call[]
   emailDrafts         EmailDraft[]
   emailTemplates      EmailTemplate[]
+  emailSignatures     EmailSignature[]
   oauthConnections    OAuthConnection[]
   mailAccounts        MailAccount[]
 
@@ -499,6 +500,32 @@ model EmailDraft {
 
   // The dock's only query: this rep's drafts in this org, by last edit.
   @@index([orgId, userId, updatedAt])
+}
+
+// A rep's reusable email sign-off. Signatures are private to the rep rather
+// than shared with the organization: names, titles, and contact details belong
+// to the sender, and the composer only offers the signed-in rep's list.
+model EmailSignature {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Shown in Settings and the composer picker. A signature without a name is
+  // impossible to distinguish from another one in the picker.
+  name     String
+  bodyHtml String
+
+  // `defaultForUser` is the owner id exactly when this is their default and
+  // null otherwise. The unique constraint makes two defaults for one rep
+  // impossible even when two settings tabs save concurrently.
+  isDefault      Boolean @default(false)
+  defaultForUser String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, name])
 }
 
 // The org's saved emails — the five a rep sends over and over

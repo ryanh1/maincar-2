@@ -182,3 +182,38 @@ export interface EmailTemplateResponse {
 export interface DeleteEmailTemplateResponse {
   template: { id: string }
 }
+
+/** A saved sign-off owned by the signed-in rep, not their organization. */
+export interface EmailSignature {
+  id: string
+  name: string
+  bodyHtml: string
+  isDefault: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface EmailSignatureInput {
+  name: string
+  bodyHtml?: string
+  isDefault?: boolean
+}
+
+export interface EmailSignaturePatch {
+  name?: string
+  bodyHtml?: string
+  isDefault?: boolean
+}
+
+export interface GetEmailSignaturesResponse {
+  signatures: EmailSignature[]
+  total: number
+}
+
+export interface EmailSignatureResponse {
+  signature: EmailSignature
+}
+
+export interface DeleteEmailSignatureResponse {
+  signature: { id: string }
+}

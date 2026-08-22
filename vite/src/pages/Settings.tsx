@@ -2,6 +2,7 @@ import type { ComponentType } from 'react'
 import {
   Building2,
   FileText,
+  FileSignature,
   Headphones,
   Phone,
   Plug,
@@ -20,6 +21,7 @@ import { Settings_OrganizationTab } from './Settings_OrganizationTab'
 import { Settings_MembersTab } from './Settings_MembersTab'
 import { Settings_PhoneNumbersTab } from './Settings_PhoneNumbersTab'
 import { Settings_EmailTemplatesTab } from './Settings_EmailTemplatesTab'
+import { Settings_EmailSignaturesTab } from './Settings_EmailSignaturesTab'
 import { Settings_IntegrationsTab } from './Settings_IntegrationsTab'
 import { Settings_DevicesTab } from './Settings_DevicesTab'
 
@@ -29,6 +31,7 @@ type TabId =
   | 'members'
   | 'numbers'
   | 'email-templates'
+  | 'signatures'
   | 'integrations'
   | 'devices'
 
@@ -53,6 +56,7 @@ const TABS: TabDef[] = [
   // Not adminOnly: a template belongs to the ORG and any member may write, edit,
   // or delete any of them (SPEC-composer-templates.md § 2).
   { id: 'email-templates', label: 'Email templates', icon: FileText, needsOrg: true },
+  { id: 'signatures', label: 'Signatures', icon: FileSignature, needsOrg: true },
   // Hidden for a user with no org, like Organization and Members: connections belong to
   // an org, so there is nothing to show without one.
   { id: 'integrations', label: 'Integrations', icon: Plug, needsOrg: true },
@@ -65,6 +69,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
   members: Settings_MembersTab,
   numbers: Settings_PhoneNumbersTab,
   'email-templates': Settings_EmailTemplatesTab,
+  signatures: Settings_EmailSignaturesTab,
   integrations: Settings_IntegrationsTab,
 }
 

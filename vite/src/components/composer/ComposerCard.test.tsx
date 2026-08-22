@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { ApiError } from '@/lib/api'
-import type { EmailDraft, EmailTemplate } from '@/lib/emailTypes'
+import type { EmailDraft, EmailSignature, EmailTemplate } from '@/lib/emailTypes'
 import type { Mailbox } from '@/lib/mailboxTypes'
 import { makeTestQueryClient, withProviders } from '@/test/utils'
 
@@ -19,6 +19,7 @@ import { makeTestQueryClient, withProviders } from '@/test/utils'
 const {
   useAuthMock,
   useGetEmailTemplatesMock,
+  useGetEmailSignaturesMock,
   useGetMailboxesMock,
   useSendEmailDraftMock,
   sendEmailDraftMock,
@@ -28,6 +29,7 @@ const {
 } = vi.hoisted(() => ({
   useAuthMock: vi.fn(),
   useGetEmailTemplatesMock: vi.fn(),
+  useGetEmailSignaturesMock: vi.fn(),
   useGetMailboxesMock: vi.fn(),
   useSendEmailDraftMock: vi.fn(),
   sendEmailDraftMock: vi.fn(),
@@ -39,6 +41,7 @@ const {
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/hooks/email', () => ({
   useGetEmailTemplates: useGetEmailTemplatesMock,
+  useGetEmailSignatures: useGetEmailSignaturesMock,
   useSendEmailDraft: useSendEmailDraftMock,
 }))
 vi.mock('@/hooks/mailboxes', () => ({ useGetMailboxes: useGetMailboxesMock }))
@@ -105,6 +108,14 @@ function templatesQuery(
   }
 }
 
+function signature(id: string, name: string, bodyHtml: string, isDefault = false): EmailSignature {
+  return { id, name, bodyHtml, isDefault, createdAt: '2026-08-20T12:00:00.000Z', updatedAt: '2026-08-20T12:00:00.000Z' }
+}
+
+function signaturesQuery(signatures: EmailSignature[] = []) {
+  return { data: { signatures, total: signatures.length }, isPending: false, isError: false, isSuccess: true, refetch: refetchMock }
+}
+
 /** A connected send-from mailbox, the shape `useGetMailboxes` returns. */
 function makeMailbox(overrides: Partial<Mailbox> = {}): Mailbox {
   return {
@@ -134,6 +145,7 @@ beforeEach(() => {
     user: { id: 'user-a' },
   })
   useGetEmailTemplatesMock.mockReturnValue(templatesQuery())
+  useGetEmailSignaturesMock.mockReturnValue(signaturesQuery())
   useGetMailboxesMock.mockReturnValue(mailboxesQuery())
   useSendEmailDraftMock.mockReturnValue({ mutateAsync: sendEmailDraftMock, isPending: false })
   sendEmailDraftMock.mockResolvedValue({
@@ -957,6 +969,40 @@ describe('ComposerCard templates', () => {
     )
 
     expect(refetchMock).toHaveBeenCalled()
+  })
+})
+
+const SIGNATURE_BUTTON = 'Choose a signature for this email'
+
+describe('ComposerCard signatures', () => {
+  it('inserts the default signature into a newly created blank draft', async () => {
+    useGetEmailSignaturesMock.mockReturnValue(
+      signaturesQuery([signature('sig-work', 'Work', '<p>Ari Rep</p>', true)]),
+    )
+
+    renderCard()
+
+    await waitFor(() => expect(bodyField()).toHaveTextContent('Ari Rep'))
+  })
+
+  it('swaps the signature without replacing the message the rep wrote', async () => {
+    const user = userEvent.setup()
+    useGetEmailSignaturesMock.mockReturnValue(
+      signaturesQuery([
+        signature('sig-work', 'Work', '<p>Ari Rep</p>', true),
+        signature('sig-personal', 'Personal', '<p>Ari</p>'),
+      ]),
+    )
+    renderCard()
+
+    await waitFor(() => expect(bodyField()).toHaveTextContent('Ari Rep'))
+    await typeBody('<p>Hello Casey</p><p>Ari Rep</p>')
+    await user.click(screen.getByRole('button', { name: SIGNATURE_BUTTON }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Personal' }))
+
+    expect(bodyField()).toHaveTextContent('Hello Casey')
+    expect(bodyField()).toHaveTextContent('Ari')
+    expect(bodyField()).not.toHaveTextContent('Ari Rep')
   })
 })
 
