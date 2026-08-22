@@ -36,6 +36,8 @@ export const JOB_TRANSCRIBE_VOICEMAIL_DROP = 'transcribe-voicemail-drop'
 
 export const JOB_TRANSCODE_GREETING = 'transcode-greeting'
 
+export const JOB_TRANSCODE_VOICEMAIL_DROP = 'transcode-voicemail-drop'
+
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
   JOB_RELEASE_NUMBER,
@@ -46,6 +48,7 @@ export const JOB_NAMES = [
   JOB_TRANSCRIBE_VOICEMAIL,
   JOB_TRANSCRIBE_VOICEMAIL_DROP,
   JOB_TRANSCODE_GREETING,
+  JOB_TRANSCODE_VOICEMAIL_DROP,
 ] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
@@ -86,6 +89,9 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }
   // One retry, thirty seconds later. A greeting is retried once before the
   // greeting row records the failed state (jobs/transcodeGreeting.ts).
   [JOB_TRANSCODE_GREETING]: { retryLimit: 1, retryDelay: 30 },
+  // One retry, thirty seconds later. The source WebM remains in private storage
+  // until a successful conversion settles the drop to its stable MP3 key.
+  [JOB_TRANSCODE_VOICEMAIL_DROP]: { retryLimit: 1, retryDelay: 30 },
 }
 
 let boss: PgBoss | null = null
