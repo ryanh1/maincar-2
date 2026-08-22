@@ -46,9 +46,12 @@ export function Sidebar({ open, onClose, notificationCenter }: { open: boolean; 
   const health = useGetIntegrationHealth(org?.id)
   const brokenCount = health.data?.broken.length ?? 0
   const objects = (useGetObjects(org?.id).data?.objects ?? []).filter(
-    (object) => !object.isHidden && !object.isArchived,
+    (object) => object.isListSupported && !object.isHidden && !object.isArchived,
   )
-  const lists = (useGetLists(org?.id).data?.lists ?? []).filter((list) => !list.isArchived)
+  const supportedObjectSlugs = new Set(objects.map((object) => object.slug))
+  const lists = (useGetLists(org?.id).data?.lists ?? []).filter(
+    (list) => !list.isArchived && supportedObjectSlugs.has(list.objectSlug),
+  )
 
   return (
     <>

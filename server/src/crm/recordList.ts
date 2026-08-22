@@ -32,6 +32,14 @@ export const TABLE_STORAGE_TABLES: Record<string, string> = {
   call: 'Call',
 }
 
+// This is the one capability policy for generic record-list surfaces. Table-backed
+// objects are supported only after their table is registered above; generic-record
+// objects are supported by the Record table. Routes expose this result so a client
+// never needs a second, stale allow-list to decide what it can navigate to.
+export function isRecordListSupported(object: Pick<ObjectDef, 'slug' | 'storage'>): boolean {
+  return object.storage === 'record' || object.slug in TABLE_STORAGE_TABLES
+}
+
 export type FilterOperator =
   | 'eq'
   | 'neq'
@@ -366,16 +374,10 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
   const { orgId, object, attributes, query } = args
   const mode: 'table' | 'record' = object.storage === 'table' ? 'table' : 'record'
 
-  let tableName: string
-  if (mode === 'table') {
-    const registered = TABLE_STORAGE_TABLES[object.slug]
-    if (!registered) {
-      throw new ListQueryError(`No table is registered for object "${object.slug}" yet.`)
-    }
-    tableName = registered
-  } else {
-    tableName = 'Record'
+  if (!isRecordListSupported(object)) {
+    throw new ListQueryError(`No list surface is available for object "${object.slug}" yet.`)
   }
+  const tableName = mode === 'table' ? TABLE_STORAGE_TABLES[object.slug]! : 'Record'
   const jsonColumnName: 'customJson' | 'valuesJson' = mode === 'table' ? 'customJson' : 'valuesJson'
 
   const attrsBySlug = new Map(attributes.map((a) => [a.slug, a]))

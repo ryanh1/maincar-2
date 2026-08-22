@@ -70,22 +70,30 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument()
   })
 
-  it('lists every visible object and active list as keyboard-reachable grid links', async () => {
+  it('lists only visible, supported objects and active lists as keyboard-reachable grid links', async () => {
     withOrg()
     jsonFetchMock.mockImplementation((input: string) => {
       if (input.endsWith('/objects')) {
         return Promise.resolve({
           objects: [
-            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false },
-            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false },
-            { id: 'hidden', slug: 'hidden', namePlural: 'Hidden', isHidden: true, isArchived: false },
+            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false, isListSupported: true },
+            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false, isListSupported: true },
+            { id: 'deferred', slug: 'deferred', namePlural: 'Deferred', isHidden: false, isArchived: false, isListSupported: false },
+            { id: 'hidden', slug: 'hidden', namePlural: 'Hidden', isHidden: true, isArchived: false, isListSupported: true },
+            { id: 'archived', slug: 'archived', namePlural: 'Archived', isHidden: false, isArchived: true, isListSupported: true },
           ],
         })
       }
       if (input.includes('/lists')) {
         return Promise.resolve({
-          lists: [{ id: 'list-1', name: 'Q3 targets', isArchived: false }],
-          total: 1,
+          lists: [
+            { id: 'list-1', name: 'Q3 targets', objectSlug: 'person', isArchived: false },
+            { id: 'deferred-list', name: 'Deferred list', objectSlug: 'deferred', isArchived: false },
+            { id: 'hidden-list', name: 'Hidden list', objectSlug: 'hidden', isArchived: false },
+            { id: 'archived-list', name: 'Archived list', objectSlug: 'archived', isArchived: false },
+            { id: 'archived', name: 'Old targets', objectSlug: 'person', isArchived: true },
+          ],
+          total: 5,
           page: 1,
           limit: 25,
         })
@@ -97,7 +105,13 @@ describe('Sidebar', () => {
     expect(await screen.findByRole('link', { name: 'People' })).toHaveAttribute('href', '/records/person')
     expect(screen.getByRole('link', { name: 'Companies' })).toHaveAttribute('href', '/records/company')
     expect(screen.getByRole('link', { name: 'Q3 targets' })).toHaveAttribute('href', '/lists/list-1')
+    expect(screen.queryByRole('link', { name: 'Deferred' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Hidden' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Archived' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Deferred list' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Hidden list' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Archived list' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Old targets' })).not.toBeInTheDocument()
     expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/objects')
     expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/lists')
   })
@@ -108,8 +122,8 @@ describe('Sidebar', () => {
       if (input.endsWith('/objects')) {
         return Promise.resolve({
           objects: [
-            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false },
-            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false },
+            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false, isListSupported: true },
+            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false, isListSupported: true },
           ],
         })
       }

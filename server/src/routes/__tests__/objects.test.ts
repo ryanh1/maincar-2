@@ -241,6 +241,26 @@ describe('GET /api/orgs/:orgId/objects', () => {
     })
   })
 
+  it('reports list support from the server capability policy', async () => {
+    prismaMock.objectDef.findMany.mockResolvedValue([
+      objectRow({ id: 'person', slug: 'person', storage: 'table' }),
+      objectRow({ id: 'email', slug: 'email', storage: 'table' }),
+      objectRow({ id: 'project', slug: 'project', storage: 'record' }),
+    ])
+
+    const res = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.objects.map((object: { slug: string; isListSupported: boolean }) => ({
+      slug: object.slug,
+      isListSupported: object.isListSupported,
+    }))).toEqual([
+      { slug: 'person', isListSupported: true },
+      { slug: 'email', isListSupported: false },
+      { slug: 'project', isListSupported: true },
+    ])
+  })
+
   it('reads one object with its attributes, by id AND orgId', async () => {
     prismaMock.objectDef.findFirst.mockResolvedValue(
       objectRow({ id: 'obj-9', attributes: [] }),
