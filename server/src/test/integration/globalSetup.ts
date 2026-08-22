@@ -1,10 +1,9 @@
 // Runs once per `npm run test:integration`, before any test file loads.
 //
-//   1. Sweep any `test_*` schemas left behind by a crashed run.
-//   2. Create a fresh, uniquely-named schema.
-//   3. Run `prisma migrate deploy` ONCE into it.
-//   4. Hand the schema URL and name to the workers via vitest's provide/inject.
-//   5. On teardown, DROP SCHEMA ... CASCADE.
+//   1. Create a fresh, uniquely-named schema.
+//   2. Run `prisma migrate deploy` ONCE into it.
+//   3. Hand the schema URL and name to the workers via vitest's provide/inject.
+//   4. On teardown, DROP only that schema.
 //
 // A schema, not a database: no CREATE DATABASE privilege needed, fast, and the
 // cascading drop is a guaranteed clean reset.
@@ -57,15 +56,10 @@ export default async function setup(project: TestProject): Promise<() => Promise
   const adminClient = new Client({ connectionString: admin })
   await adminClient.connect()
   try {
-    // The `\_` escapes LIKE's wildcard, so only the literal "test_" prefix
-    // matches — a schema called "testing" is left alone.
-    const leftovers = await adminClient.query<{ schema_name: string }>(
-      "SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'test\\_%' ESCAPE '\\'",
-    )
-    for (const row of leftovers.rows) {
-      await adminClient.query(`DROP SCHEMA IF EXISTS "${row.schema_name}" CASCADE`)
-    }
-
+    // Never sweep every `test_*` schema here: another integration run may be
+    // actively using one. This run owns and removes only its unique schema in
+    // its teardown; a crashed run's leftover is harmless and can be inspected
+    // or cleaned by coordination tooling outside a live test run.
     await adminClient.query(`CREATE SCHEMA "${schema}"`)
   } finally {
     await adminClient.end()
