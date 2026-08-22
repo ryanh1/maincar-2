@@ -15,6 +15,7 @@
 import { Router } from 'express'
 
 import { logger } from '../../dependencies/logger.js'
+import { getAvatarDownloadUrl } from '../../dependencies/s3.js'
 import { revokeFirebaseRefreshTokens } from '../../dependencies/firebaseAdmin.js'
 import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
@@ -138,6 +139,7 @@ router.get(
               lastName: true,
               title: true,
               imageUrl: true,
+              avatarKey: true,
               enabled: true,
             },
           },
@@ -151,18 +153,19 @@ router.get(
 
     // --- Return response ---
     res.json({
-      members: rows.map((m) => ({
+      members: await Promise.all(rows.map(async (m) => ({
         userId: m.user.id,
         email: m.user.email,
         firstName: m.user.firstName,
         lastName: m.user.lastName,
         title: m.user.title,
         imageUrl: m.user.imageUrl,
+        avatarUrl: m.user.avatarKey ? await getAvatarDownloadUrl(m.user.avatarKey) : null,
         enabled: m.user.enabled,
         roles: sortRoles(m.roles) as MembershipRole[],
         joinedAt: m.createdAt.toISOString(),
         isSelf: m.user.id === authReq.user!.id,
-      })),
+      }))),
       total,
       page,
       limit,

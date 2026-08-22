@@ -9,6 +9,7 @@ export interface User {
   firstName: string | null
   lastName: string | null
   imageUrl: string | null
+  avatarUrl: string | null
   title: string | null
   /**
    * Global platform roles. NOT the roles that decide what this user may do inside
@@ -34,6 +35,7 @@ export interface Org {
   id: string
   name: string | null
   logo: string | null
+  avatarUrl: string | null
   enabled: boolean
   createdAt: string
   updatedAt: string

@@ -17,6 +17,14 @@ import { endOfDayAfterDays, resolveTimeZone } from '../lib/datetime.js'
 import { requireMembership } from '../lib/membership.js'
 import { seedOrgInTx } from '../crm/seedOrg.js'
 import { assignableRolesSchema, type OrgRole, type UserRole } from '../lib/roles.js'
+import {
+  acceptAvatarUpload,
+  avatarObjectKey,
+  organizationAvatarPrefix,
+  presignAvatarUpload,
+  userAvatarPrefix,
+} from '../lib/avatarUpload.js'
+import { deleteObject, getAvatarDownloadUrl } from '../../dependencies/s3.js'
 import type { Invitation, Org, User } from '../generated/prisma/client.js'
 
 const router = Router()
@@ -30,7 +38,11 @@ const INVITE_EXPIRY_DAYS = 14
 
 // --- Mappers: database row → API shape ---
 
-function mapUserToApi(user: User) {
+async function mapAvatarUrl(avatarKey: string | null): Promise<string | null> {
+  return avatarKey ? getAvatarDownloadUrl(avatarKey) : null
+}
+
+async function mapUserToApi(user: User) {
   return {
     id: user.id,
     email: user.email,
@@ -38,6 +50,7 @@ function mapUserToApi(user: User) {
     lastName: user.lastName,
     title: user.title,
     imageUrl: user.imageUrl,
+    avatarUrl: await mapAvatarUrl(user.avatarKey),
     enabled: user.enabled,
     timeZone: user.timeZone,
     currentOrgId: user.currentOrgId,
@@ -46,11 +59,12 @@ function mapUserToApi(user: User) {
   }
 }
 
-function mapOrgToApi(org: Org) {
+async function mapOrgToApi(org: Org) {
   return {
     id: org.id,
     name: org.name,
     logo: org.logo,
+    avatarUrl: await mapAvatarUrl(org.avatarKey),
     enabled: org.enabled,
     createdAt: org.createdAt.toISOString(),
     updatedAt: org.updatedAt.toISOString(),
@@ -74,7 +88,7 @@ router.get(
 
     const user = await prisma.user.findUniqueOrThrow({ where: { id: authReq.user!.id } })
 
-    res.json({ user: mapUserToApi(user) })
+    res.json({ user: await mapUserToApi(user) })
   }),
 )
 
@@ -119,7 +133,51 @@ router.patch(
     // --- Execute query ---
     const user = await prisma.user.update({ where: { id: authReq.user!.id }, data })
 
-    res.json({ user: mapUserToApi(user) })
+    res.json({ user: await mapUserToApi(user) })
+  }),
+)
+
+const avatarObjectKeySchema = z.object({ objectKey: z.string().min(1).max(1024).nullable() }).strict()
+
+router.post(
+  '/profile/avatar/upload-url',
+  wrapRoute('POST /api/team/profile/avatar/upload-url', async (req, res) => {
+    const authReq = req as AuthenticatedRequest
+    const body = (req.body ?? {}) as { contentType?: unknown; size?: unknown }
+    const target = await presignAvatarUpload({
+      prefix: userAvatarPrefix(authReq.user!.id),
+      contentType: body.contentType,
+      size: body.size,
+    })
+    res.json(target)
+  }),
+)
+
+router.patch(
+  '/profile/avatar',
+  wrapRoute('PATCH /api/team/profile/avatar', async (req, res) => {
+    const authReq = req as AuthenticatedRequest
+    const parsed = avatarObjectKeySchema.safeParse(req.body)
+    if (!parsed.success) return void res.status(400).json({ error: 'That is not a valid photo reference.' })
+
+    const previous = await prisma.user.findUniqueOrThrow({ where: { id: authReq.user!.id } })
+    const avatarKey =
+      parsed.data.objectKey === null
+        ? null
+        : await acceptAvatarUpload({
+            objectKey: parsed.data.objectKey,
+            prefix: userAvatarPrefix(authReq.user!.id),
+          })
+    const user = await prisma.user.update({ where: { id: authReq.user!.id }, data: { avatarKey } })
+    const previousKey = avatarObjectKey(previous.avatarKey)
+    if (previousKey && previousKey !== avatarKey) {
+      try {
+        await deleteObject(previousKey)
+      } catch (error) {
+        logger.warn({ error, userId: authReq.user!.id }, 'could not delete replaced profile photo')
+      }
+    }
+    res.json({ user: await mapUserToApi(user) })
   }),
 )
 
@@ -138,10 +196,10 @@ router.get(
     })
 
     res.json({
-      orgs: memberships.map((m) => ({
-        ...mapOrgToApi(m.org),
+      orgs: await Promise.all(memberships.map(async (m) => ({
+        ...(await mapOrgToApi(m.org)),
         roles: m.roles as UserRole[],
-      })),
+      }))),
       total: memberships.length,
     })
   }),
@@ -184,7 +242,7 @@ router.post(
 
     logger.info({ userId: authReq.user!.id, orgId: org.id }, 'created an org')
 
-    res.status(201).json({ org: mapOrgToApi(org) })
+    res.status(201).json({ org: await mapOrgToApi(org) })
   }),
 )
 
@@ -201,7 +259,7 @@ router.get(
     const membership = await requireMembership(authReq, res, orgId)
     if (!membership) return
 
-    res.json({ org: mapOrgToApi(membership.org), roles: membership.roles as UserRole[] })
+    res.json({ org: await mapOrgToApi(membership.org), roles: membership.roles as UserRole[] })
   }),
 )
 
@@ -249,7 +307,55 @@ router.patch(
 
     const org = await prisma.org.findUniqueOrThrow({ where: { id: orgId } })
 
-    res.json({ org: mapOrgToApi(org) })
+    res.json({ org: await mapOrgToApi(org) })
+  }),
+)
+
+router.post(
+  '/orgs/:orgId/avatar/upload-url',
+  wrapRoute('POST /api/team/orgs/:orgId/avatar/upload-url', async (req, res) => {
+    const authReq = req as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const membership = await requireMembership(authReq, res, orgId, { admin: true })
+    if (!membership) return
+    const body = (req.body ?? {}) as { contentType?: unknown; size?: unknown }
+    const target = await presignAvatarUpload({
+      prefix: organizationAvatarPrefix(orgId),
+      contentType: body.contentType,
+      size: body.size,
+    })
+    res.json(target)
+  }),
+)
+
+router.patch(
+  '/orgs/:orgId/avatar',
+  wrapRoute('PATCH /api/team/orgs/:orgId/avatar', async (req, res) => {
+    const authReq = req as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const membership = await requireMembership(authReq, res, orgId, { admin: true })
+    if (!membership) return
+    const parsed = avatarObjectKeySchema.safeParse(req.body)
+    if (!parsed.success) return void res.status(400).json({ error: 'That is not a valid photo reference.' })
+    const avatarKey =
+      parsed.data.objectKey === null
+        ? null
+        : await acceptAvatarUpload({
+            objectKey: parsed.data.objectKey,
+            prefix: organizationAvatarPrefix(orgId),
+          })
+    const result = await prisma.org.updateMany({ where: { id: orgId }, data: { avatarKey } })
+    if (result.count === 0) return void res.status(404).json({ error: 'Organization not found' })
+    const previousKey = avatarObjectKey(membership.org.avatarKey)
+    if (previousKey && previousKey !== avatarKey) {
+      try {
+        await deleteObject(previousKey)
+      } catch (error) {
+        logger.warn({ error, orgId }, 'could not delete replaced organization photo')
+      }
+    }
+    const org = await prisma.org.findUniqueOrThrow({ where: { id: orgId } })
+    res.json({ org: await mapOrgToApi(org) })
   }),
 )
 
@@ -272,7 +378,7 @@ router.post(
       data: { currentOrgId: orgId },
     })
 
-    res.json({ user: mapUserToApi(user), org: mapOrgToApi(membership.org) })
+    res.json({ user: await mapUserToApi(user), org: await mapOrgToApi(membership.org) })
   }),
 )
 

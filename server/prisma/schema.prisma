@@ -25,6 +25,9 @@ model Org {
   id      String  @id @default(cuid())
   name    String?
   logo    String?
+  // Private MinIO/S3 object key for the organization photo. API responses sign
+  // a short-lived URL from this key rather than storing a browser-readable URL.
+  avatarKey String?
   enabled Boolean @default(true)
 
   // Which version of the standard-schema seed (server/src/crm/standardObjects.ts)
@@ -134,6 +137,8 @@ model User {
   lastName  String?
   title     String?
   imageUrl  String?
+  // Private MinIO/S3 object key for this user's uploaded profile photo.
+  avatarKey String?
 
   // false blocks sign-in without deleting anything.
   enabled Boolean @default(true)

@@ -22,12 +22,14 @@ const {
   s3ClientCtor,
   sendMock,
   getObjectCtor,
+  headObjectCtor,
   putObjectCtor,
   getSignedUrlMock,
 } = vi.hoisted(() => ({
   s3ClientCtor: vi.fn(),
   sendMock: vi.fn(),
   getObjectCtor: vi.fn(),
+  headObjectCtor: vi.fn(),
   putObjectCtor: vi.fn(),
   getSignedUrlMock: vi.fn(),
 }))
@@ -47,6 +49,12 @@ vi.mock('@aws-sdk/client-s3', () => ({
       getObjectCtor(input)
     }
   },
+  DeleteObjectCommand: class {},
+  HeadObjectCommand: class {
+    constructor(input: unknown) {
+      headObjectCtor(input)
+    }
+  },
   PutObjectCommand: class {
     constructor(input: unknown) {
       putObjectCtor(input)
@@ -60,6 +68,7 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({
 
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
 import {
+  headObject,
   getRecordingDownloadUrl,
   putRecording,
   RECORDING_CONTENT_TYPE,
@@ -139,6 +148,21 @@ describe('putRecording', () => {
     await putRecording(KEY, Buffer.from('x'), 'audio/wav')
 
     expect(putObjectCtor.mock.calls[0][0].ContentType).toBe('audio/wav')
+  })
+})
+
+describe('headObject', () => {
+  it('returns the storage metadata needed to verify an uploaded photo', async () => {
+    sendMock.mockResolvedValue({ ContentType: 'image/png', ContentLength: 123 })
+
+    await expect(headObject('avatars/users/user-a/photo.png')).resolves.toEqual({
+      contentType: 'image/png',
+      contentLength: 123,
+    })
+    expect(headObjectCtor).toHaveBeenCalledWith({
+      Bucket: 'maincar2-local',
+      Key: 'avatars/users/user-a/photo.png',
+    })
   })
 })
 

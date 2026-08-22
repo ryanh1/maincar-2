@@ -10,6 +10,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 
 import { logger } from '../../dependencies/logger.js'
+import { getAvatarDownloadUrl } from '../../dependencies/s3.js'
 import { verifyFirebaseIdToken } from '../../dependencies/firebaseAdmin.js'
 import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
@@ -29,7 +30,11 @@ const router = Router()
 // (CLAUDE.md → Server Route Patterns → Response Shape). A mapper stands between
 // the row and the wire so a new database column is never accidentally published.
 
-function mapUserToApi(user: User) {
+async function mapAvatarUrl(avatarKey: string | null): Promise<string | null> {
+  return avatarKey ? getAvatarDownloadUrl(avatarKey) : null
+}
+
+async function mapUserToApi(user: User) {
   return {
     id: user.id,
     email: user.email,
@@ -37,6 +42,7 @@ function mapUserToApi(user: User) {
     lastName: user.lastName,
     title: user.title,
     imageUrl: user.imageUrl,
+    avatarUrl: await mapAvatarUrl(user.avatarKey),
     roles: user.roles as UserRole[],
     enabled: user.enabled,
     currentOrgId: user.currentOrgId,
@@ -46,11 +52,12 @@ function mapUserToApi(user: User) {
   }
 }
 
-function mapOrgToApi(org: Org) {
+async function mapOrgToApi(org: Org) {
   return {
     id: org.id,
     name: org.name,
     logo: org.logo,
+    avatarUrl: await mapAvatarUrl(org.avatarKey),
     enabled: org.enabled,
     createdAt: org.createdAt.toISOString(),
     updatedAt: org.updatedAt.toISOString(),
@@ -62,10 +69,10 @@ function mapOrgToApi(org: Org) {
  * what the org switcher lists, and what every permission check reads: "admin" is
  * per-org now, so a user can run one org and be a basic member of another.
  */
-function mapMembershipToApi(membership: Membership & { org: Org }) {
+async function mapMembershipToApi(membership: Membership & { org: Org }) {
   return {
     orgId: membership.orgId,
-    org: mapOrgToApi(membership.org),
+    org: await mapOrgToApi(membership.org),
     roles: membership.roles as UserRole[],
   }
 }
@@ -213,9 +220,9 @@ router.get(
     }
 
     return void res.json({
-      user: mapUserToApi(user),
-      org: resolved.org ? mapOrgToApi(resolved.org) : null,
-      memberships: resolved.memberships.map(mapMembershipToApi),
+      user: await mapUserToApi(user),
+      org: resolved.org ? await mapOrgToApi(resolved.org) : null,
+      memberships: await Promise.all(resolved.memberships.map(mapMembershipToApi)),
     })
   }),
 )
@@ -272,9 +279,9 @@ router.patch(
     const resolved = await resolveActiveOrg(user)
 
     return void res.json({
-      user: mapUserToApi(user),
-      org: resolved.status === 'ok' && resolved.org ? mapOrgToApi(resolved.org) : null,
-      memberships: resolved.memberships.map(mapMembershipToApi),
+      user: await mapUserToApi(user),
+      org: resolved.status === 'ok' && resolved.org ? await mapOrgToApi(resolved.org) : null,
+      memberships: await Promise.all(resolved.memberships.map(mapMembershipToApi)),
     })
   }),
 )

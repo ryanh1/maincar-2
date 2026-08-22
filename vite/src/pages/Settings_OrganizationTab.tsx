@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RequiredAsterisk } from '@/components/ui/RequiredAsterisk'
-import { useUpdateOrg } from '@/hooks/orgs'
+import { AvatarPhotoField } from '@/components/AvatarPhotoField'
+import { useUpdateOrg, useUpdateOrgAvatar } from '@/hooks/orgs'
 import { ApiError } from '@/lib/api'
 import { useAuth } from '@/providers/useAuth'
 
@@ -19,6 +20,7 @@ import { useAuth } from '@/providers/useAuth'
 export function Settings_OrganizationTab() {
   const { org, isAdmin } = useAuth()
   const updateOrg = useUpdateOrg()
+  const updateAvatar = useUpdateOrgAvatar()
 
   const [name, setName] = useState(org?.name ?? '')
 
@@ -45,7 +47,17 @@ export function Settings_OrganizationTab() {
     <section>
       <h2 className="text-base font-semibold">Organization</h2>
 
-      <form onSubmit={onSubmit} className="mt-4 flex max-w-sm flex-col gap-4">
+      <div className="mt-4">
+        <AvatarPhotoField
+          name={org.name ?? 'Organization'}
+          avatarUrl={org.avatarUrl}
+          disabled={!isAdmin}
+          upload={(blob) => updateAvatar.mutateAsync({ orgId: org.id, blob }).then(() => undefined)}
+          label="organization"
+        />
+      </div>
+
+      <form onSubmit={onSubmit} className="mt-6 flex max-w-sm flex-col gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="orgName">
             Name <RequiredAsterisk />

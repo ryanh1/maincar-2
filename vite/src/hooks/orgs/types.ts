@@ -48,6 +48,7 @@ export interface OrgMember {
   lastName: string | null
   title: string | null
   imageUrl: string | null
+  avatarUrl: string | null
   enabled: boolean
   roles: MembershipRole[]
   joinedAt: string

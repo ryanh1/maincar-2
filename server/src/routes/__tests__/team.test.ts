@@ -7,7 +7,14 @@ import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
+const { avatarUploadMock, prismaMock, verifyTokenMock } = vi.hoisted(() => ({
+  avatarUploadMock: {
+    acceptAvatarUpload: vi.fn(),
+    avatarObjectKey: vi.fn(),
+    organizationAvatarPrefix: vi.fn((orgId: string) => `avatars/organizations/${orgId}/`),
+    presignAvatarUpload: vi.fn(),
+    userAvatarPrefix: vi.fn((userId: string) => `avatars/users/${userId}/`),
+  },
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn() },
     org: {
@@ -40,6 +47,7 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   setFirebaseUserDisabled: vi.fn(),
   deleteFirebaseUser: vi.fn(),
 }))
+vi.mock('../../lib/avatarUpload.js', () => avatarUploadMock)
 
 import app from '../../app.js'
 
@@ -55,6 +63,7 @@ function userRow(overrides: Record<string, unknown> = {}) {
     lastName: 'Pha',
     title: null,
     imageUrl: null,
+    avatarKey: null,
     roles: ['basic'],
     enabled: true,
     timeZone: null,
@@ -70,6 +79,7 @@ function orgRow(overrides: Record<string, unknown> = {}) {
     id: 'org-a',
     name: 'Org A',
     logo: null,
+    avatarKey: null,
     enabled: true,
     createdAt: NOW,
     updatedAt: NOW,
@@ -212,6 +222,28 @@ describe('PATCH /api/team/profile', () => {
   })
 })
 
+describe('profile photo routes', () => {
+  it('presigns uploads under the authenticated user only', async () => {
+    avatarUploadMock.presignAvatarUpload.mockResolvedValue({
+      uploadUrl: 'http://storage.test/put',
+      objectKey: 'avatars/users/user-a/photo.png',
+    })
+
+    const res = await request(app)
+      .post('/api/team/profile/avatar/upload-url')
+      .set('Authorization', AUTH)
+      .send({ contentType: 'image/png', size: 1024 })
+
+    expect(res.status).toBe(200)
+    expect(res.body.objectKey).toBe('avatars/users/user-a/photo.png')
+    expect(avatarUploadMock.presignAvatarUpload).toHaveBeenCalledWith({
+      prefix: 'avatars/users/user-a/',
+      contentType: 'image/png',
+      size: 1024,
+    })
+  })
+})
+
 describe('GET /api/team/orgs', () => {
   it('lists every org the caller belongs to, with their role in each', async () => {
     prismaMock.membership.findMany.mockResolvedValue([
@@ -303,6 +335,20 @@ describe('PATCH /api/team/orgs/:orgId', () => {
 
     expect(res.status).toBe(403)
     expect(prismaMock.org.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('organization photo routes', () => {
+  it('refuses a non-admin before it can request an organization upload URL', async () => {
+    authAs(membershipRow({ roles: ['basic'] }))
+
+    const res = await request(app)
+      .post('/api/team/orgs/org-a/avatar/upload-url')
+      .set('Authorization', AUTH)
+      .send({ contentType: 'image/png', size: 1024 })
+
+    expect(res.status).toBe(403)
+    expect(avatarUploadMock.presignAvatarUpload).not.toHaveBeenCalled()
   })
 })
 

@@ -24,6 +24,14 @@ function isDbUnavailableError(e: unknown): boolean {
   )
 }
 
+function clientError(error: unknown): { status: number; message: string } | null {
+  if (!(error instanceof Error)) return null
+  const status = (error as Error & { status?: unknown }).status
+  return typeof status === 'number' && status >= 400 && status < 500
+    ? { status, message: error.message }
+    : null
+}
+
 type RouteHandler = (req: Request, res: Response) => Promise<void>
 
 /**
@@ -64,6 +72,11 @@ export function wrapRoute(name: string, handler: RouteHandler, opts: { quiet?: b
 
       if (isDbUnavailableError(error)) {
         res.status(503).json({ error: 'Database unavailable' })
+        return
+      }
+      const expected = clientError(error)
+      if (expected) {
+        res.status(expected.status).json({ error: expected.message })
         return
       }
       // The real message is never sent to the client: a stack trace is not

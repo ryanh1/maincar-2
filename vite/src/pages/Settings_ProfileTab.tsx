@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RequiredAsterisk } from '@/components/ui/RequiredAsterisk'
-import { useUpdateProfile } from '@/hooks/profile'
+import { AvatarPhotoField } from '@/components/AvatarPhotoField'
+import { useUpdateAvatar, useUpdateProfile } from '@/hooks/profile'
 import { ApiError } from '@/lib/api'
 import { useAuth } from '@/providers/useAuth'
 
@@ -13,6 +14,7 @@ import { useAuth } from '@/providers/useAuth'
 export function Settings_ProfileTab() {
   const { user } = useAuth()
   const updateProfile = useUpdateProfile()
+  const updateAvatar = useUpdateAvatar()
 
   const [firstName, setFirstName] = useState(user?.firstName ?? '')
   const [lastName, setLastName] = useState(user?.lastName ?? '')
@@ -38,7 +40,18 @@ export function Settings_ProfileTab() {
     <section>
       <h2 className="text-base font-semibold">Your profile</h2>
 
-      <form onSubmit={onSubmit} className="mt-4 flex max-w-sm flex-col gap-4">
+      {user && (
+        <div className="mt-4">
+          <AvatarPhotoField
+            name={`${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || user.email}
+            avatarUrl={user.avatarUrl}
+            upload={(blob) => updateAvatar.mutateAsync(blob).then(() => undefined)}
+            label="profile"
+          />
+        </div>
+      )}
+
+      <form onSubmit={onSubmit} className="mt-6 flex max-w-sm flex-col gap-4">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="firstName">
@@ -52,7 +65,6 @@ export function Settings_ProfileTab() {
               onChange={(e) => setFirstName(e.target.value)}
             />
           </div>
-
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="lastName">
               Last name <RequiredAsterisk />
