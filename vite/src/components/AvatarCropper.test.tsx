@@ -19,6 +19,13 @@ afterEach(() => {
 })
 
 describe('AvatarPhotoField', () => {
+  it('shows the supported photo formats and size without crop helper copy', () => {
+    render(<AvatarPhotoField name="Al Pha" avatarUrl={null} label="profile" upload={vi.fn().mockResolvedValue(undefined)} />)
+
+    expect(screen.getByText('PNG, JPG, or WebP, up to 10MB.')).toBeInTheDocument()
+    expect(screen.queryByText(/cropped to a square/i)).not.toBeInTheDocument()
+  })
+
   it('keeps the selected photo preview URL valid after Strict Mode remounts effects', async () => {
     const user = userEvent.setup()
     const createObjectURL = vi.fn().mockReturnValue('blob:active-preview')

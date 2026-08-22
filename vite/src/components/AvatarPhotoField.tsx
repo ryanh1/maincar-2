@@ -67,7 +67,7 @@ export function AvatarPhotoField({ name, avatarUrl, disabled = false, upload, la
             </Button>
           )}
         </div>
-        <p className="text-xs text-text-muted">PNG, JPG, or WebP, up to 10MB. The photo is cropped to a square.</p>
+        <p className="text-xs text-text-muted">PNG, JPG, or WebP, up to 10MB.</p>
         {error && <p className="text-sm text-danger">{error}</p>}
       </div>
       <input
