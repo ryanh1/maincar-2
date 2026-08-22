@@ -38,6 +38,16 @@ const resolveQuerySchema = z.object({
   v: z.string().optional(),
   reset: z.enum(['true', 'false']).optional(),
 })
+const reorderSchema = z.object({
+  objectId: z.string().trim().min(1),
+  viewIds: z.array(z.string().trim().min(1)).min(1).max(200),
+}).superRefine(({ viewIds }, context) => {
+  if (new Set(viewIds).size !== viewIds.length) {
+    context.addIssue({ code: 'custom', path: ['viewIds'], message: 'Each saved view may appear only once.' })
+  }
+})
+
+class SavedViewReorderConflict extends Error {}
 
 function mapSavedView(view: SavedView, attributes: AttributeDef[]) {
   return {
@@ -150,6 +160,58 @@ router.post('/', wrapRoute('POST /api/orgs/:orgId/saved-views', async (req, res)
     },
   })
   res.status(201).json({ view: mapSavedView(view, loaded.attributes) })
+}))
+
+// POST /reorder keeps the switcher order coherent: the caller submits the whole
+// visible/editable set, so an omitted or foreign view cannot leave a partial order.
+router.post('/reorder', wrapRoute('POST /api/orgs/:orgId/saved-views/reorder', async (req, res) => {
+  const authReq = req as AuthenticatedRequest
+  const orgId = String(req.params.orgId)
+  const membership = await requireMembership(authReq, res, orgId)
+  if (!membership) return
+  const parsed = reorderSchema.safeParse(req.body)
+  if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
+
+  const loaded = await loadObjectAndAttributes(orgId, parsed.data.objectId)
+  if (!loaded) return void res.status(422).json({ error: 'Object not found in this organization.' })
+  const userId = authReq.user!.id
+  const visibleWhere = {
+    orgId,
+    objectId: loaded.object.id,
+    deletedAt: null,
+    OR: [{ ownerUserId: userId }, { isShared: true }],
+  }
+  const visibleViews = await prisma.savedView.findMany({ where: visibleWhere, select: { id: true } })
+  const visibleIds = new Set(visibleViews.map((view) => view.id))
+  const submittedIds = new Set(parsed.data.viewIds)
+  if (
+    visibleIds.size !== submittedIds.size
+    || parsed.data.viewIds.some((viewId) => !visibleIds.has(viewId))
+  ) {
+    return void res.status(422).json({ error: 'The order must contain every visible saved view for this object.' })
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Match the default-view transaction: serialize operations through the
+      // object row, and use updateMany with every tenant boundary in the write.
+      await tx.$queryRaw`SELECT id FROM "ObjectDef" WHERE id = ${loaded.object.id} AND "orgId" = ${orgId} FOR UPDATE`
+      for (const [sortOrder, id] of parsed.data.viewIds.entries()) {
+        const updated = await tx.savedView.updateMany({
+          where: { id, ...visibleWhere },
+          data: { sortOrder },
+        })
+        if (updated.count !== 1) throw new SavedViewReorderConflict()
+      }
+    })
+  } catch (error) {
+    if (error instanceof SavedViewReorderConflict) {
+      return void res.status(409).json({ error: 'Saved views changed before the order could be saved. Refresh and try again.' })
+    }
+    throw error
+  }
+
+  res.status(204).end()
 }))
 
 router.get('/:id', wrapRoute('GET /api/orgs/:orgId/saved-views/:id', async (req, res) => {

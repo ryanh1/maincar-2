@@ -7,7 +7,8 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     membership: { findFirst: vi.fn() },
     objectDef: { findFirst: vi.fn() },
     attributeDef: { findMany: vi.fn() },
-    savedView: { create: vi.fn(), findFirst: vi.fn(), updateMany: vi.fn() },
+    savedView: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
+    $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
 }))
@@ -64,6 +65,10 @@ beforeEach(() => {
   prismaMock.savedView.create.mockImplementation(async (args: { data: Record<string, unknown> }) => savedViewRow(args.data))
   prismaMock.savedView.findFirst.mockResolvedValue(savedViewRow())
   prismaMock.savedView.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.$transaction.mockImplementation(async (work: (tx: unknown) => unknown) => work({
+    $queryRaw: vi.fn(),
+    savedView: prismaMock.savedView,
+  }))
 })
 
 describe('POST /api/orgs/:orgId/saved-views', () => {
@@ -146,5 +151,60 @@ describe('POST /api/orgs/:orgId/objects/:objectId/views', () => {
       where: expect.objectContaining({ id: 'view-1', orgId: ORG_ID, deletedAt: { not: null } }),
       data: { deletedAt: null },
     }))
+  })
+})
+
+describe('POST /api/orgs/:orgId/saved-views/reorder', () => {
+  it('re-sequences every visible, editable view in the submitted switcher order', async () => {
+    prismaMock.savedView.findMany.mockResolvedValue([
+      savedViewRow({ id: 'view-1', sortOrder: 0 }),
+      savedViewRow({ id: 'view-2', sortOrder: 1 }),
+      savedViewRow({ id: 'view-3', sortOrder: 2 }),
+    ])
+    prismaMock.savedView.updateMany.mockResolvedValue({ count: 1 })
+
+    const response = await request(app)
+      .post(`${URL}/reorder`)
+      .set('Authorization', AUTH)
+      .send({ objectId: 'object-people', viewIds: ['view-3', 'view-1', 'view-2'] })
+
+    expect(response.status).toBe(204)
+    expect(prismaMock.savedView.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: 'view-3', orgId: ORG_ID, objectId: 'object-people', deletedAt: null, OR: [{ ownerUserId: 'user-a' }, { isShared: true }] },
+      data: { sortOrder: 0 },
+    })
+    expect(prismaMock.savedView.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 'view-1', orgId: ORG_ID, objectId: 'object-people', deletedAt: null, OR: [{ ownerUserId: 'user-a' }, { isShared: true }] },
+      data: { sortOrder: 1 },
+    })
+    expect(prismaMock.savedView.updateMany).toHaveBeenNthCalledWith(3, {
+      where: { id: 'view-2', orgId: ORG_ID, objectId: 'object-people', deletedAt: null, OR: [{ ownerUserId: 'user-a' }, { isShared: true }] },
+      data: { sortOrder: 2 },
+    })
+  })
+
+  it('rejects an incomplete or foreign-object order before changing any view', async () => {
+    prismaMock.savedView.findMany.mockResolvedValue([
+      savedViewRow({ id: 'view-1', sortOrder: 0 }),
+      savedViewRow({ id: 'view-2', sortOrder: 1 }),
+    ])
+
+    const response = await request(app)
+      .post(`${URL}/reorder`)
+      .set('Authorization', AUTH)
+      .send({ objectId: 'object-people', viewIds: ['view-1', 'view-from-another-object'] })
+
+    expect(response.status).toBe(422)
+    expect(prismaMock.savedView.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('rejects duplicate view ids before opening a reorder transaction', async () => {
+    const response = await request(app)
+      .post(`${URL}/reorder`)
+      .set('Authorization', AUTH)
+      .send({ objectId: 'object-people', viewIds: ['view-1', 'view-1'] })
+
+    expect(response.status).toBe(400)
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
   })
 })
