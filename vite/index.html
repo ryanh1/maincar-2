@@ -14,6 +14,9 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Glide's canvas editor renders its input overlay into this sibling portal.
+         Keeping it outside the app tree prevents clipping by the grid container. -->
+    <div id="portal"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

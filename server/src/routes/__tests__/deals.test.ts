@@ -442,6 +442,15 @@ describe('PATCH /api/orgs/:orgId/deals/:id', () => {
     })
   })
 
+  it('merge-patches one custom value without losing existing values', async () => {
+    prismaMock.deal.findFirst
+      .mockResolvedValueOnce(dealRow({ id: 'deal-1', customJson: { legacy: 'keep' } }))
+      .mockResolvedValueOnce(dealRow({ id: 'deal-1', customJson: { legacy: 'keep', website: 'https://maincar.com' } }))
+    const res = await request(app).patch(`${URL_A}/deal-1`).set('Authorization', AUTH).send({ customValues: { website: 'https://maincar.com' } })
+    expect(res.status).toBe(200)
+    expect(prismaMock.deal.updateMany.mock.calls[0][0].data.customJson).toEqual({ legacy: 'keep', website: 'https://maincar.com' })
+  })
+
   it('422s moving to a stage outside the deal’s pipeline', async () => {
     prismaMock.deal.findFirst.mockResolvedValueOnce(dealRow({ id: 'deal-1', pipelineId: 'pipe-1' }))
     prismaMock.pipeline.findFirst.mockResolvedValue({ id: 'pipe-1' })

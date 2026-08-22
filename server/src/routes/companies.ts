@@ -128,6 +128,7 @@ const companyBodySchema = z.object({
   ),
   source: optionalText,
   customJson: z.record(z.string(), z.unknown()).optional(),
+  customValues: z.record(z.string(), z.unknown()).optional(),
 })
 
 const ANCHOR_ERROR =
@@ -446,6 +447,14 @@ router.patch(
       data.callbackDate = body.callbackDate ? new Date(body.callbackDate) : null
     }
     if (body.customJson !== undefined) data.customJson = body.customJson
+    if (body.customValues !== undefined) {
+      const custom = { ...((existing.customJson ?? {}) as Record<string, unknown>) }
+      for (const [key, value] of Object.entries(body.customValues)) {
+        if (value === null || value === '') delete custom[key]
+        else custom[key] = value
+      }
+      data.customJson = custom
+    }
 
     // --- Execute query ---
     // updateMany with id+orgId, never update-by-id: the tenant key carries the

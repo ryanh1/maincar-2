@@ -245,6 +245,7 @@ const personBodySchema = z.object({
   source: optionalText,
   nameAudioUrl: optionalText,
   customJson: z.record(z.string(), z.unknown()).optional(),
+  customValues: z.record(z.string(), z.unknown()).optional(),
   // Nested children accepted ONLY on create, so a person can be created with just a
   // phone or email as its anchor (§5.15). Update touches children via /phones and
   // /emails sub-routes.
@@ -725,6 +726,14 @@ router.patch(
       data.callbackDate = body.callbackDate ? new Date(body.callbackDate) : null
     }
     if (body.customJson !== undefined) data.customJson = body.customJson
+    if (body.customValues !== undefined) {
+      const custom = { ...((existing.customJson ?? {}) as Record<string, unknown>) }
+      for (const [key, value] of Object.entries(body.customValues)) {
+        if (value === null || value === '') delete custom[key]
+        else custom[key] = value
+      }
+      data.customJson = custom
+    }
 
     // --- Execute query, with its field history in the SAME transaction ---
     // Spec §5.7 / MAI-136: a field change and its FieldHistory rows commit or roll

@@ -1,6 +1,8 @@
 import { Loader2 } from 'lucide-react'
+import { useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useGetActivity, type ActivityScope } from '@/hooks/crm'
 import { formatDateTime } from '@/lib/datetime'
@@ -27,6 +29,7 @@ interface RecordPeekDrawerProps {
   timeZone: string | null | undefined
   /** 1-based position and total, for the breadcrumb ("3 of 128"). */
   position: { index: number; total: number } | null
+  onEdit: (attribute: AttributeDef, value: unknown) => void
 }
 
 /**
@@ -34,7 +37,7 @@ interface RecordPeekDrawerProps {
  * `Space`/⤢, steps with `j`/`k` — see the keydown handling in RecordGrid, which
  * owns focus/selection and just hands this component the record to show.
  *
- * Read-only: inline editing here is MAI-170. Related rails and the full
+ * Fields share MAI-170's inline edit and optimistic persistence path. Related rails and the full
  * breadcrumb stack (peek-over-peek navigation) are scaffolded, not wired —
  * that's MAI-184, blocked on the Chunk 4 deep spec landing on main.
  */
@@ -47,6 +50,7 @@ export function RecordPeekDrawer({
   record,
   timeZone,
   position,
+  onEdit,
 }: RecordPeekDrawerProps) {
   const identityAttr = attributes.find((attr) => attr.isIdentity) ?? attributes[0] ?? null
   const identityValue = identityAttr && record ? formatCellValue(record[identityAttr.slug], identityAttr.type, timeZone) : ''
@@ -70,7 +74,7 @@ export function RecordPeekDrawer({
             {position ? ` · ${position.index} of ${position.total}` : ''}
           </p>
           <SheetTitle className="text-base">{title}</SheetTitle>
-          <SheetDescription className="sr-only">Record details, read-only.</SheetDescription>
+          <SheetDescription className="sr-only">Record details. Click a field value to edit it.</SheetDescription>
         </SheetHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -78,7 +82,7 @@ export function RecordPeekDrawer({
             <h3 className="mb-3 text-xs font-medium text-muted-foreground">Details</h3>
             <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-3 text-sm">
               {detailAttributes.map((attr) => (
-                <FieldRow key={attr.id} attr={attr} record={record} timeZone={timeZone} />
+                <FieldRow key={attr.id} attr={attr} record={record} timeZone={timeZone} onEdit={onEdit} />
               ))}
             </dl>
           </section>
@@ -125,18 +129,50 @@ function FieldRow({
   attr,
   record,
   timeZone,
+  onEdit,
 }: {
   attr: AttributeDef
   record: RecordRow | null
   timeZone: string | null | undefined
+  onEdit: (attribute: AttributeDef, value: unknown) => void
 }) {
   const rawValue = record ? record[attr.slug] : null
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(rawValue == null ? '' : String(rawValue))
+
+  function commit() {
+    setEditing(false)
+    if (!attr.isReadOnly && draft !== String(rawValue ?? '')) onEdit(attr, draft === '' ? null : draft)
+  }
 
   return (
     <>
       <dt className="truncate text-muted-foreground">{attr.name}</dt>
       <dd className="min-w-0 break-words text-foreground">
-        <FieldValue attr={attr} rawValue={rawValue} timeZone={timeZone} />
+        {editing ? (
+          <Input
+            autoFocus
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') commit()
+              if (event.key === 'Escape') setEditing(false)
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            disabled={attr.isReadOnly}
+            className="w-full text-left disabled:cursor-default"
+            onClick={() => {
+              setDraft(rawValue == null ? '' : String(rawValue))
+              setEditing(true)
+            }}
+          >
+            <FieldValue attr={attr} rawValue={rawValue} timeZone={timeZone} />
+          </button>
+        )}
       </dd>
     </>
   )

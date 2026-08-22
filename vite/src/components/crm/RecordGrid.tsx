@@ -14,21 +14,23 @@ import type {
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
 import { ChevronDown, ChevronUp, CornerRightUp, X } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { useRecordWindow } from '@/hooks/crm'
+import { useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
 import { useAuth } from '@/providers/useAuth'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
-import { buildGridCell, coerceForType, FLAGGED_THEME } from './cellBuilder'
+import { buildGridCell, coerceForType, FLAGGED_THEME, parseOptions } from './cellBuilder'
 import { chipCellRenderer, type ChipCellData } from './chipCell'
 import { GridViewToolbar } from './GridViewToolbar'
 import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { formatCellValue } from './recordCellValue'
 import { createViewConfig, toRecordListQuery, type ViewConfig } from './viewConfig'
+import { parseGridCommand } from './gridCommands'
 
 const LEADING_COLUMN_WIDTH = 220
 const DEFAULT_COLUMN_WIDTH = 160
@@ -74,6 +76,13 @@ type DisplayRow =
   | { kind: 'group'; key: string; label: string; count: number }
   | { kind: 'record'; record: RecordRow }
 
+interface EditHistoryEntry {
+  recordId: string
+  attribute: AttributeDef
+  before: unknown
+  after: unknown
+}
+
 interface RecordGridProps {
   orgId: string
   object: ObjectDef
@@ -98,9 +107,9 @@ function isTypingTarget(target: EventTarget | null): boolean {
  * The Glide record grid (design-system.md → Tables and grids): canvas, 60fps,
  * a tinted frozen header row (native to Glide) plus a frozen leading column
  * (MAI-164, plan T0.2; spec CHUNK-1 §B). Cell types + paste coercion land here
- * (MAI-169, T2.1); the optimistic-write/undo plumbing that persists an edit to
- * the server is T2.2-T2.4 (MAI-170) — edits here commit to local grid state
- * only, which is what lets each type demonstrate its round-trip.
+ * (MAI-169, T2.1). MAI-170 adds the Sheets intent layer: each edit paints
+ * immediately, persists through the object route, rolls back on failure, and
+ * remains reversible through this grid-owned undo stack.
  *
  * The read-only record peek drawer (MAI-167, Slice S1) also lives here: it
  * needs the same `rows` array the cells render from, so stepping between
@@ -151,6 +160,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const listQuery = useMemo(() => toRecordListQuery(config, attributes), [config, attributes])
   const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
     useRecordWindow(orgId, object.id, listQuery)
+  const updateRecordValue = useUpdateRecordValue()
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const groupAttribute = config.groupBy[0] ? columns.find((attribute) => attribute.id === config.groupBy[0]?.attributeId) : undefined
@@ -186,6 +196,8 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   // never silently dropped — issue MAI-169).
   const [edits, setEdits] = useState<Map<string, Record<string, unknown>>>(new Map())
   const [flaggedCells, setFlaggedCells] = useState<Set<string>>(new Set())
+  const [undoStack, setUndoStack] = useState<EditHistoryEntry[]>([])
+  const [redoStack, setRedoStack] = useState<EditHistoryEntry[]>([])
   const [findOpen, setFindOpen] = useState(false)
   const [replaceOpen, setReplaceOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
@@ -231,16 +243,8 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
       const attr = visibleColumns[col]
       if (!record || !attr) return true
 
-      const cellKey = `${record.id}:${attr.slug}`
-
       if (newValue.kind === GridCellKind.Text) {
         const result = coerceForType(attr, newValue.data, cellValue(record, attr))
-        setFlaggedCells((prev) => {
-          const next = new Set(prev)
-          if (result.ok) next.delete(cellKey)
-          else next.add(cellKey)
-          return next
-        })
         return {
           ...newValue,
           data: String(result.value ?? ''),
@@ -258,6 +262,32 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     [recordAtRow, visibleColumns, cellValue],
   )
 
+  const commitValue = useCallback(
+    (record: Record<string, unknown> & { id: string }, attr: AttributeDef, stored: unknown, history = true) => {
+      const prior = cellValue(record, attr)
+      setEdits((previous) => {
+        const next = new Map(previous)
+        next.set(record.id, { ...next.get(record.id), [attr.slug]: stored })
+        return next
+      })
+
+      void updateRecordValue.mutateAsync({ orgId, object, attribute: attr, recordId: record.id, value: stored }).catch(() => {
+        setEdits((previous) => {
+          const next = new Map(previous)
+          next.set(record.id, { ...next.get(record.id), [attr.slug]: prior })
+          return next
+        })
+        toast.error('Could not save. Check your connection and try again.')
+      })
+
+      if (history && !Object.is(prior, stored)) {
+        setUndoStack((previous) => [...previous, { recordId: record.id, attribute: attr, before: prior, after: stored }])
+        setRedoStack([])
+      }
+    },
+    [cellValue, updateRecordValue, orgId, object],
+  )
+
   const onCellEdited = useCallback(
     ([col, row]: Item, newValue: EditableGridCell) => {
       const record = recordAtRow(row)
@@ -273,18 +303,20 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         const chipData = newValue.data as ChipCellData
         stored = attr.isMulti ? chipData.selectedValues : (chipData.selectedValues[0] ?? null)
       } else if (newValue.kind === GridCellKind.Text) {
-        stored = newValue.data === '' ? null : newValue.data
-      } else {
-        return
-      }
-
-      setEdits((prev) => {
-        const next = new Map(prev)
-        next.set(record.id, { ...next.get(record.id), [attr.slug]: stored })
-        return next
-      })
+        const command = parseGridCommand(newValue.data, { type: attr.type, options: parseOptions(attr.optionsJson) })
+        stored = command.kind === 'value' ? command.value : newValue.data === '' ? null : newValue.data
+        const coercion = coerceForType(attr, newValue.data, cellValue(record, attr))
+        const cellKey = `${record.id}:${attr.slug}`
+        setFlaggedCells((previous) => {
+          const next = new Set(previous)
+          if (command.kind === 'value' || coercion.ok) next.delete(cellKey)
+          else next.add(cellKey)
+          return next
+        })
+      } else return
+      commitValue(record, attr, stored)
     },
-    [recordAtRow, visibleColumns],
+    [recordAtRow, visibleColumns, cellValue, commitValue],
   )
 
   const onVisibleRegionChanged = useCallback(
@@ -544,6 +576,35 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [peekOpen, focusedRow, openPeek, step])
 
+  // The grid owns history because Glide's undo buffer stops at the canvas;
+  // these entries replay through commitValue, so undo and redo are persisted
+  // optimistic writes just like the original edit.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || isTypingTarget(document.activeElement)) return
+      const isUndo = event.key.toLowerCase() === 'z' && !event.shiftKey
+      const isRedo = event.key.toLowerCase() === 'y' || (event.key.toLowerCase() === 'z' && event.shiftKey)
+      if (!isUndo && !isRedo) return
+      const stack = isUndo ? undoStack : redoStack
+      const entry = stack.at(-1)
+      if (!entry) return
+      const record = rows.find((candidate) => candidate.id === entry.recordId)
+      if (!record) return
+      event.preventDefault()
+      if (isUndo) {
+        setUndoStack((current) => current.slice(0, -1))
+        setRedoStack((current) => [...current, entry])
+        commitValue(record, entry.attribute, entry.before, false)
+      } else {
+        setRedoStack((current) => current.slice(0, -1))
+        setUndoStack((current) => [...current, entry])
+        commitValue(record, entry.attribute, entry.after, false)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [rows, undoStack, redoStack, commitValue])
+
   // The ⤢ hover affordance (DECISIONS D3): a small button pinned to the
   // frozen leading column, following whichever row the pointer is over.
   const [hoveredRow, setHoveredRow] = useState<{ row: number; y: number; height: number } | null>(null)
@@ -604,7 +665,8 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     )
   }
 
-  const peekRecord = peekIndex !== null ? recordAtRow(peekIndex) : null
+  const peekBaseRecord = peekIndex !== null ? recordAtRow(peekIndex) : null
+  const peekRecord = peekBaseRecord ? { ...peekBaseRecord, ...edits.get(peekBaseRecord.id) } : null
   const gridRowCount = groupAttribute ? displayRows.length : totalCount
 
   return (
@@ -782,6 +844,9 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         record={peekRecord}
         timeZone={user?.timeZone}
         position={peekIndex !== null ? { index: peekIndex + 1, total: totalCount } : null}
+        onEdit={(attribute, value) => {
+          if (peekRecord) commitValue(peekRecord, attribute, value)
+        }}
         />
       </div>
     </div>
