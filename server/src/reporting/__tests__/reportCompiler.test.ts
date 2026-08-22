@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  ACTIVITY_EVENT_COUNTS_GRID_REPORT,
   DEAL_STAGE_AMOUNT_REPORT,
   compileReport,
   type ReportConfig,
@@ -62,5 +63,18 @@ describe('compileReport', () => {
     }, 'org-a', { viewerTimeZone: 'America/New_York' })
 
     expect(query.values).toEqual(['Asia/Kolkata', 'org-a'])
+  })
+
+  it('compiles the activity event-count grid as local week buckets scoped to its org', () => {
+    const query = compileReport(ACTIVITY_EVENT_COUNTS_GRID_REPORT, 'org-a', {
+      viewerTimeZone: 'America/New_York',
+    })
+
+    expect(query.sql).toContain('FROM "ActivityEntry" AS "activity"')
+    expect(query.sql).toContain('date_trunc(\'week\', "activity"."occurredAt" AT TIME ZONE \'UTC\' AT TIME ZONE ?)')
+    expect(query.sql).toContain('"activity"."sourceType" IN (\'call\', \'email\', \'meeting\')')
+    expect(query.sql).toContain('"activity"."orgId" = ?')
+    expect(query.sql).toContain('COUNT(*)::text AS "count"')
+    expect(query.values).toEqual(['America/New_York', 'org-a'])
   })
 })

@@ -1,14 +1,24 @@
 import { Prisma } from '../generated/prisma/client.js'
 
-import { DEAL_FIELD_REGISTRY } from './fieldRegistry.js'
+import { ACTIVITY_EVENT_COUNT_FIELD_REGISTRY, DEAL_FIELD_REGISTRY } from './fieldRegistry.js'
 
-export interface ReportConfig {
+export interface DealStageAmountReportConfig {
   baseObject: 'deal'
   rows: [{ field: 'stage' }]
   values: [{ field: 'amountMinor'; aggregation: 'sum' }]
   timeZone: ReportTimeZone
   timeBucket?: { field: 'createdAt'; grain: 'day' }
 }
+
+export interface ActivityEventCountsGridReportConfig {
+  baseObject: 'activity'
+  rows: [{ field: 'sourceType' }]
+  values: [{ field: 'id'; aggregation: 'count' }]
+  timeZone: ReportTimeZone
+  timeBucket: { field: 'occurredAt'; grain: 'week' }
+}
+
+export type ReportConfig = DealStageAmountReportConfig | ActivityEventCountsGridReportConfig
 
 export type ReportTimeZone =
   | { mode: 'pinned'; displayZone: string }
@@ -20,13 +30,21 @@ export interface ReportExecutionContext {
   subjectTimeZone?: string | null
 }
 
-export const DEAL_STAGE_AMOUNT_REPORT: ReportConfig = {
+export const DEAL_STAGE_AMOUNT_REPORT: DealStageAmountReportConfig = {
   baseObject: 'deal',
   rows: [{ field: 'stage' }],
   values: [{ field: 'amountMinor', aggregation: 'sum' }],
   // The first report has no date bucket, but every saved report must still
   // declare an explicit zone before a later config adds one.
   timeZone: { mode: 'pinned', displayZone: 'UTC' },
+}
+
+export const ACTIVITY_EVENT_COUNTS_GRID_REPORT: ActivityEventCountsGridReportConfig = {
+  baseObject: 'activity',
+  rows: [{ field: 'sourceType' }],
+  values: [{ field: 'id', aggregation: 'count' }],
+  timeZone: { mode: 'viewer' },
+  timeBucket: { field: 'occurredAt', grain: 'week' },
 }
 
 export class InvalidReportConfigError extends Error {
@@ -81,6 +99,18 @@ export function compileReport(
   orgId: string,
   context: ReportExecutionContext = {},
 ): Prisma.Sql {
+  if (config.baseObject === 'activity') {
+    return compileActivityEventCountsGrid(config, orgId, context)
+  }
+
+  return compileDealStageAmountReport(config, orgId, context)
+}
+
+function compileDealStageAmountReport(
+  config: DealStageAmountReportConfig,
+  orgId: string,
+  context: ReportExecutionContext,
+): Prisma.Sql {
   const dimension = DEAL_FIELD_REGISTRY.dimensions.stage
   const measure = DEAL_FIELD_REGISTRY.measures.amountMinor
 
@@ -128,4 +158,40 @@ WHERE "deal"."orgId" = `,
 GROUP BY ${dimension.groupBy}
 ORDER BY "stage"."name" ASC`,
   ], orgId)
+}
+
+function compileActivityEventCountsGrid(
+  config: ActivityEventCountsGridReportConfig,
+  orgId: string,
+  context: ReportExecutionContext,
+): Prisma.Sql {
+  if (
+    config.rows.length !== 1 ||
+    config.rows[0]?.field !== 'sourceType' ||
+    config.values.length !== 1 ||
+    config.values[0]?.field !== 'id' ||
+    config.values[0]?.aggregation !== 'count' ||
+    config.timeBucket.field !== 'occurredAt' ||
+    config.timeBucket.grain !== 'week'
+  ) {
+    throw new InvalidReportConfigError('Only activity event counts grouped by week are available yet.')
+  }
+
+  const timeZone = resolveReportTimeZone(config.timeZone, context)
+  const sourceTypes = ACTIVITY_EVENT_COUNT_FIELD_REGISTRY.eventSourceTypes
+    .map((sourceType) => `'${sourceType}'`)
+    .join(', ')
+
+  return Prisma.sql([
+    // PostgreSQL weeks start on Monday. As with Deal day buckets, restore the
+    // UTC instant before deriving the viewer's local calendar week.
+    `SELECT date_trunc('week', "activity"."occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE `,
+    `)::date::text AS "weekStart", "activity"."sourceType" AS "sourceType", COUNT(*)::text AS "count"
+FROM "${ACTIVITY_EVENT_COUNT_FIELD_REGISTRY.table}" AS "activity"
+WHERE "activity"."orgId" = `,
+    `
+  AND "activity"."sourceType" IN (${sourceTypes})
+GROUP BY 1, 2
+ORDER BY "weekStart" ASC, "sourceType" ASC`,
+  ], timeZone, orgId)
 }

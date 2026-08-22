@@ -12,17 +12,29 @@ const router = Router({ mergeParams: true })
 
 // R0's intentionally narrow config. The registry/compiler is the one path from
 // this symbolic shape to SQL; the API never accepts columns, tables, or SQL.
-const reportConfigSchema = z.object({
+const timeZoneSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('pinned'), displayZone: z.string().trim().min(1).max(100) }).strict(),
+  z.object({ mode: z.literal('viewer') }).strict(),
+  z.object({ mode: z.literal('subject'), subjectUserId: z.string().trim().min(1).max(100) }).strict(),
+])
+
+const dealReportConfigSchema = z.object({
   baseObject: z.literal('deal'),
   rows: z.tuple([z.object({ field: z.literal('stage') }).strict()]),
   values: z.tuple([z.object({ field: z.literal('amountMinor'), aggregation: z.literal('sum') }).strict()]),
-  timeZone: z.discriminatedUnion('mode', [
-    z.object({ mode: z.literal('pinned'), displayZone: z.string().trim().min(1).max(100) }).strict(),
-    z.object({ mode: z.literal('viewer') }).strict(),
-    z.object({ mode: z.literal('subject'), subjectUserId: z.string().trim().min(1).max(100) }).strict(),
-  ]),
+  timeZone: timeZoneSchema,
   timeBucket: z.object({ field: z.literal('createdAt'), grain: z.literal('day') }).strict().optional(),
 }).strict()
+
+const activityGridConfigSchema = z.object({
+  baseObject: z.literal('activity'),
+  rows: z.tuple([z.object({ field: z.literal('sourceType') }).strict()]),
+  values: z.tuple([z.object({ field: z.literal('id'), aggregation: z.literal('count') }).strict()]),
+  timeZone: timeZoneSchema,
+  timeBucket: z.object({ field: z.literal('occurredAt'), grain: z.literal('week') }).strict(),
+}).strict()
+
+const reportConfigSchema = z.discriminatedUnion('baseObject', [dealReportConfigSchema, activityGridConfigSchema])
 
 const runReportBodySchema = z.object({ config: reportConfigSchema }).strict()
 const reportNameSchema = z.string().trim().min(1, 'Name the report to save it.').max(200)
@@ -49,6 +61,12 @@ function savedReportResponse(report: Pick<Report, 'id' | 'name' | 'kind' | 'conf
     createdAt: report.createdAt.toISOString(),
     updatedAt: report.updatedAt.toISOString(),
   }
+}
+
+interface RawActivityWeekCount {
+  weekStart: string
+  sourceType: string
+  count: string | number | bigint
 }
 
 router.use(requireAuth)
@@ -93,6 +111,19 @@ router.post(
       viewerTimeZone: authReq.user!.timeZone,
       subjectTimeZone,
     })
+    if (parsed.data.config.baseObject === 'activity') {
+      const rows = await prisma.$queryRaw<RawActivityWeekCount[]>(query)
+      return void res.json({
+        report: {
+          rows: rows.map((row) => ({
+            weekStart: row.weekStart,
+            sourceType: row.sourceType,
+            count: String(row.count),
+          })),
+        },
+      })
+    }
+
     const rows = await prisma.$queryRaw<RawDealStageSum[]>(query)
 
     // --- Return response ---

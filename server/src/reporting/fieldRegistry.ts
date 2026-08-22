@@ -25,3 +25,12 @@ export const DEAL_FIELD_REGISTRY = {
     },
   },
 } as const
+
+/**
+ * The first predefined rows in R4's activity grid. The compiler owns this
+ * allowlist so a report request cannot turn a source type into SQL input.
+ */
+export const ACTIVITY_EVENT_COUNT_FIELD_REGISTRY = {
+  table: 'ActivityEntry',
+  eventSourceTypes: ['call', 'email', 'meeting'],
+} as const
