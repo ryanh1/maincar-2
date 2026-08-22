@@ -67,3 +67,15 @@ export interface GetAccountTimelineResponse {
   nextCursor: string | null
   range: AccountTimelineRange
 }
+
+export interface AccountTimelineDetail {
+  type: AccountTimelineSourceType
+  id: string
+  [key: string]: unknown
+}
+
+export interface GetAccountTimelineDetailResponse {
+  event: AccountTimelineEvent
+  detail: AccountTimelineDetail
+  navigation: { previousEventId: string | null; nextEventId: string | null }
+}

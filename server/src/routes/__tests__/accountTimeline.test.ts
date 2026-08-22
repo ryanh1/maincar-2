@@ -11,7 +11,8 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     membership: { findFirst: vi.fn() },
     company: { findFirst: vi.fn() },
     deal: { findFirst: vi.fn() },
-    activityEntry: { findMany: vi.fn(), count: vi.fn() },
+    activityEntry: { findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn() },
+    call: { findFirst: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
 }))
@@ -279,5 +280,42 @@ describe('GET /api/orgs/:orgId/account-timeline — cursor paging', () => {
 
     expect(res.status).toBe(400)
     expect(prismaMock.activityEntry.findMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/orgs/:orgId/account-timeline/:eventId — typed detail', () => {
+  it('resolves the entry inside the requested company scope before reading its call source', async () => {
+    prismaMock.activityEntry.findFirst.mockResolvedValue(eventRow())
+    prismaMock.call.findFirst.mockResolvedValue({
+      id: 'call-1', direction: 'outbound', status: 'completed', fromE164: '+12025550100', toE164: '+12025550123',
+      recordingEnabled: false, transcriptStatus: 'done', transcript: 'Discussed the proposal.', durationS: 42,
+      startedAt: OCCURRED, endedAt: OCCURRED, createdAt: OCCURRED,
+    })
+
+    const res = await request(app)
+      .get(`${URL_A}/event-1?rootType=company&rootId=co-1`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.activityEntry.findFirst).toHaveBeenCalledWith({
+      where: { id: 'event-1', orgId: ORG_A, companyId: 'co-1' },
+    })
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({ where: { id: 'call-1', orgId: ORG_A } })
+    expect(res.body.detail).toMatchObject({ type: 'call', id: 'call-1', transcript: 'Discussed the proposal.' })
+  })
+
+  it('returns 404 when a source has gone stale or the event belongs to another account', async () => {
+    prismaMock.activityEntry.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(eventRow())
+    prismaMock.call.findFirst.mockResolvedValue(null)
+
+    const outsideScope = await request(app)
+      .get(`${URL_A}/event-1?rootType=company&rootId=co-2`)
+      .set('Authorization', AUTH)
+    const stale = await request(app)
+      .get(`${URL_A}/event-1?rootType=company&rootId=co-1`)
+      .set('Authorization', AUTH)
+
+    expect(outsideScope.status).toBe(404)
+    expect(stale.status).toBe(404)
   })
 })

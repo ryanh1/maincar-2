@@ -162,5 +162,7 @@ export const queryKeys = {
       root: { type: 'company' | 'deal'; id: string },
       params: Record<string, unknown> = {},
     ) => ['accountTimeline', orgId, root, params] as const,
+    detail: (orgId: string, root: { type: 'company' | 'deal'; id: string }, eventId: string, params: Record<string, unknown> = {}) =>
+      ['accountTimeline', orgId, root, 'detail', eventId, params] as const,
   },
 } as const
