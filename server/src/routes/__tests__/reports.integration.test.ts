@@ -27,6 +27,7 @@ vi.mock('../../db.js', async () => {
 
 import app from '../../app.js'
 import prisma from '../../db.js'
+import { rollupDialerAnalyticsForOrg } from '../../jobs/dialerAnalyticsRollup.js'
 import { seedMember, seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
 
 const CONFIG = {
@@ -49,6 +50,18 @@ const ACTIVITY_GRID_CONFIG = {
   timeZone: { mode: 'viewer' },
   timeBucket: { field: 'occurredAt', grain: 'week' },
 }
+
+const DIALER_NUMBER_CONFIG = {
+  baseObject: 'dialer',
+  rows: [{ field: 'numberE164' }],
+  values: [
+    { field: 'dials', aggregation: 'sum' },
+    { field: 'connects', aggregation: 'sum' },
+  ],
+  timeZone: { mode: 'pinned', displayZone: 'UTC' },
+}
+
+const DIALER_AREA_CONFIG = { ...DIALER_NUMBER_CONFIG, rows: [{ field: 'areaCode' }] }
 
 function authorization(firebaseUid: string): string {
   return `Bearer ${firebaseUid}`
@@ -275,6 +288,41 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
       { weekStart: '2026-08-24', metricKey: 'calls', metricType: 'event_count', count: '0' },
       { weekStart: '2026-08-24', metricKey: 'entered-proposal', metricType: 'stage_entry', count: '1' },
       { weekStart: '2026-08-24', metricKey: 'proposal-per-call', metricType: 'conversion', ratio: null },
+    ])
+  })
+
+  it('returns hand-counted connect rates by owned number and dialed area without another org’s calls', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+    await prisma.call.createMany({
+      data: [
+        { orgId: orgA.orgId, userId: orgA.adminUserId, fromE164: '+14155550110', toE164: '+12125550111', direction: 'outbound', status: 'completed', startedAt: new Date('2026-08-21T10:00:00.000Z') },
+        { orgId: orgA.orgId, userId: orgA.adminUserId, fromE164: '+14155550110', toE164: '+12125550112', direction: 'outbound', status: 'busy', startedAt: new Date('2026-08-21T11:00:00.000Z') },
+        { orgId: orgA.orgId, userId: orgA.adminUserId, fromE164: '+12125550120', toE164: '+14155550113', direction: 'outbound', status: 'completed', startedAt: new Date('2026-08-22T10:00:00.000Z') },
+        { orgId: orgB.orgId, userId: orgB.adminUserId, fromE164: '+14155550110', toE164: '+12125550111', direction: 'outbound', status: 'completed', startedAt: new Date('2026-08-21T10:00:00.000Z') },
+      ],
+    })
+
+    await rollupDialerAnalyticsForOrg(orgA.orgId)
+
+    const byNumber = await request(app)
+      .post(`/api/orgs/${orgA.orgId}/reports/run`)
+      .set('Authorization', authorization(orgA.adminFirebaseUid))
+      .send({ config: DIALER_NUMBER_CONFIG })
+    const byArea = await request(app)
+      .post(`/api/orgs/${orgA.orgId}/reports/run`)
+      .set('Authorization', authorization(orgA.adminFirebaseUid))
+      .send({ config: DIALER_AREA_CONFIG })
+
+    expect(byNumber.status).toBe(200)
+    expect(byNumber.body.report.rows).toEqual([
+      { numberE164: '+12125550120', dials: '1', connects: '1', connectRate: '1' },
+      { numberE164: '+14155550110', dials: '2', connects: '1', connectRate: '0.5' },
+    ])
+    expect(byArea.status).toBe(200)
+    expect(byArea.body.report.rows).toEqual([
+      { areaCode: '212', dials: '2', connects: '1', connectRate: '0.5' },
+      { areaCode: '415', dials: '1', connects: '1', connectRate: '1' },
     ])
   })
 
