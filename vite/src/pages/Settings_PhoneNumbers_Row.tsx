@@ -19,11 +19,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { IconButton } from '@/components/ui/icon-button'
-import { useReleaseNumber, useSetActiveNumber } from '@/hooks/phoneNumbers'
+import { useReleaseNumber } from '@/hooks/phoneNumbers'
 import type { PhoneNumber } from '@/hooks/phoneNumbers'
 import { ApiError } from '@/lib/api'
 import { formatDate } from '@/lib/datetime'
 import { getPhoneNumberStatusLabel } from '@/lib/phoneNumberLabels'
+
+import { Settings_PhoneNumbers_PrimaryControl } from './Settings_PhoneNumbers_PrimaryControl'
 
 interface Props {
   number: PhoneNumber
@@ -45,15 +47,10 @@ export function Settings_PhoneNumbers_Row({
   hasOtherActiveNumber,
   timeZone,
 }: Props) {
-  const setActive = useSetActiveNumber()
   const releaseNumber = useReleaseNumber()
   const [confirmRelease, setConfirmRelease] = useState(false)
 
   const isActive = number.isActiveForOutbound
-  // Only a dialable number that is not already the caller ID can be picked.
-  // `searching`, `releasing`, and `failed` cannot call out.
-  const canActivate = number.status === 'active' && !isActive
-
   // The server refuses both of these. The menu anticipates them and says why in
   // the item's own label, because a greyed row with no reason is a dead end.
   const isBuying = number.status === 'searching'
@@ -98,33 +95,7 @@ export function Settings_PhoneNumbers_Row({
         {formatDate(number.createdAt, timeZone)}
       </td>
       <td className="px-3 py-1 text-sm">
-        <label className="inline-flex items-center gap-2">
-          <input
-            type="radio"
-            name="call-from"
-            className="size-4 accent-primary"
-            checked={isActive}
-            disabled={!canActivate || setActive.isPending}
-            onChange={() =>
-              setActive.mutate(
-                { orgId, id: number.id },
-                {
-                  onSuccess: () => toast.success(`Now calling from ${number.e164}.`),
-                  onError: (error) =>
-                    toast.error(
-                      error instanceof ApiError
-                        ? error.message
-                        : 'Could not switch the number to call from. Try again.',
-                    ),
-                },
-              )
-            }
-            aria-label={`Call from ${number.e164}`}
-          />
-          <span className={isActive ? 'text-foreground' : 'text-muted-foreground'}>
-            {isActive ? 'Calling from' : 'Call from this number'}
-          </span>
-        </label>
+        <Settings_PhoneNumbers_PrimaryControl number={number} orgId={orgId} ownedByViewer />
       </td>
       <td className="px-2 py-1 text-right">
         <DropdownMenu>

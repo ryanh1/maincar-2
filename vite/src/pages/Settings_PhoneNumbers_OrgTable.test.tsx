@@ -10,14 +10,16 @@ import { screen } from '@testing-library/react'
 
 import { renderWithProviders } from '@/test/utils'
 
-const { useGetOrgNumbersMock, useAuthMock } = vi.hoisted(() => ({
+const { useGetOrgNumbersMock, useSetActiveNumberMock, useAuthMock } = vi.hoisted(() => ({
   useGetOrgNumbersMock: vi.fn(),
+  useSetActiveNumberMock: vi.fn(),
   useAuthMock: vi.fn(),
 }))
 
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/hooks/phoneNumbers', () => ({
   useGetOrgNumbers: useGetOrgNumbersMock,
+  useSetActiveNumber: useSetActiveNumberMock,
   useAssignNumber: () => ({ mutate: vi.fn(), isPending: false }),
 }))
 
@@ -26,6 +28,7 @@ import { Settings_PhoneNumbers_OrgTable } from './Settings_PhoneNumbers_OrgTable
 beforeEach(() => {
   vi.clearAllMocks()
   useAuthMock.mockReturnValue({ org: { id: 'org-a', name: 'Acme' }, user: { timeZone: 'America/New_York' } })
+  useSetActiveNumberMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
 })
 
 function render() {
@@ -145,4 +148,35 @@ it('omits the unassigned callout once every number has a holder', () => {
 
   expect(screen.getByText('1 total')).toBeInTheDocument()
   expect(screen.queryByText(/unassigned/)).not.toBeInTheDocument()
+})
+
+it('labels the primary column and does not offer to change a colleague\'s caller ID', () => {
+  useGetOrgNumbersMock.mockReturnValue({
+    isPending: false,
+    isError: false,
+    data: {
+      numbers: [
+        {
+          id: 'num-4',
+          e164: '+12025550126',
+          twilioSid: 'PN4',
+          status: 'active',
+          isActiveForOutbound: false,
+          createdAt: '2026-03-01T00:00:00.000Z',
+          assignedUser: { id: 'user-b', firstName: 'Bee', lastName: 'Ta', email: 'b@acme.com' },
+        },
+      ],
+      total: 1,
+      unassignedCount: 0,
+    },
+  })
+  useAuthMock.mockReturnValue({
+    org: { id: 'org-a', name: 'Acme' },
+    user: { id: 'user-a', timeZone: 'America/New_York' },
+  })
+
+  render()
+
+  expect(screen.getByRole('columnheader', { name: 'Primary' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Make primary' })).not.toBeInTheDocument()
 })
