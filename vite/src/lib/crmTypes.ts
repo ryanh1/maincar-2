@@ -124,6 +124,8 @@ export interface CrmList {
   description: string | null
   icon: string | null
   ownerUserId: string | null
+  isShared: boolean
+  sortOrder: number
   isArchived: boolean
   createdAt: string
   updatedAt: string

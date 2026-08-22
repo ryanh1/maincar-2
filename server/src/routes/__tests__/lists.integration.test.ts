@@ -95,6 +95,7 @@ describe('List + ListEntry (integration, real Postgres, real routes)', () => {
     expect(listA.status).toBe(201)
     expect(listB.status).toBe(201)
     expect(listA.body.list.slug).not.toBe(listB.body.list.slug)
+    expect(listA.body.list).toMatchObject({ isShared: false, sortOrder: 0 })
 
     const addTo = (listId: string, stage: string) =>
       request(app)
@@ -137,6 +138,17 @@ describe('List + ListEntry (integration, real Postgres, real routes)', () => {
     const stillPerson = await prisma.person.findFirstOrThrow({ where: { id: person.id, orgId: org.orgId } })
     expect(stillPerson.firstName).toBe('Jane')
     expect('valuesJson' in stillPerson).toBe(false)
+
+    // Removing a membership is not deleting the underlying CRM object. The
+    // process-specific values leave with the entry; the person survives intact.
+    const removed = await request(app)
+      .delete(`/api/orgs/${org.orgId}/lists/${listA.body.list.id}/entries/${entryA.body.entry.id}`)
+      .set('Authorization', as(admin.firebaseUid))
+    expect(removed.status).toBe(204)
+    await expect(prisma.person.findFirstOrThrow({ where: { id: person.id, orgId: org.orgId } }))
+      .resolves.toMatchObject({ id: person.id, firstName: 'Jane', lastName: 'Doe' })
+    await expect(prisma.listEntry.count({ where: { orgId: org.orgId, listId: listA.body.list.id } }))
+      .resolves.toBe(0)
   })
 
   // ============================================================

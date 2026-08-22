@@ -74,6 +74,7 @@ function listRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'list-1', orgId: ORG_A, name: 'Q3 outbound blitz', slug: 'q3-outbound-blitz',
     objectSlug: 'person', description: null, icon: null, ownerUserId: null,
+    isShared: false, sortOrder: 0,
     isArchived: false, deletedAt: null, createdAt: NOW, updatedAt: NOW, ...overrides,
   }
 }
@@ -128,6 +129,22 @@ beforeEach(() => {
 // POST /api/orgs/:orgId/lists — the "one object type per list" criterion
 // ============================================================
 describe('POST /api/orgs/:orgId/lists', () => {
+  it('persists and returns the sharing and sidebar-order metadata', async () => {
+    prismaMock.list.findFirst.mockResolvedValue(null) // no slug clash
+
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ name: 'Shared prospects', objectSlug: 'person', isShared: true, sortOrder: 1_024 })
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.list.create.mock.calls[0][0].data).toMatchObject({
+      isShared: true,
+      sortOrder: 1_024,
+    })
+    expect(res.body.list).toMatchObject({ isShared: true, sortOrder: 1_024 })
+  })
+
   it('verifies objectSlug against an ObjectDef in this org before creating', async () => {
     prismaMock.list.findFirst.mockResolvedValue(null) // no slug clash
     const res = await request(app)
@@ -250,11 +267,13 @@ describe('GET /api/orgs/:orgId/lists', () => {
     expect(prismaMock.list.count.mock.calls[0][0].where).toEqual(where)
   })
 
-  it('filters by objectSlug and can ask for the archived lists', async () => {
-    await request(app).get(`${URL_A}?objectSlug=company&isArchived=true`).set('Authorization', AUTH)
+  it('filters by objectSlug and sharing state, can ask for archived lists, and supports persisted ordering', async () => {
+    await request(app).get(`${URL_A}?objectSlug=company&isShared=true&isArchived=true&sort=sortOrder`).set('Authorization', AUTH)
     const where = prismaMock.list.findMany.mock.calls[0][0].where
     expect(where.objectSlug).toBe('company')
+    expect(where.isShared).toBe(true)
     expect(where.isArchived).toBe(true)
+    expect(prismaMock.list.findMany.mock.calls[0][0].orderBy[0]).toEqual({ sortOrder: 'asc' })
   })
 
   it('400s an over-large page and an unknown sort', async () => {
@@ -284,15 +303,17 @@ describe('GET /api/orgs/:orgId/lists/:id', () => {
 // PATCH — slug and objectSlug are never patchable
 // ============================================================
 describe('PATCH /api/orgs/:orgId/lists/:id', () => {
-  it('renames and archives, but ignores an attempt to change slug or objectSlug', async () => {
+  it('renames, archives, and updates sharing metadata, but ignores an attempt to change slug or objectSlug', async () => {
     const res = await request(app)
       .patch(`${URL_A}/list-1`)
       .set('Authorization', AUTH)
-      .send({ name: 'Renamed blitz', isArchived: true, slug: 'hacked-slug', objectSlug: 'company' })
+      .send({ name: 'Renamed blitz', isShared: true, sortOrder: 1_024, isArchived: true, slug: 'hacked-slug', objectSlug: 'company' })
 
     expect(res.status).toBe(200)
     const data = prismaMock.list.updateMany.mock.calls[0][0].data
     expect(data.name).toBe('Renamed blitz')
+    expect(data.isShared).toBe(true)
+    expect(data.sortOrder).toBe(1_024)
     expect(data.isArchived).toBe(true)
     expect(data.slug).toBeUndefined()
     expect(data.objectSlug).toBeUndefined()

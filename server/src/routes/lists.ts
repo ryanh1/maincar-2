@@ -50,7 +50,7 @@ const router = Router({ mergeParams: true })
 export const LIST_DEFAULT_LIMIT = 25
 export const LIST_MAX_LIMIT = 100
 
-const LIST_SORT_FIELDS = ['name', 'createdAt', 'updatedAt'] as const
+const LIST_SORT_FIELDS = ['name', 'createdAt', 'updatedAt', 'sortOrder'] as const
 const ENTRY_SORT_FIELDS = ['position', 'createdAt', 'updatedAt'] as const
 
 // A slug is url-safe on purpose: unlike an ObjectDef slug (a programmatic
@@ -95,6 +95,8 @@ function mapListToApi(list: List) {
     description: list.description,
     icon: list.icon,
     ownerUserId: list.ownerUserId,
+    isShared: list.isShared,
+    sortOrder: list.sortOrder,
     isArchived: list.isArchived,
     createdAt: list.createdAt.toISOString(),
     updatedAt: list.updatedAt.toISOString(),
@@ -212,6 +214,7 @@ const listQuerySchema = z.object({
   sort: z.enum(LIST_SORT_FIELDS, { error: `Sort by one of: ${LIST_SORT_FIELDS.join(', ')}.` }).default('name'),
   dir: z.enum(['asc', 'desc'], { error: 'Sort direction is asc or desc.' }).default('asc'),
   objectSlug: optionalId,
+  isShared: optionalBool,
   isArchived: optionalBool,
   q: z.preprocess(blankToUndefined, z.string().trim().min(1).max(200).optional()),
 })
@@ -234,13 +237,14 @@ router.get(
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
-    const { page, limit, sort, dir, objectSlug, isArchived, q } = parsed.data
+    const { page, limit, sort, dir, objectSlug, isShared, isArchived, q } = parsed.data
 
     // --- Build filters ---
     const where: Prisma.ListWhereInput = {
       orgId,
       deletedAt: null,
       ...(objectSlug ? { objectSlug } : {}),
+      ...(isShared === undefined ? {} : { isShared }),
       // A list is active by default; ask isArchived=true to see the archived ones.
       isArchived: isArchived ?? false,
       ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
@@ -292,6 +296,8 @@ const createListBodySchema = z.object({
   description: z.string().max(2000, 'That description is too long.').nullish(),
   icon: z.string().max(100).nullish(),
   ownerUserId: z.string().trim().min(1).nullish(),
+  isShared: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
 })
 
 // ============================================================
@@ -342,6 +348,8 @@ router.post(
       description: body.description ?? null,
       icon: body.icon ?? null,
       ownerUserId: body.ownerUserId ?? null,
+      isShared: body.isShared ?? false,
+      sortOrder: body.sortOrder ?? 0,
     }
     let created: List
     try {
@@ -365,6 +373,8 @@ const updateListBodySchema = z.object({
   description: z.string().max(2000, 'That description is too long.').nullish(),
   icon: z.string().max(100).nullish(),
   ownerUserId: z.string().trim().min(1).nullish(),
+  isShared: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
   isArchived: z.boolean().optional(),
 })
 
@@ -410,6 +420,8 @@ router.patch(
     if ('description' in raw) data.description = blankToNull(raw.description) as string | null
     if ('icon' in raw) data.icon = blankToNull(raw.icon) as string | null
     if ('ownerUserId' in raw) data.ownerUserId = body.ownerUserId ?? null
+    if (body.isShared !== undefined) data.isShared = body.isShared
+    if (body.sortOrder !== undefined) data.sortOrder = body.sortOrder
     if (body.isArchived !== undefined) data.isArchived = body.isArchived
 
     // --- Execute query ---
@@ -664,6 +676,9 @@ router.post(
 
 const updateEntryBodySchema = z.object({
   valuesJson: z.record(z.string(), z.unknown()).optional(),
+  // The caller sends a sparse rank (for example 1024, 1536, 2048), calculated
+  // between its visible neighbours. Moving one entry consequently updates only
+  // that row; a full-list rewrite is never needed.
   position: z.number().int().nullish(),
 })
 
