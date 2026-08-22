@@ -4,7 +4,8 @@ import request from 'supertest'
 const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
-    membership: { findFirst: vi.fn() },
+    membership: { findFirst: vi.fn(), findMany: vi.fn() },
+    team: { findMany: vi.fn() },
     report: {
       create: vi.fn(),
       count: vi.fn(),
@@ -90,6 +91,30 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
       },
     })
     expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves an owner team filter through the shared team scope before compiling', async () => {
+    prismaMock.membership.findMany.mockResolvedValue([{ userId: 'lead-a' }])
+    prismaMock.team.findMany.mockResolvedValue([
+      { id: 'team-a', members: [{ userId: 'owner-a' }, { userId: 'owner-b' }] },
+    ])
+
+    const response = await request(app)
+      .post(URL)
+      .set('Authorization', 'Bearer fake-token')
+      .send({
+        config: {
+          ...CONFIG,
+          filters: { ownerTeam: { teamIds: ['team-a'], leadUserIds: ['lead-a'] } },
+        },
+      })
+
+    expect(response.status).toBe(200)
+    expect(prismaMock.team.findMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ orgId: ORG_ID, archivedAt: null }),
+      select: { id: true, members: { select: { userId: true } } },
+    })
+    expect(prismaMock.$queryRaw.mock.calls[0][0].values).toEqual([ORG_ID, 'owner-a', 'owner-b'])
   })
 
   it('returns activity event counts grouped into viewer-local weeks', async () => {
@@ -270,6 +295,26 @@ describe('saved reports', () => {
       id: 'report-1',
       name: 'Pipeline by stage',
       config: CONFIG,
+    })
+  })
+
+  it('updates a saved report’s structured owner team selection', async () => {
+    const scopedConfig = {
+      ...CONFIG,
+      filters: { ownerTeam: { teamIds: ['team-a'], leadUserIds: ['lead-b'] } },
+    }
+    prismaMock.report.updateMany.mockResolvedValue({ count: 1 })
+
+    const updated = await request(app)
+      .patch(`/api/orgs/${ORG_ID}/reports/report-1`)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ config: scopedConfig })
+
+    expect(updated.status).toBe(200)
+    expect(updated.body).toEqual({ report: { id: 'report-1', config: scopedConfig } })
+    expect(prismaMock.report.updateMany).toHaveBeenCalledWith({
+      where: { id: 'report-1', orgId: ORG_ID, ownerId: 'user-a', deletedAt: null },
+      data: { configJson: scopedConfig },
     })
   })
 

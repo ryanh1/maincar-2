@@ -79,6 +79,36 @@ export interface GetMembersResponse {
   viewerRoles: MembershipRole[]
 }
 
+export interface TeamMember {
+  userId: string
+  email: string
+  firstName: string | null
+  lastName: string | null
+  title: string | null
+}
+
+/** The team catalog shape used by team-aware pickers. */
+export interface Team {
+  id: string
+  orgId: string
+  name: string
+  leadUserId: string
+  isArchived: boolean
+  archivedAt: string | null
+  memberUserIds: string[]
+  members: TeamMember[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface GetTeamsParams {
+  isArchived?: boolean
+}
+
+export interface GetTeamsResponse {
+  teams: Team[]
+}
+
 export interface UpdateMemberRolesInput {
   orgId: string
   userId: string

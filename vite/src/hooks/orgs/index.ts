@@ -6,6 +6,7 @@ export { useUpdateOrg } from './useUpdateOrg'
 export { useUpdateOrgAvatar } from './useUpdateOrgAvatar'
 export { useSwitchOrg } from './useSwitchOrg'
 export { useGetMembers } from './useGetMembers'
+export { useGetTeams } from './useGetTeams'
 export { useUpdateMemberRoles } from './useUpdateMemberRoles'
 export { useRemoveMember } from './useRemoveMember'
 export { useGetInvitations } from './useGetInvitations'
@@ -26,6 +27,10 @@ export type {
   Invitation,
   GetOrgsResponse,
   GetMembersResponse,
+  Team,
+  TeamMember,
+  GetTeamsParams,
+  GetTeamsResponse,
   GetInvitationsResponse,
   CreateOrgInput,
   UpdateOrgInput,
