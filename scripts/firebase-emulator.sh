@@ -7,14 +7,13 @@
 #
 # 1. `--export-on-exit` only runs on a CLEAN shutdown. Kill the parent `npm run dev`
 #    hard, or lose the terminal, and the export never happens — every local account
-#    is gone. So before doing anything else, this saves the accounts out of whatever
-#    is currently running.
+#    is gone. So this wrapper checkpoints accounts while the emulator runs and
+#    once more during its own clean shutdown.
 #
 # 2. firebase.json pins auth to a fixed port. The FIRST emulator to claim it wins.
 #    A later one starts with a hub but NO auth emulator: it prints a cheerful banner
-#    and then signs nobody in. A stale emulator from a session that ended hours ago
-#    is enough to break `npm run dev` for the rest of the day. So this frees the port
-#    first, and refuses to start if it cannot.
+#    and then signs nobody in. A port owner may belong to another worktree, though,
+#    so this launcher refuses loudly instead of killing a process it does not own.
 #
 # Accounts are read straight off the emulator's REST API rather than through
 # `firebase emulators:export`, because that command follows a global hub locator
@@ -32,6 +31,7 @@ PROJECT="maincar-2"
 PORT=9140
 DATA_DIR="$FB/data"
 EXPORT_DIR="$DATA_DIR/auth_export"
+READY_FILE=""
 
 log() { printf '[firebase] %s\n' "$*"; }
 
@@ -42,11 +42,9 @@ emulator_pids_on_port() {
 # Every port firebase.json pins, read from the file rather than hardcoded here, so
 # adding an emulator to the config does not silently leave a port unmanaged.
 #
-# Freeing ONLY the auth port is not enough. The emulators are separate processes —
-# Firestore and Storage are JVMs — and a hard kill of the parent can leave any of
-# them holding its port. The next start then dies on "port taken" for an emulator
-# nobody was thinking about, which reads like a broken config rather than a stale
-# process.
+# Checking ONLY the auth port is not enough. The emulators are separate processes
+# — Firestore and Storage are JVMs — and every configured port must be free before
+# a reliable emulator session can start.
 declared_ports() {
   python3 - "$FB/firebase.json" <<'PY'
 import json, sys
@@ -147,37 +145,30 @@ if [ "${1:-}" = "--save-only" ]; then
   exit $?
 fi
 
-# --- Save the accounts off whatever is running, BEFORE anything gets killed ---
-if [ -n "$(emulator_pids_on_port "$PORT")" ]; then
-  log "an emulator already holds $PORT — saving its accounts before restarting"
-  save_accounts_from_running_emulator || true
+if [ "${1:-}" = "--ready-file" ]; then
+  if [ "$#" -ne 2 ]; then
+    log "ERROR: --ready-file needs a file path"
+    exit 2
+  fi
+  READY_FILE="$2"
+elif [ "$#" -ne 0 ]; then
+  log "ERROR: unknown argument: $1"
+  exit 2
 fi
 
-# --- Free every pinned port ---
+# --- Refuse occupied ports ---
+# This used to terminate every listener on a configured port. That made one
+# worktree's startup silently kill another's Firebase emulator, after which the
+# API had no Auth service at all. We cannot establish ownership from a port
+# number, so fail with the exact PIDs rather than making that destructive guess.
 for port in $(declared_ports); do
   pids="$(emulator_pids_on_port "$port")"
   [ -z "$pids" ] && continue
 
-  log "freeing port $port (pid(s): $pids)"
-  # shellcheck disable=SC2086
-  kill $pids 2>/dev/null || true
-
-  for _ in $(seq 1 15); do
-    [ -z "$(emulator_pids_on_port "$port")" ] && break
-    sleep 1
-  done
-
-  if [ -n "$(emulator_pids_on_port "$port")" ]; then
-    # shellcheck disable=SC2086
-    kill -9 $(emulator_pids_on_port "$port") 2>/dev/null || true
-    sleep 2
-  fi
-
-  if [ -n "$(emulator_pids_on_port "$port")" ]; then
-    log "ERROR: could not free port $port. Inspect it with:"
-    log "  lsof -nP -iTCP:$port -sTCP:LISTEN"
-    exit 1
-  fi
+  log "ERROR: port $port is already in use by pid(s): $pids"
+  log "Refusing to stop a process this launcher did not start. Inspect it with:"
+  log "  lsof -nP -iTCP:$port -sTCP:LISTEN"
+  exit 1
 done
 
 # --- Start ---
@@ -196,11 +187,11 @@ fi
 # own pid and not a wrapper's.
 start_emulator() {
   if [ -f "$DATA_DIR/firebase-export-metadata.json" ]; then
-    exec npx firebase emulators:start \
+    exec npx --no-install firebase emulators:start \
       --config firebase.json --project "$PROJECT" \
       --import data --export-on-exit data
   else
-    exec npx firebase emulators:start \
+    exec npx --no-install firebase emulators:start \
       --config firebase.json --project "$PROJECT" \
       --export-on-exit data
   fi
@@ -208,6 +199,40 @@ start_emulator() {
 
 start_emulator &
 EMULATOR_PID=$!
+
+# A listening socket is not enough: the Auth emulator binds its port before it
+# can answer token-verification requests. The local API and Vite proxy both use
+# this endpoint, so a successful query is the readiness contract they need.
+wait_for_auth_ready() {
+  for _ in $(seq 1 60); do
+    if curl -fsS -m 1 -X POST \
+        "http://127.0.0.1:$PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT/accounts:query" \
+        -H "Authorization: Bearer owner" -H "Content-Type: application/json" \
+        -d '{}' -o /dev/null; then
+      return 0
+    fi
+
+    if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+      log "ERROR: Firebase exited before Auth became ready"
+      return 1
+    fi
+    sleep 1
+  done
+
+  log "ERROR: Firebase Auth did not become ready within 60 seconds"
+  return 1
+}
+
+if ! wait_for_auth_ready; then
+  kill "$EMULATOR_PID" 2>/dev/null || true
+  wait "$EMULATOR_PID" 2>/dev/null || true
+  exit 1
+fi
+
+if [ -n "$READY_FILE" ]; then
+  : > "$READY_FILE"
+  log "Firebase Auth is ready"
+fi
 
 # Checkpoint on a timer while the emulator runs.
 #
