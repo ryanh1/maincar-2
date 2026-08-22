@@ -157,12 +157,12 @@ describe('FieldValueEditor', () => {
     expect(onCommit).not.toHaveBeenCalled()
   })
 
-  it('uses option controls for a multiselect field', () => {
+  it('commits each multiselect change without a separate save action', () => {
     render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Stage', type: 'multiselect', isMulti: true, optionsJson: [{ value: 'new', label: 'New' }, { value: 'won', label: 'Won' }] })} value={['new']} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Won' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save Stage' }))
     expect(onCommit).toHaveBeenCalledWith(['new', 'won'])
+    expect(screen.queryByRole('button', { name: 'Save Stage' })).not.toBeInTheDocument()
   })
 
   it('uses record and member pickers for reference fields', () => {

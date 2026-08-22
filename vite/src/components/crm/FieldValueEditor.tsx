@@ -21,6 +21,7 @@ interface FieldValueEditorProps {
   timeZone: string | null | undefined
   onCommit: (value: unknown) => void
   onCancel: () => void
+  onTabNext?: () => void
 }
 
 function draftValue(value: unknown, attribute: AttributeDef): string {
@@ -38,7 +39,7 @@ function draftValue(value: unknown, attribute: AttributeDef): string {
  * record drawer. It keeps an invalid draft on screen and names the correction
  * instead of handing an unparseable value to the server or silently clearing it.
  */
-export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, onCancel }: FieldValueEditorProps) {
+export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, onCancel, onTabNext }: FieldValueEditorProps) {
   const [draft, setDraft] = useState(() => draftValue(value, attribute))
   const [error, setError] = useState<string | null>(null)
   const cancelled = useRef(false)
@@ -46,7 +47,7 @@ export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, 
     Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : typeof value === 'string' ? [value] : [],
   )
 
-  function commitText() {
+  function commitText(): boolean {
     const result =
       attribute.type === 'currency'
         ? coerceCurrency(draft)
@@ -61,10 +62,11 @@ export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, 
             ? 'Enter a valid amount.'
           : result.reason ?? `Enter a valid ${attribute.name.toLowerCase()}.`,
       )
-      return
+      return false
     }
     setError(null)
     onCommit(attribute.type === 'currency' && attribute.slug === 'amountMinor' && typeof result.value === 'number' ? result.value * 100 : result.value)
+    return true
   }
 
   function commitOnBlur() {
@@ -99,15 +101,16 @@ export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, 
             <label key={option.value} className="flex items-center gap-2 text-sm">
               <Checkbox
                 checked={checked}
-                onCheckedChange={(next) => setSelectedValues((current) => next === true ? [...current, option.value] : current.filter((entry) => entry !== option.value))}
+                onCheckedChange={(next) => {
+                  const updated = next === true ? [...selectedValues, option.value] : selectedValues.filter((entry) => entry !== option.value)
+                  onCommit(updated)
+                  setSelectedValues(updated)
+                }}
               />
               {option.label}
             </label>
           )
         })}
-        <Button type="button" variant="secondary" size="sm" className="self-start" onClick={() => onCommit(selectedValues)}>
-          Save {attribute.name}
-        </Button>
       </div>
     )
   }
@@ -196,6 +199,10 @@ export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, 
           if (event.key === 'Enter') {
             event.preventDefault()
             commitText()
+          }
+          if (event.key === 'Tab' && onTabNext) {
+            event.preventDefault()
+            if (commitText()) onTabNext()
           }
           if (event.key === 'Escape') {
             event.preventDefault()
