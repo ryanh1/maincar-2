@@ -2750,6 +2750,12 @@ model List {
   // Task.deletedById is one: the list outlives the account that owned it.
   ownerUserId String?
 
+  // Sharing and sidebar order are properties of the list itself, never of a
+  // membership entry. `sortOrder` has a stable default so lists created before
+  // a user reorders them remain queryable with the same indexed shape.
+  isShared  Boolean @default(false)
+  sortOrder Int     @default(0)
+
   isArchived Boolean   @default(false)
   // Soft delete into the 30-day trash (spec §5.13).
   deletedAt  DateTime?
@@ -2763,6 +2769,8 @@ model List {
   @@index([orgId])
   // "The lists of people", "the lists of companies" — the sidebar's own query.
   @@index([orgId, objectSlug])
+  // Shared-list sidebar lookup in its persisted order.
+  @@index([orgId, objectSlug, isShared, sortOrder])
 }
 
 model ListEntry {
