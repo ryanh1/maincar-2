@@ -7,6 +7,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
 import type { AttributeDef } from '@/lib/crmTypes'
@@ -17,8 +18,10 @@ const useRecordWindow = vi.hoisted(() => vi.fn())
 const useGetActivity = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: undefined })))
 const mutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 const useUpdateRecordValue = vi.hoisted(() => vi.fn(() => ({ mutateAsync })))
+const createMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
+const useCreateRecord = vi.hoisted(() => vi.fn(() => ({ mutateAsync: createMutateAsync, isPending: false })))
 const dataEditorScrollTo = vi.hoisted(() => vi.fn())
-vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetActivity, useUpdateRecordValue }))
+vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetActivity, useUpdateRecordValue, useCreateRecord }))
 
 vi.mock('@/providers/useAuth', () => ({
   useAuth: () => ({ user: { timeZone: 'America/New_York' } }),
@@ -58,6 +61,7 @@ const TEST_OBJECT = {
   storage: 'table' as const,
   isStandard: false,
   isFirstClass: false,
+  isGridCreateSupported: false,
   isHidden: false,
   isArchived: false,
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -103,12 +107,64 @@ beforeEach(() => {
   useRecordWindow.mockReset()
   mutateAsync.mockReset()
   mutateAsync.mockResolvedValue(undefined)
+  createMutateAsync.mockReset()
+  createMutateAsync.mockResolvedValue(undefined)
+  useCreateRecord.mockReturnValue({ mutateAsync: createMutateAsync, isPending: false })
   dataEditorProps.current = null
   dataEditorScrollTo.mockReset()
   dataEditorProps.frozenRows = null
 })
 
 describe('RecordGrid', () => {
+  it('does not render a create action when the server says grid creation is unsupported', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [], totalCount: 0, isPending: false, isError: false, hasNextPage: false,
+      isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    const attributes = [attribute({ slug: 'status', name: 'Status' })]
+
+    renderWithProviders(
+      <RecordGrid
+        orgId="org-1"
+        object={{ ...TEST_OBJECT, slug: 'call', name: 'Call', namePlural: 'Calls' }}
+        attributes={attributes}
+        viewConfig={createViewConfig(attributes)}
+        onViewConfigChange={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Create Call' })).not.toBeInTheDocument()
+  })
+
+  it('creates a new record from a blank grid row and closes it after the confirmed save', async () => {
+    const user = userEvent.setup()
+    useRecordWindow.mockReturnValue({
+      rows: [], totalCount: 0, isPending: false, isError: false, hasNextPage: false,
+      isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    const object = { ...TEST_OBJECT, slug: 'company', name: 'Company', namePlural: 'Companies', isGridCreateSupported: true }
+    const attributes = [attribute({ slug: 'name', name: 'Name', isIdentity: true })]
+
+    renderWithProviders(
+      <RecordGrid
+        orgId="org-1"
+        object={object}
+        attributes={attributes}
+        viewConfig={createViewConfig(attributes)}
+        onViewConfigChange={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Create Company' }))
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Acme')
+    await user.click(screen.getByRole('button', { name: 'Save Company' }))
+
+    expect(createMutateAsync).toHaveBeenCalledWith({
+      orgId: 'org-1', object, values: { name: 'Acme' },
+    })
+    expect(screen.queryByRole('textbox', { name: 'Name' })).not.toBeInTheDocument()
+  })
+
   it('shows a loading state before the first page resolves', () => {
     useRecordWindow.mockReturnValue({
       rows: [],

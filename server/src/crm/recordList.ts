@@ -71,6 +71,17 @@ export function isRecordListSupported(object: Pick<ObjectDef, 'slug' | 'storage'
   return object.storage === 'record' || object.slug in TABLE_STORAGE_TABLES
 }
 
+// Grid creation is deliberately narrower than listing. Record-backed objects
+// use the generic records route, while Person and Company have standalone
+// create routes whose identity fields can be collected in a blank grid row.
+// Deal creation requires a pipeline and stage picker, and Call rows originate
+// from the calling flow, so neither gets a live-looking grid control.
+const GRID_CREATE_TABLE_SLUGS = new Set(['person', 'company'])
+
+export function isRecordGridCreateSupported(object: Pick<ObjectDef, 'slug' | 'storage'>): boolean {
+  return isRecordListSupported(object) && (object.storage === 'record' || GRID_CREATE_TABLE_SLUGS.has(object.slug))
+}
+
 export type FilterOperator =
   | 'eq'
   | 'neq'

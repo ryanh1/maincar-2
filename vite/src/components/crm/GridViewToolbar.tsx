@@ -24,6 +24,9 @@ interface GridViewToolbarProps {
   config: ViewConfig
   onConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
   teamScopeSupported?: boolean
+  createLabel?: string
+  onCreate?: () => void
+  createDisabled?: boolean
 }
 
 function selectedValues(config: ViewConfig, attributeId: string): string[] {
@@ -111,7 +114,7 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 }
 
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
-export function GridViewToolbar({ orgId, attributes, config, onConfigChange, teamScopeSupported = false }: GridViewToolbarProps) {
+export function GridViewToolbar({ orgId, attributes, config, onConfigChange, teamScopeSupported = false, createLabel, onCreate, createDisabled = false }: GridViewToolbarProps) {
   const activeSort = config.sorts[0]
   const activeSortAttribute = attributes.find((attribute) => attribute.id === activeSort?.attributeId)
   const selectableAttributes = attributes.filter(
@@ -357,9 +360,10 @@ export function GridViewToolbar({ orgId, attributes, config, onConfigChange, tea
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {activeSortAttribute && (
-        <span className="ml-auto text-xs tabular-nums text-text-muted">Sorted by {activeSortAttribute.name}</span>
-      )}
+      <div className="ml-auto flex items-center gap-2">
+        {activeSortAttribute && <span className="text-xs tabular-nums text-text-muted">Sorted by {activeSortAttribute.name}</span>}
+        {createLabel && onCreate && <Button type="button" size="sm" disabled={createDisabled} onClick={onCreate}>{createLabel}</Button>}
+      </div>
     </div>
   )
 }

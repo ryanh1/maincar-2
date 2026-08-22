@@ -28,7 +28,7 @@ import { logger } from '../../dependencies/logger.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
-import { isRecordListSupported, listRecords, ListQueryError } from '../crm/recordList.js'
+import { isRecordGridCreateSupported, isRecordListSupported, listRecords, ListQueryError } from '../crm/recordList.js'
 import type { ObjectDef, AttributeDef, Prisma } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
@@ -56,6 +56,7 @@ function mapObjectToApi(object: ObjectDef & { attributes?: AttributeDef[] }) {
     isFirstClass: object.isFirstClass,
     timelineEventsEnabled: object.timelineEventsEnabled,
     isListSupported: isRecordListSupported(object),
+    isGridCreateSupported: isRecordGridCreateSupported(object),
     isHidden: object.isHidden,
     isArchived: object.isArchived,
     createdAt: object.createdAt.toISOString(),

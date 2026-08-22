@@ -241,9 +241,10 @@ describe('GET /api/orgs/:orgId/objects', () => {
     })
   })
 
-  it('reports list support from the server capability policy', async () => {
+  it('reports list and grid-create support from the server capability policies', async () => {
     prismaMock.objectDef.findMany.mockResolvedValue([
       objectRow({ id: 'person', slug: 'person', storage: 'table' }),
+      objectRow({ id: 'call', slug: 'call', storage: 'table' }),
       objectRow({ id: 'email', slug: 'email', storage: 'table' }),
       objectRow({ id: 'project', slug: 'project', storage: 'record' }),
     ])
@@ -251,13 +252,15 @@ describe('GET /api/orgs/:orgId/objects', () => {
     const res = await request(app).get(URL_A).set('Authorization', AUTH)
 
     expect(res.status).toBe(200)
-    expect(res.body.objects.map((object: { slug: string; isListSupported: boolean }) => ({
+    expect(res.body.objects.map((object: { slug: string; isListSupported: boolean; isGridCreateSupported: boolean }) => ({
       slug: object.slug,
       isListSupported: object.isListSupported,
+      isGridCreateSupported: object.isGridCreateSupported,
     }))).toEqual([
-      { slug: 'person', isListSupported: true },
-      { slug: 'email', isListSupported: false },
-      { slug: 'project', isListSupported: true },
+      { slug: 'person', isListSupported: true, isGridCreateSupported: true },
+      { slug: 'call', isListSupported: true, isGridCreateSupported: false },
+      { slug: 'email', isListSupported: false, isGridCreateSupported: false },
+      { slug: 'project', isListSupported: true, isGridCreateSupported: true },
     ])
   })
 

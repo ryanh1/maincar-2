@@ -72,6 +72,7 @@ export interface ObjectDef {
   isStandard: boolean
   isFirstClass: boolean
   isListSupported: boolean
+  isGridCreateSupported: boolean
   isHidden: boolean
   isArchived: boolean
   createdAt: string

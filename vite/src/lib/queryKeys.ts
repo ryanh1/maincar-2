@@ -143,6 +143,7 @@ export const queryKeys = {
     // different answer and must not share a cache entry.
     list: (orgId: string, objectId: string, query?: Record<string, unknown>) =>
       ['records', 'list', orgId, objectId, query ?? {}] as const,
+    listAll: (orgId: string, objectId: string) => ['records', 'list', orgId, objectId] as const,
   },
   activity: {
     all: ['activity'] as const,
