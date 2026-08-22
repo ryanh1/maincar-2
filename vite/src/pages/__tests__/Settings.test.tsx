@@ -47,6 +47,7 @@ describe('Settings', () => {
       'Profile',
       'Organization',
       'Members',
+      'Teams',
       'Phone numbers',
       'Call recordings',
       'Call dispositions',

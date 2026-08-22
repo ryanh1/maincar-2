@@ -27,6 +27,11 @@ export const queryKeys = {
       ['orgs', 'teams', orgId, query ?? {}] as const,
     invitations: (orgId: string) => ['orgs', 'invitations', orgId] as const,
   },
+  teams: {
+    all: (orgId: string) => ['teams', orgId] as const,
+    list: (orgId: string, query?: Record<string, unknown>) =>
+      ['teams', orgId, 'list', query ?? {}] as const,
+  },
   email: {
     all: ['email'] as const,
     // Keyed by org, like the member list, because a draft belongs to one org and

@@ -66,3 +66,23 @@ describe('POST /api/orgs/:orgId/teams', () => {
     })
   })
 })
+
+describe('GET /api/orgs/:orgId/teams', () => {
+  it('returns the requested server page sorted by team name', async () => {
+    prismaMock.team.findMany.mockResolvedValue([teamRow({ id: 'team-b', name: 'Customer success' })])
+    prismaMock.team.count.mockResolvedValue(3)
+
+    const response = await request(app)
+      .get(`/api/orgs/${ORG_ID}/teams?page=2&limit=1&sort=name&dir=desc`)
+      .set('Authorization', AUTH)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({ total: 3, page: 2, limit: 1 })
+    expect(response.body.teams).toEqual([expect.objectContaining({ id: 'team-b', name: 'Customer success' })])
+    expect(prismaMock.team.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      skip: 1,
+      take: 1,
+      orderBy: [{ name: 'desc' }, { createdAt: 'asc' }],
+    }))
+  })
+})
