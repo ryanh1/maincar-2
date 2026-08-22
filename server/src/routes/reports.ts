@@ -13,11 +13,11 @@ const router = Router({ mergeParams: true })
 // this symbolic shape to SQL; the API never accepts columns, tables, or SQL.
 const reportConfigSchema = z.object({
   baseObject: z.literal('deal'),
-  rows: z.tuple([z.object({ field: z.literal('stage') })]),
-  values: z.tuple([z.object({ field: z.literal('amountMinor'), aggregation: z.literal('sum') })]),
-})
+  rows: z.tuple([z.object({ field: z.literal('stage') }).strict()]),
+  values: z.tuple([z.object({ field: z.literal('amountMinor'), aggregation: z.literal('sum') }).strict()]),
+}).strict()
 
-const runReportBodySchema = z.object({ config: reportConfigSchema })
+const runReportBodySchema = z.object({ config: reportConfigSchema }).strict()
 
 interface RawDealStageSum {
   stageId: string
