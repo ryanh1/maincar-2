@@ -7,7 +7,7 @@ const { prismaMock, verifyTokenMock, presignMock, deleteObjectMock } = vi.hoiste
   prismaMock: {
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
-    voicemail: { findFirst: vi.fn(), deleteMany: vi.fn() },
+    voicemail: { findFirst: vi.fn(), deleteMany: vi.fn(), findMany: vi.fn(), count: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
   presignMock: vi.fn(),
@@ -70,6 +70,8 @@ beforeEach(() => {
   authAs()
   prismaMock.voicemail.findFirst.mockResolvedValue(voicemailRow())
   prismaMock.voicemail.deleteMany.mockResolvedValue({ count: 1 })
+  prismaMock.voicemail.count.mockResolvedValue(1)
+  prismaMock.voicemail.findMany.mockResolvedValue([voicemailRow()])
   presignMock.mockResolvedValue('https://recordings.example/signed/voicemail-1.mp3')
   deleteObjectMock.mockResolvedValue(undefined)
 })
@@ -103,6 +105,44 @@ describe('GET /api/orgs/:orgId/voicemails/:id', () => {
     const res = await request(app).get(`/api/orgs/${ORG_B}/voicemails/voicemail-1`).set('Authorization', AUTH)
     expect(res.status).toBe(404)
     expect(prismaMock.voicemail.findFirst).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/orgs/:orgId/voicemails', () => {
+  it('returns a paginated, storage-safe inbox row', async () => {
+    const res = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ total: 1, page: 1, limit: 25 })
+    expect(res.body.voicemails).toEqual([
+      expect.objectContaining({
+        id: 'voicemail-1', fromE164: '+12015550100', durationS: 73,
+        transcriptStatus: 'done', transcript: 'Please call me back.', createdAt: NOW.toISOString(),
+      }),
+    ])
+    expect(res.body.voicemails[0]).not.toHaveProperty('orgId')
+    expect(res.body.voicemails[0]).not.toHaveProperty('recordingUrl')
+  })
+
+  it('scopes both the count and page to the org, and searches the caller number', async () => {
+    await request(app).get(`${URL_A}?q=555&page=2&limit=10`).set('Authorization', AUTH)
+
+    const expectedWhere = { orgId: ORG_A, fromE164: { contains: '555' } }
+    expect(prismaMock.voicemail.count).toHaveBeenCalledWith({ where: expectedWhere })
+    expect(prismaMock.voicemail.findMany).toHaveBeenCalledWith({
+      where: expectedWhere,
+      orderBy: [{ createdAt: 'desc' }],
+      skip: 10,
+      take: 10,
+    })
+  })
+
+  it('rejects a non-member before reading a voicemail', async () => {
+    authAs(null)
+    const res = await request(app).get(`/api/orgs/${ORG_B}/voicemails`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.voicemail.findMany).not.toHaveBeenCalled()
   })
 })
 

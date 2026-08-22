@@ -19,6 +19,7 @@ import { Records } from '@/pages/Records'
 import { Settings } from '@/pages/Settings'
 import { Welcome } from '@/pages/Welcome'
 import { VoicemailDetail } from '@/pages/VoicemailDetail'
+import { Voicemails } from '@/pages/Voicemails'
 
 const routeErrorElement = <RouteErrorPage />
 
@@ -37,6 +38,7 @@ const router = createBrowserRouter([
       { path: 'calls', element: <Calls /> },
       { path: 'calls/:id', element: <CallDetail /> },
       { path: 'voicemails/:id', element: <VoicemailDetail /> },
+      { path: 'voicemails', element: <Voicemails /> },
       { path: 'records/:slug', element: <Records /> },
       { path: 'lists/:listId', element: <CrmGrid /> },
       { path: 'welcome', element: <Welcome /> },

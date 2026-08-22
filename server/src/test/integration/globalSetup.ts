@@ -20,6 +20,12 @@ loadEnv({ path: path.resolve(import.meta.dirname, '../../../../.env') })
 function withSchema(baseUrl: string, schema: string): string {
   const url = new URL(baseUrl)
   url.searchParams.set('schema', schema)
+  // Prisma Client uses `schema`, but the migration engine also has to set
+  // PostgreSQL's search path. Without this connection option, migrate deploy
+  // records migrations against the shared default schema and leaves this fresh
+  // test schema empty. The schema name comes from uniqueSchemaName(), never a
+  // request, so it is safe to pass as a server-side connection option.
+  url.searchParams.set('options', `-c search_path=${schema}`)
   return url.toString()
 }
 
