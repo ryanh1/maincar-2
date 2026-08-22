@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
-import type { QueryClient } from '@tanstack/react-query'
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { focusManager, type QueryClient } from '@tanstack/react-query'
 
 import { ApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
@@ -110,5 +110,56 @@ describe('useGetCallDetail', () => {
     renderGetDetail('org-1', 'call-1', undefined, { refetchInterval: 5 })
 
     await waitFor(() => expect(jsonFetch.mock.calls.length).toBeGreaterThan(1))
+  })
+
+  describe('while a transcript is pending', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+      focusManager.setFocused(true)
+    })
+    afterEach(() => {
+      focusManager.setFocused(undefined)
+      vi.useRealTimers()
+    })
+
+    it('refreshes until a pending transcript is ready, then stops', async () => {
+      const pending = detail('call-1')
+      pending.transcriptStatus = 'pending'
+      pending.transcript = null
+      const ready = detail('call-1')
+      jsonFetch.mockResolvedValueOnce({ call: pending }).mockResolvedValueOnce({ call: ready })
+
+      const { result } = renderGetDetail('org-1', 'call-1')
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      expect(result.current.data?.call.transcriptStatus).toBe('pending')
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_500) })
+      expect(result.current.data?.call.transcriptStatus).toBe('done')
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+      expect(jsonFetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('refreshes until a pending transcript fails, then stops', async () => {
+      const pending = detail('call-1')
+      pending.transcriptStatus = 'pending'
+      pending.transcript = null
+      const failed = detail('call-1')
+      failed.transcriptStatus = 'failed'
+      failed.transcript = null
+      jsonFetch.mockResolvedValueOnce({ call: pending }).mockResolvedValueOnce({ call: failed })
+
+      const { result } = renderGetDetail('org-1', 'call-1')
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      expect(result.current.data?.call.transcriptStatus).toBe('pending')
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_500) })
+      expect(result.current.data?.call.transcriptStatus).toBe('failed')
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+      expect(jsonFetch).toHaveBeenCalledTimes(2)
+    })
   })
 })

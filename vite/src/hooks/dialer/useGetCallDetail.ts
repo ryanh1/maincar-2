@@ -4,6 +4,8 @@ import { jsonFetch } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import type { CallDetailResponse } from '@/lib/callTypes'
 
+const TRANSCRIPT_POLL_MS = 2_500
+
 /**
  * One call in full — every field, its transcript, and a freshly signed link to
  * the recording.
@@ -14,10 +16,10 @@ import type { CallDetailResponse } from '@/lib/callTypes'
  * until both are known, so a detail view that mounts before its id resolves does
  * not request `/api/orgs/org-1/calls/undefined`.
  *
- * `refetchInterval` is off by default — a one-shot read for the detail page.
- * `DialerProvider` passes one while a call is live, so this same query doubles
- * as the channel that tells the browser what the server already knows about the
- * call's real status and duration (MAI-190).
+ * A pending transcript refreshes until it reaches a terminal state, so the
+ * detail page changes without a manual reload. `DialerProvider` may provide an
+ * interval while a call is live; that poll also tells the browser what the
+ * server knows about the call's real status and duration (MAI-190).
  */
 export function useGetCallDetail(
   orgId: string | null | undefined,
@@ -28,6 +30,8 @@ export function useGetCallDetail(
     queryKey: queryKeys.calls.detail(orgId ?? 'none', callId ?? 'none'),
     enabled: !!orgId && !!callId,
     queryFn: () => jsonFetch<CallDetailResponse>(`/api/orgs/${orgId}/calls/${callId}`),
-    refetchInterval: options?.refetchInterval ?? false,
+    refetchInterval: (query) =>
+      options?.refetchInterval ??
+      (query.state.data?.call.transcriptStatus === 'pending' ? TRANSCRIPT_POLL_MS : false),
   })
 }
