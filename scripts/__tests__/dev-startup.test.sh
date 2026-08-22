@@ -26,6 +26,10 @@ grep -Fq 'firebase-emulator.sh" --ready-file "$READY_FILE"' "$BOOTSTRAP" ||
   fail "the bootstrap does not launch Firebase with a readiness signal"
 grep -Fq 'wait_for_ready_file' "$BOOTSTRAP" ||
   fail "the bootstrap does not wait for Firebase readiness"
+grep -Fq 'npm run docker:up' "$BOOTSTRAP" ||
+  fail "the bootstrap does not start Docker before the API"
+grep -Fq 'npm --prefix server run db:deploy' "$BOOTSTRAP" ||
+  fail "the bootstrap does not apply Prisma migrations before the API"
 grep -Fq 'concurrently' "$BOOTSTRAP" ||
   fail "the bootstrap does not start the API and web processes after readiness"
 
@@ -65,11 +69,66 @@ cat > "$TEST_DIR/bin/npx" <<'SH'
 #!/bin/bash
 READY_PATH="$(cat "$TEST_STATE_DIR/ready-path")"
 [ -f "$READY_PATH" ] || exit 22
+[ -f "$TEST_STATE_DIR/migrations-applied" ] || exit 23
 printf 'concurrently started after Firebase readiness\n'
 SH
 
-chmod +x "$TEST_DIR/bin/bash" "$TEST_DIR/bin/npx"
+cat > "$TEST_DIR/bin/npm" <<'SH'
+#!/bin/bash
+if [ "$1" = "run" ] && [ "$2" = "docker:up" ]; then
+  : > "$TEST_STATE_DIR/docker-ready"
+  exit 0
+fi
+if [ "$1" = "--prefix" ] && [ "$2" = "server" ] && [ "$3" = "run" ] && [ "$4" = "db:deploy" ]; then
+  [ -f "$TEST_STATE_DIR/docker-ready" ] || exit 24
+  [ "${TEST_FORCE_MIGRATION_FAILURE:-0}" != 1 ] || exit 25
+  : > "$TEST_STATE_DIR/migrations-applied"
+  exit 0
+fi
+exit 26
+SH
+
+chmod +x "$TEST_DIR/bin/bash" "$TEST_DIR/bin/npx" "$TEST_DIR/bin/npm"
 PROJECT_ROOT="$ROOT" TEST_STATE_DIR="$TEST_DIR" PATH="$TEST_DIR/bin:$PATH" \
   /bin/bash "$BOOTSTRAP" >/dev/null || fail "API/web startup was not gated on Firebase readiness"
+
+# Remove the new migration command from a temporary copy to prove the old
+# startup path fails before concurrently can launch the API.
+OLD_BOOTSTRAP="$TEST_DIR/dev-without-migrations.sh"
+sed '/npm --prefix server run db:deploy/d' "$BOOTSTRAP" > "$OLD_BOOTSTRAP"
+rm -f "$TEST_DIR/migrations-applied"
+if PROJECT_ROOT="$ROOT" TEST_STATE_DIR="$TEST_DIR" PATH="$TEST_DIR/bin:$PATH" \
+  /bin/bash "$OLD_BOOTSTRAP" >/dev/null 2>&1; then
+  fail "API/web startup accepted a missing migration step"
+fi
+
+rm -f "$TEST_DIR/migrations-applied"
+if PROJECT_ROOT="$ROOT" TEST_STATE_DIR="$TEST_DIR" TEST_FORCE_MIGRATION_FAILURE=1 PATH="$TEST_DIR/bin:$PATH" \
+  /bin/bash "$BOOTSTRAP" >/dev/null 2>&1; then
+  fail "API/web startup continued after a migration failure"
+fi
+
+# The schema guard receives Prisma exit status 2 for a schema that lacks a
+# migration. It must turn that into a failing verification command.
+GUARD="$ROOT/scripts/check-prisma-migration-drift.sh"
+cat > "$TEST_DIR/bin/docker" <<'SH'
+#!/bin/bash
+exit 0
+SH
+cat > "$TEST_DIR/bin/npx" <<'SH'
+#!/bin/bash
+case " $* " in
+  *' prisma migrate diff '*) exit "${TEST_PRISMA_DIFF_STATUS:-0}" ;;
+  *) exit 27 ;;
+esac
+SH
+chmod +x "$TEST_DIR/bin/docker" "$TEST_DIR/bin/npx"
+if MIGRATE_DATABASE_URL='postgresql://postgres:postgres@localhost:5440/maincar2' \
+  TEST_PRISMA_DIFF_STATUS=2 PATH="$TEST_DIR/bin:$PATH" /bin/bash "$GUARD" >/dev/null 2>&1; then
+  fail "migration-drift guard accepted a schema with no migration"
+fi
+MIGRATE_DATABASE_URL='postgresql://postgres:postgres@localhost:5440/maincar2' \
+  TEST_PRISMA_DIFF_STATUS=0 PATH="$TEST_DIR/bin:$PATH" /bin/bash "$GUARD" >/dev/null ||
+  fail "migration-drift guard rejected matching schema and migrations"
 
 printf 'dev-startup guard: passed\n'

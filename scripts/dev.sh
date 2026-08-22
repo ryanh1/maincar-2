@@ -39,14 +39,20 @@ FIREBASE_PID=$!
 
 wait_for_ready_file || exit 1
 
+# Start Docker and apply every committed Prisma migration before the API can
+# connect. This makes a stale local database fail here instead of later in a
+# request handler (for example, a raw query selecting a new column).
+npm run docker:up
+npm --prefix server run db:deploy
+
 if [ "${1:-}" = "--tunnel" ]; then
   npx --no-install concurrently --kill-others-on-fail \
-    -n docker,vite,server,tunnel -c blue,cyan,green,magenta \
-    "npm run docker:up" "npm --prefix vite run dev" "npm --prefix server run dev" "npm run tunnel" &
+    -n vite,server,tunnel -c cyan,green,magenta \
+    "npm --prefix vite run dev" "npm --prefix server run dev" "npm run tunnel" &
 elif [ "$#" -eq 0 ]; then
   npx --no-install concurrently --kill-others-on-fail \
-    -n docker,vite,server -c blue,cyan,green \
-    "npm run docker:up" "npm --prefix vite run dev" "npm --prefix server run dev" &
+    -n vite,server -c cyan,green \
+    "npm --prefix vite run dev" "npm --prefix server run dev" &
 else
   printf '[dev] Unknown argument: %s\n' "$1" >&2
   exit 2

@@ -9,8 +9,8 @@
 //   - a sort change re-windows (first page differs, orders correctly) without
 //     walking the whole set;
 //   - a filter's totalCount is exact against a known subset;
-//   - the SAME endpoint also works over a "table"-storage standard object (Person:
-//     typed columns + customJson), proving the compiler handles both storage kinds.
+//   - the SAME endpoint works over table-storage standard objects with customJson,
+//     including Call, so the raw query cannot assume a column that its schema lacks.
 // Run with `npm run test:integration`, with Docker up.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
@@ -225,5 +225,29 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
       .set('Authorization', as(adminFirebaseUid))
       .send({ filter: { type: 'condition', field: 'companyId', operator: 'eq', value: 'x' } })
     expect(unfilterable.status).toBe(400)
+  })
+
+  it('works over Call, which also has the table-storage customJson bag', async () => {
+    const { orgId, adminFirebaseUid, adminUserId } = await seedOrgWithAdmin(prisma, { seed: true })
+    const callObject = await prisma.objectDef.findFirstOrThrow({ where: { orgId, slug: 'call' } })
+    const call = await prisma.call.create({
+      data: {
+        orgId,
+        userId: adminUserId,
+        fromE164: '+12025550100',
+        toE164: '+12025550101',
+        direction: 'outbound',
+        customJson: { disposition: 'Demo booked' },
+      },
+    })
+
+    const res = await request(app)
+      .post(`/api/orgs/${orgId}/objects/${callObject.id}/list`)
+      .set('Authorization', as(adminFirebaseUid))
+      .send({})
+
+    expect(res.status).toBe(200)
+    expect(res.body.totalCount).toBe(1)
+    expect(res.body.rows[0].id).toBe(call.id)
   })
 })
