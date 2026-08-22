@@ -125,6 +125,8 @@ export function mailProviderContract(name: string, makeProvider: MakeProvider): 
         bodyHtml: '<p>hello</p>',
       })
 
+      expect('kind' in sent).toBe(false)
+      if ('kind' in sent) throw new Error(`${name} did not return the fixture's send receipt.`)
       expect(sent.providerMsgId).toBe('PMSG-1')
       expect(sent.threadId).toBe('THREAD-1')
       expect(sent.sentAt).toBeInstanceOf(Date)

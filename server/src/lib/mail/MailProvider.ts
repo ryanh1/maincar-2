@@ -51,6 +51,16 @@ export type OutboundEmail = {
 export type SentEmail = { providerMsgId: string; threadId: string; sentAt: Date }
 
 /**
+ * The provider accepted the send, but did not return a stored message receipt.
+ * Microsoft Graph's `POST /me/sendMail` is this shape: it returns 202 Accepted
+ * with no response body. See https://learn.microsoft.com/en-us/graph/api/user-sendmail?view=graph-rest-1.0#response
+ */
+export type AcceptedEmail = { kind: 'accepted' }
+
+/** A provider either returns a real receipt or explicitly says it only accepted the request. */
+export type SendEmailResult = SentEmail | AcceptedEmail
+
+/**
  * A message read back from a mailbox. The rep's own sent mail comes back through
  * here too, flagged with `isOutbound`. `sentAt` is UTC.
  */
@@ -90,7 +100,7 @@ export type CalendarEvent = {
  */
 export interface MailProvider {
   readonly provider: 'google' | 'microsoft'
-  sendEmail(input: OutboundEmail): Promise<SentEmail>
+  sendEmail(input: OutboundEmail): Promise<SendEmailResult>
   listMessagesSince(
     cursor: string | null,
     limit: number,

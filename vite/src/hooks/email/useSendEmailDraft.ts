@@ -11,7 +11,9 @@ export interface SentEmailMessage {
 }
 
 export interface SendEmailDraftResponse {
-  message: SentEmailMessage
+  /** `null` when the provider accepted the send but returned no message receipt. */
+  message: SentEmailMessage | null
+  accepted: true
 }
 
 /** Which draft to send, in which org. The route takes no other input. */
