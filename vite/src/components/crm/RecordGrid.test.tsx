@@ -586,6 +586,23 @@ describe('RecordGrid', () => {
     expect(getCellContent([0, 0])).toMatchObject({ data: 'Ada' })
   })
 
+  it('persists a shared currency-editor commit and rolls it back when the write rejects', async () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', amount: 42.5 }], totalCount: 1, isPending: false, isError: false,
+      hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    mutateAsync.mockRejectedValueOnce(new Error('forced'))
+    const amount = attribute({ slug: 'amount', name: 'Amount', type: 'currency' })
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={[amount]} />)
+    const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => Record<string, unknown>
+    const cell = getCellContent([0, 0])
+    const onCellEdited = dataEditorProps.current!.onCellEdited as (item: [number, number], cell: Record<string, unknown>) => void
+    act(() => onCellEdited([0, 0], { kind: 'custom', data: { ...(cell.data as Record<string, unknown>), value: 75.5 } }))
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ recordId: 'r1', value: 75.5 }))
+    await act(async () => { await Promise.resolve() })
+    expect(getCellContent([0, 0])).toMatchObject({ data: { value: 42.5 } })
+  })
+
   it('persists undo through the same mutation path', () => {
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'r1', firstName: 'Ada' }], totalCount: 1, isPending: false, isError: false,

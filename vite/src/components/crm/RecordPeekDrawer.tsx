@@ -2,12 +2,13 @@ import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useGetActivity, type ActivityScope } from '@/hooks/crm'
 import { formatDateTime } from '@/lib/datetime'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { parseOptions } from './cellBuilder'
+import { FieldValueEditor } from './FieldValueEditor'
 import { formatCellValue } from './recordCellValue'
 
 // The three standard objects the activity feed can be scoped to
@@ -82,7 +83,7 @@ export function RecordPeekDrawer({
             <h3 className="mb-3 text-xs font-medium text-muted-foreground">Details</h3>
             <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-3 text-sm">
               {detailAttributes.map((attr) => (
-                <FieldRow key={attr.id} attr={attr} record={record} timeZone={timeZone} onEdit={onEdit} />
+                <FieldRow key={attr.id} orgId={orgId} attr={attr} record={record} timeZone={timeZone} onEdit={onEdit} />
               ))}
             </dl>
           </section>
@@ -126,11 +127,13 @@ export function RecordPeekDrawer({
 }
 
 function FieldRow({
+  orgId,
   attr,
   record,
   timeZone,
   onEdit,
 }: {
+  orgId: string
   attr: AttributeDef
   record: RecordRow | null
   timeZone: string | null | undefined
@@ -138,11 +141,10 @@ function FieldRow({
 }) {
   const rawValue = record ? record[attr.slug] : null
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(rawValue == null ? '' : String(rawValue))
 
-  function commit() {
+  function commit(value: unknown) {
     setEditing(false)
-    if (!attr.isReadOnly && draft !== String(rawValue ?? '')) onEdit(attr, draft === '' ? null : draft)
+    if (!attr.isReadOnly && JSON.stringify(value) !== JSON.stringify(rawValue)) onEdit(attr, value)
   }
 
   return (
@@ -150,28 +152,18 @@ function FieldRow({
       <dt className="truncate text-muted-foreground">{attr.name}</dt>
       <dd className="min-w-0 break-words text-foreground">
         {editing ? (
-          <Input
-            autoFocus
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onBlur={commit}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') commit()
-              if (event.key === 'Escape') setEditing(false)
-            }}
-          />
+          <FieldValueEditor orgId={orgId} attribute={attr} value={rawValue} timeZone={timeZone} onCommit={commit} onCancel={() => setEditing(false)} />
         ) : (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             disabled={attr.isReadOnly}
-            className="w-full text-left disabled:cursor-default"
-            onClick={() => {
-              setDraft(rawValue == null ? '' : String(rawValue))
-              setEditing(true)
-            }}
+            className="w-full justify-start px-0 text-left disabled:cursor-default"
+            onClick={() => setEditing(true)}
           >
-            <FieldValue attr={attr} rawValue={rawValue} timeZone={timeZone} />
-          </button>
+            <FieldValue attr={attr} rawValue={rawValue} timeZone={timeZone} currencyCode={typeof record?.currency === 'string' ? record.currency : undefined} />
+          </Button>
         )}
       </dd>
     </>
@@ -182,10 +174,12 @@ function FieldValue({
   attr,
   rawValue,
   timeZone,
+  currencyCode,
 }: {
   attr: AttributeDef
   rawValue: unknown
   timeZone: string | null | undefined
+  currencyCode: string | undefined
 }) {
   if (rawValue === null || rawValue === undefined || rawValue === '') {
     return <span className="text-muted-foreground">—</span>
@@ -208,5 +202,5 @@ function FieldValue({
     )
   }
 
-  return <span>{formatCellValue(rawValue, attr.type, timeZone)}</span>
+  return <span>{formatCellValue(rawValue, attr.type, timeZone, currencyCode, attr.slug === 'amountMinor')}</span>
 }
