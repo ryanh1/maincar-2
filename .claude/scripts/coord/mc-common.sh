@@ -62,13 +62,40 @@ mc_sync_local_main() {
   git -C "$LOCAL_MAIN_REPO" fetch upstream --prune '+refs/heads/main:refs/heads/main' >/dev/null
 }
 
+# Dependency manifests change the runnable environment as well as tracked source.
+# Return the affected package roots, one per line, so an explicit refresh can
+# reinstall exactly those roots from their committed locks.
+mc_changed_dependency_roots() {
+  local primary="$1" target="$2" path
+  while IFS= read -r path; do
+    case "$path" in
+      package.json|package-lock.json) printf '.\n' ;;
+      server/package.json|server/package-lock.json) printf 'server\n' ;;
+      vite/package.json|vite/package-lock.json) printf 'vite\n' ;;
+      firebase/package.json|firebase/package-lock.json) printf 'firebase\n' ;;
+    esac
+  done < <(git -C "$primary" diff --name-only HEAD "$target") | sort -u
+}
+
+mc_sync_primary_dependencies() {
+  local primary="$1" root
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    if [ "$root" = '.' ]; then
+      npm --prefix "$primary" ci
+    else
+      npm --prefix "$primary/$root" ci
+    fi
+  done
+}
+
 # The primary checkout is for running and inspecting the application, never for
 # delivery. After GitHub accepts a delivery and the bare mirror is refreshed, it
 # can safely fast-forward that checkout only when doing so cannot overwrite local
 # work. A local deletion that is also present in delivered main is safe: the
 # checkout already has the delivered file state.
 mc_refresh_primary_checkout() {
-  local primary branch target path unsafe
+  local primary branch target path unsafe dependency_roots
   primary="$(cd "$PRIMARY_CHECKOUT" && pwd -P)" || {
     echo "[mc-primary] not refreshed: primary checkout is unavailable: $PRIMARY_CHECKOUT" >&2
     return 0
@@ -112,8 +139,19 @@ mc_refresh_primary_checkout() {
     return 0
   fi
 
+  dependency_roots="$(mc_changed_dependency_roots "$primary" "$target")"
+  if [ -n "$dependency_roots" ] && [ "${MC_PRIMARY_ALLOW_DEPENDENCY_REFRESH:-}" != "1" ]; then
+    echo "[mc-primary] not refreshed: delivered dependency manifests changed; keeping the runnable checkout on $(git -C "$primary" rev-parse --short HEAD)." >&2
+    echo "[mc-primary] run ./.claude/scripts/coord/mc-local-main refresh to fast-forward and reinstall the affected dependencies." >&2
+    return 0
+  fi
+
   if git -C "$primary" merge --ff-only "$target" >/dev/null; then
     echo "[mc-primary] fast-forwarded runnable checkout to $(git -C "$primary" rev-parse --short HEAD)."
+    if [ -n "$dependency_roots" ]; then
+      echo "[mc-primary] synchronizing dependencies for: $(tr '\n' ' ' <<< "$dependency_roots")"
+      printf '%s\n' "$dependency_roots" | mc_sync_primary_dependencies "$primary"
+    fi
   else
     echo "[mc-primary] not refreshed: primary checkout could not fast-forward safely." >&2
   fi

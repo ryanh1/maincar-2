@@ -8,8 +8,12 @@ case "${1:-sync}" in
     mc_sync_local_main
     echo "[mc-local-main] ready: $LOCAL_MAIN_REPO"
     ;;
+  refresh)
+    mc_sync_local_main
+    MC_PRIMARY_ALLOW_DEPENDENCY_REFRESH=1 mc_refresh_primary_checkout
+    ;;
   *)
-    echo "usage: mc-local-main [sync]" >&2
+    echo "usage: mc-local-main [sync|refresh]" >&2
     exit 2
     ;;
 esac

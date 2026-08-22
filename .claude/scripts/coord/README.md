@@ -19,6 +19,16 @@ If that is not safe, it leaves the checkout untouched and prints the exact reaso
 Running `mc-local-main sync` also installs hard-block hooks in the primary
 checkout, so a commit or push there fails immediately.
 
+When delivery changes a package manifest or lockfile, `mc-merge` deliberately
+does not refresh the runnable primary checkout: advancing source without the
+matching installed dependencies can break a live dev server. Refresh it
+explicitly instead; this fast-forwards only when safe, then runs `npm ci` for
+each affected package root:
+
+```bash
+./.claude/scripts/coord/mc-local-main refresh
+```
+
 ## Quick start
 
 ### 1. Create a worktree for an issue
@@ -79,7 +89,7 @@ Or run specific tests:
 | Script | What it does | When to use |
 | --- | --- | --- |
 | `mc-common.sh` | Shared toolbox (lock, log, local-mirror sync) | Never run directly; sourced by others |
-| `mc-local-main` | Creates/refreshes the local bare `main` mirror | Before creating ticket clones; safe to rerun |
+| `mc-local-main` | Creates/refreshes the local bare `main` mirror; `refresh` also safely updates the runnable primary checkout and changed dependencies | Before creating ticket clones; use `refresh` after a dependency-changing delivery |
 | `mc-slot` | Assigns stable ports for your worktree | `eval "$(mc-slot --env)"` at the start |
 | `mc-gate` | Runs tests with a queue (max 4 at once) | Before every merge |
 | `mc-merge` | Merges your branch safely, with a lock | When work is done and tests pass |
