@@ -667,6 +667,79 @@ const updateEntryBodySchema = z.object({
   position: z.number().int().nullish(),
 })
 
+const reorderEntriesBodySchema = z.object({
+  entryIds: z.array(z.string().trim().min(1)).min(1),
+})
+
+const REORDER_ENTRY_NOT_FOUND = 'REORDER_ENTRY_NOT_FOUND'
+
+// ============================================================
+// PATCH /api/orgs/:orgId/lists/:id/entries/reorder — atomically reorder a list
+// ============================================================
+router.patch(
+  '/:id/entries/reorder',
+  wrapRoute('PATCH /api/orgs/:orgId/lists/:id/entries/reorder', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const listId = String(req.params.id)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    const list = await loadOwningList(orgId, listId)
+    if (!list) {
+      return void res.status(404).json({ error: 'List not found' })
+    }
+
+    // --- Parse & validate params ---
+    const parsed = reorderEntriesBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+    const entryIds = parsed.data.entryIds
+    if (new Set(entryIds).size !== entryIds.length) {
+      return void res.status(400).json({ error: 'Each entry may appear only once.' })
+    }
+
+    // --- Execute query ---
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Lock every current entry before comparing the submitted set. An entry
+        // cannot be removed or added between validation and the position writes.
+        const lockedEntries = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "ListEntry"
+          WHERE "orgId" = ${orgId} AND "listId" = ${listId}
+          FOR UPDATE
+        `
+        const lockedIds = new Set(lockedEntries.map((entry) => entry.id))
+        if (lockedIds.size !== entryIds.length || entryIds.some((entryId) => !lockedIds.has(entryId))) {
+          throw new Error(REORDER_ENTRY_NOT_FOUND)
+        }
+
+        for (const [position, entryId] of entryIds.entries()) {
+          const result = await tx.listEntry.updateMany({
+            where: { id: entryId, orgId, listId },
+            data: { position },
+          })
+          if (result.count === 0) throw new Error(REORDER_ENTRY_NOT_FOUND)
+        }
+      })
+    } catch (error) {
+      if (error instanceof Error && error.message === REORDER_ENTRY_NOT_FOUND) {
+        return void res.status(404).json({ error: 'Entry not found' })
+      }
+      throw error
+    }
+
+    logger.info({ orgId, userId, listId, entries: entryIds.length }, 'reordered list entries')
+
+    // --- Return response ---
+    res.status(204).end()
+  }),
+)
+
 // ============================================================
 // PATCH /api/orgs/:orgId/lists/:id/entries/:entryId — edit values or reorder
 // ============================================================

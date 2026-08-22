@@ -21,6 +21,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     attributeDef: { findMany: vi.fn() },
     record: { findFirst: vi.fn() },
     $queryRaw: vi.fn(),
+    $transaction: vi.fn(),
     list: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
@@ -117,6 +118,7 @@ beforeEach(() => {
   )
   prismaMock.listEntry.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.listEntry.deleteMany.mockResolvedValue({ count: 1 })
+  prismaMock.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prismaMock))
   prismaMock.$queryRaw
     .mockResolvedValueOnce([{ id: 'person-1', createdAt: NOW, updatedAt: NOW, firstName: 'Ada', customJson: {} }])
     .mockResolvedValueOnce([{ count: '1' }])
@@ -508,6 +510,37 @@ describe('PATCH /api/orgs/:orgId/lists/:id/entries/:entryId', () => {
       .set('Authorization', AUTH)
       .send({ position: 1 })
     expect(res.status).toBe(404)
+  })
+})
+
+describe('PATCH /api/orgs/:orgId/lists/:id/entries/reorder', () => {
+  it('re-sequences every requested entry in one transaction, scoped to this list and org', async () => {
+    const ordered = ['entry-5', 'entry-3', 'entry-1', 'entry-4', 'entry-2']
+    prismaMock.$queryRaw.mockReset().mockResolvedValue(ordered.map((id) => ({ id })))
+
+    const res = await request(app)
+      .patch(`${URL_A}/list-1/entries/reorder`)
+      .set('Authorization', AUTH)
+      .send({ entryIds: ordered })
+
+    expect(res.status).toBe(204)
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(prismaMock.listEntry.updateMany.mock.calls.map((call) => call[0])).toEqual(
+      ordered.map((id, position) => ({ where: { id, orgId: ORG_A, listId: 'list-1' }, data: { position } })),
+    )
+  })
+
+  it('rejects an entry that does not belong to the list before writing any positions', async () => {
+    prismaMock.$queryRaw.mockReset().mockResolvedValue([{ id: 'entry-1' }])
+
+    const res = await request(app)
+      .patch(`${URL_A}/list-1/entries/reorder`)
+      .set('Authorization', AUTH)
+      .send({ entryIds: ['entry-1', 'entry-from-another-list'] })
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(prismaMock.listEntry.updateMany).not.toHaveBeenCalled()
   })
 })
 
