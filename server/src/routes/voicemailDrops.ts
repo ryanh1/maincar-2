@@ -13,7 +13,7 @@ import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
-import type { Prisma } from '../generated/prisma/client.js'
+import { ensureOneDefault, lockVoicemailDrops } from '../lib/voicemailDropDefaults.js'
 
 const router = Router({ mergeParams: true })
 
@@ -31,25 +31,6 @@ class VoicemailDropNotFoundError extends Error {
   constructor() {
     super('Voicemail drop not found')
   }
-}
-
-/**
- * Locks all drops in the library while the caller decides whether it may delete
- * one. Without this, two requests can both see two drops and each delete one,
- * leaving the organization with none.
- */
-async function lockAndCountVoicemailDrops(
-  tx: Prisma.TransactionClient,
-  orgId: string,
-): Promise<number> {
-  const rows = await tx.$queryRaw<{ count: bigint }[]>`
-    SELECT COUNT(*) AS count FROM (
-      SELECT 1 FROM "VoicemailDrop"
-      WHERE "orgId" = ${orgId}
-      FOR UPDATE
-    ) AS locked
-  `
-  return Number(rows[0]?.count ?? 0)
 }
 
 router.use(requireAuth)
@@ -70,7 +51,7 @@ router.delete(
 
     // --- Execute query ---
     const deletedDrop = await prisma.$transaction(async (tx) => {
-      const dropCount = await lockAndCountVoicemailDrops(tx, orgId)
+      const dropCount = await lockVoicemailDrops(tx, orgId)
       const drop = await tx.voicemailDrop.findFirst({ where: { id, orgId } })
       if (!drop) throw new VoicemailDropNotFoundError()
       if (dropCount <= 1) throw new LastVoicemailDropError()
@@ -78,19 +59,7 @@ router.delete(
       const deleted = await tx.voicemailDrop.deleteMany({ where: { id, orgId } })
       if (deleted.count === 0) throw new VoicemailDropNotFoundError()
 
-      if (drop.isDefault) {
-        const replacement = await tx.voicemailDrop.findFirst({
-          where: { orgId },
-          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        })
-        if (!replacement) throw new Error('Voicemail drop replacement missing after deletion')
-
-        const promoted = await tx.voicemailDrop.updateMany({
-          where: { id: replacement.id, orgId },
-          data: { isDefault: true },
-        })
-        if (promoted.count === 0) throw new VoicemailDropNotFoundError()
-      }
+      if (drop.isDefault) await ensureOneDefault(tx, orgId)
 
       return drop
     })

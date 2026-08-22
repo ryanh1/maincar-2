@@ -94,6 +94,7 @@ describe('DELETE /api/orgs/:orgId/voicemail-drops/:id', () => {
     const oldest = dropRow({ id: 'drop-2', name: 'Oldest remaining', createdAt: new Date('2026-08-20T12:00:00.000Z') })
     prismaMock.voicemailDrop.findFirst
       .mockResolvedValueOnce(dropRow({ isDefault: true }))
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(oldest)
 
     const res = await request(app).delete(`${URL_A}/drop-1`).set('Authorization', AUTH)
