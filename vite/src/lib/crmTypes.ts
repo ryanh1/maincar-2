@@ -25,6 +25,16 @@ export type AttributeType =
   | 'user_reference'
   | 'ai'
 
+// The shape of one `AttributeDef.optionsJson` entry for select/status/multiselect
+// (server/src/crm/valuesValidator.ts's `allowedOptionValues`).
+export interface AttributeOption {
+  value: string
+  label: string
+  color?: string
+  order?: number
+  isArchived?: boolean
+}
+
 export interface AttributeDef {
   id: string
   objectId: string

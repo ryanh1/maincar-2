@@ -2,11 +2,13 @@ import { formatDate, formatDateTime } from '@/lib/datetime'
 import type { AttributeType } from '@/lib/crmTypes'
 
 /**
- * The raw stored value for one cell, as plain display text. Cell types (a
- * select's option label, a phone's E.164 formatting, a select-chip renderer)
- * are CHUNK-1 §C / T2.1 — out of scope for the read-only grid shell. Dates are
- * the one exception: CLAUDE.md's timezone rule is not feature-scoped, so a
- * timestamp never reaches the screen as a bare ISO string.
+ * The raw stored value for one cell, as plain display text. This is the
+ * fallback path `cellBuilder.ts`'s `buildGridCell` uses for types with no
+ * dedicated `GridCellKind` (text, phone, email, url, record references, …);
+ * checkbox/select/number/currency get their own cell shapes there instead.
+ * Dates stay handled here regardless: CLAUDE.md's timezone rule is not
+ * feature-scoped, so a timestamp never reaches the screen as a bare ISO
+ * string.
  */
 export function formatCellValue(
   value: unknown,

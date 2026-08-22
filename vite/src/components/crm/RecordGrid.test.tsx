@@ -6,7 +6,7 @@
  * scroll are verified in the browser (CLAUDE.md → Verification before finishing).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { act, screen } from '@testing-library/react'
 
 import { renderWithProviders } from '@/test/utils'
 import type { AttributeDef } from '@/lib/crmTypes'
@@ -29,7 +29,8 @@ vi.mock('@glideapps/glide-data-grid', () => ({
     dataEditorProps.current = props
     return <div data-testid="data-editor" />
   },
-  GridCellKind: { Loading: 'loading', Text: 'text' },
+  GridCellKind: { Loading: 'loading', Text: 'text', Number: 'number', Boolean: 'boolean', Custom: 'custom' },
+  roundedRect: () => {},
 }))
 
 function attribute(overrides: Partial<AttributeDef>): AttributeDef {
@@ -147,8 +148,106 @@ describe('RecordGrid', () => {
     renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={ATTRIBUTES} />)
 
     const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => unknown
-    expect(getCellContent([0, 0])).toMatchObject({ data: 'Ada', readonly: true })
-    expect(getCellContent([1, 0])).toMatchObject({ data: 'Lovelace', readonly: true })
+    expect(getCellContent([0, 0])).toMatchObject({ data: 'Ada', readonly: false, allowOverlay: true })
+    expect(getCellContent([1, 0])).toMatchObject({ data: 'Lovelace', readonly: false, allowOverlay: true })
+  })
+
+  it('round-trips a typed edit: the new value reads back on the next getCellContent call', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={ATTRIBUTES} />)
+
+    const onCellEdited = dataEditorProps.current!.onCellEdited as (
+      item: [number, number],
+      newValue: Record<string, unknown>,
+    ) => void
+
+    act(() => {
+      onCellEdited([0, 0], { kind: 'text', data: 'Grace', displayData: 'Grace', allowOverlay: true })
+    })
+
+    // Re-read the callback: onCellEdited's setState re-rendered RecordGrid,
+    // so the closure the mock captured is a fresh one bound to the new value.
+    const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => Record<string, unknown>
+    expect(getCellContent([0, 0])).toMatchObject({ data: 'Grace' })
+  })
+
+  it('coerces a pasted phone number to E.164 and flags an unparseable one instead of dropping it', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', phone: null }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    const phoneAttrs = [attribute({ slug: 'phone', name: 'Phone', type: 'phone', sortOrder: 0 })]
+    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={phoneAttrs} />)
+
+    const props = dataEditorProps.current!
+    const validateCell = props.validateCell as (
+      item: [number, number],
+      newValue: Record<string, unknown>,
+      prevValue: Record<string, unknown>,
+    ) => Record<string, unknown>
+
+    let valid!: Record<string, unknown>
+    act(() => {
+      valid = validateCell([0, 0], { kind: 'text', data: '+12025550123' }, { kind: 'text', data: '' })
+    })
+    expect(valid).toMatchObject({ data: '+12025550123' })
+    expect(valid.themeOverride).toBeUndefined()
+
+    let invalid!: Record<string, unknown>
+    act(() => {
+      invalid = validateCell([0, 0], { kind: 'text', data: 'not a phone' }, { kind: 'text', data: '' })
+    })
+    // Never dropped: the raw text survives, just flagged.
+    expect(invalid).toMatchObject({ data: 'not a phone' })
+    expect(invalid.themeOverride).toMatchObject({ textDark: '#dc2626' })
+  })
+
+  it('renders a select attribute as a chip Custom cell', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', status: 'open' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    const statusAttrs = [
+      attribute({
+        slug: 'status',
+        name: 'Status',
+        type: 'status',
+        sortOrder: 0,
+        optionsJson: [{ value: 'open', label: 'Open' }],
+      }),
+    ]
+    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={statusAttrs} />)
+
+    const getCellContent = dataEditorProps.current!.getCellContent as (
+      item: [number, number],
+    ) => { kind: string; data: Record<string, unknown> }
+    const cell = getCellContent([0, 0])
+    expect(cell.kind).toBe('custom')
+    expect(cell.data).toMatchObject({ kind: 'chip-cell', selectedValues: ['open'] })
   })
 
   it('requests the next window once the visible range nears the end of what is loaded', () => {
