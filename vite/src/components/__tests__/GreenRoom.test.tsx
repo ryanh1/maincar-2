@@ -254,7 +254,7 @@ describe('GreenRoom confirm', () => {
     expect(onConfirm).toHaveBeenCalledWith({ microphoneId: 'default', speakerId: 'default' })
   })
 
-  it('records the device error as the problem, so the next dial asks again', async () => {
+  it('does not let failed device readiness start a call', async () => {
     mockDevices({
       microphones: [],
       speakers: [],
@@ -262,14 +262,13 @@ describe('GreenRoom confirm', () => {
     })
     const recordSession = mockDecision('initial')
     const user = userEvent.setup()
-    renderGreenRoom()
+    const { onConfirm } = renderGreenRoom()
 
+    expect(screen.getByRole('button', { name: 'Start call' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Start call' }))
 
-    expect(recordSession).toHaveBeenCalledWith({
-      hasMicrophone: false,
-      problem: 'No microphone found. Plug one in, then try again.',
-    })
+    expect(recordSession).not.toHaveBeenCalled()
+    expect(onConfirm).not.toHaveBeenCalled()
   })
 
   it('never records a permission of its own', async () => {

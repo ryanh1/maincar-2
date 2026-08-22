@@ -68,6 +68,7 @@ interface BrowserOptions {
 
 function installBrowser(options: BrowserOptions = {}) {
   const stop = vi.fn()
+  const deviceChangeListeners = new Set<() => void>()
   const getUserMedia = vi.fn(
     options.getUserMedia ?? (async () => ({ getTracks: () => [{ stop }] })),
   )
@@ -77,14 +78,22 @@ function installBrowser(options: BrowserOptions = {}) {
     value: {
       getUserMedia,
       enumerateDevices,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
+      addEventListener: vi.fn((type: string, listener: () => void) => {
+        if (type === 'devicechange') deviceChangeListeners.add(listener)
+      }),
+      removeEventListener: vi.fn((type: string, listener: () => void) => {
+        if (type === 'devicechange') deviceChangeListeners.delete(listener)
+      }),
     },
   })
 
   if (options.permissionsApi === null) {
     Reflect.deleteProperty(navigator, 'permissions')
-    return { getUserMedia, enumerateDevices, stop }
+    return { getUserMedia, enumerateDevices, stop, emitDeviceChange: () => {
+      act(() => {
+        for (const listener of deviceChangeListeners) listener()
+      })
+    } }
   }
 
   const status = {
@@ -97,7 +106,18 @@ function installBrowser(options: BrowserOptions = {}) {
     return status
   })
   Object.defineProperty(navigator, 'permissions', { value: { query }, configurable: true })
-  return { getUserMedia, enumerateDevices, stop, query, status }
+  return {
+    getUserMedia,
+    enumerateDevices,
+    stop,
+    query,
+    status,
+    emitDeviceChange: () => {
+      act(() => {
+        for (const listener of deviceChangeListeners) listener()
+      })
+    },
+  }
 }
 
 /** jsdom has no Web Audio; enough of one that `DeviceCheck` renders its real controls. */
@@ -267,6 +287,30 @@ describe('the first dial of a session, end to end', () => {
     )
     expect(window.sessionStorage.getItem(DEVICE_CHOICE_KEY)).toBeNull()
   })
+
+  it('keeps the open greenroom up while a device change refreshes its microphone choices', async () => {
+    const browser = installBrowser()
+    const user = userEvent.setup()
+    const onCall = vi.fn()
+    render(<Dialer onCall={onCall} />)
+
+    await user.click(screen.getByRole('button', { name: 'Call' }))
+    await waitForReadyDialog()
+
+    browser.enumerateDevices.mockResolvedValue([
+      deviceInfo('audioinput', 'mic-usb', 'USB Microphone'),
+      deviceInfo('audiooutput', 'default', 'Default - MacBook Pro Speakers'),
+    ])
+    browser.emitDeviceChange()
+
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Microphone' })).toHaveTextContent(
+        'USB Microphone',
+      ),
+    )
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(onCall).not.toHaveBeenCalled()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -298,8 +342,9 @@ describe('the second dial of a session', () => {
   })
 
   it('shows the greenroom again when the first check found no microphone, because that was never a pass', async () => {
-    // No audioinput at all: the confirm records `hasMicrophone: false`, which
-    // `greenRoomCheckPassed` refuses, so the next dial starts over.
+    // No audioinput at all: the primary action stays disabled, so a failed
+    // readiness check cannot start a silent call. With no pass recorded, the
+    // next dial starts over in the greenroom.
     installBrowser({
       devices: [deviceInfo('audiooutput', 'default', 'Default - MacBook Pro Speakers')],
     })
@@ -309,8 +354,9 @@ describe('the second dial of a session', () => {
 
     await user.click(screen.getByRole('button', { name: 'Call' }))
     await waitForReadyDialog()
-    await user.click(screen.getByRole('button', { name: 'Start call' }))
-    expect(storedCheck()).toMatchObject({ hasMicrophone: false })
+    expect(screen.getByRole('button', { name: 'Start call' })).toBeDisabled()
+    expect(onCall).not.toHaveBeenCalled()
+    expect(storedCheck()).toBeNull()
 
     unmount()
     render(<Dialer onCall={onCall} />)
@@ -348,6 +394,31 @@ describe('the second dial of a session', () => {
 
     await waitFor(() => expect(onCall).toHaveBeenCalledTimes(2))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('shows the greenroom again after the browser reports a device change', async () => {
+    const browser = installBrowser()
+    const user = userEvent.setup()
+    const onCall = vi.fn()
+    render(<Dialer onCall={onCall} />)
+
+    await user.click(screen.getByRole('button', { name: 'Call' }))
+    await waitForReadyDialog()
+    await user.click(screen.getByRole('button', { name: 'Start call' }))
+    expect(onCall).toHaveBeenCalledTimes(1)
+
+    browser.enumerateDevices.mockResolvedValue([
+      deviceInfo('audioinput', 'mic-usb', 'USB Microphone'),
+      deviceInfo('audiooutput', 'default', 'Default - MacBook Pro Speakers'),
+    ])
+    browser.emitDeviceChange()
+
+    await user.click(screen.getByRole('button', { name: 'Call' }))
+    await waitForReadyDialog()
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Microphone' })).toHaveTextContent('USB Microphone')
+    expect(onCall).toHaveBeenCalledTimes(1)
   })
 })
 

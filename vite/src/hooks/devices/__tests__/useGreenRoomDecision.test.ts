@@ -33,6 +33,28 @@ function recordPass(permission: 'granted' | 'prompt' = 'granted') {
   recordGreenRoomCheck({ permission, hasMicrophone: true })
 }
 
+function installDeviceChangeListener() {
+  const listeners = new Set<Listener>()
+  const media = {
+    addEventListener: vi.fn((type: string, listener: Listener) => {
+      if (type === 'devicechange') listeners.add(listener)
+    }),
+    removeEventListener: vi.fn((type: string, listener: Listener) => {
+      if (type === 'devicechange') listeners.delete(listener)
+    }),
+  }
+  Object.defineProperty(navigator, 'mediaDevices', { value: media, configurable: true })
+
+  return {
+    media,
+    emitDeviceChange: () => {
+      act(() => {
+        for (const listener of listeners) listener()
+      })
+    },
+  }
+}
+
 // The record now lives in a module-level store shared by every hook instance, so
 // it outlives an individual test. Dropping its cache is what makes each test
 // start from the storage IT set up rather than the one before it.
@@ -42,6 +64,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  Reflect.deleteProperty(navigator, 'mediaDevices')
   Reflect.deleteProperty(navigator, 'permissions')
   vi.restoreAllMocks()
   window.sessionStorage.clear()
@@ -68,6 +91,24 @@ describe('useGreenRoomDecision', () => {
     await waitFor(() => expect(result.current.reason).toBe('retry'))
     expect(result.current.shouldShow).toBe(false)
     expect(result.current.permission).toBe('granted')
+  })
+
+  it('requires another check when the browser reports a device change after a pass', async () => {
+    recordPass('granted')
+    installPermissions('granted')
+    const { media, emitDeviceChange } = installDeviceChangeListener()
+
+    const { result, unmount } = renderHook(() => useGreenRoomDecision())
+    await waitFor(() => expect(result.current.reason).toBe('retry'))
+
+    emitDeviceChange()
+
+    expect(readGreenRoomCheck()).toBeNull()
+    expect(result.current.reason).toBe('initial')
+    expect(result.current.shouldShow).toBe(true)
+
+    unmount()
+    expect(media.removeEventListener).toHaveBeenCalledWith('devicechange', expect.any(Function))
   })
 
   it('shows the greenroom when the microphone is denied, even with a recorded pass', async () => {
