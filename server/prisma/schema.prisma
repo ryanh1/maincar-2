@@ -132,12 +132,14 @@ model Org {
   notificationObjects NotificationObject[]
   notifications       Notification[]
 
-  // Inbound voicemail (MAI-39, MAI-40, MAI-41). Back-relations so a deleted org
-  // cascades its voicemails and greeting away — the same onDelete: Cascade the
-  // rest of the dialer models already use. voicemailGreeting is a single object,
-  // not an array, because VoicemailGreeting.orgId is @unique.
+  // Inbound voicemail and pre-recorded drops (MAI-39 through MAI-53).
+  // Back-relations so deleting an org cascades its voicemail rows, greeting, and
+  // reusable drops away — the same onDelete: Cascade the rest of the dialer
+  // models already use. voicemailGreeting is a single object, not an array,
+  // because VoicemailGreeting.orgId is @unique.
   voicemails        Voicemail[]
   voicemailGreeting VoicemailGreeting?
+  voicemailDrops    VoicemailDrop[]
 }
 
 model User {
@@ -529,6 +531,36 @@ model VoicemailGreeting {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// A reusable, pre-recorded voicemail drop in an org's library (MAI-53). The
+// audio key is private storage, never a browser-readable URL; callers presign it
+// when they need playback. `isDefault` is protected by a partial unique index in
+// this model's migration: an org may have any number of non-default drops, but
+// at most one default.
+model VoicemailDrop {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Pickable label for the library and the bare S3 object key for its MP3.
+  name     String
+  audioUrl String
+
+  // Length in whole seconds, derived during upload before the drop is available.
+  duration Int
+
+  isDefault Boolean @default(false)
+
+  // Allowed values: "pending", "done", "failed".
+  transcriptStatus String  @default("pending")
+  transcript       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, name])
 }
 
 // One inbound call that went to voicemail, and what was learned from it after
