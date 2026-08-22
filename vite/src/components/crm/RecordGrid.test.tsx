@@ -1112,7 +1112,7 @@ describe('RecordGrid', () => {
     })
 
     expect((dataEditorProps.current!.columns as { hasMenu?: boolean }[])[0]?.hasMenu).toBe(true)
-    expect(screen.getByText('Filter First name')).toBeInTheDocument()
+    expect(screen.getByText('Column actions for First name')).toBeInTheDocument()
     expect(onViewConfigChange).not.toHaveBeenCalled()
   })
 })

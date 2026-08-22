@@ -8,10 +8,15 @@ export type ViewSort = {
   direction: 'asc' | 'desc'
 }
 
+export type ViewFilterOperator =
+  | 'eq' | 'neq' | 'contains' | 'not_contains' | 'starts_with' | 'ends_with'
+  | 'gt' | 'gte' | 'lt' | 'lte' | 'is_empty' | 'is_not_empty' | 'in'
+  | 'between' | 'not_in'
+
 export type ViewFilterCondition = {
   type: 'condition'
   attributeId: string
-  operator: 'eq' | 'neq' | 'contains' | 'not_contains' | 'starts_with' | 'ends_with' | 'gt' | 'gte' | 'lt' | 'lte' | 'is_empty' | 'is_not_empty' | 'in'
+  operator: ViewFilterOperator
   value?: unknown
 }
 
@@ -61,7 +66,7 @@ export type RecordListFilter =
   | {
       type: 'condition'
       field: string
-      operator: ViewFilterCondition['operator']
+      operator: Exclude<ViewFilterOperator, 'between' | 'not_in'>
       value?: unknown
     }
   | {
@@ -194,6 +199,29 @@ function toRecordListFilter(node: ViewFilterNode, attributesById: Map<string, At
   if (node.type === 'condition') {
     const attribute = attributesById.get(node.attributeId)
     if (!attribute) return null
+    if (node.operator === 'between') {
+      const [lower, upper] = Array.isArray(node.value) ? node.value : []
+      if (lower === undefined || upper === undefined || lower === '' || upper === '') return null
+      return {
+        type: 'group',
+        op: 'and',
+        children: [
+          { type: 'condition', field: attribute.slug, operator: 'gte', value: lower },
+          { type: 'condition', field: attribute.slug, operator: 'lte', value: upper },
+        ],
+      }
+    }
+    if (node.operator === 'not_in') {
+      const values = Array.isArray(node.value) ? node.value.filter((value) => value !== '') : []
+      if (values.length === 0) return null
+      return {
+        type: 'group',
+        op: 'and',
+        children: values.map((value) => ({ type: 'condition', field: attribute.slug, operator: 'neq', value })),
+      }
+    }
+    if (node.operator === 'in' && (!Array.isArray(node.value) || node.value.length === 0)) return null
+    if (!['is_empty', 'is_not_empty'].includes(node.operator) && (node.value === undefined || node.value === '')) return null
     return { type: 'condition', field: attribute.slug, operator: node.operator, ...(node.value === undefined ? {} : { value: node.value }) }
   }
 

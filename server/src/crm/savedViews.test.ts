@@ -54,6 +54,28 @@ describe('repairSavedViewConfig', () => {
       { attributeId: 'attr-stage', visible: true, order: 1, group: 'Identity', collapsed: true },
     ])
   })
+
+  it('retains the builder operators that expand into the record-list query at runtime', () => {
+    const config = repairSavedViewConfig({
+      filterTree: {
+        type: 'group',
+        op: 'and',
+        children: [
+          { type: 'condition', attributeId: 'attr-name', operator: 'between', value: ['10', '20'] },
+          { type: 'condition', attributeId: 'attr-stage', operator: 'not_in', value: ['new', 'won'] },
+        ],
+      },
+    }, ATTRIBUTES)
+
+    expect(config.filterTree).toEqual({
+      type: 'group',
+      op: 'and',
+      children: [
+        { type: 'condition', attributeId: 'attr-name', operator: 'between', value: ['10', '20'] },
+        { type: 'condition', attributeId: 'attr-stage', operator: 'not_in', value: ['new', 'won'] },
+      ],
+    })
+  })
 })
 
 describe('decodeUrlViewOverlay', () => {

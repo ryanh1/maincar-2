@@ -18,6 +18,7 @@ import {
 import type { AttributeDef } from '@/lib/crmTypes'
 import { memberDisplayName, useGetMembers, useGetTeams } from '@/hooks/orgs'
 import type { TeamScope, ViewConfig } from './viewConfig'
+import { GridFilterBuilder } from './GridFilterBuilder'
 
 interface GridViewToolbarProps {
   leading?: ReactNode
@@ -226,6 +227,8 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
       )}
 
       {teamScopeSupported && orgId && config.teamScope && <TeamScopeChip orgId={orgId} config={config} />}
+
+      <GridFilterBuilder attributes={attributes} config={config} onConfigChange={onConfigChange} />
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
