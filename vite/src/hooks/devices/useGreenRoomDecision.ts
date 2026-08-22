@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { greenRoomCheckPassed } from '@/lib/greenRoomSession'
 
 import {
+  clearGreenRoomCheckInStore,
   getGreenRoomCheckSnapshot,
   recordGreenRoomCheckInStore,
   subscribeToGreenRoomCheck,
@@ -108,6 +109,18 @@ export function useGreenRoomDecision(): UseGreenRoomDecisionResult {
       cancelled = true
       status?.removeEventListener?.('change', onChange)
     }
+  }, [])
+
+  useEffect(() => {
+    // A passed check only describes the hardware that was attached when it ran.
+    // When the browser reports a headset or microphone change, forget that pass
+    // so the next call returns through the greenroom. `DeviceCheck` separately
+    // refreshes its live list while the dialog is already open.
+    const media = navigator.mediaDevices
+    const onDeviceChange = () => clearGreenRoomCheckInStore()
+    media?.addEventListener?.('devicechange', onDeviceChange)
+
+    return () => media?.removeEventListener?.('devicechange', onDeviceChange)
   }, [])
 
   const recordSession = useCallback(

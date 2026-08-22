@@ -67,7 +67,7 @@ export interface GreenRoomProps {
  */
 export function GreenRoom({ open, onOpenChange, onConfirm, confirmLabel }: GreenRoomProps) {
   const { reason, shouldShow, permission, recordSession } = useGreenRoomDecision()
-  const { error } = useGetDevices()
+  const { error, isLoading } = useGetDevices()
 
   // Not cleared on close. `DeviceCheck` unmounts with the dialog and reports a
   // fresh selection from its mount effect, which lands before the rep can press
@@ -112,6 +112,11 @@ export function GreenRoom({ open, onOpenChange, onConfirm, confirmLabel }: Green
   // decision hook watches the permission, so allowing it re-enables the button
   // without a reload.
   const micDenied = reason === 'mic-denied'
+  // A confirmation is safe only after the check has settled on a working
+  // microphone and reported no device-readiness error. A failed check stays in
+  // the dialog, where the rep can reconnect hardware or cancel; it can never
+  // leak through to the caller and place a silent call.
+  const readinessFailed = isLoading || error !== null || selection?.microphoneId == null
   // Radix warns when a dialog has no description, and there is nothing honest to
   // put under "Check your devices" — the screen is its own explanation. Passing
   // the prop explicitly is Radix's own way to say "there is none". The actionable
@@ -194,7 +199,7 @@ export function GreenRoom({ open, onOpenChange, onConfirm, confirmLabel }: Green
             ref={confirmRef}
             type="button"
             size="sm"
-            disabled={micDenied}
+            disabled={micDenied || readinessFailed}
             onClick={handleConfirm}
           >
             {confirmLabel ?? 'Start call'}
