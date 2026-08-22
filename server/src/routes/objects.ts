@@ -148,9 +148,16 @@ const filterNodeSchema: z.ZodType<FilterNodeInput> = z.lazy(() =>
     }),
   ]),
 )
+const teamScopeSchema = z.object({
+  teamIds: z.array(z.string().trim().min(1, 'Each team id must be non-empty.')).optional(),
+  leadUserIds: z.array(z.string().trim().min(1, 'Each team lead id must be non-empty.')).optional(),
+}).strict().refine((scope) => (scope.teamIds?.length ?? 0) + (scope.leadUserIds?.length ?? 0) > 0, {
+  message: 'Choose at least one team or team lead.',
+})
 const listBodySchema = z.object({
   filter: filterNodeSchema.nullish(),
   sort: z.object({ field: z.string().min(1), direction: z.enum(['asc', 'desc']) }).nullish(),
+  teamScope: teamScopeSchema.optional(),
   cursor: z.string().nullish(),
   limit: z.number().int().positive().optional(),
 })
@@ -292,7 +299,7 @@ router.post(
       res.json(result)
     } catch (error) {
       if (error instanceof ListQueryError) {
-        return void res.status(400).json({ error: error.message })
+        return void res.status(error.status).json({ error: error.message })
       }
       throw error
     }

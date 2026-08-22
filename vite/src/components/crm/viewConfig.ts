@@ -23,6 +23,12 @@ export type ViewFilterGroup = {
 
 export type ViewFilterNode = ViewFilterCondition | ViewFilterGroup
 
+/** A durable selection that the server resolves against the live team roster. */
+export type TeamScope = {
+  teamIds?: string[]
+  leadUserIds?: string[]
+}
+
 /**
  * The live counterpart of SavedView.configJson. Saved views have not landed
  * yet (MAI-176), so this state belongs to the current route and is ready to be
@@ -32,6 +38,7 @@ export type ViewConfig = {
   columns: Array<{ attributeId: string; visible: boolean; order: number }>
   sorts: ViewSort[]
   filterTree?: ViewFilterNode
+  teamScope?: TeamScope
   groupBy: ViewSort[]
   rowHeight: 'compact' | 'comfortable' | 'tall'
   gridLines: boolean
@@ -58,11 +65,13 @@ export type RecordListFilter =
 export type RecordListQuery = {
   sort?: { field: string; direction: 'asc' | 'desc' }
   filter?: RecordListFilter
+  teamScope?: TeamScope
 }
 
 type SharedViewConfig = {
   version: 1
   sorts: ViewSort[]
+  teamScope?: TeamScope
 }
 
 const EMPTY_CONFIG: Omit<ViewConfig, 'columns'> = {
@@ -97,6 +106,20 @@ function isViewSort(value: unknown, knownIds: Set<string>): value is ViewSort {
   )
 }
 
+function parseTeamScope(value: unknown): TeamScope | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const source = value as { teamIds?: unknown; leadUserIds?: unknown }
+  const validIds = (ids: unknown): string[] | undefined =>
+    Array.isArray(ids) && ids.every((id) => typeof id === 'string' && id.trim().length > 0)
+      ? [...new Set(ids)]
+      : undefined
+  const teamIds = validIds(source.teamIds)
+  const leadUserIds = validIds(source.leadUserIds)
+  return teamIds?.length || leadUserIds?.length
+    ? { ...(teamIds?.length ? { teamIds } : {}), ...(leadUserIds?.length ? { leadUserIds } : {}) }
+    : undefined
+}
+
 function decodeSharedConfig(encoded: string | null, attributes: AttributeDef[]): SharedViewConfig | null {
   if (!encoded) return null
 
@@ -107,15 +130,17 @@ function decodeSharedConfig(encoded: string | null, attributes: AttributeDef[]):
     const sorts = Array.isArray((parsed as { sorts?: unknown }).sorts)
       ? (parsed as { sorts: unknown[] }).sorts.filter((sort) => isViewSort(sort, knownIds))
       : []
-    return { version: 1, sorts }
+    const teamScope = parseTeamScope((parsed as { teamScope?: unknown }).teamScope)
+    return { version: 1, sorts, ...(teamScope ? { teamScope } : {}) }
   } catch {
     return null
   }
 }
 
 function encodeSharedConfig(config: ViewConfig): string | null {
-  if (config.sorts.length === 0) return null
-  const shared: SharedViewConfig = { version: 1, sorts: config.sorts }
+  const teamScope = parseTeamScope(config.teamScope)
+  if (config.sorts.length === 0 && !teamScope) return null
+  const shared: SharedViewConfig = { version: 1, sorts: config.sorts, ...(teamScope ? { teamScope } : {}) }
   return btoa(JSON.stringify(shared))
 }
 
@@ -155,20 +180,21 @@ export function toRecordListQuery(config: ViewConfig, attributes: AttributeDef[]
   return {
     ...(sortAttribute && firstSort ? { sort: { field: sortAttribute.slug, direction: firstSort.direction } } : {}),
     ...(filter ? { filter } : {}),
+    ...(config.teamScope ? { teamScope: config.teamScope } : {}),
   }
 }
 
 /**
- * Route-owned live view state. The `v` parameter holds only versioned,
- * allow-listed sort state; filter literals and local display controls remain
- * in memory so PII never leaks into a shared URL.
+ * Route-owned live view state. The `v` parameter holds versioned, allow-listed
+ * sort state and Team-scope ids; filter literals and local display controls
+ * remain in memory so CRM values and PII never leak into a shared URL.
  */
 export function useViewConfig(attributes: AttributeDef[]): [ViewConfig, (update: (current: ViewConfig) => ViewConfig) => void] {
   const [searchParams, setSearchParams] = useSearchParams()
   const baseConfig = useMemo(() => {
     const defaults = createViewConfig(attributes)
     const shared = decodeSharedConfig(searchParams.get('v'), attributes)
-    return shared ? { ...defaults, sorts: shared.sorts } : defaults
+    return shared ? { ...defaults, sorts: shared.sorts, ...(shared.teamScope ? { teamScope: shared.teamScope } : {}) } : defaults
   }, [attributes, searchParams])
 
   const [localConfig, setLocalConfig] = useState<ViewConfig | null>(null)

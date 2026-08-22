@@ -32,6 +32,14 @@ describe('repairSavedViewConfig', () => {
     expect(config.sorts).toEqual([])
     expect(config.columnWidths).toEqual({ 'attr-name': 200 })
   })
+
+  it('keeps the reusable Team scope when a saved view is reloaded', () => {
+    const config = repairSavedViewConfig({
+      teamScope: { teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] },
+    }, ATTRIBUTES)
+
+    expect(config.teamScope).toEqual({ teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] })
+  })
 })
 
 describe('decodeUrlViewOverlay', () => {
@@ -57,5 +65,16 @@ describe('decodeUrlViewOverlay', () => {
     })).toString('base64url')
 
     expect(decodeUrlViewOverlay(encoded, ATTRIBUTES)).toBeUndefined()
+  })
+
+  it('restores Team scope ids from a URL overlay without accepting CRM filter literals', () => {
+    const encoded = Buffer.from(JSON.stringify({
+      version: 1,
+      teamScope: { teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] },
+    })).toString('base64url')
+
+    const resolved = applyUrlViewOverlay(repairSavedViewConfig({}, ATTRIBUTES), decodeUrlViewOverlay(encoded, ATTRIBUTES))
+
+    expect(resolved.teamScope).toEqual({ teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] })
   })
 })

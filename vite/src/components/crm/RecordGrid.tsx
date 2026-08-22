@@ -131,6 +131,9 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         .sort((a, b) => a.sortOrder - b.sortOrder),
     [attributes],
   )
+  const teamScopeSupported = object.storage === 'table' && columns.some(
+    (attribute) => attribute.slug === 'ownerUserId' && attribute.storage === 'column' && attribute.type === 'user_reference',
+  )
 
   const fallbackConfig = useMemo(() => createViewConfig(attributes), [attributes])
   const config = viewConfig ?? fallbackConfig
@@ -674,7 +677,15 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
 
   return (
     <div className="flex h-full min-h-0 flex-col border border-border bg-bg">
-      {onViewConfigChange && <GridViewToolbar attributes={columns} config={config} onConfigChange={onViewConfigChange} />}
+      {onViewConfigChange && (
+        <GridViewToolbar
+          orgId={orgId}
+          attributes={columns}
+          config={config}
+          onConfigChange={onViewConfigChange}
+          teamScopeSupported={teamScopeSupported}
+        />
+      )}
       <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => setHoveredRow(null)}>
         <DataEditor
         ref={dataEditorRef}
