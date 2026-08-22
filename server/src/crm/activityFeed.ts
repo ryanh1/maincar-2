@@ -31,11 +31,11 @@
  * call site. They are pure functions, which is why they can be unit-tested without
  * a database.
  */
+import { Prisma } from '../generated/prisma/client.js'
 import type {
   Call,
   Email,
   Meeting,
-  Prisma,
   SmsMessage,
 } from '../generated/prisma/client.js'
 
@@ -85,6 +85,9 @@ export const ACTIVITY_SOURCE_TYPES = [
   'meeting',
   'note',
   'stage_change',
+  'task',
+  'record_created',
+  'custom',
 ] as const
 
 export type ActivitySourceType = (typeof ACTIVITY_SOURCE_TYPES)[number]
@@ -107,6 +110,73 @@ export function isActivityDirection(value: unknown): value is ActivityDirection 
   return typeof value === 'string' && (ACTIVITY_DIRECTIONS as readonly string[]).includes(value)
 }
 
+// --- The versioned timeline projection --------------------------------------
+
+/** The only projection shape this code can write today. */
+export const TIMELINE_EVENT_VERSION = 1 as const
+
+/**
+ * A source's presentation state. These are strings, not Prisma enums: the timeline
+ * will grow source-specific states without forcing a database type migration.
+ */
+export const TIMELINE_EVENT_SUBTYPES = [
+  'created',
+  'scheduled',
+  'sent',
+  'received',
+  'completed',
+  'reopened',
+  'cancelled',
+  'voicemail',
+  'stage_changed',
+  'closed_won',
+  'closed_lost',
+] as const
+export type TimelineEventSubtype = (typeof TIMELINE_EVENT_SUBTYPES)[number]
+
+/** Bubble weight: 1 is a lifecycle marker; 5 is the strongest account activity. */
+export const TIMELINE_EVENT_INTENSITIES = [1, 2, 3, 4, 5] as const
+export type TimelineEventIntensity = (typeof TIMELINE_EVENT_INTENSITIES)[number]
+
+/** The flags that belong on the deal ribbon above the timeline lanes. */
+export const TIMELINE_EVENT_MARKER_TYPES = [
+  'deal_created',
+  'stage_moved',
+  'closed_won',
+  'closed_lost',
+] as const
+export type TimelineEventMarkerType = (typeof TIMELINE_EVENT_MARKER_TYPES)[number]
+
+/** Names captured at write time so a timeline row or bubble never needs a join. */
+export interface TimelineEventDisplaySnapshot {
+  actorName?: string
+  companyName?: string
+  personName?: string
+  dealName?: string
+}
+
+/** Optional deal-ribbon metadata. A stage move always preserves both sides. */
+export interface TimelineEventMarker {
+  type: TimelineEventMarkerType
+  before?: string
+  after?: string
+}
+
+/**
+ * The durable, self-rendering event contract. `summary` remains the generic CRM
+ * feed's backward-compatible field; `title` is the timeline's independently
+ * versioned display title.
+ */
+export interface TimelineEventProjection {
+  version: typeof TIMELINE_EVENT_VERSION
+  title: string
+  preview?: string | null
+  subtype?: TimelineEventSubtype | null
+  intensity: TimelineEventIntensity
+  display: TimelineEventDisplaySnapshot
+  marker?: TimelineEventMarker | null
+}
+
 // --- Text limits --------------------------------------------------------------
 
 // A feed line is one row in a list, not a document. 200 characters is well past
@@ -117,6 +187,110 @@ export const SUMMARY_MAX_LENGTH = 200
 // own `snippet` runs to about this length, so matching it means an ingested value
 // usually survives untouched.
 export const PREVIEW_MAX_LENGTH = 280
+
+const DISPLAY_SNAPSHOT_KEYS = ['actorName', 'companyName', 'personName', 'dealName'] as const
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function validateOptionalSnapshotText(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw new ActivityFeedError(`${field} must be a string.`)
+  const text = condense(value, SUMMARY_MAX_LENGTH)
+  if (!text || text !== value) {
+    throw new ActivityFeedError(`${field} must be non-empty, trimmed text within ${SUMMARY_MAX_LENGTH} characters.`)
+  }
+  return text
+}
+
+/**
+ * Validates a projection before the transaction writes any part of it. This is
+ * deliberately stricter than a database JSON column: the database preserves the
+ * snapshot, while this boundary preserves the contract future readers rely on.
+ */
+export function validateTimelineEventProjection(value: unknown): TimelineEventProjection {
+  if (!isRecord(value)) throw new ActivityFeedError('A timeline projection must be an object.')
+  if (value.version !== TIMELINE_EVENT_VERSION) {
+    throw new ActivityFeedError(`timeline version must be ${TIMELINE_EVENT_VERSION}.`)
+  }
+  if (typeof value.title !== 'string') throw new ActivityFeedError('timeline title must be a string.')
+  const title = condense(value.title, SUMMARY_MAX_LENGTH)
+  if (!title || title !== value.title) {
+    throw new ActivityFeedError(`timeline title must be non-empty, trimmed text within ${SUMMARY_MAX_LENGTH} characters.`)
+  }
+
+  const preview = value.preview
+  if (preview !== undefined && preview !== null) {
+    if (typeof preview !== 'string' || preview.length > PREVIEW_MAX_LENGTH || condense(preview, PREVIEW_MAX_LENGTH) !== preview) {
+      throw new ActivityFeedError(`timeline preview must be trimmed text within ${PREVIEW_MAX_LENGTH} characters, or null.`)
+    }
+  }
+
+  const subtype = value.subtype
+  if (
+    subtype !== undefined &&
+    subtype !== null &&
+    (typeof subtype !== 'string' || !(TIMELINE_EVENT_SUBTYPES as readonly string[]).includes(subtype))
+  ) {
+    throw new ActivityFeedError(`timeline subtype must be one of: ${TIMELINE_EVENT_SUBTYPES.join(', ')}, or null.`)
+  }
+
+  const intensity = value.intensity
+  if (typeof intensity !== 'number' || !(TIMELINE_EVENT_INTENSITIES as readonly number[]).includes(intensity)) {
+    throw new ActivityFeedError(`timeline intensity must be one of: ${TIMELINE_EVENT_INTENSITIES.join(', ')}.`)
+  }
+
+  if (!isRecord(value.display)) throw new ActivityFeedError('timeline display must be an object.')
+  for (const key of Object.keys(value.display)) {
+    if (!(DISPLAY_SNAPSHOT_KEYS as readonly string[]).includes(key)) {
+      throw new ActivityFeedError(`timeline display does not support ${key}.`)
+    }
+  }
+  const display: TimelineEventDisplaySnapshot = {}
+  for (const key of DISPLAY_SNAPSHOT_KEYS) {
+    const text = validateOptionalSnapshotText(value.display[key], `timeline display ${key}`)
+    if (text !== undefined) display[key] = text
+  }
+
+  const marker = value.marker
+  if (marker !== undefined && marker !== null) {
+    if (!isRecord(marker)) throw new ActivityFeedError('timeline marker must be an object.')
+    if (Object.keys(marker).some((key) => key !== 'type' && key !== 'before' && key !== 'after')) {
+      throw new ActivityFeedError('timeline marker has unsupported data.')
+    }
+    if (
+      typeof marker.type !== 'string' ||
+      !(TIMELINE_EVENT_MARKER_TYPES as readonly string[]).includes(marker.type)
+    ) {
+      throw new ActivityFeedError(`timeline marker type must be one of: ${TIMELINE_EVENT_MARKER_TYPES.join(', ')}.`)
+    }
+    const before = validateOptionalSnapshotText(marker.before, 'timeline marker before')
+    const after = validateOptionalSnapshotText(marker.after, 'timeline marker after')
+    if (marker.type === 'stage_moved' && (!before || !after)) {
+      throw new ActivityFeedError('a stage_moved timeline marker needs both before and after values.')
+    }
+    return {
+      version: TIMELINE_EVENT_VERSION,
+      title,
+      preview: preview ?? null,
+      subtype: (subtype ?? null) as TimelineEventSubtype | null,
+      intensity: intensity as TimelineEventIntensity,
+      display,
+      marker: { type: marker.type as TimelineEventMarkerType, ...(before ? { before } : {}), ...(after ? { after } : {}) },
+    }
+  }
+
+  return {
+    version: TIMELINE_EVENT_VERSION,
+    title,
+    preview: preview ?? null,
+    subtype: (subtype ?? null) as TimelineEventSubtype | null,
+    intensity: intensity as TimelineEventIntensity,
+    display,
+    marker: null,
+  }
+}
 
 /**
  * Collapses whitespace and caps length, appending an ellipsis when it cuts.
@@ -188,6 +362,8 @@ export interface NewActivityEntry {
   companyId?: string | null
   personId?: string | null
   dealId?: string | null
+  /** Optional only for existing feed writers; the writer creates and validates v1. */
+  timeline?: TimelineEventProjection
 }
 
 /**
@@ -233,13 +409,35 @@ export async function recordActivityInTx(
     }
   }
 
+  // Existing generic writers keep their contract: absent timeline data becomes a
+  // conservative v1 projection. New source writers can provide richer snapshots
+  // and marker data, but every persisted row is validated at this one boundary.
+  const projection = validateTimelineEventProjection(
+    entry.timeline ?? {
+      version: TIMELINE_EVENT_VERSION,
+      title: summary,
+      preview: condense(entry.preview, PREVIEW_MAX_LENGTH),
+      intensity: 2,
+      display: {},
+    },
+  )
+
   // The fields a re-save is allowed to refresh. `orgId`/`sourceType`/`sourceId` are
   // the identity of the row and are deliberately absent: an update must never move
   // a feed row onto a different activity.
   const mutable = {
     summary,
-    preview: condense(entry.preview, PREVIEW_MAX_LENGTH),
+    preview: projection.preview,
     direction: entry.direction ?? null,
+    timelineVersion: projection.version,
+    timelineTitle: projection.title,
+    timelineSubtype: projection.subtype ?? null,
+    timelineIntensity: projection.intensity,
+    timelineDisplay: projection.display as Prisma.InputJsonValue,
+    timelineMarker:
+      projection.marker === null || projection.marker === undefined
+        ? Prisma.JsonNull
+        : (projection.marker as unknown as Prisma.InputJsonValue),
     occurredAt: entry.occurredAt,
     createdByUserId: entry.createdByUserId ?? null,
     companyId: entry.companyId ?? null,

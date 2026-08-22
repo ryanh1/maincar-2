@@ -165,6 +165,50 @@ describe('ActivityEntry feed (integration, real Postgres)', () => {
     expect(rows[0].summary).not.toContain('0s')
     // occurredAt is the call's own instant, not the moment the row was written.
     expect(rows[0].occurredAt.getTime()).toBe(call.createdAt.getTime())
+    // The existing call writer gets a safe v1 projection without changing the
+    // generic feed columns the current activity route renders.
+    expect(rows[0]).toMatchObject({
+      timelineVersion: 1,
+      timelineTitle: rows[0].summary,
+      timelineSubtype: null,
+      timelineIntensity: 2,
+      timelineDisplay: {},
+      timelineMarker: null,
+    })
+  })
+
+  it('persists a validated projection and deal marker on the same idempotent source row', async () => {
+    const { orgId } = await seedOrgWithAdmin(prisma)
+    await record({
+      orgId,
+      sourceType: 'stage_change',
+      sourceId: 'deal-stage-1',
+      summary: 'Deal moved to Proposal',
+      occurredAt: new Date('2026-08-22T17:00:00Z'),
+      timeline: {
+        version: 1,
+        title: 'Moved Enterprise renewal to Proposal',
+        preview: 'Discovery → Proposal',
+        subtype: 'stage_changed',
+        intensity: 3,
+        display: { actorName: 'Al Pha', dealName: 'Enterprise renewal' },
+        marker: { type: 'stage_moved', before: 'Discovery', after: 'Proposal' },
+      },
+    })
+
+    const row = await prisma.activityEntry.findFirstOrThrow({
+      where: { orgId, sourceType: 'stage_change', sourceId: 'deal-stage-1' },
+    })
+    expect(row).toMatchObject({
+      summary: 'Deal moved to Proposal',
+      preview: 'Discovery → Proposal',
+      timelineVersion: 1,
+      timelineTitle: 'Moved Enterprise renewal to Proposal',
+      timelineSubtype: 'stage_changed',
+      timelineIntensity: 3,
+      timelineDisplay: { actorName: 'Al Pha', dealName: 'Enterprise renewal' },
+      timelineMarker: { type: 'stage_moved', before: 'Discovery', after: 'Proposal' },
+    })
   })
 
   it('carries the CRM spine onto the feed row, so the account feed finds the call', async () => {
@@ -290,6 +334,7 @@ describe('ActivityEntry feed (integration, real Postgres)', () => {
       sourceType: 'call',
       sourceId: 'src-dup-1',
       summary: 'Called +12025550777',
+      timelineTitle: 'Called +12025550777',
       occurredAt: new Date('2026-03-02T10:00:00Z'),
     }
     await prisma.activityEntry.create({ data: base })
@@ -576,18 +621,18 @@ describe('ActivityEntry feed (integration, real Postgres)', () => {
     // writes is asserted everywhere else in this file.
     await prisma.$executeRawUnsafe(
       `INSERT INTO "${schema}"."ActivityEntry"
-         ("id", "orgId", "sourceType", "sourceId", "summary", "occurredAt", "updatedAt")
-       SELECT 'noise-' || i, '${orgId}', 'call', 'noise-src-' || i, 'Noise ' || i,
+         ("id", "orgId", "sourceType", "sourceId", "summary", "timelineTitle", "occurredAt", "updatedAt")
+       SELECT 'noise-' || i, '${orgId}', 'call', 'noise-src-' || i, 'Noise ' || i, 'Noise ' || i,
               TIMESTAMP '2026-04-01 00:00:00' + (i * INTERVAL '1 minute'), NOW()
        FROM generate_series(1, 20000) AS i`,
     )
     await prisma.$executeRawUnsafe(
       `INSERT INTO "${schema}"."ActivityEntry"
          ("id", "orgId", "sourceType", "sourceId", "summary", "occurredAt",
-          "companyId", "createdByUserId", "updatedAt")
+          "timelineTitle", "companyId", "createdByUserId", "updatedAt")
        SELECT 'bulk-' || i, '${orgId}', 'call', 'bulk-src-' || i, 'Activity ' || i,
               TIMESTAMP '2026-04-01 00:00:00' + (i * INTERVAL '1 hour'),
-              '${company.id}', '${adminUserId}', NOW()
+              'Activity ' || i, '${company.id}', '${adminUserId}', NOW()
        FROM generate_series(1, 100) AS i`,
     )
     await prisma.$executeRawUnsafe(`ANALYZE "${schema}"."ActivityEntry"`)

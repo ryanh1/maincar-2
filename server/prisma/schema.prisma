@@ -2161,7 +2161,9 @@ model ActivityEntry {
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   // --- What this row summarizes ----------------------------------------------
-  // Allowed values: "call", "email", "sms", "meeting", "note", "stage_change".
+  // Allowed values: "call", "email", "sms", "meeting", "note", "stage_change",
+  // "task", "record_created", and "custom". A String, never a Prisma enum: this
+  // list grows with timeline sources and Postgres enums require an ALTER TYPE dance.
   // A String, not a Prisma enum, because this list WILL gain values and a Postgres
   // enum needs an ALTER TYPE dance to do it (.claude/rules/database-and-prisma.md
   // → No Enums). The type-safe half is ACTIVITY_SOURCE_TYPES in
@@ -2182,6 +2184,25 @@ model ActivityEntry {
   // history unless the writer re-saves and the upsert refreshes them.
   summary String
   preview String?
+
+  // --- Versioned account-timeline projection --------------------------------
+  // The generic CRM activity feed remains on summary/preview. These fields are the
+  // timeline's durable row-level projection: it can render the title, bubble
+  // weight, lane labels, and deal-ribbon metadata without joining every source.
+  // The writer validates this v1 shape in crm/activityFeed.ts before every upsert.
+  timelineVersion   Int    @default(1)
+  timelineTitle     String
+  // Allowed values are the TimelineEventSubtype TypeScript string union. NULL means
+  // the source has no meaningful subtype; this is deliberately not a Prisma enum.
+  timelineSubtype   String?
+  // 1..5. One is a low-weight lifecycle marker; five is the strongest activity.
+  timelineIntensity Int    @default(2)
+  // { actorName?, companyName?, personName?, dealName? }; display snapshots avoid
+  // per-event joins for timeline lanes and rows. JSON keeps the projection additive.
+  timelineDisplay   Json?
+  // Optional { type, before?, after? } deal ribbon marker. `type` is a TypeScript
+  // string union (deal_created | stage_moved | closed_won | closed_lost), not enum.
+  timelineMarker    Json?
 
   // Allowed values: "outbound", "inbound", or NULL where the idea does not apply
   // (a note has no direction, and neither does a stage change).
