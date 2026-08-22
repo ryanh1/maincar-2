@@ -58,6 +58,11 @@ export const queryKeys = {
     voiceToken: (orgId: string) => ['calls', 'voiceToken', orgId] as const,
   },
   recordingPolicy: (orgId: string) => ['recordingPolicy', orgId] as const,
+  voicemails: {
+    all: ['voicemails'] as const,
+    detail: (orgId: string, voicemailId: string) =>
+      ['voicemails', 'detail', orgId, voicemailId] as const,
+  },
   phoneNumbers: {
     all: ['phoneNumbers'] as const,
     // Keyed by org only, not by any query: the list is not paginated (the route
