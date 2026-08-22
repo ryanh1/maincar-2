@@ -28,13 +28,14 @@ done
 
 WT="$(mc_worktree)"; BR="$(mc_branch)"
 cd "$WT"
+mc_assert_ticket_checkout || exit 2
 [ "$BR" = "main" ] && { echo "mc-merge: you are on main. Run this from your ticket branch." >&2; exit 2; }
 if [ -n "$(git status --porcelain)" ]; then
   echo "mc-merge: working tree is dirty. Commit or stash first." >&2; git status --short >&2; exit 2
 fi
 
-UPSTREAM="$(mc_upstream_url)" || exit 1
-mc_fetch_upstream_main --quiet
+UPSTREAM="$(mc_canonical_upstream_url)" || exit 1
+mc_fetch_local_main --quiet
 BASE="$(git merge-base HEAD origin/main)"
 TIP="$(git rev-parse origin/main)"
 
@@ -78,7 +79,7 @@ if [ "$GATE" = 1 ]; then
   echo "[mc-merge --gate] lock held. Nothing else can merge until this finishes or fails."
   mc_log "merge --gate start $BR"
 
-  mc_fetch_upstream_main --quiet
+  mc_fetch_local_main --quiet
   echo "[mc-merge --gate] rebasing onto $(git rev-parse --short origin/main)"
   if ! git rebase origin/main; then
     echo >&2
@@ -112,6 +113,7 @@ if [ "$GATE" = 1 ]; then
   printf '%s\n\nCo-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>\n' "$MSG" > "$TMP/../mc-merge-msg.txt"
   git -C "$TMP" merge --no-ff "$BR" -F "$TMP/../mc-merge-msg.txt"
   git -C "$TMP" push "$UPSTREAM" HEAD:main
+  mc_sync_local_main
   echo "[mc-merge --gate] merged and pushed. $BR is on main."
   mc_log "merge --gate done $BR"
   exit 0
@@ -135,7 +137,7 @@ mc_log "merge start $BR"
 
 # Someone may have pushed while we waited for the lock.
 MSG_FIRST_LINE="$(printf '%s' "${MSG:-your message}" | head -1)"
-mc_fetch_upstream_main --quiet
+mc_fetch_local_main --quiet
 if [ "$(git rev-parse origin/main)" != "$TIP" ]; then
   # This refusal is correct but it is a TRAP without the next four lines. The time
   # you spend waiting for the lock is time other sessions spend merging, so at this
@@ -163,5 +165,6 @@ trap cleanup EXIT
 printf '%s\n\nCo-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>\n' "$MSG" > "$TMP/../mc-merge-msg.txt"
 git -C "$TMP" merge --no-ff "$BR" -F "$TMP/../mc-merge-msg.txt"
 git -C "$TMP" push "$UPSTREAM" HEAD:main
+mc_sync_local_main
 echo "[mc-merge] merged and pushed. $BR is on main."
 mc_log "merge done $BR"

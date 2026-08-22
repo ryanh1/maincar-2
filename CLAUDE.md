@@ -30,18 +30,22 @@ Every time-of-day shown to a person MUST render in an explicit timezone and carr
 
 ## Git and branching
 
-**Use a worktree per issue.** Multiple sessions work this repo at once. Give each
-one its own checkout and branch instead of sharing the main tree. **Never `git
-checkout` a feature branch, or `git merge` outside of `mc-merge`, in the main
-tree at `~/Documents/Coding/My Projects/maincar-2` itself** — it has happened
-more than once, silently: the main tree ended up stranded on a stale branch, or
-with local commits never pushed to `origin/main`, and nobody noticed until it
-served stale code. `./.claude/scripts/coord/mc-doctor` checks the main tree's branch,
-cleanliness, and sync with `origin/main` — run it if something looks stale.
+**Use an issue clone per issue.** Multiple sessions work this repo at once. The
+primary checkout at `~/Documents/Coding/My Projects/maincar-2` is a reference
+checkout only: **never edit, stage, commit, change branches, merge, or push in
+it.** A hook and every `mc-*` delivery command reject it. If it is dirty, do
+not clean, reset, or stash it: identify the owner and move that work into an
+issue clone. Run `./.claude/scripts/coord/mc-doctor` when something looks stale.
+
+Ticket clones fetch from a local *bare* mirror, not the editable primary
+checkout. This keeps local fetches fast without allowing one session's WIP to
+block another session's delivery. The mirror rejects direct pushes, so
+`mc-merge` is the only normal delivery route.
 
 ```bash
+./.claude/scripts/coord/mc-local-main sync
 cd ~/code/maincar-2-worktrees
-git clone /path/to/maincar-2 mai-123-short-title
+git clone ~/code/maincar-2-coord/local-main.git mai-123-short-title
 cd mai-123-short-title
 git checkout -b mai-123-short-title
 ```
@@ -54,9 +58,10 @@ Then use the coordination scripts in [`.claude/scripts/coord/`](.claude/scripts/
 - `./.claude/scripts/coord/mc-gate` — run the test gate through a shared queue instead of
   calling `npm run verify` directly. It still runs everything `verify` runs — it is
   a queue, not a shortcut.
-- `./.claude/scripts/coord/mc-merge --gate -m "MAI-123: ..."` — rebase, run the
-  full gate, merge, and push under one lock, so
-  two sessions can't push over each other.
+- `./.claude/scripts/coord/mc-merge --gate -m "MAI-123: ..."` — rebase from the
+  local mirror, run the full gate, merge, and push under one lock, so two
+  sessions can't push over each other. It automatically repairs a legacy clone's
+  `origin` before delivery.
 - `./.claude/scripts/coord/mc-doctor` — check machine health (stuck locks, load, leftover
   test databases) if something feels stuck.
 
@@ -83,16 +88,9 @@ Do not call an issue complete after only committing, testing, or opening a PR.
 The merge, GitHub push, branch deletion, worktree deletion, and Linear update are
 all required closeout steps.
 
-**No worktree, or working solo in the main checkout?** That still works for
-editing and testing, but it does not permit an ad-hoc merge or push:
-
-- Preserve all existing changes. Make your changes, then commit only the files and
-  hunks you changed — `git commit -- <paths>`, never a bare `git add -A` (see
-  [committing.md](.claude/rules/committing.md) → **The index is shared**).
-- Do not touch, revert, stash, or commit another session's changes.
-- Run `npm run verify` yourself before committing, then use
-  `./.claude/scripts/coord/mc-merge --gate` from the feature worktree to merge
-  and push. Never replace it with `git merge` or a direct `git push` to `main`.
+There is no solo-main exception. If you started in the primary checkout, create
+an issue clone before editing. Preserve any existing primary-checkout files;
+never reset, stash, revert, commit, or "clean up" another session's work.
 
 ## Before you commit
 

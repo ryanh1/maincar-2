@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Create or refresh the clean local source of main used by ticket checkouts.
+set -euo pipefail
+source "$(dirname "$0")/mc-common.sh"
+
+case "${1:-sync}" in
+  sync|init)
+    mc_sync_local_main
+    echo "[mc-local-main] ready: $LOCAL_MAIN_REPO"
+    ;;
+  *)
+    echo "usage: mc-local-main [sync]" >&2
+    exit 2
+    ;;
+esac

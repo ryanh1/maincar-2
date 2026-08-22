@@ -7,38 +7,74 @@
 COORD="${MC_STATE_HOME:-$HOME/code/maincar-2-coord}"
 STATE="$COORD/state"
 mkdir -p "$STATE/claims" "$STATE/locks" "$STATE/ports" "$COORD/inbox" "$COORD/log"
+COORD_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+PRIMARY_CHECKOUT="${MC_MAIN_CHECKOUT:-$HOME/Documents/Coding/My Projects/maincar-2}"
+LOCAL_MAIN_REPO="${MC_LOCAL_MAIN_REPO:-$COORD/local-main.git}"
 
 # The worktree this shell is in. Identity for slots and claims.
 mc_worktree() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
 mc_branch()   { git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached; }
 mc_now()      { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# A ticket checkout is normally cloned from the shared delivery checkout, so its
-# `origin` is a local, non-bare repository. Fetching from it is convenient, but
-# pushing to it fails whenever that checkout has unrelated edits. Resolve through
-# it to the actual upstream so delivery never depends on the main checkout being
-# clean. A checkout cloned directly from GitHub simply returns its own origin.
-mc_upstream_url() {
-  local origin upstream
-  origin="$(git config --get remote.origin.pushurl 2>/dev/null || git config --get remote.origin.url 2>/dev/null || true)"
-  [ -n "$origin" ] || { echo "mc: remote.origin is not configured" >&2; return 1; }
-
-  if [ -d "$origin" ] && git -C "$origin" rev-parse --git-dir >/dev/null 2>&1; then
-    upstream="$(git -C "$origin" config --get remote.origin.pushurl 2>/dev/null || git -C "$origin" config --get remote.origin.url 2>/dev/null || true)"
-    if [ -n "$upstream" ]; then
-      printf '%s\n' "$upstream"
-      return 0
-    fi
+# The primary checkout is for a person to inspect. It is never a ticket workspace
+# or a Git remote: either role lets an unfinished session block every other one.
+mc_assert_ticket_checkout() {
+  local primary worktree
+  primary="$(cd "$PRIMARY_CHECKOUT" && pwd -P)" || return 1
+  worktree="$(cd "$(mc_worktree)" && pwd -P)" || return 1
+  if [ "$worktree" = "$primary" ]; then
+    echo "mc: the primary checkout is not a ticket workspace. Use an issue clone." >&2
+    return 1
   fi
-
-  printf '%s\n' "$origin"
 }
 
-# Update origin/main from the canonical upstream even when this ticket checkout's
-# origin is the shared delivery checkout. This keeps merge/rebase decisions based
-# on the branch that will actually receive the push.
-mc_fetch_upstream_main() {
-  git fetch "$@" "$(mc_upstream_url)" '+refs/heads/main:refs/remotes/origin/main'
+# GitHub remains the durable remote. The local bare mirror is the fast, clean
+# source that every ticket fetches. Unlike a working checkout, a bare repository
+# cannot carry uncommitted files that make another ticket's push fail.
+mc_canonical_upstream_url() {
+  if [ -d "$LOCAL_MAIN_REPO" ]; then
+    git -C "$LOCAL_MAIN_REPO" remote get-url upstream 2>/dev/null && return 0
+  fi
+  git -C "$PRIMARY_CHECKOUT" remote get-url origin
+}
+
+mc_sync_local_main() {
+  local upstream
+  upstream="$(mc_canonical_upstream_url)" || return 1
+  if [ ! -d "$LOCAL_MAIN_REPO" ]; then
+    git clone --bare "$upstream" "$LOCAL_MAIN_REPO" >/dev/null
+    git -C "$LOCAL_MAIN_REPO" remote rename origin upstream
+  fi
+  git -C "$LOCAL_MAIN_REPO" rev-parse --is-bare-repository >/dev/null || {
+    echo "mc: local main mirror is not a bare repository: $LOCAL_MAIN_REPO" >&2
+    return 1
+  }
+  install -m 755 "$COORD_SCRIPTS_DIR/hooks/local-main-pre-receive" "$LOCAL_MAIN_REPO/hooks/pre-receive"
+  mkdir -p "$COORD/primary-hooks"
+  install -m 755 "$COORD_SCRIPTS_DIR/hooks/primary-pre-commit" "$COORD/primary-hooks/pre-commit"
+  install -m 755 "$COORD_SCRIPTS_DIR/hooks/primary-pre-push" "$COORD/primary-hooks/pre-push"
+  # This must be worktree-local. A normal local config is shared by every linked
+  # worktree, which would block the issue clone while trying to run mc-merge.
+  git -C "$PRIMARY_CHECKOUT" config --local --unset-all core.hooksPath 2>/dev/null || true
+  git -C "$PRIMARY_CHECKOUT" config --worktree core.hooksPath "$COORD/primary-hooks"
+  git -C "$LOCAL_MAIN_REPO" remote remove origin 2>/dev/null || true
+  git -C "$LOCAL_MAIN_REPO" remote set-url upstream "$upstream" 2>/dev/null || git -C "$LOCAL_MAIN_REPO" remote add upstream "$upstream"
+  git -C "$LOCAL_MAIN_REPO" fetch upstream --prune '+refs/heads/main:refs/heads/main' >/dev/null
+}
+
+mc_adopt_local_main() {
+  local current
+  current="$(git remote get-url origin 2>/dev/null || true)"
+  if [ "$current" != "$LOCAL_MAIN_REPO" ]; then
+    git config --worktree remote.origin.url "$LOCAL_MAIN_REPO"
+    echo "[mc] migrated ticket origin to local main mirror: $LOCAL_MAIN_REPO"
+  fi
+}
+
+mc_fetch_local_main() {
+  mc_sync_local_main || return 1
+  mc_adopt_local_main || return 1
+  git fetch "$@" origin
 }
 
 # Log every coordination event so the coordinator can see history.

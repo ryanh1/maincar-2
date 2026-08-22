@@ -11,6 +11,14 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+primary_checkout="${MC_MAIN_CHECKOUT:-$HOME/Documents/Coding/My Projects/maincar-2}"
+if [ "$(pwd -P)" = "$(cd "$primary_checkout" && pwd -P)" ]; then
+  echo ""
+  echo "  ✗ COMMIT BLOCKED — the primary checkout is a reference, not a ticket workspace."
+  echo "    Create an issue clone under ~/code/maincar-2-worktrees and commit there."
+  echo ""
+  exit 1
+fi
 # shellcheck source=lib/verify.sh
 . .githooks/lib/verify.sh
 
@@ -55,7 +63,7 @@ fi
 # Each names a file, so a failure can be traced to whoever wrote it.
 attributable() {
   local label="$1" prefix="$2"; shift 2
-  echo "pre-commit: $label…"
+  echo "pre-commit: ${label}…"
   if "$@" > "$TMP/out" 2>&1; then return 0; fi
 
   failing_files "$prefix" "$TMP/out" > "$TMP/files"
@@ -85,7 +93,7 @@ attributable "vite lint"        vite   npm --prefix vite   run lint      --silen
 # is the dependency graph, not a guess. See touches_workspace() in lib/verify.sh.
 workspace_tests() {
   local label="$1" ws="$2"; shift 2
-  echo "pre-commit: $label…"
+  echo "pre-commit: ${label}…"
   if "$@" > "$TMP/out" 2>&1; then return 0; fi
 
   if touches_workspace "$ws"; then

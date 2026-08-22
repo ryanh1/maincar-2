@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regression coverage for coordination helpers. Run from any checkout:
+# Regression coverage for the local, bare main mirror. Run from any checkout:
 #   ./.claude/scripts/coord/tests/mc-common.test.sh
 set -euo pipefail
 
@@ -8,66 +8,89 @@ SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/mc-common-test-XXXXXX")"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 git init --bare "$SANDBOX/upstream.git" --quiet
-git init "$SANDBOX/delivery" --quiet
-git -C "$SANDBOX/delivery" config user.name 'Coordination test'
-git -C "$SANDBOX/delivery" config user.email 'coordination-test@example.test'
-git -C "$SANDBOX/delivery" checkout -b main --quiet
-git -C "$SANDBOX/delivery" commit --allow-empty -m 'Initial main' --quiet
-git -C "$SANDBOX/delivery" remote add origin "$SANDBOX/upstream.git"
-git -C "$SANDBOX/delivery" push origin main --quiet
+git init "$SANDBOX/primary" --quiet
+git -C "$SANDBOX/primary" config user.name 'Coordination test'
+git -C "$SANDBOX/primary" config user.email 'coordination-test@example.test'
+git -C "$SANDBOX/primary" checkout -b main --quiet
+git -C "$SANDBOX/primary" commit --allow-empty -m 'Initial main' --quiet
+git -C "$SANDBOX/primary" remote add origin "$SANDBOX/upstream.git"
+git -C "$SANDBOX/primary" push origin main --quiet
 
-# This matches the supported worktree setup: clone the local delivery checkout.
-git clone "$SANDBOX/delivery" "$SANDBOX/issue-worktree" --quiet
+# The old checkout source becomes dirty. Ticket delivery must not depend on it.
+touch "$SANDBOX/primary/unrelated-wip"
 
-# Advance only the canonical remote. The local delivery checkout is deliberately
-# stale, so a fetch through the helper must not read its checked-out main.
-git clone "$SANDBOX/upstream.git" "$SANDBOX/publisher" --quiet
-git -C "$SANDBOX/publisher" config user.name 'Coordination test'
-git -C "$SANDBOX/publisher" config user.email 'coordination-test@example.test'
-git -C "$SANDBOX/publisher" commit --allow-empty -m 'Canonical update' --quiet
-git -C "$SANDBOX/publisher" push origin main --quiet
+env_for_test=(
+  MC_STATE_HOME="$SANDBOX/state"
+  MC_MAIN_CHECKOUT="$SANDBOX/primary"
+  MC_LOCAL_MAIN_REPO="$SANDBOX/state/local-main.git"
+)
 
-upstream="$({
-  cd "$SANDBOX/issue-worktree"
-  # shellcheck source=../mc-common.sh
-  source "$ROOT/.claude/scripts/coord/mc-common.sh"
-  mc_upstream_url
-})"
+(
+  cd "$SANDBOX/primary"
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" sync
+)
 
-if [ "$upstream" != "$SANDBOX/upstream.git" ]; then
-  echo "expected canonical upstream $SANDBOX/upstream.git, got $upstream" >&2
+test "$(git -C "$SANDBOX/state/local-main.git" rev-parse --is-bare-repository)" = true
+test "$(git -C "$SANDBOX/state/local-main.git" rev-parse main)" = "$(git -C "$SANDBOX/upstream.git" rev-parse main)"
+test "$(git -C "$SANDBOX/state/local-main.git" remote get-url upstream)" = "$SANDBOX/upstream.git"
+if [ "$(git -C "$SANDBOX/primary" config --worktree --get core.hooksPath)" != "$SANDBOX/state/primary-hooks" ]; then
+  echo 'primary checkout was not configured with the hard-block hooks' >&2
+  exit 1
+fi
+touch "$SANDBOX/primary/blocked-commit"
+git -C "$SANDBOX/primary" add blocked-commit
+if git -C "$SANDBOX/primary" commit -m 'Must not commit in primary' --quiet; then
+  echo 'the primary checkout accepted a commit' >&2
   exit 1
 fi
 
-({
-  cd "$SANDBOX/issue-worktree"
-  # shellcheck source=../mc-common.sh
-  source "$ROOT/.claude/scripts/coord/mc-common.sh"
-  mc_fetch_upstream_main --quiet
-})
-
-if [ "$(git -C "$SANDBOX/issue-worktree" rev-parse refs/remotes/origin/main)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
-  echo 'canonical fetch did not update origin/main' >&2
-  exit 1
-fi
-
+# A ticket cloned from the old primary checkout must migrate to the bare local
+# mirror before it fetches or merges.
+git clone "$SANDBOX/primary" "$SANDBOX/issue-worktree" --quiet
 git -C "$SANDBOX/issue-worktree" config user.name 'Coordination test'
 git -C "$SANDBOX/issue-worktree" config user.email 'coordination-test@example.test'
-git -C "$SANDBOX/issue-worktree" rebase origin/main --quiet
 git -C "$SANDBOX/issue-worktree" checkout -b issue-change --quiet
 git -C "$SANDBOX/issue-worktree" commit --allow-empty -m 'Issue change' --quiet
-touch "$SANDBOX/delivery/unrelated-wip"
 
-# A regular merge must push to the canonical remote even while its local source
-# checkout has unrelated WIP. The old helper pushed to delivery and was rejected.
 (
   cd "$SANDBOX/issue-worktree"
-  MC_STATE_HOME="$SANDBOX/state" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Merge issue change'
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Merge issue change'
 )
+
+if [ "$(git -C "$SANDBOX/issue-worktree" remote get-url origin)" != "$SANDBOX/state/local-main.git" ]; then
+  echo 'ticket checkout did not migrate to the local bare mirror' >&2
+  exit 1
+fi
 
 if ! git -C "$SANDBOX/upstream.git" merge-base --is-ancestor "$(git -C "$SANDBOX/issue-worktree" rev-parse HEAD)" main; then
   echo 'merge did not reach the canonical upstream' >&2
   exit 1
 fi
 
-echo 'mc-common upstream resolution: PASS'
+# A fresh ref would be accepted by a normal bare repository. The mirror's
+# receive hook must refuse it, which makes a raw `git push origin` non-delivery.
+git -C "$SANDBOX/issue-worktree" commit --allow-empty -m 'Direct push attempt' --quiet
+if git -C "$SANDBOX/issue-worktree" push origin HEAD:direct-push-test; then
+  echo 'the local bare mirror accepted a direct ticket push' >&2
+  exit 1
+fi
+
+if [ "$(git -C "$SANDBOX/state/local-main.git" rev-parse main)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
+  echo 'local bare mirror did not refresh after the merge' >&2
+  exit 1
+fi
+
+if env "${env_for_test[@]}" bash -c 'cd "$2"; source "$1/.claude/scripts/coord/mc-common.sh"; mc_assert_ticket_checkout' _ "$ROOT" "$SANDBOX/primary"; then
+  echo 'the primary checkout was allowed to run a ticket command' >&2
+  exit 1
+fi
+
+if (
+  cd "$SANDBOX/primary"
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-gate" --classify
+); then
+  echo 'mc-gate allowed the primary checkout to run a ticket command' >&2
+  exit 1
+fi
+
+echo 'mc-common local mirror: PASS'
