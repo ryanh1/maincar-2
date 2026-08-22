@@ -1,12 +1,12 @@
 import { useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
-import { Bold, Italic, Link2, List, ListOrdered } from 'lucide-react'
+import { Bold, Italic, Link2, List, ListOrdered, Underline } from 'lucide-react'
 import type { Editor } from '@tiptap/core'
 import { useEditorState } from '@tiptap/react'
 
 import { Button } from '@/components/ui/button'
 
 /**
- * The state of the five controls at the caret.
+ * The state of the formatting controls at the caret.
  *
  * Read through `useEditorState` rather than by re-rendering the editor on every
  * transaction: the toolbar has to follow the caret, and the editor must not be
@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 interface ToolbarState {
   bold: boolean
   italic: boolean
+  underline: boolean
   bulletList: boolean
   orderedList: boolean
   link: boolean
@@ -81,13 +82,12 @@ function ToolbarButton({
 }
 
 /**
- * The compact formatting toolbar: bold, italic, bullet list, numbered list,
- * link. Nothing else (SPEC-composer-body.md → Acceptance criteria, 2). A sixth
- * button is a question for the spec, not a patch to this file.
+ * The compact formatting toolbar: bold, italic, underline, bullet list,
+ * numbered list, and link.
  *
  * It is a real ARIA `toolbar`, so it takes ONE tab stop and the arrow keys move
  * between the buttons inside it. That matters in a composer: `Tab` out of the
- * body has to reach Send, not walk five icons first.
+ * body has to reach Send, not walk every icon first.
  */
 export function RichTextEditorToolbar({ editor, onRequestLink }: RichTextEditorToolbarProps) {
   const rowRef = useRef<HTMLDivElement>(null)
@@ -97,6 +97,7 @@ export function RichTextEditorToolbar({ editor, onRequestLink }: RichTextEditorT
     selector: ({ editor: current }): ToolbarState => ({
       bold: current.isActive('bold'),
       italic: current.isActive('italic'),
+      underline: current.isActive('underline'),
       bulletList: current.isActive('bulletList'),
       orderedList: current.isActive('orderedList'),
       link: current.isActive('link'),
@@ -163,6 +164,14 @@ export function RichTextEditorToolbar({ editor, onRequestLink }: RichTextEditorT
       pressed: state.italic,
       icon: <Italic size={16} />,
       onPress: () => editor.chain().focus().toggleItalic().run(),
+      disabled: false,
+    },
+    {
+      key: 'underline',
+      label: 'Underline',
+      pressed: state.underline,
+      icon: <Underline size={16} />,
+      onPress: () => editor.chain().focus().toggleUnderline().run(),
       disabled: false,
     },
     {
