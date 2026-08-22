@@ -160,6 +160,84 @@ beforeEach(() => {
 })
 
 describe('the templates list', () => {
+  it('asks the server for the private template page by default and restores table state from the URL', () => {
+    renderWithProviders(<Settings_EmailTemplatesTab />, {
+      initialEntries: ['/settings?tab=email-templates&scope=all&q=follow&sort=subject&dir=desc&page=2'],
+    })
+
+    expect(useGetEmailTemplatesMock).toHaveBeenCalledWith('org-a', {
+      scope: 'all',
+      page: 2,
+      limit: 25,
+      sort: 'subject',
+      dir: 'desc',
+      q: 'follow',
+    })
+    expect(screen.getByLabelText('Search templates')).toHaveValue('follow')
+    expect(screen.getByRole('combobox', { name: 'Template visibility' })).toHaveTextContent(
+      'Private and organization templates',
+    )
+  })
+
+  it('keeps sort, search, scope, and page in the server request', async () => {
+    useGetEmailTemplatesMock.mockReturnValue(
+      listState({ data: templatesResponse({ total: 51, limit: 25 }) }),
+    )
+    const user = userEvent.setup()
+
+    renderWithProviders(<Settings_EmailTemplatesTab />)
+
+    expect(useGetEmailTemplatesMock).toHaveBeenLastCalledWith('org-a', {
+      scope: 'private',
+      page: 1,
+      limit: 25,
+      sort: 'name',
+      dir: 'asc',
+      q: undefined,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Sort by Subject' }))
+    await waitFor(() =>
+      expect(useGetEmailTemplatesMock).toHaveBeenLastCalledWith(
+        'org-a',
+        expect.objectContaining({ sort: 'subject', dir: 'asc', page: 1 }),
+      ),
+    )
+
+    await user.type(screen.getByLabelText('Search templates'), 'pricing')
+    await waitFor(() =>
+      expect(useGetEmailTemplatesMock).toHaveBeenLastCalledWith(
+        'org-a',
+        expect.objectContaining({ q: 'pricing', page: 1 }),
+      ),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }))
+    await waitFor(() =>
+      expect(useGetEmailTemplatesMock).toHaveBeenLastCalledWith(
+        'org-a',
+        expect.objectContaining({ q: undefined, page: 1 }),
+      ),
+    )
+
+    await user.click(screen.getByRole('combobox', { name: 'Template visibility' }))
+    await user.click(await screen.findByRole('option', { name: 'Private and organization templates' }))
+    await waitFor(() =>
+      expect(useGetEmailTemplatesMock).toHaveBeenLastCalledWith(
+        'org-a',
+        expect.objectContaining({ scope: 'all', page: 1 }),
+      ),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() =>
+      expect(useGetEmailTemplatesMock).toHaveBeenLastCalledWith(
+        'org-a',
+        expect.objectContaining({ scope: 'all', page: 2 }),
+      ),
+    )
+  })
+
   it('lists the org templates in the order the server sent, with a subject', () => {
     renderWithProviders(<Settings_EmailTemplatesTab />)
 
