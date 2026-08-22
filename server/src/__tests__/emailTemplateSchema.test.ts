@@ -5,13 +5,9 @@
 // what happens to a template when its author is deleted) is proved in
 // emailTemplate.integration.test.ts.
 //
-// What it guards is the one decision the whole module turns on: a template is
-// ORG-WIDE, not private to its author (SPEC-composer-templates.md § Acceptance
-// criteria 2). EmailDraft, right above it in the schema, is the opposite — org-
-// AND user-scoped. The two models sit next to each other and read almost alike,
-// so the way this gets broken is someone copying the draft's userId scoping down
-// into the template and turning every teammate's template into a note to self.
-import { readFileSync } from 'node:fs'
+// What it guards is the visibility boundary: templates begin private, and an
+// author can choose to share one with their organization.
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -29,6 +25,13 @@ function modelBlock(name: string): string {
 }
 
 const emailTemplate = modelBlock('EmailTemplate')
+const migrationsDir = path.resolve(import.meta.dirname, '../../prisma/migrations')
+
+function visibilityMigration(): string {
+  const directory = readdirSync(migrationsDir).find((entry) => entry.endsWith('_add_email_template_visibility'))
+  expect(directory, 'email template visibility migration is missing').toBeDefined()
+  return readFileSync(path.join(migrationsDir, directory!, 'migration.sql'), 'utf8')
+}
 
 /** The one line that declares a field, whitespace collapsed. */
 function fieldLine(block: string, field: string): string {
@@ -49,6 +52,7 @@ describe('EmailTemplate schema', () => {
       name: 'String',
       subject: 'String',
       bodyHtml: 'String',
+      visibility: 'EmailTemplateVisibility',
       fieldsJson: 'Json?',
       createdAt: 'DateTime',
       updatedAt: 'DateTime',
@@ -67,28 +71,31 @@ describe('EmailTemplate schema', () => {
     }
   })
 
-  it('is org-scoped ONLY — no userId column to filter a teammate out', () => {
-    // The whole point of the module. EmailDraft carries `userId String` and
-    // filters on it; EmailTemplate must not, or the org-wide list silently
-    // becomes a per-rep list. Per-user private templates are an "ask first" in
-    // the spec's Boundaries.
-    expect(modelBlock('EmailDraft')).toMatch(/^\s*userId\s+String\s*$/m)
-    expect(emailTemplate).not.toMatch(/^\s*userId\s/m)
+  it('has explicit visibility and starts new templates private', () => {
+    expect(schema).toMatch(/enum EmailTemplateVisibility \{\s+PRIVATE\s+ORGANIZATION\s+\}/s)
+    expect(fieldLine(emailTemplate, 'visibility')).toBe('visibility EmailTemplateVisibility @default(PRIVATE)')
+  })
+
+  it('migrates existing templates to organization visibility before defaulting new rows private', () => {
+    const migration = visibilityMigration()
+    expect(migration).toContain("ADD COLUMN \"visibility\" \"EmailTemplateVisibility\" NOT NULL DEFAULT 'ORGANIZATION'")
+    expect(migration).toContain('ALTER COLUMN "visibility" SET DEFAULT \'PRIVATE\'')
+  })
+
+  it('is organization-scoped, with private ownership recorded through createdById', () => {
     expect(fieldLine(emailTemplate, 'org')).toBe(
       'org Org @relation(fields: [orgId], references: [id], onDelete: Cascade)',
     )
   })
 
-  it('says in the schema that templates are org-wide, not private', () => {
-    // The comment above the model is the only place the decision is written
-    // down next to the code that implements it. Losing it is how EC-17's query
-    // filters quietly grow a userId.
+  it('documents the private and organization visibility model beside the schema', () => {
     const preamble = schema.slice(
       schema.lastIndexOf('\n\n', schema.indexOf('model EmailTemplate {')),
       schema.indexOf('model EmailTemplate {'),
     )
-    expect(preamble).toContain('Org-wide, NOT private to its author')
-    expect(preamble).toContain('every query filters on orgId')
+    expect(preamble).toContain('starts')
+    expect(preamble).toContain('private')
+    expect(preamble).toContain('organization')
   })
 
   it('keeps the template when its author leaves — nullable createdById, SetNull', () => {
@@ -110,7 +117,7 @@ describe('EmailTemplate schema', () => {
     expect(emailTemplate).toContain('null until merge fields land')
   })
 
-  it('indexes the Templates screen’s only query', () => {
+  it('indexes the Templates screen’s organization query', () => {
     expect(emailTemplate).toContain('@@index([orgId, name])')
   })
 

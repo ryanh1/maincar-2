@@ -19,6 +19,7 @@ const { prismaMock, verifyTokenMock, revokeTokensMock } = vi.hoisted(() => ({
       count: vi.fn(),
       updateMany: vi.fn(),
     },
+    emailTemplate: { deleteMany: vi.fn() },
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   },
@@ -146,6 +147,7 @@ beforeEach(() => {
   prismaMock.$queryRaw.mockResolvedValue([{ count: 2n }])
   prismaMock.membership.findMany.mockResolvedValue([])
   prismaMock.membership.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.emailTemplate.deleteMany.mockResolvedValue({ count: 0 })
   prismaMock.user.updateMany.mockResolvedValue({ count: 1 })
   revokeTokensMock.mockResolvedValue(undefined)
   // The routes' transaction bodies are plain code, so running the callback
@@ -546,6 +548,16 @@ describe('DELETE /api/orgs/:orgId/members/:userId', () => {
     expect(prismaMock.user.updateMany).toHaveBeenCalledWith({
       where: { id: 'user-b', currentOrgId: ORG_A },
       data: { currentOrgId: null },
+    })
+  })
+
+  it('deletes the removed member’s private templates in this organization only', async () => {
+    authAs(callerMembership(), targetMembership())
+
+    await request(app).delete(`/api/orgs/${ORG_A}/members/user-b`).set('Authorization', AUTH)
+
+    expect(prismaMock.emailTemplate.deleteMany).toHaveBeenCalledWith({
+      where: { orgId: ORG_A, createdById: 'user-b', visibility: 'PRIVATE' },
     })
   })
 

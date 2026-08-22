@@ -46,6 +46,7 @@ const { prismaMock, verifyTokenMock, revokeTokensMock, loggerMock, logCalls } = 
         updateMany: vi.fn(),
       },
       org: { updateMany: vi.fn(), findUniqueOrThrow: vi.fn() },
+      emailTemplate: { deleteMany: vi.fn() },
       $transaction: vi.fn(),
       $queryRaw: vi.fn(),
     },
@@ -608,6 +609,10 @@ runMatrix('tenant isolation', [
       expect(prismaMock.membership.updateMany).toHaveBeenCalledWith({
         where: { userId: 'user-b', orgId: ORG_A, isActive: true },
         data: { isActive: false },
+      })
+      // A departing member's private content leaves only this organization.
+      expect(prismaMock.emailTemplate.deleteMany).toHaveBeenCalledWith({
+        where: { orgId: ORG_A, createdById: 'user-b', visibility: 'PRIVATE' },
       })
       // The User row is never disabled or deleted: Org B must keep working.
       expect(prismaMock.user.update).not.toHaveBeenCalled()
