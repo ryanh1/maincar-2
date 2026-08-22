@@ -23,6 +23,15 @@ export const DEAL_FIELD_REGISTRY = {
       orderBy: '"ownerName" ASC',
       join: 'LEFT JOIN "User" AS "owner" ON "owner"."id" = "deal"."ownerUserId"',
     },
+    segment: {
+      field: 'segment',
+      // `segment` is the system-owned AttributeDef slug seeded for every Deal
+      // object. This key lives only in the registry, never in report config.
+      select: `COALESCE(NULLIF("deal"."customJson" ->> 'segment', ''), 'unspecified') AS "segmentId", COALESCE(NULLIF("deal"."customJson" ->> 'segment', ''), 'Unspecified') AS "segmentName"`,
+      groupBy: `COALESCE(NULLIF("deal"."customJson" ->> 'segment', ''), 'unspecified'), COALESCE(NULLIF("deal"."customJson" ->> 'segment', ''), 'Unspecified')`,
+      orderBy: '"segmentName" ASC',
+      join: '',
+    },
   },
   measures: {
     amountMinor: {

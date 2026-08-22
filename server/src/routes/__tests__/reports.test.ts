@@ -6,6 +6,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn(), findMany: vi.fn() },
     team: { findMany: vi.fn() },
+    attributeDef: { findFirst: vi.fn() },
     report: {
       create: vi.fn(),
       count: vi.fn(),
@@ -102,6 +103,7 @@ beforeEach(() => {
     { stageId: 'stage-discovery', stageName: 'Discovery', amountMinor: 3500n },
     { stageId: 'stage-won', stageName: 'Won', amountMinor: 9000n },
   ])
+  prismaMock.attributeDef.findFirst.mockResolvedValue({ id: 'attribute-segment', slug: 'segment' })
 })
 
 describe('POST /api/orgs/:orgId/reports/run', () => {
@@ -163,6 +165,41 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
       { ownerId: 'user-a', ownerName: 'Avery Admin', stageId: 'stage-discovery', stageName: 'Discovery', amountMinor: '3500' },
       { ownerId: 'user-a', ownerName: 'Avery Admin', stageId: 'stage-won', stageName: 'Won', amountMinor: '9000' },
     ])
+  })
+
+  it('resolves the canonical Segment attribute before returning its grouped values', async () => {
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      { segmentId: 'Enterprise', segmentName: 'Enterprise', amountMinor: 3500n },
+      { segmentId: 'unspecified', segmentName: 'Unspecified', amountMinor: 9000n },
+    ])
+
+    const response = await request(app)
+      .post(URL)
+      .set('Authorization', 'Bearer fake-token')
+      .send({
+        config: {
+          ...CONFIG,
+          rows: [{ field: 'segment' }],
+        },
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.report.rows).toEqual([
+      { segmentId: 'Enterprise', segmentName: 'Enterprise', amountMinor: '3500' },
+      { segmentId: 'unspecified', segmentName: 'Unspecified', amountMinor: '9000' },
+    ])
+    expect(prismaMock.attributeDef.findFirst).toHaveBeenCalledWith({
+      where: {
+        orgId: ORG_ID,
+        slug: 'segment',
+        type: 'select',
+        storage: 'custom',
+        isSystem: true,
+        deletedAt: null,
+        object: { orgId: ORG_ID, slug: 'deal', storage: 'table', isStandard: true, isArchived: false, deletedAt: null },
+      },
+      select: { id: true, slug: true },
+    })
   })
 
   it('returns activity event counts grouped into viewer-local weeks', async () => {
@@ -290,6 +327,10 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
       config: { ...CONFIG, rows: [{ field: 'deal.amountMinor' }] },
     },
     {
+      name: 'a client-supplied custom JSON key',
+      config: { ...CONFIG, rows: [{ field: 'customJson.segment' }] },
+    },
+    {
       name: 'SQL-like field input',
       config: { ...CONFIG, rows: [{ field: 'stage; DROP TABLE "Deal"' }] },
     },
@@ -322,7 +363,7 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
       .send({ name: 'Duplicate', config: { ...OWNER_BY_STAGE_CONFIG, columns: [{ field: 'owner' }] } })
 
     expect(noGroup.status).toBe(400)
-    expect(noGroup.body).toEqual({ error: 'Add at least one Owner or Stage group.' })
+    expect(noGroup.body).toEqual({ error: 'Add at least one Owner, Stage, or Segment group.' })
     expect(duplicate.status).toBe(400)
     expect(duplicate.body).toEqual({ error: 'A field can appear in only one pivot zone.' })
     expect(prismaMock.report.create).not.toHaveBeenCalled()

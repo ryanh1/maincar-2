@@ -15,10 +15,11 @@ type PivotZone = 'rows' | 'columns' | 'values'
 const DIMENSIONS: Array<{ field: DealPivotDimension; label: string }> = [
   { field: 'owner', label: 'Owner' },
   { field: 'stage', label: 'Stage' },
+  { field: 'segment', label: 'Segment' },
   { field: 'createdAt', label: 'Created date' },
 ]
 
-const DIMENSION_LABELS: Record<DealPivotDimension, string> = { owner: 'Owner', stage: 'Stage', createdAt: 'Created date' }
+const DIMENSION_LABELS: Record<DealPivotDimension, string> = { owner: 'Owner', stage: 'Stage', segment: 'Segment', createdAt: 'Created date' }
 const MEASURE = { field: 'amountMinor', label: 'Amount' } as const
 
 interface ReportsPivotBuilderProps {
@@ -95,7 +96,7 @@ export function ReportsPivotBuilder({ config, onChange, result, isLoading, hasAc
       </aside>
 
       <div className="flex min-w-0 flex-col gap-6">
-        <div className="grid gap-3 md:grid-cols-3" aria-label="Pivot drop zones">
+        <div role="group" className="grid gap-3 md:grid-cols-3" aria-label="Pivot drop zones">
           <DropZone label="Rows" zone="rows" items={config.rows.map((item) => item.field)} onDrop={dropField} onRemove={removeField} />
           <DropZone label="Columns" zone="columns" items={config.columns.map((item) => item.field)} onDrop={dropField} onRemove={removeField} />
           <DropZone label="Values" zone="values" items={config.values.map((item) => item.field)} onDrop={dropField} onRemove={removeField} />
@@ -235,7 +236,10 @@ function addAmount(node: PivotNode, columnKey: string, amount: bigint): void {
 function fieldValue(row: RunReportResponse['report']['rows'][number], field: DealPivotDimension, suffix: 'Id' | 'Name'): string {
   if (field === 'createdAt') return row.createdDay ?? 'Unknown date'
   const key = `${field}${suffix}` as keyof typeof row
-  return String(row[key] ?? (suffix === 'Name' ? 'Unassigned' : 'unassigned'))
+  const fallback = field === 'segment'
+    ? (suffix === 'Name' ? 'Unspecified' : 'unspecified')
+    : (suffix === 'Name' ? 'Unassigned' : 'unassigned')
+  return String(row[key] ?? fallback)
 }
 
 function formatAmountMinor(amountMinor: bigint): string {
@@ -275,7 +279,7 @@ function PivotGrid({ config, onChange, result, isLoading, hasActiveFilters, onLo
         )}
       </EmptyState>
     )
-}
+  }
 
   const root = newNode('grand-total', 'Grand total')
   const columnHeaders = new Map<string, string>()

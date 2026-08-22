@@ -57,6 +57,7 @@ describe('seedOrg (integration, real Postgres)', () => {
 
     const person = objects.find((o) => o.slug === 'person')!
     const company = objects.find((o) => o.slug === 'company')!
+    const deal = objects.find((o) => o.slug === 'deal')!
 
     // A typed, system column field.
     const firstName = attributes.find((a) => a.objectId === person.id && a.slug === 'firstName')!
@@ -78,6 +79,11 @@ describe('seedOrg (integration, real Postgres)', () => {
     const companyType = attributes.find((a) => a.objectId === company.id && a.slug === 'companyType')!
     const options = companyType.optionsJson as Array<{ value: string }>
     expect(options.map((o) => o.value)).toContain('saas')
+
+    // The reportable Deal segment is a system-owned custom select, so its slug
+    // remains stable for server-side reporting even when its label is edited.
+    const segment = attributes.find((a) => a.objectId === deal.id && a.slug === 'segment')!
+    expect(segment).toMatchObject({ type: 'select', storage: 'custom', isSystem: true })
 
     // The default pipeline and its stages.
     const pipelines = await prisma.pipeline.findMany({ where: { orgId } })

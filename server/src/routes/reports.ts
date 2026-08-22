@@ -36,7 +36,7 @@ const ownerTeamScopeSchema = z.object({
 
 const dealReportFiltersSchema = z.object({ ownerTeam: ownerTeamScopeSchema }).strict()
 
-const pivotDimensionSchema = z.object({ field: z.enum(['owner', 'stage', 'createdAt']) }).strict()
+const pivotDimensionSchema = z.object({ field: z.enum(['owner', 'stage', 'segment', 'createdAt']) }).strict()
 
 const pivotValueTransformSchema = z.enum(['none', 'percentOfGrandTotal', 'percentOfColumn', 'percentOfRow', 'percentOfParent', 'runningTotal', 'rankLargestToSmallest'])
 
@@ -119,7 +119,7 @@ const reportConfigSchema = z.discriminatedUnion('baseObject', [
 
   const dimensions = [...config.rows, ...config.columns]
   if (dimensions.length === 0) {
-    context.addIssue({ code: 'custom', path: ['rows'], message: 'Add at least one Owner or Stage group.' })
+    context.addIssue({ code: 'custom', path: ['rows'], message: 'Add at least one Owner, Stage, or Segment group.' })
   }
   if (dimensions.length > 2) {
     context.addIssue({ code: 'custom', path: ['rows'], message: 'A pivot can use at most two groups.' })
@@ -148,6 +148,8 @@ interface RawDealPivotRow {
   createdDay?: string
   ownerId?: string
   ownerName?: string
+  segmentId?: string
+  segmentName?: string
   stageId?: string
   stageName?: string
   amountMinor: string | number | bigint
@@ -224,6 +226,26 @@ router.post(
       ? await resolveOwnerTeamScope(prisma, orgId, parsed.data.config.filters.ownerTeam)
       : undefined
 
+    const usesSegment = parsed.data.config.baseObject === 'deal'
+      && [...parsed.data.config.rows, ...parsed.data.config.columns].some((dimension) => dimension.field === 'segment')
+    if (usesSegment) {
+      const canonicalSegment = await prisma.attributeDef.findFirst({
+        where: {
+          orgId,
+          slug: 'segment',
+          type: 'select',
+          storage: 'custom',
+          isSystem: true,
+          deletedAt: null,
+          object: { orgId, slug: 'deal', storage: 'table', isStandard: true, isArchived: false, deletedAt: null },
+        },
+        select: { id: true, slug: true },
+      })
+      if (!canonicalSegment) {
+        throw new InvalidReportConfigError('The canonical Deal segment field is unavailable for this organization.')
+      }
+    }
+
     const query = compileReport(parsed.data.config as ReportConfig, orgId, {
       viewerTimeZone: authReq.user!.timeZone,
       subjectTimeZone,
@@ -272,6 +294,7 @@ router.post(
         rows: rows.map((row) => ({
           ...(row.createdDay ? { createdDay: row.createdDay } : {}),
           ...(row.ownerId && row.ownerName ? { ownerId: row.ownerId, ownerName: row.ownerName } : {}),
+          ...(row.segmentId && row.segmentName ? { segmentId: row.segmentId, segmentName: row.segmentName } : {}),
           ...(row.stageId && row.stageName ? { stageId: row.stageId, stageName: row.stageName } : {}),
           // PostgreSQL returns the aggregate as text, preserving exact minor
           // units through JSON just like the Deals API does for one record.

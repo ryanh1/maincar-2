@@ -22,7 +22,7 @@
 // Bump this when this file adds a standard object, field, or default option. The
 // backfill compares an org's stored seedVersion against it to decide whether to
 // re-run the insert-missing-only pass (spec §10.2).
-export const CURRENT_SEED_VERSION = 2
+export const CURRENT_SEED_VERSION = 3
 
 export interface SeedDisposition {
   value: string
@@ -154,6 +154,15 @@ const LOST_REASON_OPTIONS: SeedOption[] = [
   opt('other', 'Other', '#94a3b8', 5),
 ]
 
+// The canonical Deal segment used by standard reporting. The values remain
+// editable through the normal field controls, while the system-owned slug is
+// the stable reporting contract.
+const DEAL_SEGMENT_OPTIONS: SeedOption[] = [
+  opt('Enterprise', 'Enterprise', 'option-1', 0),
+  opt('Mid-market', 'Mid-market', 'option-2', 1),
+  opt('SMB', 'SMB', 'option-3', 2),
+]
+
 const ATTENTION_REASON_OPTIONS: SeedOption[] = [
   opt('other_stakeholder', 'Other stakeholder', '#6366f1', 0),
   opt('cooled', 'Cooled', '#3b82f6', 1),
@@ -246,6 +255,7 @@ const DEAL: SeedObject = {
     { slug: 'closeDate', name: 'Close date', type: 'date', storage: 'column', isSystem: true, sortOrder: 5 },
     { slug: 'lostReason', name: 'Lost reason', type: 'select', storage: 'column', isSystem: true, optionsJson: LOST_REASON_OPTIONS, sortOrder: 6 },
     { slug: 'ownerUserId', name: 'Owner', type: 'user_reference', storage: 'column', isSystem: true, sortOrder: 7 },
+    { slug: 'segment', name: 'Segment', type: 'select', storage: 'custom', isSystem: true, optionsJson: DEAL_SEGMENT_OPTIONS, sortOrder: 8 },
   ],
 }
 
