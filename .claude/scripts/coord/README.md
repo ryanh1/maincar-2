@@ -19,11 +19,12 @@ If that is not safe, it leaves the checkout untouched and prints the exact reaso
 Running `mc-local-main sync` also installs hard-block hooks in the primary
 checkout, so a commit or push there fails immediately.
 
-When delivery changes a package manifest or lockfile, `mc-merge` deliberately
-does not refresh the runnable primary checkout: advancing source without the
-matching installed dependencies can break a live dev server. Refresh it
-explicitly instead; this fast-forwards only when safe, then runs `npm ci` for
-each affected package root:
+When delivery changes a package manifest, lockfile, Prisma schema, or tracked
+Prisma migration, `mc-merge` deliberately does not refresh the runnable primary
+checkout: advancing source before its local dependencies or database are ready
+can break a live dev server. Refresh it explicitly instead; this fast-forwards
+only when safe, then runs `npm ci` for affected package roots and applies tracked
+Prisma migrations:
 
 ```bash
 ./.claude/scripts/coord/mc-local-main refresh

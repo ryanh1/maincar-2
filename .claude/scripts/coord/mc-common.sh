@@ -89,13 +89,20 @@ mc_sync_primary_dependencies() {
   done
 }
 
+# A changed Prisma schema or migration can make a freshly refreshed server fail
+# at runtime until the local database has caught up.
+mc_prisma_refresh_required() {
+  local primary="$1" target="$2"
+  ! git -C "$primary" diff --quiet HEAD "$target" -- server/prisma/schema.prisma server/prisma/migrations
+}
+
 # The primary checkout is for running and inspecting the application, never for
 # delivery. After GitHub accepts a delivery and the bare mirror is refreshed, it
 # can safely fast-forward that checkout only when doing so cannot overwrite local
 # work. A local deletion that is also present in delivered main is safe: the
 # checkout already has the delivered file state.
 mc_refresh_primary_checkout() {
-  local primary branch target path unsafe dependency_roots
+  local primary branch target path unsafe dependency_roots refresh_requirements prisma_refresh_required=0
   primary="$(cd "$PRIMARY_CHECKOUT" && pwd -P)" || {
     echo "[mc-primary] not refreshed: primary checkout is unavailable: $PRIMARY_CHECKOUT" >&2
     return 0
@@ -140,9 +147,15 @@ mc_refresh_primary_checkout() {
   fi
 
   dependency_roots="$(mc_changed_dependency_roots "$primary" "$target")"
-  if [ -n "$dependency_roots" ] && [ "${MC_PRIMARY_ALLOW_DEPENDENCY_REFRESH:-}" != "1" ]; then
-    echo "[mc-primary] not refreshed: delivered dependency manifests changed; keeping the runnable checkout on $(git -C "$primary" rev-parse --short HEAD)." >&2
-    echo "[mc-primary] run ./.claude/scripts/coord/mc-local-main refresh to fast-forward and reinstall the affected dependencies." >&2
+  refresh_requirements=""
+  if [ -n "$dependency_roots" ]; then refresh_requirements="dependency manifests"; fi
+  if mc_prisma_refresh_required "$primary" "$target"; then
+    prisma_refresh_required=1
+    refresh_requirements="${refresh_requirements:+$refresh_requirements and }Prisma schema/migrations"
+  fi
+  if [ -n "$refresh_requirements" ] && [ "${MC_PRIMARY_ALLOW_DEPENDENCY_REFRESH:-}" != "1" ]; then
+    echo "[mc-primary] not refreshed: delivered $refresh_requirements changed; keeping the runnable checkout on $(git -C "$primary" rev-parse --short HEAD)." >&2
+    echo "[mc-primary] run ./.claude/scripts/coord/mc-local-main refresh to fast-forward and synchronize the runnable environment." >&2
     return 0
   fi
 
@@ -151,6 +164,10 @@ mc_refresh_primary_checkout() {
     if [ -n "$dependency_roots" ]; then
       echo "[mc-primary] synchronizing dependencies for: $(tr '\n' ' ' <<< "$dependency_roots")"
       printf '%s\n' "$dependency_roots" | mc_sync_primary_dependencies "$primary"
+    fi
+    if [ "$prisma_refresh_required" -eq 1 ]; then
+      echo "[mc-primary] applying tracked Prisma migrations."
+      (cd "$primary/server" && npx prisma migrate deploy)
     fi
   else
     echo "[mc-primary] not refreshed: primary checkout could not fast-forward safely." >&2

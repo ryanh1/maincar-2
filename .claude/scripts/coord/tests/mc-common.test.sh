@@ -161,6 +161,43 @@ if ! grep -Fx -- "--prefix $primary_real/vite ci" "$SANDBOX/npm.log" >/dev/null;
   exit 1
 fi
 
+# Schema migrations are the database equivalent of a dependency lockfile: code
+# cannot safely run until they are applied. Automatic refresh must therefore
+# hold the primary at its known-good revision until an explicit refresh applies
+# the tracked migration.
+primary_before_migration_delivery="$(git -C "$SANDBOX/primary" rev-parse HEAD)"
+git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-migration-refresh" --quiet
+git -C "$SANDBOX/issue-migration-refresh" config user.name 'Coordination test'
+git -C "$SANDBOX/issue-migration-refresh" config user.email 'coordination-test@example.test'
+git -C "$SANDBOX/issue-migration-refresh" checkout -b issue-migration-refresh --quiet
+mkdir -p "$SANDBOX/issue-migration-refresh/server/prisma/migrations/20260822090000_test_primary_refresh"
+printf '%s\n' '-- test migration' > "$SANDBOX/issue-migration-refresh/server/prisma/migrations/20260822090000_test_primary_refresh/migration.sql"
+git -C "$SANDBOX/issue-migration-refresh" add server/prisma/migrations
+git -C "$SANDBOX/issue-migration-refresh" commit -m 'Add a schema migration' --quiet
+(
+  cd "$SANDBOX/issue-migration-refresh"
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver schema migration'
+)
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$primary_before_migration_delivery" ]; then
+  echo 'primary checkout refreshed source across an unapplied schema migration' >&2
+  exit 1
+fi
+
+cat > "$SANDBOX/fake-bin/npx" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MC_NPX_LOG"
+EOF
+chmod +x "$SANDBOX/fake-bin/npx"
+MC_NPX_LOG="$SANDBOX/npx.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
+  echo 'explicit primary refresh did not fast-forward the delivered schema migration' >&2
+  exit 1
+fi
+if ! grep -Fx -- 'prisma migrate deploy' "$SANDBOX/npx.log" >/dev/null; then
+  echo 'explicit primary refresh did not apply the delivered schema migration' >&2
+  exit 1
+fi
+
 if env "${env_for_test[@]}" bash -c 'cd "$2"; source "$1/.claude/scripts/coord/mc-common.sh"; mc_assert_ticket_checkout' _ "$ROOT" "$SANDBOX/primary"; then
   echo 'the primary checkout was allowed to run a ticket command' >&2
   exit 1
