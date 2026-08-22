@@ -13,6 +13,7 @@ import { ReportsFixture } from './pages/ReportsFixture'
 import { CallTranscriptFixture } from './pages/CallTranscriptFixture'
 import { RecordsFixture } from './pages/RecordsFixture'
 import { ComposerCardFixture } from './components/composer/ComposerCardFixture'
+import { Settings_EmailSignaturesFixture } from './pages/Settings_EmailSignaturesFixture'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,6 +44,8 @@ createRoot(document.getElementById('root')!).render(
       <RecordsFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/composer-focus' ? (
       <ComposerCardFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/email-signatures' ? (
+      <Settings_EmailSignaturesFixture />
     ) : (
       <QueryClientProvider client={queryClient}>
         <App />

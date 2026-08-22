@@ -179,7 +179,10 @@ export interface EmailSignature {
   id: string
   name: string
   bodyHtml: string
+  /** Backward-compatible alias for `isDefaultForNew`. */
   isDefault: boolean
+  isDefaultForNew?: boolean
+  isDefaultForReply?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -187,13 +190,19 @@ export interface EmailSignature {
 export interface EmailSignatureInput {
   name: string
   bodyHtml?: string
+  /** Backward-compatible new-message default. */
   isDefault?: boolean
+  isDefaultForNew?: boolean
+  isDefaultForReply?: boolean
 }
 
 export interface EmailSignaturePatch {
   name?: string
   bodyHtml?: string
+  /** Backward-compatible new-message default. */
   isDefault?: boolean
+  isDefaultForNew?: boolean
+  isDefaultForReply?: boolean
 }
 
 export interface GetEmailSignaturesResponse {
