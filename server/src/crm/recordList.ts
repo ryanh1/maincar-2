@@ -20,6 +20,7 @@
  */
 import { Prisma } from '../generated/prisma/client.js'
 import type { PrismaClient, ObjectDef, AttributeDef } from '../generated/prisma/client.js'
+import { InvalidTeamScopeError, resolveOwnerTeamScope, type TeamScope } from '../lib/teamScope.js'
 
 // storage="table" ObjectDefs whose real Postgres table this endpoint knows how to
 // query. Every standard object that has landed a table (standardObjects.ts) goes
@@ -78,6 +79,7 @@ export interface SortSpec {
 export interface ListQuery {
   filter?: FilterNode | null
   sort?: SortSpec | null
+  teamScope?: TeamScope
   cursor?: string | null
   limit?: number
 }
@@ -117,7 +119,11 @@ const OPERATORS_BY_KIND: Record<ValueKind, ReadonlySet<FilterOperator>> = {
   timestamp: new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'is_not_empty']),
 }
 
-export class ListQueryError extends Error {}
+export class ListQueryError extends Error {
+  constructor(message: string, readonly status = 400) {
+    super(message)
+  }
+}
 
 function valueKindForType(type: string): ValueKind {
   switch (type) {
@@ -392,6 +398,22 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
   const whereParts: Prisma.Sql[] = [Prisma.sql`"orgId" = ${orgId}`, Prisma.sql`"deletedAt" IS NULL`]
   if (mode === 'record') whereParts.push(Prisma.sql`"objectId" = ${object.id}`)
   if (query.filter) whereParts.push(compileFilterNode(query.filter, ctx))
+  if (query.teamScope) {
+    const ownerAttribute = attributes.find(
+      (attribute) => attribute.slug === 'ownerUserId' && attribute.storage === 'column' && attribute.type === 'user_reference',
+    )
+    if (mode !== 'table' || !ownerAttribute) {
+      throw new ListQueryError('Team filtering is available only for objects with an owner field.')
+    }
+    try {
+      const scope = await resolveOwnerTeamScope(prisma, orgId, query.teamScope)
+      const ownerUserIds = scope?.ownerUserId.in ?? []
+      whereParts.push(ownerUserIds.length ? Prisma.sql`"ownerUserId" IN (${Prisma.join(ownerUserIds)})` : Prisma.sql`FALSE`)
+    } catch (error) {
+      if (error instanceof InvalidTeamScopeError) throw new ListQueryError(error.message, error.status)
+      throw error
+    }
+  }
 
   const countWhereSql = Prisma.join(whereParts, ' AND ')
 

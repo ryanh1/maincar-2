@@ -16,6 +16,7 @@ export type ViewColumn = { attributeId: string; visible: boolean; order: number 
 export type ViewFilter =
   | { type: 'condition'; attributeId: string; operator: FilterOperator; value?: unknown }
   | { type: 'group'; op: 'and' | 'or'; children: ViewFilter[] }
+export type TeamScope = { teamIds?: string[]; leadUserIds?: string[] }
 
 type FilterOperator =
   | 'eq' | 'neq' | 'contains' | 'not_contains' | 'starts_with' | 'ends_with'
@@ -26,6 +27,7 @@ export type SavedViewConfig = {
   columns: ViewColumn[]
   sorts: ViewSort[]
   filterTree?: ViewFilter
+  teamScope?: TeamScope
   groupBy: ViewSort[]
   rowHeight: 'compact' | 'comfortable' | 'tall'
   gridLines: boolean
@@ -36,7 +38,7 @@ export type SavedViewConfig = {
   columnStyles: Array<{ attributeId: string; headerColor?: string; auto?: { kind: 'relation-source'; objectId: string } }>
 }
 
-export type UrlViewOverlay = Partial<Pick<SavedViewConfig, 'columns' | 'sorts' | 'groupBy' | 'rowHeight' | 'gridLines' | 'frozenRows' | 'frozenCols' | 'zoom'>> & {
+export type UrlViewOverlay = Partial<Pick<SavedViewConfig, 'columns' | 'sorts' | 'teamScope' | 'groupBy' | 'rowHeight' | 'gridLines' | 'frozenRows' | 'frozenCols' | 'zoom'>> & {
   filterTree?: Omit<ViewFilter, 'value'>
   layout?: ViewLayout
 }
@@ -53,6 +55,10 @@ const configShape = z.object({
   columns: z.array(z.object({ attributeId: z.string().min(1), visible: z.boolean(), order: z.number().int().min(0) })).optional(),
   sorts: z.array(z.object({ attributeId: z.string().min(1), direction: directionSchema })).optional(),
   filterTree: z.unknown().optional(),
+  teamScope: z.object({
+    teamIds: z.array(z.string().trim().min(1)).optional(),
+    leadUserIds: z.array(z.string().trim().min(1)).optional(),
+  }).strict().refine((scope) => (scope.teamIds?.length ?? 0) + (scope.leadUserIds?.length ?? 0) > 0).optional(),
   groupBy: z.array(z.object({ attributeId: z.string().min(1), direction: directionSchema })).optional(),
   rowHeight: z.enum(['compact', 'comfortable', 'tall']).optional(),
   gridLines: z.boolean().optional(),
@@ -101,6 +107,15 @@ function uniqueByAttribute<T extends { attributeId: string }>(items: T[]): T[] {
   return items.filter((item) => !seen.has(item.attributeId) && seen.add(item.attributeId))
 }
 
+function repairTeamScope(scope: TeamScope | undefined): TeamScope | undefined {
+  if (!scope) return undefined
+  const teamIds = [...new Set(scope.teamIds ?? [])]
+  const leadUserIds = [...new Set(scope.leadUserIds ?? [])]
+  return teamIds.length || leadUserIds.length
+    ? { ...(teamIds.length ? { teamIds } : {}), ...(leadUserIds.length ? { leadUserIds } : {}) }
+    : undefined
+}
+
 /**
  * Migrates any prior config into the current schema and repairs references after
  * fields change. Unknown/stale state is discarded; newly visible attributes are
@@ -122,12 +137,14 @@ export function repairSavedViewConfig(raw: unknown, attributes: ViewAttribute[])
       attributeId: attribute.id, visible: true, order: requestedColumns.length + index,
     })),
   ]
+  const teamScope = repairTeamScope(source.teamScope)
 
   return {
     version: VIEW_CONFIG_VERSION,
     columns,
     sorts: uniqueByAttribute((source.sorts ?? []).filter((sort) => knownIds.has(sort.attributeId))),
     ...(repairFilter(source.filterTree, knownIds, true) ? { filterTree: repairFilter(source.filterTree, knownIds, true) } : {}),
+    ...(teamScope ? { teamScope } : {}),
     groupBy: uniqueByAttribute((source.groupBy ?? []).filter((group) => knownIds.has(group.attributeId))),
     rowHeight: source.rowHeight ?? 'compact',
     gridLines: source.gridLines ?? true,
@@ -174,6 +191,7 @@ export function decodeUrlViewOverlay(encoded: string | undefined, attributes: Vi
   const overlay: UrlViewOverlay = {}
   if (source.columns !== undefined) overlay.columns = repaired.columns
   if (source.sorts !== undefined) overlay.sorts = repaired.sorts
+  if (source.teamScope !== undefined && repaired.teamScope) overlay.teamScope = repaired.teamScope
   if (source.groupBy !== undefined) overlay.groupBy = repaired.groupBy
   if (source.rowHeight !== undefined) overlay.rowHeight = repaired.rowHeight
   if (source.gridLines !== undefined) overlay.gridLines = repaired.gridLines
@@ -193,6 +211,7 @@ export function applyUrlViewOverlay(config: SavedViewConfig, overlay: UrlViewOve
     ...config,
     ...(overlay.columns ? { columns: overlay.columns } : {}),
     ...(overlay.sorts ? { sorts: overlay.sorts } : {}),
+    ...(overlay.teamScope ? { teamScope: overlay.teamScope } : {}),
     ...(overlay.groupBy ? { groupBy: overlay.groupBy } : {}),
     ...(overlay.rowHeight ? { rowHeight: overlay.rowHeight } : {}),
     ...(overlay.gridLines !== undefined ? { gridLines: overlay.gridLines } : {}),

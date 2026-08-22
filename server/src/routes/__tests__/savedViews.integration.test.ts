@@ -130,6 +130,26 @@ describe('SavedView (integration, real Postgres, real routes)', () => {
     expect(stored.objectId).toBe(object.id)
   })
 
+  it('persists and reloads a Team scope unchanged with a saved grid view', async () => {
+    const { org, admin, object } = await seedViewContext()
+    const created = await request(app)
+      .post(`/api/orgs/${org.orgId}/saved-views`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({
+        objectId: object.id,
+        name: 'Revenue team',
+        layout: 'grid',
+        config: { teamScope: { teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] } },
+      })
+    expect(created.status).toBe(201)
+
+    const reloaded = await request(app)
+      .get(`/api/orgs/${org.orgId}/saved-views/${created.body.view.id}`)
+      .set('Authorization', as(admin.firebaseUid))
+    expect(reloaded.status).toBe(200)
+    expect(reloaded.body.view.config.teamScope).toEqual({ teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] })
+  })
+
   it('keeps a URL overlay session-only, resets it without a write, and duplicates as a personal non-default view', async () => {
     const { org, admin, object, attribute } = await seedViewContext()
     const created = await request(app)

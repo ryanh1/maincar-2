@@ -41,6 +41,20 @@ describe('viewConfig', () => {
     })
   })
 
+  it('keeps the reusable Team scope intact for the list API', () => {
+    const query = toRecordListQuery(
+      {
+        sorts: [],
+        teamScope: { teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] },
+      },
+      attributes,
+    )
+
+    expect(query).toEqual({
+      teamScope: { teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] },
+    })
+  })
+
   it('shares a sorted config through the URL without encoding filter values', () => {
     const { result } = renderHook(
       () => {
@@ -67,6 +81,21 @@ describe('viewConfig', () => {
     expect(result.current.config.filterTree).toMatchObject({ attributeId: 'status', value: ['open'] })
     expect(result.current.search).toContain('v=')
     expect(result.current.search).not.toContain('open')
+  })
+
+  it('restores a Team scope from the shared URL config', () => {
+    const encoded = btoa(JSON.stringify({
+      version: 1,
+      sorts: [],
+      teamScope: { teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] },
+    }))
+    const teamScopeWrapper = ({ children }: { children: ReactNode }) => (
+      <MemoryRouter initialEntries={[`/records/person?v=${encoded}`]}>{children}</MemoryRouter>
+    )
+
+    const { result } = renderHook(() => useViewConfig(attributes), { wrapper: teamScopeWrapper })
+
+    expect(result.current[0].teamScope).toEqual({ teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] })
   })
 
   it('keeps display-only grid controls live in the route config', () => {

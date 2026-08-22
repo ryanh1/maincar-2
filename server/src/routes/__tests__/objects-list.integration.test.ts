@@ -41,7 +41,7 @@ vi.mock('../../db.js', async () => {
 
 import app from '../../app.js'
 import prisma from '../../db.js'
-import { seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
+import { seedMember, seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
 import type { Prisma } from '../../generated/prisma/client.js'
 
 function as(firebaseUid: string): string {
@@ -249,5 +249,73 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
     expect(res.status).toBe(200)
     expect(res.body.totalCount).toBe(1)
     expect(res.body.rows[0].id).toBe(call.id)
+  })
+
+  it('uses the live, deduplicating Team scope for owner-backed rows, counts, and pages only', async () => {
+    const org = await seedOrgWithAdmin(prisma, { seed: true })
+    const jordan = await seedMember(prisma, org.orgId)
+    const personObject = await prisma.objectDef.findFirstOrThrow({ where: { orgId: org.orgId, slug: 'person' } })
+    const callObject = await prisma.objectDef.findFirstOrThrow({ where: { orgId: org.orgId, slug: 'call' } })
+
+    const revenue = await prisma.team.create({
+      data: {
+        orgId: org.orgId,
+        name: 'Revenue',
+        leadUserId: jordan.userId,
+        members: { create: [{ orgId: org.orgId, userId: jordan.userId }, { orgId: org.orgId, userId: org.adminUserId }] },
+      },
+    })
+    await prisma.team.create({
+      data: {
+        orgId: org.orgId,
+        name: 'Outbound',
+        leadUserId: jordan.userId,
+        members: { create: [{ orgId: org.orgId, userId: jordan.userId }] },
+      },
+    })
+    const empty = await prisma.team.create({ data: { orgId: org.orgId, name: 'Empty', leadUserId: jordan.userId } })
+    const [jordanPerson, adminPerson] = await Promise.all([
+      prisma.person.create({ data: { orgId: org.orgId, firstName: 'Jordan', ownerUserId: jordan.userId } }),
+      prisma.person.create({ data: { orgId: org.orgId, firstName: 'Avery', ownerUserId: org.adminUserId } }),
+    ])
+    await prisma.person.create({ data: { orgId: org.orgId, firstName: 'Unassigned' } })
+
+    const specific = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${personObject.id}/list`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ teamScope: { teamIds: [revenue.id] } })
+    expect(specific.status).toBe(200)
+    expect(specific.body.totalCount).toBe(2)
+    expect(specific.body.rows.map((row: { id: string }) => row.id).sort()).toEqual([adminPerson.id, jordanPerson.id].sort())
+
+    const ledByJordan = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${personObject.id}/list`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ teamScope: { leadUserIds: [jordan.userId] } })
+    expect(ledByJordan.status).toBe(200)
+    expect(ledByJordan.body.totalCount).toBe(2)
+    expect(new Set(ledByJordan.body.rows.map((row: { id: string }) => row.id)).size).toBe(2)
+
+    await prisma.team.updateMany({ where: { id: revenue.id, orgId: org.orgId }, data: { leadUserId: org.adminUserId } })
+    const liveLead = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${personObject.id}/list`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ teamScope: { leadUserIds: [jordan.userId] } })
+    expect(liveLead.status).toBe(200)
+    expect(liveLead.body.totalCount).toBe(1)
+    expect(liveLead.body.rows[0].id).toBe(jordanPerson.id)
+
+    const emptyTeam = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${personObject.id}/list`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ teamScope: { teamIds: [empty.id] } })
+    expect(emptyTeam.status).toBe(200)
+    expect(emptyTeam.body).toMatchObject({ rows: [], totalCount: 0, nextCursor: null })
+
+    const unsupported = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${callObject.id}/list`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ teamScope: { teamIds: [revenue.id] } })
+    expect(unsupported.status).toBe(400)
   })
 })

@@ -15,12 +15,15 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { AttributeDef } from '@/lib/crmTypes'
-import type { ViewConfig, ViewFilterCondition } from './viewConfig'
+import { memberDisplayName, useGetMembers, useGetTeams } from '@/hooks/orgs'
+import type { TeamScope, ViewConfig, ViewFilterCondition } from './viewConfig'
 
 interface GridViewToolbarProps {
+  orgId?: string
   attributes: AttributeDef[]
   config: ViewConfig
   onConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
+  teamScopeSupported?: boolean
 }
 
 function selectedValues(config: ViewConfig, attributeId: string): string[] {
@@ -30,8 +33,85 @@ function selectedValues(config: ViewConfig, attributeId: string): string[] {
     : []
 }
 
+function scopeLabel(scope: TeamScope | undefined, teams: Array<{ id: string; name: string }>, members: Array<{ userId: string; firstName: string | null; lastName: string | null; email: string }>): string | null {
+  if (!scope) return null
+  const teamNames = (scope.teamIds ?? []).map((id) => teams.find((team) => team.id === id)?.name ?? id)
+  const leadNames = (scope.leadUserIds ?? []).map((id) => {
+    const member = members.find((candidate) => candidate.userId === id)
+    return member ? memberDisplayName(member) : id
+  })
+  const labels = [
+    ...(teamNames.length ? [`Team: ${teamNames.join(', ')}`] : []),
+    ...(leadNames.length ? [`Teams led by ${leadNames.join(', ')}`] : []),
+  ]
+  return labels.length ? labels.join(' · ') : null
+}
+
+interface TeamScopeControlProps {
+  orgId: string
+  config: ViewConfig
+  onConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
+}
+
+function TeamScopeMenu({ orgId, config, onConfigChange }: TeamScopeControlProps) {
+  const teamsQuery = useGetTeams(orgId)
+  const membersQuery = useGetMembers(orgId, { limit: 200, sort: 'name' })
+  const teams = teamsQuery.data?.teams ?? []
+  const members = membersQuery.data?.members ?? []
+
+  function toggleTeamScopeId(kind: 'teamIds' | 'leadUserIds', id: string) {
+    onConfigChange((current) => {
+      const currentScope = current.teamScope ?? {}
+      const selected = currentScope[kind] ?? []
+      const next = selected.includes(id) ? selected.filter((entry) => entry !== id) : [...selected, id]
+      const teamIds = kind === 'teamIds' ? next : currentScope.teamIds ?? []
+      const leadUserIds = kind === 'leadUserIds' ? next : currentScope.leadUserIds ?? []
+      const teamScope = teamIds.length || leadUserIds.length
+        ? { ...(teamIds.length ? { teamIds } : {}), ...(leadUserIds.length ? { leadUserIds } : {}) }
+        : undefined
+      return { ...current, ...(teamScope ? { teamScope } : { teamScope: undefined }) }
+    })
+  }
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>Team</DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="max-h-80 overflow-y-auto">
+        <DropdownMenuLabel>Specific teams</DropdownMenuLabel>
+        {teams.map((team) => (
+          <DropdownMenuCheckboxItem key={team.id} checked={config.teamScope?.teamIds?.includes(team.id) ?? false} onSelect={(event) => event.preventDefault()} onCheckedChange={() => toggleTeamScopeId('teamIds', team.id)}>
+            {team.name}
+          </DropdownMenuCheckboxItem>
+        ))}
+        {!teamsQuery.isPending && teams.length === 0 && <DropdownMenuItem disabled>No active teams</DropdownMenuItem>}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Teams led by</DropdownMenuLabel>
+        {members.map((member) => (
+          <DropdownMenuCheckboxItem key={member.userId} checked={config.teamScope?.leadUserIds?.includes(member.userId) ?? false} onSelect={(event) => event.preventDefault()} onCheckedChange={() => toggleTeamScopeId('leadUserIds', member.userId)}>
+            {memberDisplayName(member)}
+          </DropdownMenuCheckboxItem>
+        ))}
+        {!membersQuery.isPending && members.length === 0 && <DropdownMenuItem disabled>No active members</DropdownMenuItem>}
+        {config.teamScope && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onConfigChange((current) => ({ ...current, teamScope: undefined }))}>Clear Team filter</DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
+function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 'config'>) {
+  const teams = useGetTeams(orgId).data?.teams ?? []
+  const members = useGetMembers(orgId, { limit: 200, sort: 'name' }).data?.members ?? []
+  const label = scopeLabel(config.teamScope, teams, members)
+  return label ? <span className="text-xs text-text-muted">{label}</span> : null
+}
+
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
-export function GridViewToolbar({ attributes, config, onConfigChange }: GridViewToolbarProps) {
+export function GridViewToolbar({ orgId, attributes, config, onConfigChange, teamScopeSupported = false }: GridViewToolbarProps) {
   const activeSort = config.sorts[0]
   const activeSortAttribute = attributes.find((attribute) => attribute.id === activeSort?.attributeId)
   const selectableAttributes = attributes.filter(
@@ -153,7 +233,7 @@ export function GridViewToolbar({ attributes, config, onConfigChange }: GridView
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm">
-            Filter{config.filterTree ? ' · 1' : ''}
+            Filter{config.filterTree || config.teamScope ? ` · ${(config.filterTree ? 1 : 0) + (config.teamScope ? 1 : 0)}` : ''}
             <ChevronDown size={16} />
           </Button>
         </DropdownMenuTrigger>
@@ -176,6 +256,7 @@ export function GridViewToolbar({ attributes, config, onConfigChange }: GridView
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           ))}
+          {teamScopeSupported && orgId && <TeamScopeMenu orgId={orgId} config={config} onConfigChange={onConfigChange} />}
           {selectableAttributes.length === 0 && <DropdownMenuItem disabled>No selectable fields</DropdownMenuItem>}
           {config.filterTree && (
             <>
@@ -187,6 +268,8 @@ export function GridViewToolbar({ attributes, config, onConfigChange }: GridView
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {teamScopeSupported && orgId && config.teamScope && <TeamScopeChip orgId={orgId} config={config} />}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

@@ -1,9 +1,22 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
 import type { AttributeDef } from '@/lib/crmTypes'
+
+const { useGetTeamsMock, useGetMembersMock } = vi.hoisted(() => ({
+  useGetTeamsMock: vi.fn(),
+  useGetMembersMock: vi.fn(),
+}))
+
+vi.mock('@/hooks/orgs', () => ({
+  memberDisplayName: (member: { firstName: string | null; lastName: string | null; email: string }) =>
+    [member.firstName, member.lastName].filter(Boolean).join(' ') || member.email,
+  useGetTeams: useGetTeamsMock,
+  useGetMembers: useGetMembersMock,
+}))
+
 import { GridViewToolbar } from './GridViewToolbar'
 import { createViewConfig } from './viewConfig'
 
@@ -36,6 +49,13 @@ const attributes = [
 ] satisfies AttributeDef[]
 
 describe('GridViewToolbar', () => {
+  beforeEach(() => {
+    useGetTeamsMock.mockReturnValue({ data: { teams: [{ id: 'team-revenue', name: 'Revenue' }] }, isPending: false })
+    useGetMembersMock.mockReturnValue({
+      data: { members: [{ userId: 'user-jordan', firstName: 'Jordan', lastName: 'Lee', email: 'jordan@example.test' }] },
+      isPending: false,
+    })
+  })
   it('writes the same view config when choosing a sort from the toolbar', async () => {
     const user = userEvent.setup()
     const onConfigChange = vi.fn()
@@ -77,5 +97,52 @@ describe('GridViewToolbar', () => {
     await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Show grid lines' }))
     const linesUpdate = onConfigChange.mock.calls[3][0] as (current: typeof config) => typeof config
     expect(linesUpdate(config).gridLines).toBe(false)
+  })
+
+  it('shows the Team scope control only for owner-backed grids', async () => {
+    const user = userEvent.setup()
+    const config = createViewConfig(attributes)
+
+    const { unmount } = renderWithProviders(
+      <GridViewToolbar
+        orgId="org-1"
+        attributes={attributes}
+        config={config}
+        onConfigChange={vi.fn()}
+        teamScopeSupported
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Filter' }))
+    await user.click(await screen.findByText('Team'))
+    expect(await screen.findByText('Specific teams')).toBeInTheDocument()
+    expect(await screen.findByText('Teams led by')).toBeInTheDocument()
+
+    unmount()
+    renderWithProviders(<GridViewToolbar orgId="org-1" attributes={attributes} config={config} onConfigChange={vi.fn()} teamScopeSupported={false} />)
+    await user.click(screen.getByRole('button', { name: 'Filter' }))
+    expect(screen.queryByText('Team')).not.toBeInTheDocument()
+  })
+
+  it('writes selected teams and direct team leads into the reusable scope without expanding a roster', async () => {
+    const user = userEvent.setup()
+    const onConfigChange = vi.fn()
+    const config = createViewConfig(attributes)
+
+    renderWithProviders(<GridViewToolbar orgId="org-1" attributes={attributes} config={config} onConfigChange={onConfigChange} teamScopeSupported />)
+
+    await user.click(screen.getByRole('button', { name: 'Filter' }))
+    await user.click(await screen.findByText('Team'))
+    const revenue = await screen.findByRole('menuitemcheckbox', { name: 'Revenue' })
+    revenue.focus()
+    await user.keyboard(' ')
+    const teamUpdate = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(teamUpdate(config).teamScope).toEqual({ teamIds: ['team-revenue'] })
+
+    const jordan = await screen.findByRole('menuitemcheckbox', { name: 'Jordan Lee' })
+    jordan.focus()
+    await user.keyboard(' ')
+    const leadUpdate = onConfigChange.mock.calls[1][0] as (current: typeof config) => typeof config
+    expect(leadUpdate(config).teamScope).toEqual({ leadUserIds: ['user-jordan'] })
   })
 })
