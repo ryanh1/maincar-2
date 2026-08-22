@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { useGetAccountTimeline } from '@/hooks/accountTimeline'
+import { useGetAccountTimeline, useGetAccountTimelineDetail } from '@/hooks/accountTimeline'
 import { mapAccountTimelineEvent } from '@/components/activity-feed/activityFeed'
 import type { AccountTimelineParams } from '@/lib/accountTimelineTypes'
 import { AccountTimelineFeed } from './AccountTimelineFeed'
 import { TimelineFilters, type TimelineFilterValue } from './TimelineFilters'
+import { AccountTimelineDetailPanel } from './AccountTimelineDetailPanel'
 
 const ROOT = { type: 'company' as const, id: 'company-fixture' }
 
@@ -23,6 +24,7 @@ function TimelineFixtureContent() {
   const [filters, setFilters] = useState<TimelineFilterValue>({})
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const query = useGetAccountTimeline('org-fixture', ROOT, filters as AccountTimelineParams)
+  const detailQuery = useGetAccountTimelineDetail('org-fixture', ROOT, selectedEventId, filters as AccountTimelineParams)
 
   return (
     <main className="min-h-dvh bg-bg p-6">
@@ -47,6 +49,13 @@ function TimelineFixtureContent() {
           hasNextPage={query.hasNextPage}
           isFetchingNextPage={query.isFetchingNextPage}
           onLoadMore={() => void query.fetchNextPage()}
+        />
+        <AccountTimelineDetailPanel
+          open={selectedEventId !== null}
+          onOpenChange={(open) => { if (!open) setSelectedEventId(null) }}
+          detail={detailQuery.data?.detail ?? null}
+          navigation={detailQuery.data?.navigation ?? null}
+          onNavigate={setSelectedEventId}
         />
       </section>
     </main>

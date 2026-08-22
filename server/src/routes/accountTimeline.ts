@@ -10,6 +10,10 @@ import { z } from 'zod'
 
 import prisma from '../db.js'
 import { ACTIVITY_DIRECTIONS, ACTIVITY_SOURCE_TYPES } from '../crm/activityFeed.js'
+import { mapEmailToDetailApi } from '../crm/emailActivity.js'
+import { mapMeetingToDetailApi } from '../crm/meetingActivity.js'
+import { mapSmsToDetailApi } from '../crm/smsActivity.js'
+import { mapNoteToApi, mapTaskToApi } from '../crm/taskNote.js'
 import {
   DENSE_TIMELINE_EVENT_COUNT,
   resolveSmartTimelineRange,
@@ -107,6 +111,82 @@ function mapTimelineEventToApi(entry: {
     companyId: entry.companyId,
     personId: entry.personId,
     dealId: entry.dealId,
+  }
+}
+
+/**
+ * Reads the source only AFTER the ActivityEntry has proved its organization and
+ * account scope. The feed remains the ordering projection; this is the one
+ * deliberate follow-up read that supplies source-authoritative panel content.
+ */
+async function readTimelineDetail(entry: { sourceType: string; sourceId: string; orgId: string; timelineMarker: Prisma.JsonValue | null }) {
+  const { orgId, sourceId } = entry
+  switch (entry.sourceType) {
+    case 'call': {
+      const call = await prisma.call.findFirst({ where: { id: sourceId, orgId } })
+      return call && {
+        type: 'call', id: call.id, direction: call.direction, status: call.status,
+        fromE164: call.fromE164, toE164: call.toE164, recordingEnabled: call.recordingEnabled,
+        transcriptStatus: call.transcriptStatus, transcript: call.transcript, durationS: call.durationS,
+        startedAt: call.startedAt?.toISOString() ?? null, endedAt: call.endedAt?.toISOString() ?? null,
+        createdAt: call.createdAt.toISOString(), openFullCallPath: `/calls/${call.id}`,
+      }
+    }
+    case 'email': {
+      const email = await prisma.email.findFirst({
+        where: { id: sourceId, orgId },
+        include: { participants: { orderBy: [{ role: 'asc' }, { createdAt: 'asc' }] }, attachments: { orderBy: [{ createdAt: 'asc' }] } },
+      })
+      return email && { type: 'email', ...mapEmailToDetailApi(email) }
+    }
+    case 'sms': {
+      const message = await prisma.smsMessage.findFirst({
+        where: { id: sourceId, orgId }, include: { media: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } },
+      })
+      return message && { type: 'sms', ...mapSmsToDetailApi(message) }
+    }
+    case 'meeting': {
+      const meeting = await prisma.meeting.findFirst({
+        where: { id: sourceId, orgId }, include: { attendees: { orderBy: [{ createdAt: 'asc' }] } },
+      })
+      return meeting && { type: 'meeting', ...mapMeetingToDetailApi(meeting) }
+    }
+    case 'note': {
+      const note = await prisma.note.findFirst({ where: { id: sourceId, orgId, deletedAt: null } })
+      return note && { type: 'note', ...mapNoteToApi(note) }
+    }
+    case 'task': {
+      const task = await prisma.task.findFirst({ where: { id: sourceId, orgId, deletedAt: null } })
+      if (!task) return null
+      const { type: taskType, ...taskDetail } = mapTaskToApi(task)
+      return { type: 'task', taskType, ...taskDetail }
+    }
+    case 'stage_change': {
+      // A stage change's source id is an immutable transition identity, not a
+      // FieldHistory primary key. Its stored marker is therefore the durable
+      // before/after evidence; confirming the current Deal still exists prevents
+      // a stale projection from rendering as a live detail.
+      const dealId = sourceId.split(':', 1)[0]
+      const deal = dealId ? await prisma.deal.findFirst({ where: { id: dealId, orgId, deletedAt: null } }) : null
+      return deal && { type: 'stage_change', id: sourceId, dealId: deal.id, marker: entry.timelineMarker }
+    }
+    case 'record_created': {
+      // Creation rows use the created record's id. It may be a Company, Person,
+      // or Deal; probe each org-scoped root without ever accepting a cross-org id.
+      const [company, person, deal] = await Promise.all([
+        prisma.company.findFirst({ where: { id: sourceId, orgId, deletedAt: null } }),
+        prisma.person.findFirst({ where: { id: sourceId, orgId, deletedAt: null } }),
+        prisma.deal.findFirst({ where: { id: sourceId, orgId, deletedAt: null } }),
+      ])
+      const record = company ?? person ?? deal
+      return record && { type: 'record_created', id: sourceId }
+    }
+    case 'custom': {
+      const record = await prisma.record.findFirst({ where: { id: sourceId, orgId, deletedAt: null } })
+      return record && { type: 'custom', id: record.id, values: record.valuesJson }
+    }
+    default:
+      return null
   }
 }
 
@@ -240,6 +320,79 @@ router.get(
       events: pageRows.map(mapTimelineEventToApi),
       nextCursor: hasMore ? encodeTimelineCursor(pageRows[pageRows.length - 1]) : null,
       range: { from: range.from.toISOString(), to: range.to.toISOString(), isDefault: isDefaultRange },
+    })
+  }),
+)
+
+// ============================================================
+// GET /api/orgs/:orgId/account-timeline/:eventId — one typed detail panel
+// ============================================================
+router.get(
+  '/:eventId',
+  wrapRoute('GET /api/orgs/:orgId/account-timeline/:eventId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const eventId = String(req.params.eventId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = accountTimelineQuerySchema.safeParse(req.query ?? {})
+    if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
+    const { rootType, rootId, occurredFrom, occurredTo, sourceType, direction, personId, dealId } = parsed.data
+    if ((occurredFrom === undefined) !== (occurredTo === undefined)) {
+      return void res.status(400).json({ error: 'occurredFrom and occurredTo must be supplied together.' })
+    }
+    if (occurredFrom && occurredTo && occurredTo <= occurredFrom) {
+      return void res.status(400).json({ error: 'occurredTo must be after occurredFrom.' })
+    }
+    if (rootType === 'deal' && (personId || dealId)) {
+      return void res.status(400).json({ error: 'personId and dealId filters are available only on a company timeline.' })
+    }
+
+    // --- Verify ownership ---
+    const root = rootType === 'company'
+      ? await prisma.company.findFirst({ where: { id: rootId, orgId, deletedAt: null }, select: { id: true } })
+      : await prisma.deal.findFirst({ where: { id: rootId, orgId, deletedAt: null }, select: { id: true } })
+    if (!root) return void res.status(404).json({ error: 'Account not found' })
+
+    // --- Execute query ---
+    // Scope before dispatch. A guessed ActivityEntry id cannot select a source in
+    // another account or organization, even when its source id is valid there.
+    const scopedWhere: Prisma.ActivityEntryWhereInput = {
+        id: eventId, orgId,
+        ...(rootType === 'company' ? { companyId: rootId } : { dealId: rootId }),
+        ...(rootType === 'company' && personId ? { personId } : {}),
+        ...(rootType === 'company' && dealId ? { dealId } : {}),
+        ...(sourceType ? { sourceType } : {}),
+        ...(direction ? { direction } : {}),
+        ...(occurredFrom && occurredTo ? { occurredAt: { gte: occurredFrom, lt: occurredTo } } : {}),
+      }
+    const entry = await prisma.activityEntry.findFirst({ where: scopedWhere })
+    if (!entry) return void res.status(404).json({ error: 'Timeline event not found' })
+
+    const detail = await readTimelineDetail(entry)
+    if (!detail) return void res.status(404).json({ error: 'Timeline event source not found' })
+
+    const { id: _eventId, ...activeFilterWhere } = scopedWhere
+    const [previous, next] = await Promise.all([
+      prisma.activityEntry.findFirst({
+        where: { ...activeFilterWhere, OR: [{ occurredAt: { gt: entry.occurredAt } }, { occurredAt: entry.occurredAt, id: { gt: entry.id } }] },
+        orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }], select: { id: true },
+      }),
+      prisma.activityEntry.findFirst({
+        where: { ...activeFilterWhere, OR: [{ occurredAt: { lt: entry.occurredAt } }, { occurredAt: entry.occurredAt, id: { lt: entry.id } }] },
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }], select: { id: true },
+      }),
+    ])
+
+    // --- Return response ---
+    res.json({
+      event: mapTimelineEventToApi(entry),
+      detail,
+      navigation: { previousEventId: previous?.id ?? null, nextEventId: next?.id ?? null },
     })
   }),
 )
