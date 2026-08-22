@@ -10,6 +10,7 @@ import { InCallControlsFixture } from './components/dialer/InCallControlsFixture
 import { TooltipProvider } from './components/ui/tooltip'
 import { ReportsFixture } from './pages/ReportsFixture'
 import { CallTranscriptFixture } from './pages/CallTranscriptFixture'
+import { RecordsFixture } from './pages/RecordsFixture'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,6 +35,8 @@ createRoot(document.getElementById('root')!).render(
       <ReportsFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/call-transcript' ? (
       <CallTranscriptFixture />
+    ) : import.meta.env.DEV && window.location.pathname.startsWith('/__fixtures/records/') ? (
+      <RecordsFixture />
     ) : (
       <QueryClientProvider client={queryClient}>
         <App />

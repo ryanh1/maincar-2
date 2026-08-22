@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
+import { useCreateRecord, useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
 import { useAuth } from '@/providers/useAuth'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { buildGridCell, coerceForType, FLAGGED_THEME, parseOptions } from './cellBuilder'
@@ -29,6 +29,7 @@ import { fieldEditorCellRenderer, type FieldEditorCellData } from './fieldEditor
 import { GridViewToolbar } from './GridViewToolbar'
 import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
+import { RecordGridCreateRow } from './RecordGrid_CreateRow'
 import { formatCellValue } from './recordCellValue'
 import { createViewConfig, toRecordListQuery, type ViewConfig } from './viewConfig'
 import { parseGridCommand } from './gridCommands'
@@ -165,6 +166,24 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
     useRecordWindow(orgId, object.id, listQuery)
   const updateRecordValue = useUpdateRecordValue()
+  const createRecord = useCreateRecord()
+  const [isCreating, setIsCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const createAttributes = columns.filter((attribute) => !attribute.isReadOnly && (attribute.isIdentity || attribute.isRequired))
+  if (createAttributes.length === 0) {
+    const firstEditable = columns.find((attribute) => !attribute.isReadOnly)
+    if (firstEditable) createAttributes.push(firstEditable)
+  }
+
+  const saveNewRecord = useCallback(async (values: Record<string, unknown>) => {
+    setCreateError(null)
+    try {
+      await createRecord.mutateAsync({ orgId, object, values })
+      setIsCreating(false)
+    } catch (error) {
+      setCreateError(error instanceof Error && error.message ? error.message : `Could not save this ${object.name.toLowerCase()}. Try again.`)
+    }
+  }, [createRecord, object, orgId])
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const groupAttribute = config.groupBy[0] ? columns.find((attribute) => attribute.id === config.groupBy[0]?.attributeId) : undefined
@@ -684,6 +703,19 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
           config={config}
           onConfigChange={onViewConfigChange}
           teamScopeSupported={teamScopeSupported}
+          createLabel={object.isGridCreateSupported ? `Create ${object.name}` : undefined}
+          createDisabled={isCreating}
+          onCreate={object.isGridCreateSupported ? () => { setCreateError(null); setIsCreating(true) } : undefined}
+        />
+      )}
+      {isCreating && (
+        <RecordGridCreateRow
+          object={object}
+          attributes={createAttributes}
+          isSaving={createRecord.isPending}
+          error={createError}
+          onSave={saveNewRecord}
+          onCancel={() => { setCreateError(null); setIsCreating(false) }}
         />
       )}
       <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => setHoveredRow(null)}>
