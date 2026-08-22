@@ -6,6 +6,7 @@
  * and delete one private voicemail without exposing a storage key to the browser.
  */
 import { Router } from 'express'
+import { z } from 'zod'
 
 import { deleteObject, getRecordingDownloadUrl } from '../../dependencies/s3.js'
 import { logger } from '../../dependencies/logger.js'
@@ -16,6 +17,31 @@ import { requireMembership } from '../lib/membership.js'
 import type { Voicemail } from '../generated/prisma/client.js'
 
 const router = Router({ mergeParams: true })
+
+const LIST_DEFAULT_LIMIT = 25
+const LIST_MAX_LIMIT = 100
+
+function blankToUndefined(value: unknown): unknown {
+  return typeof value === 'string' && value.trim() === '' ? undefined : value
+}
+
+const listQuerySchema = z.object({
+  page: z.coerce.number().int().min(1, 'page starts at 1.').default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1, 'Ask for at least one row.')
+    .max(LIST_MAX_LIMIT, `Ask for at most ${LIST_MAX_LIMIT} rows at a time.`)
+    .default(LIST_DEFAULT_LIMIT),
+  q: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .trim()
+      .regex(/^\+?\d{1,15}$/, 'Search by digits of the caller number, like 201.')
+      .optional(),
+  ),
+})
 
 function mapVoicemailToApi(voicemail: Voicemail, recordingUrl: string | null) {
   return {
@@ -30,7 +56,59 @@ function mapVoicemailToApi(voicemail: Voicemail, recordingUrl: string | null) {
   }
 }
 
+function mapVoicemailToListApi(voicemail: Voicemail) {
+  return {
+    id: voicemail.id,
+    fromE164: voicemail.fromE164,
+    durationS: voicemail.durationS,
+    transcriptStatus: voicemail.transcriptStatus,
+    transcript: voicemail.transcript,
+    createdAt: voicemail.createdAt.toISOString(),
+  }
+}
+
 router.use(requireAuth)
+
+// ============================================================
+// GET /api/orgs/:orgId/voicemails — the org's voicemail inbox
+// ============================================================
+// Recording URLs are short-lived credentials and belong only on MAI-50's detail
+// response, never in every row of a paginated inbox.
+router.get(
+  '/',
+  wrapRoute('GET /api/orgs/:orgId/voicemails', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = listQuerySchema.safeParse(req.query ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+    const { page, limit, q } = parsed.data
+
+    // --- Build filters ---
+    const where = { orgId, ...(q ? { fromE164: { contains: q } } : {}) }
+
+    // --- Execute query ---
+    const [total, voicemails] = await Promise.all([
+      prisma.voicemail.count({ where }),
+      prisma.voicemail.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ])
+
+    // --- Return response ---
+    res.json({ voicemails: voicemails.map(mapVoicemailToListApi), total, page, limit })
+  }),
+)
 
 // ============================================================
 // GET /api/orgs/:orgId/voicemails/:id — one voicemail, with a signed recording
