@@ -113,6 +113,7 @@ if [ "$GATE" = 1 ]; then
   git -C "$TMP" merge --no-ff "$BR" -F "$TMP/../mc-merge-msg.txt"
   git -C "$TMP" push "$UPSTREAM" HEAD:main
   mc_sync_local_main
+  mc_refresh_primary_checkout
   git fetch --quiet origin
   mc_record_delivery "$BR" "$(git -C "$LOCAL_MAIN_REPO" rev-parse main)" "$UPSTREAM"
   echo "[mc-merge --gate] merged and pushed. $BR is on main."
@@ -167,6 +168,7 @@ printf '%s\n\nCo-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>\n' "$MSG"
 git -C "$TMP" merge --no-ff "$BR" -F "$TMP/../mc-merge-msg.txt"
 git -C "$TMP" push "$UPSTREAM" HEAD:main
 mc_sync_local_main
+mc_refresh_primary_checkout
 git fetch --quiet origin
 mc_record_delivery "$BR" "$(git -C "$LOCAL_MAIN_REPO" rev-parse main)" "$UPSTREAM"
 echo "[mc-merge] merged and pushed. $BR is on main."

@@ -12,6 +12,8 @@ git init "$SANDBOX/primary" --quiet
 git -C "$SANDBOX/primary" config user.name 'Coordination test'
 git -C "$SANDBOX/primary" config user.email 'coordination-test@example.test'
 git -C "$SANDBOX/primary" checkout -b main --quiet
+touch "$SANDBOX/primary/tracked-placeholder"
+git -C "$SANDBOX/primary" add tracked-placeholder
 git -C "$SANDBOX/primary" commit --allow-empty -m 'Initial main' --quiet
 git -C "$SANDBOX/primary" remote add origin "$SANDBOX/upstream.git"
 git -C "$SANDBOX/primary" push origin main --quiet
@@ -66,6 +68,10 @@ if ! git -C "$SANDBOX/upstream.git" merge-base --is-ancestor "$(git -C "$SANDBOX
   echo 'merge did not reach the canonical upstream' >&2
   exit 1
 fi
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" = "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
+  echo 'dirty primary checkout was unexpectedly refreshed' >&2
+  exit 1
+fi
 
 # A fresh ref would be accepted by a normal bare repository. The mirror's
 # receive hook must refuse it, which makes a raw `git push origin` non-delivery.
@@ -81,6 +87,36 @@ if [ "$(git -C "$SANDBOX/state/local-main.git" rev-parse main)" != "$(git -C "$S
 fi
 if [ "$(git -C "$SANDBOX/issue-worktree" rev-parse origin/main)" != "$(git -C "$SANDBOX/state/local-main.git" rev-parse main)" ]; then
   echo 'ticket origin/main did not refresh after the merge' >&2
+  exit 1
+fi
+
+# Once unrelated local work is gone, a primary checkout may fast-forward. A
+# locally deleted tracked file is safe when the delivered main deletes it too.
+git -C "$SANDBOX/primary" reset --hard HEAD --quiet
+rm -f "$SANDBOX/primary/unrelated-wip"
+rm -f "$SANDBOX/primary/tracked-placeholder"
+git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-primary-refresh" --quiet
+git -C "$SANDBOX/issue-primary-refresh" config user.name 'Coordination test'
+git -C "$SANDBOX/issue-primary-refresh" config user.email 'coordination-test@example.test'
+git -C "$SANDBOX/issue-primary-refresh" checkout -b issue-primary-refresh --quiet
+touch "$SANDBOX/issue-primary-refresh/delivered-change"
+git -C "$SANDBOX/issue-primary-refresh" add delivered-change
+git -C "$SANDBOX/issue-primary-refresh" rm tracked-placeholder --quiet
+git -C "$SANDBOX/issue-primary-refresh" commit -m 'Refresh primary checkout' --quiet
+(
+  cd "$SANDBOX/issue-primary-refresh"
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Refresh primary checkout'
+)
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
+  echo 'clean primary checkout did not fast-forward after delivery' >&2
+  exit 1
+fi
+if [ -e "$SANDBOX/primary/tracked-placeholder" ]; then
+  echo 'primary checkout retained a file removed by delivered main' >&2
+  exit 1
+fi
+if [ ! -e "$SANDBOX/primary/delivered-change" ]; then
+  echo 'primary checkout did not receive a delivered file' >&2
   exit 1
 fi
 

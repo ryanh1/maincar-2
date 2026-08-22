@@ -90,6 +90,8 @@ emulator and does three things the bare command does not:
   instead of failing with "Could not find import directory".
 
 `npm run firebase:save` checkpoints on demand, without restarting anything.
+Firebase snapshots are runtime state and are ignored by Git, so a normal save
+does not make the runnable checkout look like it contains user changes.
 
 Accounts are read from the emulator's REST API rather than through
 `firebase emulators:export`, because that command follows a global hub locator

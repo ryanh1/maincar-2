@@ -35,9 +35,9 @@ yarn-error.log*
 .env.old
 .env.deploy.*
 
-# Firebase emulator export/import + debug
-firebase/data/*
-!firebase/data/.gitkeep
+# Firebase emulator export/import + debug. The emulator replaces this directory
+# with runtime snapshots, so no placeholder inside it may be tracked.
+firebase/data/
 firebase_key.json
 firestore-debug.log
 firebase-debug.log

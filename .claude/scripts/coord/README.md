@@ -11,7 +11,10 @@ remote: it can contain a person's unfinished files, while a bare mirror cannot.
 `mc-merge` refreshes the mirror from GitHub under its merge lock and refreshes it
 again after pushing, so tickets retain a local fetch source without inheriting
 the primary checkout's state. The mirror rejects every push; only `mc-merge`
-may deliver to GitHub under the merge lock.
+may deliver to GitHub under the merge lock. After a successful delivery,
+`mc-merge` fast-forwards the runnable primary checkout from the refreshed mirror
+when it is already on `main` and has no local changes outside the delivered tree.
+If that is not safe, it leaves the checkout untouched and prints the exact reason.
 
 Running `mc-local-main sync` also installs hard-block hooks in the primary
 checkout, so a commit or push there fails immediately.
@@ -53,7 +56,7 @@ Or run specific tests:
 ./.claude/scripts/coord/mc-merge --gate -m "MAI-123: Your commit message"
 # Takes the merge lock
 # Checks main hasn't moved since you last rebased
-# Merges and pushes
+# Merges and pushes, refreshes the mirror, then refreshes the runnable checkout when safe
 ```
 
 ### 5. Prove closeout, then update Linear
