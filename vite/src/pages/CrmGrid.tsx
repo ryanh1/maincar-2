@@ -1,5 +1,6 @@
 import { useParams } from 'react-router-dom'
 
+import { RecordCount } from '@/components/crm/RecordCount'
 import { useGetLists, useGetObjects } from '@/hooks/crm'
 import { useAuth } from '@/providers/useAuth'
 
@@ -22,6 +23,9 @@ export function CrmGrid() {
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex h-12 shrink-0 items-center border-b border-border bg-muted px-4">
         <h1 className="text-base font-semibold">{title}</h1>
+        <div className="ml-auto">
+          <RecordCount filteredCount={0} isFiltered={false} totalCount={0} />
+        </div>
       </header>
       <div className="min-h-0 flex-1 overflow-auto bg-background p-4">
         <div role="grid" aria-label={`${title} grid`} className="min-h-full border border-border bg-background">
