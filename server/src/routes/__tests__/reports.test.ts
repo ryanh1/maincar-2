@@ -5,6 +5,13 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
+    report: {
+      create: vi.fn(),
+      count: vi.fn(),
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      updateMany: vi.fn(),
+    },
     $queryRaw: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
@@ -138,5 +145,132 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
 
     expect(response.status).toBe(400)
     expect(prismaMock.$queryRaw).not.toHaveBeenCalled()
+  })
+})
+
+describe('saved reports', () => {
+  it('lists only the active member’s reports, newest first', async () => {
+    prismaMock.report.count.mockResolvedValue(2)
+    prismaMock.report.findMany.mockResolvedValue([
+      {
+        id: 'report-2', name: 'Renewals', kind: 'pivot', configJson: CONFIG, ownerId: 'user-a',
+        createdAt: NOW, updatedAt: new Date('2026-08-22T12:01:00.000Z'),
+      },
+      {
+        id: 'report-1', name: 'Pipeline by stage', kind: 'pivot', configJson: CONFIG, ownerId: 'user-a',
+        createdAt: NOW, updatedAt: NOW,
+      },
+    ])
+
+    const response = await request(app)
+      .get(`/api/orgs/${ORG_ID}/reports`)
+      .set('Authorization', 'Bearer fake-token')
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      total: 2,
+      page: 1,
+      limit: 50,
+      reports: [
+        { id: 'report-2', name: 'Renewals' },
+        { id: 'report-1', name: 'Pipeline by stage' },
+      ],
+    })
+    expect(prismaMock.report.findMany).toHaveBeenCalledWith({
+      where: { orgId: ORG_ID, ownerId: 'user-a', deletedAt: null },
+      orderBy: { updatedAt: 'desc' },
+      skip: 0,
+      take: 50,
+    })
+    expect(prismaMock.report.count).toHaveBeenCalledWith({
+      where: { orgId: ORG_ID, ownerId: 'user-a', deletedAt: null },
+    })
+  })
+
+  it('saves a named report and reopens its exact config', async () => {
+    prismaMock.report.create.mockResolvedValue({
+      id: 'report-1',
+      name: 'Pipeline by stage',
+      kind: 'pivot',
+      configJson: CONFIG,
+      ownerId: 'user-a',
+      createdAt: NOW,
+      updatedAt: NOW,
+    })
+    prismaMock.report.findFirst.mockResolvedValue({
+      id: 'report-1',
+      name: 'Pipeline by stage',
+      kind: 'pivot',
+      configJson: CONFIG,
+      ownerId: 'user-a',
+      createdAt: NOW,
+      updatedAt: NOW,
+    })
+
+    const saved = await request(app)
+      .post(`/api/orgs/${ORG_ID}/reports`)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ name: 'Pipeline by stage', config: CONFIG })
+
+    expect(saved.status).toBe(201)
+    expect(saved.body.report).toMatchObject({
+      id: 'report-1',
+      name: 'Pipeline by stage',
+      config: CONFIG,
+    })
+    expect(prismaMock.report.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orgId: ORG_ID,
+        ownerId: 'user-a',
+        name: 'Pipeline by stage',
+        kind: 'pivot',
+        configJson: CONFIG,
+      }),
+    })
+
+    const reopened = await request(app)
+      .get(`/api/orgs/${ORG_ID}/reports/report-1`)
+      .set('Authorization', 'Bearer fake-token')
+
+    expect(reopened.status).toBe(200)
+    expect(reopened.body.report).toMatchObject({
+      id: 'report-1',
+      name: 'Pipeline by stage',
+      config: CONFIG,
+    })
+  })
+
+  it('rejects a report with no usable name', async () => {
+    const response = await request(app)
+      .post(`/api/orgs/${ORG_ID}/reports`)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ name: '   ', config: CONFIG })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toEqual({ error: 'Name the report to save it.' })
+    expect(prismaMock.report.create).not.toHaveBeenCalled()
+  })
+
+  it('renames and moves only the owner report into the 30-day trash', async () => {
+    prismaMock.report.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 1 })
+
+    const renamed = await request(app)
+      .patch(`/api/orgs/${ORG_ID}/reports/report-1`)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ name: 'Pipeline by stage Q3' })
+    const deleted = await request(app)
+      .delete(`/api/orgs/${ORG_ID}/reports/report-1`)
+      .set('Authorization', 'Bearer fake-token')
+
+    expect(renamed.status).toBe(200)
+    expect(deleted.status).toBe(200)
+    expect(prismaMock.report.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: 'report-1', orgId: ORG_ID, ownerId: 'user-a', deletedAt: null },
+      data: { name: 'Pipeline by stage Q3' },
+    })
+    expect(prismaMock.report.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 'report-1', orgId: ORG_ID, ownerId: 'user-a', deletedAt: null },
+      data: { deletedAt: expect.any(Date), deletedById: 'user-a' },
+    })
   })
 })

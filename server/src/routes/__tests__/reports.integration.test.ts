@@ -145,4 +145,44 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
     expect(response.body.report.rows).toMatchObject([{ createdDay: '2026-03-08', amountMinor: '7000' }])
     expect(response.body.report.rows).toHaveLength(1)
   })
+
+  it('persists, reopens, renames, and soft-deletes an owned report', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+
+    const saved = await request(app)
+      .post(`/api/orgs/${org.orgId}/reports`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({ name: 'Pipeline by stage', config: CONFIG })
+
+    expect(saved.status).toBe(201)
+    expect(saved.body.report).toMatchObject({ name: 'Pipeline by stage', config: CONFIG })
+    const reportId = saved.body.report.id as string
+
+    const reopened = await request(app)
+      .get(`/api/orgs/${org.orgId}/reports/${reportId}`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+    expect(reopened.status).toBe(200)
+    expect(reopened.body.report.config).toEqual(CONFIG)
+
+    const renamed = await request(app)
+      .patch(`/api/orgs/${org.orgId}/reports/${reportId}`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({ name: 'Pipeline Q3' })
+    expect(renamed.status).toBe(200)
+
+    const reports = await request(app)
+      .get(`/api/orgs/${org.orgId}/reports`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+    expect(reports.body).toMatchObject({ total: 1, reports: [{ id: reportId, name: 'Pipeline Q3' }] })
+
+    const deleted = await request(app)
+      .delete(`/api/orgs/${org.orgId}/reports/${reportId}`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+    expect(deleted.status).toBe(200)
+
+    const noLongerOpen = await request(app)
+      .get(`/api/orgs/${org.orgId}/reports/${reportId}`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+    expect(noLongerOpen.status).toBe(404)
+  })
 })

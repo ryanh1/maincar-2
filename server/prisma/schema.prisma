@@ -129,6 +129,10 @@ model Org {
   lists       List[]
   listEntries ListEntry[]
 
+  // Saved reports (MAI-145). A report belongs to an organization, while its
+  // owner controls this first lifecycle slice. Sharing arrives separately.
+  reports Report[]
+
   // Shared in-app notifications (MAI-235). A source event is one durable object
   // with one recipient-owned lifecycle row per teammate; deleting the org clears
   // both halves together.
@@ -193,6 +197,8 @@ model User {
   emailSignatures     EmailSignature[]
   oauthConnections    OAuthConnection[]
   mailAccounts        MailAccount[]
+  reportsOwned        Report[] @relation("ReportOwner")
+  reportsDeleted      Report[] @relation("ReportDeletedBy")
 
   // Texts sent or received on this rep's number (SmsMessage.mailboxUserId →
   // User). SetNull on that side, so deleting a user never destroys the org's
@@ -1299,6 +1305,36 @@ model Pipeline {
   updatedAt DateTime @updatedAt
 
   @@index([orgId])
+}
+
+// A saved report is the durable form of a reporting-engine config. The engine
+// owns the config's shape; this model owns its lifecycle (MAI-145).
+model Report {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Nullable + SetNull: reports are organization data and outlive a teammate's
+  // departure. This first slice still filters My reports by the active owner.
+  ownerId String?
+  owner   User?   @relation("ReportOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  name       String
+  kind       String @default("pivot") // pivot | activity | transition | cohort | dialer
+  configJson Json
+
+  // The trash is a soft delete. A later cleanup job may permanently purge rows
+  // after 30 days, but this slice never destroys a report immediately.
+  deletedAt   DateTime?
+  deletedById String?
+  deletedBy   User?     @relation("ReportDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([orgId, ownerId, deletedAt])
 }
 
 // One step in a Pipeline. winProbability weights the forecast; outcome tells the

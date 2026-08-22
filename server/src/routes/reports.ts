@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import type { Report } from '../generated/prisma/client.js'
 
 import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
@@ -24,12 +25,30 @@ const reportConfigSchema = z.object({
 }).strict()
 
 const runReportBodySchema = z.object({ config: reportConfigSchema }).strict()
+const reportNameSchema = z.string().trim().min(1, 'Name the report to save it.').max(200)
+const saveReportBodySchema = z.object({ name: reportNameSchema, config: reportConfigSchema }).strict()
+const renameReportBodySchema = z.object({ name: reportNameSchema }).strict()
+const reportListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+}).strict()
 
 interface RawDealStageSum {
   createdDay?: string
   stageId: string
   stageName: string
   amountMinor: string | number | bigint
+}
+
+function savedReportResponse(report: Pick<Report, 'id' | 'name' | 'kind' | 'configJson' | 'createdAt' | 'updatedAt'>) {
+  return {
+    id: report.id,
+    name: report.name,
+    kind: report.kind,
+    config: report.configJson,
+    createdAt: report.createdAt.toISOString(),
+    updatedAt: report.updatedAt.toISOString(),
+  }
 }
 
 router.use(requireAuth)
@@ -89,6 +108,149 @@ router.post(
         })),
       },
     })
+  }),
+)
+
+// ============================================================
+// Saved report lifecycle — MAI-145
+// ============================================================
+router.get(
+  '/',
+  wrapRoute('GET /api/orgs/:orgId/reports', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = reportListQuerySchema.safeParse(req.query)
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+    const { page, limit } = parsed.data
+    const where = { orgId, ownerId: authReq.user!.id, deletedAt: null }
+
+    // --- Execute query ---
+    const [reports, total] = await Promise.all([
+      prisma.report.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.report.count({ where }),
+    ])
+
+    // --- Return response ---
+    return void res.json({ reports: reports.map(savedReportResponse), total, page, limit })
+  }),
+)
+
+router.post(
+  '/',
+  wrapRoute('POST /api/orgs/:orgId/reports', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = saveReportBodySchema.safeParse(req.body)
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // --- Execute query ---
+    const report = await prisma.report.create({
+      data: {
+        orgId,
+        ownerId: authReq.user!.id,
+        name: parsed.data.name,
+        kind: 'pivot',
+        configJson: parsed.data.config,
+      },
+    })
+
+    // --- Return response ---
+    return void res.status(201).json({ report: savedReportResponse(report) })
+  }),
+)
+
+router.get(
+  '/:reportId',
+  wrapRoute('GET /api/orgs/:orgId/reports/:reportId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const reportId = String(req.params.reportId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    const report = await prisma.report.findFirst({
+      where: { id: reportId, orgId, ownerId: authReq.user!.id, deletedAt: null },
+    })
+    if (!report) return void res.status(404).json({ error: 'Report not found' })
+
+    // --- Return response ---
+    return void res.json({ report: savedReportResponse(report) })
+  }),
+)
+
+router.patch(
+  '/:reportId',
+  wrapRoute('PATCH /api/orgs/:orgId/reports/:reportId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const reportId = String(req.params.reportId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = renameReportBodySchema.safeParse(req.body)
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // --- Execute query ---
+    const result = await prisma.report.updateMany({
+      where: { id: reportId, orgId, ownerId: authReq.user!.id, deletedAt: null },
+      data: { name: parsed.data.name },
+    })
+    if (result.count === 0) return void res.status(404).json({ error: 'Report not found' })
+
+    // --- Return response ---
+    return void res.json({ report: { id: reportId, name: parsed.data.name } })
+  }),
+)
+
+router.delete(
+  '/:reportId',
+  wrapRoute('DELETE /api/orgs/:orgId/reports/:reportId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const reportId = String(req.params.reportId)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    const result = await prisma.report.updateMany({
+      where: { id: reportId, orgId, ownerId: authReq.user!.id, deletedAt: null },
+      data: { deletedAt: new Date(), deletedById: authReq.user!.id },
+    })
+    if (result.count === 0) return void res.status(404).json({ error: 'Report not found' })
+
+    // --- Return response ---
+    return void res.json({ report: { id: reportId } })
   }),
 )
 
