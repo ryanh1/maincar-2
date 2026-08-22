@@ -38,8 +38,13 @@ export interface LinkRequest {
 
 /** The narrow imperative surface for a host that needs to add trusted editor HTML. */
 export interface RichTextEditorActions {
-  /** Inserts an allowed rich-text fragment after the document's existing content. */
+  /**
+   * Inserts an allowed rich-text fragment after the document's existing content
+   * without taking focus or moving the initial writing position past it.
+   */
   insertHtmlAtEnd: (html: string) => void
+  /** Gives the message body focus with its caret at the beginning. */
+  focusAtStart: () => void
 }
 
 export interface RichTextEditorProps {
@@ -193,10 +198,16 @@ export function RichTextEditor({
       insertHtmlAtEnd: (html) => {
         editor
           .chain()
-          .focus()
           .setTextSelection(editor.state.doc.content.size)
           .insertContent(html)
+          // A default signature is an appended block, not the place the rep
+          // starts writing. Leave focus where it was (normally To) and keep the
+          // editor's next selection at the beginning of the message.
+          .setTextSelection(1)
           .run()
+      },
+      focusAtStart: () => {
+        editor.chain().focus().setTextSelection(1).run()
       },
     }
     onReady?.(actions)

@@ -196,6 +196,8 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
   const [bodySeed, setBodySeed] = useState(() => ({ html: draft.bodyHtml ?? '', mount: 0 }))
   const [body, setBody] = useState(bodySeed.html)
   const [editorActions, setEditorActions] = useState<RichTextEditorActions | null>(null)
+  const focusBodyAfterDocumentChange = useRef(false)
+  const focusBodyAfterSignatureMenuClose = useRef(false)
   const [insertedSignature, setInsertedSignature] = useState<EmailSignature | null>(null)
   const defaultSignatureInserted = useRef(false)
   // The open link request, or null. The editor raises it; the dialog collects a
@@ -384,6 +386,7 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
     setConfirmTemplate(null)
     setSubject(template.subject)
     setBody(template.bodyHtml)
+    focusBodyAfterDocumentChange.current = true
     setBodySeed((current) => ({ html: template.bodyHtml, mount: current.mount + 1 }))
     // Saved by the ordinary debounce, with no special path: `subject` and `body`
     // changed, so `flush` sends them 1200 ms from now like any other edit.
@@ -433,10 +436,19 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
 
     setInsertedSignature(nextSignature)
     setBody(nextBody)
+    focusBodyAfterDocumentChange.current = true
+    focusBodyAfterSignatureMenuClose.current = true
     // Choosing a signature is an explicit request for a different block. Like
     // choosing a template, remounting is the editor's safe way to show it.
     setBodySeed((current) => ({ html: nextBody, mount: current.mount + 1 }))
   }
+
+  const handleEditorReady = useCallback((actions: RichTextEditorActions | null) => {
+    setEditorActions(actions)
+    if (!actions || !focusBodyAfterDocumentChange.current) return
+    focusBodyAfterDocumentChange.current = false
+    actions.focusAtStart()
+  }, [])
 
   // Built from the LOCAL subject and the LOCAL chips, so the header renames
   // itself as the rep types and as the first recipient changes, rather than a
@@ -537,7 +549,7 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
         initialHtml={bodySeed.html}
         onChange={setBody}
         onRequestLink={setLinkRequest}
-        onReady={setEditorActions}
+        onReady={handleEditorReady}
         className="min-h-0 flex-1"
       />
 
@@ -630,7 +642,18 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
               <FileSignature size={16} aria-hidden />
             </IconButton>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" side="top">
+          <DropdownMenuContent
+            align="end"
+            side="top"
+            onCloseAutoFocus={(event) => {
+              if (!focusBodyAfterSignatureMenuClose.current) return
+              // The replacement editor already placed the caret at the start of
+              // its new document. Do not let the menu put focus back on its
+              // trigger after that deliberate transition.
+              event.preventDefault()
+              focusBodyAfterSignatureMenuClose.current = false
+            }}
+          >
             {signaturesQuery.isPending && <DropdownMenuItem disabled>Loading signatures…</DropdownMenuItem>}
             {signaturesQuery.isError && (
               <DropdownMenuItem onSelect={(event) => { event.preventDefault(); void signaturesQuery.refetch() }}>
