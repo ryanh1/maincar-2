@@ -554,6 +554,107 @@ describe('RecordGrid', () => {
     expect(getCellContent([0, 0])).toMatchObject({ data: 'Grace' })
   })
 
+  it('extends a numeric series through the drag-fill handler', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [
+        { id: 'r1', rank: 1 },
+        { id: 'r2', rank: 2 },
+        { id: 'r3', rank: null },
+        { id: 'r4', rank: null },
+      ],
+      totalCount: 4,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={[attribute({ slug: 'rank', type: 'number' })]} />)
+
+    const preventDefault = vi.fn()
+    const onFillPattern = dataEditorProps.current!.onFillPattern as (event: {
+      patternSource: { x: number; y: number; width: number; height: number }
+      fillDestination: { x: number; y: number; width: number; height: number }
+      preventDefault: () => void
+    }) => void
+    act(() => {
+      onFillPattern({
+        patternSource: { x: 0, y: 0, width: 1, height: 2 },
+        fillDestination: { x: 0, y: 0, width: 1, height: 4 },
+        preventDefault,
+      })
+    })
+
+    expect(preventDefault).toHaveBeenCalled()
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ recordId: 'r3', value: 3 }))
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ recordId: 'r4', value: 4 }))
+  })
+
+  it('fills down from the keyboard while skipping read-only and AI columns', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [
+        { id: 'r1', firstName: 'Ada', locked: 'Manual lock', insight: 'Generated summary' },
+        { id: 'r2', firstName: 'Grace', locked: 'Do not overwrite', insight: 'Existing summary' },
+      ],
+      totalCount: 2,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const attributes = [
+      attribute({ slug: 'firstName', sortOrder: 0 }),
+      attribute({ slug: 'locked', isReadOnly: true, sortOrder: 1 }),
+      attribute({ slug: 'insight', type: 'ai', isReadOnly: true, sortOrder: 2 }),
+    ]
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={attributes} />)
+
+    act(() => {
+      ;(dataEditorProps.current!.onGridSelectionChange as (selection: unknown) => void)({
+        current: { cell: [0, 0], range: { x: 0, y: 0, width: 3, height: 2 }, rangeStack: [] },
+        columns: { items: [] },
+        rows: { items: [] },
+      })
+    })
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', metaKey: true, bubbles: true, cancelable: true }))
+    })
+
+    expect(mutateAsync).toHaveBeenCalledTimes(1)
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ recordId: 'r2', attribute: expect.objectContaining({ slug: 'firstName' }), value: 'Ada' }))
+  })
+
+  it('fills right from the first selected column with Ctrl+R', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+
+    act(() => {
+      ;(dataEditorProps.current!.onGridSelectionChange as (selection: unknown) => void)({
+        current: { cell: [0, 0], range: { x: 0, y: 0, width: 2, height: 1 }, rangeStack: [] },
+        columns: { items: [] },
+        rows: { items: [] },
+      })
+    })
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', ctrlKey: true, bubbles: true, cancelable: true }))
+    })
+
+    expect(mutateAsync).toHaveBeenCalledTimes(1)
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ recordId: 'r1', attribute: expect.objectContaining({ slug: 'lastName' }), value: 'Ada' }))
+  })
+
   it('coerces a pasted phone number to E.164 and flags an unparseable one instead of dropping it', () => {
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'r1', phone: null }],

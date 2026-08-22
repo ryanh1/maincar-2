@@ -19,6 +19,11 @@ const domainAttribute = {
   id: 'domain', slug: 'domain', name: 'Domain', isIdentity: false, sortOrder: 1,
 }
 
+const rankAttribute = {
+  ...nameAttribute,
+  id: 'rank', slug: 'rank', name: 'Rank', type: 'number', isIdentity: false,
+}
+
 test('creates a Company from its grid after a recoverable validation error', async ({ page }) => {
   const consoleErrors: string[] = []
   const companies: Array<Record<string, unknown>> = []
@@ -106,4 +111,54 @@ test('keeps an unsupported direct object URL out of the grid and list API', asyn
   await expect(page.getByRole('grid')).toHaveCount(0)
   expect(listRequests).toEqual([])
   expect(consoleErrors).toEqual([])
+})
+
+test('fills the selected Company grid rows down with Ctrl+D', async ({ page }) => {
+  const updates: Array<{ id: string; value: unknown }> = []
+  const rows = [
+    { id: 'company-1', rank: 1 },
+    { id: 'company-2', rank: null },
+    { id: 'company-3', rank: null },
+    { id: 'company-4', rank: null },
+  ]
+
+  await page.route('**/api/orgs/org-fixture/objects**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects')) {
+      return route.fulfill({ json: { objects: [companyObject] } })
+    }
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects/company')) {
+      return route.fulfill({ json: { object: { ...companyObject, attributes: [rankAttribute] } } })
+    }
+    if (route.request().method() === 'POST' && pathname.endsWith('/objects/company/list')) {
+      return route.fulfill({ json: { rows, nextCursor: null, totalCount: rows.length } })
+    }
+    return route.fallback()
+  })
+  await page.route('**/api/orgs/org-fixture/companies/*', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    const body = route.request().postDataJSON() as { rank?: unknown }
+    updates.push({ id: route.request().url().split('/').at(-1)!, value: body.rank })
+    return route.fulfill({ json: {} })
+  })
+
+  await page.goto('/__fixtures/records/company')
+  const canvas = page.getByTestId('data-grid-canvas')
+  await expect(canvas).toBeVisible()
+  const bounds = await canvas.boundingBox()
+  expect(bounds).not.toBeNull()
+  if (!bounds) throw new Error('The record grid canvas was not measurable.')
+
+  const rowCenter = (row: number) => bounds.y + 32 + (row * 34) + 17
+  await page.mouse.click(bounds.x + 80, rowCenter(0))
+  await page.keyboard.down('Shift')
+  await page.mouse.click(bounds.x + 80, rowCenter(3))
+  await page.keyboard.up('Shift')
+  await page.keyboard.press('Control+d')
+
+  await expect.poll(() => updates).toEqual([
+    { id: 'company-2', value: 1 },
+    { id: 'company-3', value: 1 },
+    { id: 'company-4', value: 1 },
+  ])
 })
