@@ -7,14 +7,11 @@
 //
 // A schema, not a database: no CREATE DATABASE privilege needed, fast, and the
 // cascading drop is a guaranteed clean reset.
-import { execFile } from 'node:child_process'
+import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { promisify } from 'node:util'
 import { config as loadEnv } from 'dotenv'
 import { Client } from 'pg'
 import type { TestProject } from 'vitest/node'
-
-const execFileAsync = promisify(execFile)
 
 // dotenv never overrides an already-set var, so this is safe beside config.ts.
 loadEnv({ path: path.resolve(import.meta.dirname, '../../../../.env') })
@@ -38,6 +35,28 @@ function uniqueSchemaName(): string {
   // distinct schemas.
   const rand = Math.random().toString(36).slice(2, 8)
   return `test_${Date.now()}_${rand}`
+}
+
+async function migrateSchema(schemaUrl: string, schema: string): Promise<void> {
+  const migrationsDir = path.resolve(import.meta.dirname, '../../../prisma/migrations')
+  const migrations = (await readdir(migrationsDir, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+  const client = new Client({ connectionString: schemaUrl })
+  await client.connect()
+  try {
+    await client.query(`SET search_path TO "${schema}"`)
+    for (const migration of migrations) {
+      await client.query(await readFile(path.join(migrationsDir, migration, 'migration.sql'), 'utf8'))
+    }
+    const result = await client.query<{ table: string | null }>(
+      "SELECT to_regclass(current_schema() || '.\"Org\"') AS table",
+    )
+    if (!result.rows[0]?.table) throw new Error(`Integration schema ${schema} has no Org table after migrations.`)
+  } finally {
+    await client.end()
+  }
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
@@ -65,14 +84,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
     await adminClient.end()
   }
 
-  // Migrate ONCE, via the Prisma CLI. BOTH URLs are overridden: prisma.config.ts
-  // sets a directUrl, and for migration commands directUrl wins — leave it and
-  // the migration lands in the developer's real database instead.
-  const prismaBin = path.join(process.cwd(), 'node_modules', '.bin', 'prisma')
-  await execFileAsync(prismaBin, ['migrate', 'deploy'], {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_URL: schemaUrl, DIRECT_DATABASE_URL: schemaUrl },
-  })
+  await migrateSchema(schemaUrl, schema)
 
   project.provide('testDatabaseUrl', schemaUrl)
   project.provide('testSchema', schema)
