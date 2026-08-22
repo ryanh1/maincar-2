@@ -70,6 +70,7 @@ vi.mock('../../../dependencies/twilio.js', () => ({
 // file. The route hands this a stored object key; the test asserts on that.
 vi.mock('../../../dependencies/s3.js', () => ({
   getRecordingDownloadUrl: presignMock,
+  RECORDING_URL_TTL_SECONDS: 3600,
 }))
 
 import app from '../../app.js'
@@ -440,9 +441,9 @@ describe('GET /api/orgs/:orgId/calls/:id', () => {
 
     expect(res.status).toBe(200)
     // Read by id AND orgId together — the tenant key is half the lookup.
-    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'call-9', orgId: ORG_A },
-    })
+    }))
     // The whole record a detail view needs, and no tenant internals.
     expect(Object.keys(res.body.call).sort()).toEqual([
       'createdAt',
@@ -456,6 +457,7 @@ describe('GET /api/orgs/:orgId/calls/:id', () => {
       'recordingPlanned',
       'recordingReason',
       'recordingUrl',
+      'review',
       'startedAt',
       'status',
       'toE164',
@@ -467,6 +469,139 @@ describe('GET /api/orgs/:orgId/calls/:id', () => {
     expect(res.body.call.transcript).toBe('Hello, this is the transcript.')
     expect(res.body.call.transcriptStatus).toBe('done')
     expect(res.body.call.durationS).toBe(73)
+  })
+
+  it('returns one review read model with CRM context, a signed audio source, timed transcript data, and speakers', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(
+      callRow({
+        id: 'call-review',
+        recordingStatus: 'stored',
+        recordingUrl: 'recordings/call-review.mp3',
+        transcriptStatus: 'done',
+        transcript: 'Legacy compatibility text.',
+        person: { id: 'person-1', firstName: 'Jordan', lastName: 'Lee', preferredFirstName: null, title: 'VP Sales' },
+        company: { id: 'company-1', name: 'Acme' },
+        deal: { id: 'deal-1', name: 'Renewal', status: 'open' },
+        finalTranscript: {
+          id: 'transcript-1',
+          provider: 'deepgram',
+          plainText: 'Hello there.',
+          segments: [
+            {
+              id: 'segment-1',
+              position: 0,
+              speakerKey: 'channel-0',
+              startMs: 0,
+              endMs: 700,
+              text: 'Hello there.',
+              words: [{ word: 'Hello', startMs: 0, endMs: 350 }],
+            },
+          ],
+        },
+        speakers: [
+          {
+            id: 'speaker-1',
+            speakerKey: 'channel-0',
+            displayName: 'Jordan Lee',
+            source: 'manual',
+            confidence: 1,
+            confirmedAt: NOW,
+            manualOverride: true,
+            person: { id: 'person-1', firstName: 'Jordan', lastName: 'Lee', preferredFirstName: null },
+          },
+        ],
+      }),
+    )
+    presignMock.mockResolvedValue('https://minio.local/recordings/call-review.mp3?sig=xyz')
+
+    const res = await request(app).get(`${URL_A}/call-review`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.call.review).toMatchObject({
+      crm: {
+        person: { id: 'person-1', firstName: 'Jordan', lastName: 'Lee', title: 'VP Sales' },
+        company: { id: 'company-1', name: 'Acme' },
+        deal: { id: 'deal-1', name: 'Renewal', status: 'open' },
+      },
+      recording: {
+        state: 'ready',
+        source: { kind: 'audio', url: 'https://minio.local/recordings/call-review.mp3?sig=xyz' },
+      },
+      transcript: {
+        state: 'ready',
+        pass: {
+          id: 'transcript-1',
+          provider: 'deepgram',
+          plainText: 'Hello there.',
+          segments: [{ speakerKey: 'channel-0', startMs: 0, endMs: 700 }],
+        },
+      },
+      speakers: [
+        {
+          id: 'speaker-1',
+          speakerKey: 'channel-0',
+          displayName: 'Jordan Lee',
+          source: 'manual',
+          manualOverride: true,
+          person: { id: 'person-1', firstName: 'Jordan', lastName: 'Lee' },
+        },
+      ],
+    })
+    expect(new Date(res.body.call.review.recording.source.expiresAt).getTime()).toBeGreaterThan(Date.now())
+  })
+
+  it('returns independent partial-ready recording and transcript states', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(
+      callRow({
+        id: 'call-partial-ready',
+        recordingStatus: 'stored',
+        recordingUrl: 'recordings/call-partial-ready.mp3',
+        transcriptStatus: 'pending',
+        recordingEnabled: true,
+      }),
+    )
+
+    const res = await request(app).get(`${URL_A}/call-partial-ready`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.call.review.recording.state).toBe('ready')
+    expect(res.body.call.review.recording.source).toMatchObject({ kind: 'audio' })
+    expect(res.body.call.review.transcript).toEqual({ state: 'processing', pass: null })
+  })
+
+  it('does not expose a raw recording key when signing the source fails', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(
+      callRow({ id: 'call-missing-source', recordingStatus: 'stored', recordingUrl: 'recordings/missing.mp3' }),
+    )
+    presignMock.mockRejectedValue(new Error('source is unavailable'))
+
+    const res = await request(app).get(`${URL_A}/call-missing-source`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.call.recordingUrl).toBeNull()
+    expect(res.body.call.review.recording).toEqual({ state: 'missing', source: null })
+    expect(JSON.stringify(res.body)).not.toContain('recordings/missing.mp3')
+  })
+
+  it('reports consent-unavailable recording and transcript states without signing a source', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(
+      callRow({
+        id: 'call-without-consent',
+        recordingPlanned: false,
+        recordingReason: 'two-party-consent-state',
+        recordingConsent: 'declined',
+        recordingUrl: 'recordings/consent-withdrawn.mp3',
+        transcriptStatus: 'skipped-not-recorded',
+      }),
+    )
+
+    const res = await request(app).get(`${URL_A}/call-without-consent`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.call.review.recording).toEqual({ state: 'unavailable-by-consent', source: null })
+    expect(res.body.call.review.transcript).toEqual({ state: 'unavailable-by-consent', pass: null })
+    expect(presignMock).not.toHaveBeenCalled()
+    expect(JSON.stringify(res.body)).not.toContain('recordings/consent-withdrawn.mp3')
   })
 
   it('signs the stored recording key at request time and returns the presigned URL', async () => {
@@ -517,9 +652,9 @@ describe('GET /api/orgs/:orgId/calls/:id', () => {
 
     expect(res.status).toBe(404)
     expect(res.body.error).toBe('Call not found')
-    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'call-in-org-b', orgId: ORG_A },
-    })
+    }))
   })
 })
 

@@ -19,7 +19,7 @@ import { z } from 'zod'
 import prisma from '../db.js'
 import { logger } from '../../dependencies/logger.js'
 import { hangUpCall, mintVoiceAccessToken } from '../../dependencies/twilio.js'
-import { getRecordingDownloadUrl } from '../../dependencies/s3.js'
+import { getRecordingDownloadUrl, RECORDING_URL_TTL_SECONDS } from '../../dependencies/s3.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
@@ -108,6 +108,186 @@ function mapCallToDetailApi(call: Call, recordingUrl: string | null) {
     createdAt: call.createdAt.toISOString(),
   }
 }
+
+// The review workbench reads one coherent model from this route. The old detail
+// fields remain above while existing consumers migrate; this additive block is
+// deliberately a read model, not a second Call record or an alternate endpoint.
+type ReviewLifecycleState =
+  | 'unavailable'
+  | 'unavailable-by-consent'
+  | 'queued'
+  | 'processing'
+  | 'ready'
+  | 'failed'
+  | 'missing'
+
+type CallReviewRecord = Call & {
+  person: {
+    id: string
+    firstName: string | null
+    lastName: string | null
+    preferredFirstName: string | null
+    title: string | null
+  } | null
+  company: { id: string; name: string | null } | null
+  deal: { id: string; name: string; status: string } | null
+  finalTranscript: {
+    id: string
+    provider: string
+    plainText: string
+    segments: {
+      id: string
+      position: number
+      speakerKey: string
+      startMs: number
+      endMs: number
+      text: string
+      words: unknown
+    }[]
+  } | null
+  speakers: {
+    id: string
+    speakerKey: string
+    displayName: string | null
+    source: string
+    confidence: number | null
+    confirmedAt: Date | null
+    manualOverride: boolean
+    person: {
+      id: string
+      firstName: string | null
+      lastName: string | null
+      preferredFirstName: string | null
+    } | null
+  }[]
+}
+
+interface SignedAudioSource {
+  kind: 'audio'
+  url: string
+  expiresAt: string
+}
+
+function isUnavailableByConsent(call: Call): boolean {
+  return call.recordingConsent === 'declined' || call.recordingReason === 'two-party-consent-state'
+}
+
+function recordingReviewState(call: Call, source: SignedAudioSource | null): ReviewLifecycleState {
+  if (isUnavailableByConsent(call)) return 'unavailable-by-consent'
+  if (call.recordingPlanned === false) return 'unavailable'
+  if (call.recordingStatus === 'failed') return 'failed'
+  if (call.recordingStatus === 'stored') return source ? 'ready' : 'missing'
+  return call.recordingEnabled ? 'processing' : 'queued'
+}
+
+function transcriptReviewState(call: Call, hasTranscript: boolean): ReviewLifecycleState {
+  if (call.transcriptStatus === 'failed') return 'failed'
+  if (call.transcriptStatus === 'done') return hasTranscript ? 'ready' : 'missing'
+  if (call.transcriptStatus === 'skipped-not-recorded') {
+    return isUnavailableByConsent(call) ? 'unavailable-by-consent' : 'unavailable'
+  }
+  if (isUnavailableByConsent(call)) return 'unavailable-by-consent'
+  if (call.recordingPlanned === false) return 'unavailable'
+  return call.recordingEnabled || call.recordingStatus === 'stored' ? 'processing' : 'queued'
+}
+
+async function signReviewAudioSource(call: Call): Promise<SignedAudioSource | null> {
+  // A stale object key must never override the policy that made recording
+  // unavailable. Check that policy before touching the signing boundary.
+  if (!call.recordingUrl || isUnavailableByConsent(call) || call.recordingPlanned === false) return null
+
+  try {
+    const url = await getRecordingDownloadUrl(call.recordingUrl)
+    return {
+      kind: 'audio',
+      url,
+      expiresAt: new Date(Date.now() + RECORDING_URL_TTL_SECONDS * 1000).toISOString(),
+    }
+  } catch {
+    // Do not expose the stored object key, provider error, or an expired source.
+    // A later read re-attempts signing after the normal membership check.
+    logger.warn({ orgId: call.orgId, callId: call.id }, 'could not sign a call recording source')
+    return null
+  }
+}
+
+function mapCallReviewApi(call: CallReviewRecord, source: SignedAudioSource | null) {
+  const transcript = call.finalTranscript
+    ? {
+        id: call.finalTranscript.id,
+        provider: call.finalTranscript.provider,
+        plainText: call.finalTranscript.plainText,
+        segments: call.finalTranscript.segments.map((segment) => ({
+          id: segment.id,
+          position: segment.position,
+          speakerKey: segment.speakerKey,
+          startMs: segment.startMs,
+          endMs: segment.endMs,
+          text: segment.text,
+          words: segment.words,
+        })),
+      }
+    : null
+  const hasTranscript = Boolean(transcript ?? call.transcript)
+
+  return {
+    crm: {
+      person: call.person ?? null,
+      company: call.company ?? null,
+      deal: call.deal ?? null,
+    },
+    recording: { state: recordingReviewState(call, source), source },
+    transcript: { state: transcriptReviewState(call, hasTranscript), pass: transcript },
+    speakers: (call.speakers ?? []).map((speaker) => ({
+      id: speaker.id,
+      speakerKey: speaker.speakerKey,
+      displayName: speaker.displayName,
+      source: speaker.source,
+      confidence: speaker.confidence,
+      confirmedAt: speaker.confirmedAt ? speaker.confirmedAt.toISOString() : null,
+      manualOverride: speaker.manualOverride,
+      person: speaker.person,
+    })),
+  }
+}
+
+const callReviewInclude = {
+  person: { select: { id: true, firstName: true, lastName: true, preferredFirstName: true, title: true } },
+  company: { select: { id: true, name: true } },
+  deal: { select: { id: true, name: true, status: true } },
+  finalTranscript: {
+    select: {
+      id: true,
+      provider: true,
+      plainText: true,
+      segments: {
+        select: {
+          id: true,
+          position: true,
+          speakerKey: true,
+          startMs: true,
+          endMs: true,
+          text: true,
+          words: true,
+        },
+        orderBy: { position: 'asc' },
+      },
+    },
+  },
+  speakers: {
+    select: {
+      id: true,
+      speakerKey: true,
+      displayName: true,
+      source: true,
+      confidence: true,
+      confirmedAt: true,
+      manualOverride: true,
+      person: { select: { id: true, firstName: true, lastName: true, preferredFirstName: true } },
+    },
+    orderBy: { speakerKey: 'asc' },
+  },
+} as const
 
 // --- Create input ---
 
@@ -350,7 +530,7 @@ router.get(
     // a real id belonging to another org matches nothing and falls to the 404
     // below. Org isolation lives in the where clause, not in a check bolted on
     // after the read.
-    const call = await prisma.call.findFirst({ where: { id, orgId } })
+    const call = await prisma.call.findFirst({ where: { id, orgId }, include: callReviewInclude })
     if (!call) {
       return void res.status(404).json({ error: 'Call not found' })
     }
@@ -361,10 +541,12 @@ router.get(
     // always inside its one-hour life; a link signed once when the recording
     // uploaded and then stored would be expired by the time anyone clicked it. No
     // recording yet → null, not a signed link to nothing.
-    const recordingUrl = call.recordingUrl ? await getRecordingDownloadUrl(call.recordingUrl) : null
+    const source = await signReviewAudioSource(call)
 
     // --- Return response ---
-    res.json({ call: mapCallToDetailApi(call, recordingUrl) })
+    res.json({
+      call: { ...mapCallToDetailApi(call, source?.url ?? null), review: mapCallReviewApi(call, source) },
+    })
   }),
 )
 

@@ -39,6 +39,83 @@ export type RecordingDecisionReason =
 /** Allowed values mirror the comments on `Call.transcriptStatus` in schema.prisma. */
 export type TranscriptStatus = 'pending' | 'done' | 'failed' | 'skipped-not-recorded'
 
+/** The independent lifecycle for a review asset, separate from Call.status. */
+export type ReviewLifecycleState =
+  | 'unavailable'
+  | 'unavailable-by-consent'
+  | 'queued'
+  | 'processing'
+  | 'ready'
+  | 'failed'
+  | 'missing'
+
+/** Audio is the only source today; video is reserved for a later player. */
+export type CallMediaSource = {
+  kind: 'audio' | 'video'
+  url: string
+  /** Absolute expiry; clients refresh the call read before retrying an expired URL. */
+  expiresAt: string
+}
+
+export interface CallReviewPerson {
+  id: string
+  firstName: string | null
+  lastName: string | null
+  preferredFirstName: string | null
+  title?: string | null
+}
+
+export interface CallReviewCompany {
+  id: string
+  name: string | null
+}
+
+export interface CallReviewDeal {
+  id: string
+  name: string
+  status: string
+}
+
+export interface TimedTranscriptSegment {
+  id: string
+  position: number
+  speakerKey: string
+  startMs: number
+  endMs: number
+  text: string
+  words: unknown
+}
+
+export interface CallTranscriptPass {
+  id: string
+  provider: string
+  plainText: string
+  segments: TimedTranscriptSegment[]
+}
+
+export interface CallReviewSpeaker {
+  id: string
+  speakerKey: string
+  displayName: string | null
+  source: string
+  confidence: number | null
+  confirmedAt: string | null
+  manualOverride: boolean
+  person: CallReviewPerson | null
+}
+
+/** The typed, one-request read model for the call review workbench. */
+export interface CallReviewReadModel {
+  crm: {
+    person: CallReviewPerson | null
+    company: CallReviewCompany | null
+    deal: CallReviewDeal | null
+  }
+  recording: { state: ReviewLifecycleState; source: CallMediaSource | null }
+  transcript: { state: ReviewLifecycleState; pass: CallTranscriptPass | null }
+  speakers: CallReviewSpeaker[]
+}
+
 /** What POST echoes back: the queued row, before the call has run. */
 export interface Call {
   id: string
@@ -79,6 +156,8 @@ export interface CallDetail extends CallHistoryItem {
   recordingEnabled: boolean | null
   recordingUrl: string | null
   transcript: string | null
+  /** Present on authenticated GET detail responses; optional while DELETE remains legacy-compatible. */
+  review?: CallReviewReadModel
 }
 
 /** What POST accepts. Recording is decided by the organization policy. */
