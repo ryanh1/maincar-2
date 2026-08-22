@@ -20,6 +20,7 @@ import meetingsRouter from './routes/meetings.js'
 import membersRouter from './routes/members.js'
 import messagesRouter from './routes/messages.js'
 import notesRouter from './routes/notes.js'
+import notificationsRouter from './routes/notifications.js'
 import objectsRouter from './routes/objects.js'
 import peopleRouter from './routes/people.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
@@ -131,6 +132,10 @@ app.use('/api/orgs/:orgId/records', recordsRouter)
 // is the list of things that HAPPENED, and a task is a thing that has not.
 app.use('/api/orgs/:orgId/tasks', tasksRouter)
 app.use('/api/orgs/:orgId/notes', notesRouter)
+
+// In-app recipient notification lifecycle (MAI-236). The event object is shared,
+// while this endpoint exposes only the requesting recipient's private state.
+app.use('/api/orgs/:orgId/notifications', notificationsRouter)
 
 // Lists (MAI-142 T14) — a saved working set of records, and the process that runs
 // on it. This is why there is no Lead object (spec §5.2): a prospecting cycle is a
