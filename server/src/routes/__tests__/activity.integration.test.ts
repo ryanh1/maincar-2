@@ -22,6 +22,11 @@ import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest'
 
 import {
   activityFromCall,
+  activityFromEmail,
+  activityFromMeeting,
+  activityFromNote,
+  activityFromSms,
+  activityFromStageChange,
   recordActivityInTx,
   type NewActivityEntry,
 } from '../../crm/activityFeed.js'
@@ -165,15 +170,116 @@ describe('ActivityEntry feed (integration, real Postgres)', () => {
     expect(rows[0].summary).not.toContain('0s')
     // occurredAt is the call's own instant, not the moment the row was written.
     expect(rows[0].occurredAt.getTime()).toBe(call.createdAt.getTime())
-    // The existing call writer gets a safe v1 projection without changing the
-    // generic feed columns the current activity route renders.
+    // The call builder writes the durable projection alongside the backwards-
+    // compatible generic feed fields.
     expect(rows[0]).toMatchObject({
       timelineVersion: 1,
       timelineTitle: rows[0].summary,
-      timelineSubtype: null,
-      timelineIntensity: 2,
+      timelineSubtype: 'scheduled',
+      timelineIntensity: 3,
       timelineDisplay: {},
       timelineMarker: null,
+    })
+  })
+
+  it('persists all interaction projections independently for two organizations', async () => {
+    async function writeAll(orgId: string, userId: string, label: string) {
+      return prisma.$transaction(async (tx) => {
+        const call = await tx.call.create({
+          data: {
+            orgId,
+            userId,
+            fromE164: '+12025550000',
+            toE164: '+12025550123',
+            direction: 'outbound',
+            status: 'completed',
+            durationS: 90,
+          },
+        })
+        const email = await tx.email.create({
+          data: {
+            orgId,
+            direction: 'inbound',
+            subject: `${label} proposal`,
+            snippet: `${label} mail preview`,
+            internetMessageId: `<${label}@example.test>`,
+            receivedAt: new Date('2026-08-22T12:00:00.000Z'),
+          },
+        })
+        const sms = await tx.smsMessage.create({
+          data: {
+            orgId,
+            mailboxUserId: userId,
+            fromE164: '+12025550000',
+            toE164: '+12025550123',
+            direction: 'outbound',
+            body: `${label} text`,
+            status: 'delivered',
+          },
+        })
+        const meeting = await tx.meeting.create({
+          data: {
+            orgId,
+            title: `${label} discovery`,
+            startsAt: new Date('2026-08-22T13:00:00.000Z'),
+            endsAt: new Date('2026-08-22T14:00:00.000Z'),
+            status: 'confirmed',
+          },
+        })
+        const note = await tx.note.create({
+          data: {
+            orgId,
+            authorUserId: userId,
+            bodyJson: { type: 'doc' },
+            bodyText: `${label} note`,
+          },
+        })
+        const pipeline = await tx.pipeline.create({ data: { orgId, name: `${label} pipeline` } })
+        const discovery = await tx.pipelineStage.create({
+          data: { orgId, pipelineId: pipeline.id, name: 'Discovery', sortOrder: 1 },
+        })
+        const proposal = await tx.pipelineStage.create({
+          data: { orgId, pipelineId: pipeline.id, name: 'Proposal', sortOrder: 2 },
+        })
+        const deal = await tx.deal.create({
+          data: { orgId, name: `${label} deal`, pipelineId: pipeline.id, stageId: proposal.id },
+        })
+
+        await recordActivityInTx(tx, activityFromCall(call))
+        await recordActivityInTx(tx, activityFromEmail(email))
+        await recordActivityInTx(tx, activityFromSms(sms))
+        await recordActivityInTx(tx, activityFromMeeting(meeting))
+        await recordActivityInTx(tx, activityFromNote(note))
+        await recordActivityInTx(
+          tx,
+          activityFromStageChange(deal, {
+            sourceId: `${deal.id}:${discovery.id}:${proposal.id}:${deal.updatedAt.toISOString()}`,
+            before: discovery.name,
+            after: proposal.name,
+            createdByUserId: userId,
+          }),
+        )
+      })
+    }
+
+    const a = await seedOrgWithAdmin(prisma)
+    const b = await seedOrgWithAdmin(prisma)
+    await writeAll(a.orgId, a.adminUserId, 'Alpha')
+    await writeAll(b.orgId, b.adminUserId, 'Beta')
+
+    const rowsA = await prisma.activityEntry.findMany({ where: { orgId: a.orgId } })
+    const rowsB = await prisma.activityEntry.findMany({ where: { orgId: b.orgId } })
+    for (const rows of [rowsA, rowsB]) {
+      expect(rows).toHaveLength(6)
+      expect(rows.map((row) => row.sourceType).sort()).toEqual([
+        'call', 'email', 'meeting', 'note', 'sms', 'stage_change',
+      ])
+      expect(rows.every((row) => row.timelineVersion === 1 && row.timelineTitle.length > 0)).toBe(true)
+    }
+    expect(rowsA.every((row) => row.orgId === a.orgId)).toBe(true)
+    expect(rowsB.every((row) => row.orgId === b.orgId)).toBe(true)
+    expect(rowsA.find((row) => row.sourceType === 'stage_change')?.timelineMarker).toEqual({
+      type: 'stage_moved', before: 'Discovery', after: 'Proposal',
     })
   })
 
