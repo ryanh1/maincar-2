@@ -40,6 +40,8 @@ export interface GreenRoomProps {
    * drop, where the button reads "Drop voicemail".
    */
   confirmLabel?: string
+  /** Lets a calling flow own the meaningful focus return after this dialog closes. */
+  onCloseAutoFocus?: (event: Event) => void
 }
 
 /**
@@ -65,7 +67,7 @@ export interface GreenRoomProps {
  *   decision flips to `'retry'` underneath — a permission that settles halfway
  *   through must not yank the dialog out from under the rep.
  */
-export function GreenRoom({ open, onOpenChange, onConfirm, confirmLabel }: GreenRoomProps) {
+export function GreenRoom({ open, onOpenChange, onConfirm, confirmLabel, onCloseAutoFocus }: GreenRoomProps) {
   const { reason, shouldShow, permission, recordSession } = useGreenRoomDecision()
   const { error, isLoading } = useGetDevices()
 
@@ -170,6 +172,10 @@ export function GreenRoom({ open, onOpenChange, onConfirm, confirmLabel }: Green
           target.focus()
         }}
         onCloseAutoFocus={(event) => {
+          if (onCloseAutoFocus) {
+            onCloseAutoFocus(event)
+            return
+          }
           // Radix's own restore targets a trigger this dialog does not have, so
           // it is replaced rather than composed with. An opener that left the
           // page while the dialog was up falls through to Radix's default.

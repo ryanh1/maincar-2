@@ -81,6 +81,7 @@ function readStoredActiveCall(orgId: string): StoredActiveCall | null {
 export function DialerProvider({ children }: { children: ReactNode }) {
   const { org } = useAuth()
   const [view, setView] = useState<DialerView>('collapsed')
+  const [prefilledNumber, setPrefilledNumber] = useState<string | undefined>()
   const [phase, setPhase] = useState<CallPhase>('idle')
   // A call is up. Kept as its own flag rather than derived from `phase` because
   // it is what the timer effect keys off, and the two hooks set it alongside the
@@ -114,7 +115,10 @@ export function DialerProvider({ children }: { children: ReactNode }) {
   const serverStartedAtRef = useRef<string | null>(null)
   const restoredOrgRef = useRef<string | null>(null)
 
-  const expandDialer = useCallback(() => setView('expanded'), [])
+  const expandDialer = useCallback((number?: string) => {
+    setPrefilledNumber(number)
+    setView('expanded')
+  }, [])
   const collapseDialer = useCallback(() => setView('collapsed'), [])
   const toggleView = useCallback(
     () => setView((v) => (v === 'expanded' ? 'collapsed' : 'expanded')),
@@ -391,6 +395,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       elapsedSeconds,
       activeCall,
       canControlAudio,
+      prefilledNumber,
       expandDialer,
       collapseDialer,
       toggleView,
@@ -412,6 +417,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       elapsedSeconds,
       activeCall,
       canControlAudio,
+      prefilledNumber,
       expandDialer,
       collapseDialer,
       toggleView,

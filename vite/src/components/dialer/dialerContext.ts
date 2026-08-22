@@ -58,9 +58,11 @@ export interface DialerContextValue {
   activeCall: ActiveCall | null
   /** Whether this browser has a Voice SDK Call it can mute or send DTMF through. */
   canControlAudio: boolean
+  /** A number supplied by the action that opened the dialer, when there is one. */
+  prefilledNumber?: string
 
-  /** Open the dialer to full size. */
-  expandDialer: () => void
+  /** Open the dialer to full size, optionally ready to call a known number. */
+  expandDialer: (prefilledNumber?: string) => void
   /** Shrink the dialer back to its pill. */
   collapseDialer: () => void
   /** Flip between collapsed and expanded — the title-bar click and the ⌘⇧D hotkey. */

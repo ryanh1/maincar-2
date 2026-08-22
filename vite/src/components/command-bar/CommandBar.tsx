@@ -188,7 +188,7 @@ export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarPro
       <IconButton tooltip="Write an email" onClick={() => void composeEmail()}>
         <Mail size={16} aria-hidden />
       </IconButton>
-      <IconButton tooltip="Open the dialer" onClick={expandDialer}>
+      <IconButton tooltip="Open the dialer" onClick={() => expandDialer()}>
         <Phone size={16} aria-hidden />
       </IconButton>
       {mobileDraft ? <ComposerCard draft={mobileDraft} fullScreen onDismiss={() => setMobileDraftId(null)} /> : null}

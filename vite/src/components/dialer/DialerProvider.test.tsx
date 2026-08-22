@@ -88,6 +88,15 @@ describe('DialerProvider', () => {
     expect(result.current.view).toBe('collapsed')
   })
 
+  it('retains a supplied number while it opens the dialer', () => {
+    const { result } = renderDialer()
+
+    act(() => result.current.expandDialer('+12025550123'))
+
+    expect(result.current.view).toBe('expanded')
+    expect(result.current.prefilledNumber).toBe('+12025550123')
+  })
+
   it('toggleView flips between collapsed and expanded', () => {
     const { result } = renderDialer()
 
