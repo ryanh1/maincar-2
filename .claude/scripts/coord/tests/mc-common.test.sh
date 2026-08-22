@@ -120,6 +120,47 @@ if [ ! -e "$SANDBOX/primary/delivered-change" ]; then
   exit 1
 fi
 
+# A dependency manifest or lockfile changes the runnable environment, not just
+# tracked source. The automatic refresh must leave the primary on its known-good
+# revision until its dependencies have been synchronized deliberately.
+primary_before_dependency_delivery="$(git -C "$SANDBOX/primary" rev-parse HEAD)"
+git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-dependency-refresh" --quiet
+git -C "$SANDBOX/issue-dependency-refresh" config user.name 'Coordination test'
+git -C "$SANDBOX/issue-dependency-refresh" config user.email 'coordination-test@example.test'
+git -C "$SANDBOX/issue-dependency-refresh" checkout -b issue-dependency-refresh --quiet
+mkdir -p "$SANDBOX/issue-dependency-refresh/vite"
+printf '{"lockfileVersion": 3}\n' > "$SANDBOX/issue-dependency-refresh/vite/package-lock.json"
+git -C "$SANDBOX/issue-dependency-refresh" add vite/package-lock.json
+git -C "$SANDBOX/issue-dependency-refresh" commit -m 'Change frontend dependency lockfile' --quiet
+(
+  cd "$SANDBOX/issue-dependency-refresh"
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver dependency lockfile change'
+)
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$primary_before_dependency_delivery" ]; then
+  echo 'primary checkout refreshed source across an unsynchronized dependency lockfile change' >&2
+  exit 1
+fi
+
+# An explicit refresh opts into the coupled source-and-dependency update. Stub
+# npm so this script test proves the selected workspace receives `npm ci`
+# without downloading packages.
+mkdir -p "$SANDBOX/fake-bin"
+cat > "$SANDBOX/fake-bin/npm" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MC_NPM_LOG"
+EOF
+chmod +x "$SANDBOX/fake-bin/npm"
+MC_NPM_LOG="$SANDBOX/npm.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
+  echo 'explicit primary refresh did not fast-forward the delivered dependency change' >&2
+  exit 1
+fi
+primary_real="$(cd "$SANDBOX/primary" && pwd -P)"
+if ! grep -Fx -- "--prefix $primary_real/vite ci" "$SANDBOX/npm.log" >/dev/null; then
+  echo 'explicit primary refresh did not reinstall the changed frontend dependency root' >&2
+  exit 1
+fi
+
 if env "${env_for_test[@]}" bash -c 'cd "$2"; source "$1/.claude/scripts/coord/mc-common.sh"; mc_assert_ticket_checkout' _ "$ROOT" "$SANDBOX/primary"; then
   echo 'the primary checkout was allowed to run a ticket command' >&2
   exit 1
