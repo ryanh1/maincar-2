@@ -13,10 +13,14 @@ const { useGetDevicesMock, useGreenRoomDecisionMock } = vi.hoisted(() => ({
   useGetDevicesMock: vi.fn(),
   useGreenRoomDecisionMock: vi.fn(),
 }))
-vi.mock('@/hooks/devices', () => ({
-  useGetDevices: useGetDevicesMock,
-  useGreenRoomDecision: useGreenRoomDecisionMock,
-}))
+vi.mock('@/hooks/devices', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/devices')>()
+  return {
+    ...actual,
+    useGetDevices: useGetDevicesMock,
+    useGreenRoomDecision: useGreenRoomDecisionMock,
+  }
+})
 
 import { GreenRoom } from '@/components/GreenRoom'
 import { useGreenRoomDecision } from '@/hooks/devices'
@@ -80,6 +84,16 @@ describe('GreenRoom opening', () => {
     expect(screen.getByRole('heading', { name: 'Check your audio' })).toBeInTheDocument()
     expect(screen.getByLabelText('Microphone')).toBeInTheDocument()
     expect(screen.getByLabelText('Speaker')).toBeInTheDocument()
+  })
+
+  // MAI-211: DialerDock sits at z-[100] to clear the composer dock, and the
+  // shared Dialog primitive has to stack above every fixed dock in the app, not
+  // just this one, or the greenroom opens underneath a rep's own dialer.
+  it('stacks above the dialer dock (MAI-211)', () => {
+    setup()
+    renderGreenRoom()
+
+    expect(screen.getByRole('dialog').className).toContain('z-[150]')
   })
 
   it('renders nothing when the intent is not set', () => {
