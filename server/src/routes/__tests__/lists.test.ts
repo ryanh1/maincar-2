@@ -20,6 +20,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     objectDef: { findFirst: vi.fn() },
     attributeDef: { findMany: vi.fn() },
     record: { findFirst: vi.fn() },
+    $queryRaw: vi.fn(),
     list: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
@@ -93,7 +94,7 @@ function authAs(membership: ReturnType<typeof membershipRow> | null = membership
 beforeEach(() => {
   vi.clearAllMocks()
   authAs()
-  prismaMock.objectDef.findFirst.mockResolvedValue({ id: 'obj-person', slug: 'person' })
+  prismaMock.objectDef.findFirst.mockResolvedValue({ id: 'obj-person', slug: 'person', storage: 'table' })
   prismaMock.attributeDef.findMany.mockResolvedValue([])
   prismaMock.person.findFirst.mockResolvedValue({ id: 'person-1' })
   prismaMock.company.findFirst.mockResolvedValue({ id: 'co-1' })
@@ -116,6 +117,9 @@ beforeEach(() => {
   )
   prismaMock.listEntry.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.listEntry.deleteMany.mockResolvedValue({ count: 1 })
+  prismaMock.$queryRaw
+    .mockResolvedValueOnce([{ id: 'person-1', createdAt: NOW, updatedAt: NOW, firstName: 'Ada', customJson: {} }])
+    .mockResolvedValueOnce([{ count: '1' }])
 })
 
 // ============================================================
@@ -433,6 +437,29 @@ describe('GET /api/orgs/:orgId/lists/:id/entries', () => {
       position: { sort: 'asc', nulls: 'last' },
     })
     expect(res.body.entries[0].values).toEqual({})
+  })
+
+  it('returns each entry’s target record and list-only values without writing the record', async () => {
+    prismaMock.attributeDef.findMany.mockResolvedValue([
+      { id: 'first-name', slug: 'firstName', name: 'First name', type: 'text', storage: 'column', isMulti: false },
+      { id: 'stage', slug: 'stage', name: 'Stage', type: 'text', storage: 'list', isMulti: false },
+    ])
+    prismaMock.listEntry.findMany.mockResolvedValue([
+      entryRow({ valuesJson: { stage: 'contacted' }, position: 4 }),
+    ])
+
+    const res = await request(app).get(`${URL_A}/list-1/entries`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.entries).toEqual([
+      expect.objectContaining({
+        targetId: 'person-1',
+        position: 4,
+        values: { stage: 'contacted' },
+        target: expect.objectContaining({ id: 'person-1', firstName: 'Ada' }),
+      }),
+    ])
+    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(2)
   })
 
   it('404s when the list is trashed or in another org', async () => {

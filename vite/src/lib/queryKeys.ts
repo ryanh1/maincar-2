@@ -115,6 +115,8 @@ export const queryKeys = {
     all: (orgId: string) => ['crm', orgId] as const,
     objects: (orgId: string) => ['crm', orgId, 'objects'] as const,
     lists: (orgId: string) => ['crm', orgId, 'lists'] as const,
+    list: (orgId: string, listId: string) => ['crm', orgId, 'lists', listId] as const,
+    listEntries: (orgId: string, listId: string) => ['crm', orgId, 'lists', listId, 'entries'] as const,
   },
   objects: {
     all: ['objects'] as const,

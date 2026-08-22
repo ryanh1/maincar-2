@@ -1,4 +1,6 @@
 export { useGetLists } from './useGetLists'
+export { useGetList } from './useGetList'
+export { useGetListEntries } from './useGetListEntries'
 // The barrel is the only thing components import from this domain
 // (frontend.md → Frontend data fetching).
 export { useGetObjects } from './useGetObjects'
