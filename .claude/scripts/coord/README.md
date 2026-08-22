@@ -56,14 +56,22 @@ Or run specific tests:
 # Merges and pushes
 ```
 
-### 5. Check health
+### 5. Prove closeout, then update Linear
+
+```bash
+# Run this from a surviving checkout after the issue clone directory is gone.
+./.claude/scripts/coord/mc-closeout MAI-123 --worktree ~/code/maincar-2-worktrees/mai-123-feature
+# Only after it prints LINEAR_DONE_ALLOWED: move MAI-123 to Done in Linear.
+```
+
+### 6. Check health
 
 ```bash
 ./.claude/scripts/coord/mc-doctor
 # Shows: load, merge lock, stuck worktrees, databases, etc.
 ```
 
-## The 7 scripts
+## The 8 scripts
 
 | Script | What it does | When to use |
 | --- | --- | --- |
@@ -72,6 +80,7 @@ Or run specific tests:
 | `mc-slot` | Assigns stable ports for your worktree | `eval "$(mc-slot --env)"` at the start |
 | `mc-gate` | Runs tests with a queue (max 4 at once) | Before every merge |
 | `mc-merge` | Merges your branch safely, with a lock | When work is done and tests pass |
+| `mc-closeout` | Proves GitHub delivery and clone cleanup | Immediately before Linear Done |
 | `mc-migrate` | Creates non-colliding database migrations | When you need a new migration |
 | `mc-doctor` | Shows system health | When something feels stuck |
 | `mc-scratch` | Per-worktree temp folder | Rarely used directly |

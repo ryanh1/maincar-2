@@ -97,4 +97,38 @@ if (
   exit 1
 fi
 
+# Delivery receipts are created only after the canonical upstream accepted the
+# merge. mc-closeout must then refuse Linear Done until the exact clone is gone.
+git clone "$SANDBOX/state/local-main.git" "$SANDBOX/mai-999-closeout" --quiet
+git -C "$SANDBOX/mai-999-closeout" config user.name 'Coordination test'
+git -C "$SANDBOX/mai-999-closeout" config user.email 'coordination-test@example.test'
+git -C "$SANDBOX/mai-999-closeout" checkout -b mai-999-closeout --quiet
+git -C "$SANDBOX/mai-999-closeout" commit --allow-empty -m 'MAI-999: Closeout test' --quiet
+(
+  cd "$SANDBOX/mai-999-closeout"
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'MAI-999: Merge closeout test'
+)
+test -f "$SANDBOX/state/state/deliveries/MAI-999.tsv"
+if env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-closeout" MAI-999 --worktree "$SANDBOX/mai-999-closeout"; then
+  echo 'mc-closeout allowed Linear Done before the issue clone was removed' >&2
+  exit 1
+fi
+rm -rf "$SANDBOX/mai-999-closeout"
+env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-closeout" MAI-999 --worktree "$SANDBOX/mai-999-closeout" | grep -q '^LINEAR_DONE_ALLOWED MAI-999 '
+test -f "$SANDBOX/state/state/linear-ready/MAI-999.tsv"
+
+# The old merge path discarded a failed Prisma generation with `|| true`.
+# This test proves the shared helper exists and propagates that failure instead.
+env "${env_for_test[@]}" bash -c 'source "$1/.claude/scripts/coord/mc-common.sh"; declare -F mc_ensure_prisma_client >/dev/null' _ "$ROOT" || {
+  echo 'Prisma client guard is missing' >&2
+  exit 1
+}
+mkdir -p "$SANDBOX/prisma-client/server/prisma" "$SANDBOX/no-npm"
+touch "$SANDBOX/prisma-client/server/prisma/schema.prisma"
+ln -s "$(command -v false)" "$SANDBOX/no-npm/npm"
+if env "${env_for_test[@]}" bash -c 'cd "$2"; PATH="$3:$PATH"; source "$1/.claude/scripts/coord/mc-common.sh"; mc_ensure_prisma_client >/dev/null 2>&1' _ "$ROOT" "$SANDBOX/prisma-client" "$SANDBOX/no-npm"; then
+  echo 'Prisma client guard accepted a failed generation' >&2
+  exit 1
+fi
+
 echo 'mc-common local mirror: PASS'

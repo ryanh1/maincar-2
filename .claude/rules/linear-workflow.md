@@ -7,9 +7,12 @@ When working on a Linear issue:
 - **When starting work:** Move issue to **"In Progress"**
 - **When implementation is ready for review:** Move the issue to **"In Review"** (tests pass, code is committed, and it awaits review or merge).
 - **When the session merges and pushes the issue itself:** after the required merge,
-  GitHub push, feature-branch deletion, and worktree cleanup, move the issue to
-  **"Done"** (or the team's final equivalent). Do not leave a merged issue in
-  "In Progress" or "In Review".
+  GitHub push, feature-branch deletion, and worktree cleanup, run
+  `./.claude/scripts/coord/mc-closeout MAI-123 --worktree /exact/removed/issue-clone`
+  from a surviving checkout. Move the issue to **"Done"** only when it prints
+  `LINEAR_DONE_ALLOWED`. Do not call the Linear status tool directly before this
+  check. It fails unless GitHub accepted the delivery and the exact issue clone
+  no longer exists.
 - **Never leave an issue in "In Progress" after the work is done.** Update its
   status as part of closeout, after the repository cleanup rather than before it.
 

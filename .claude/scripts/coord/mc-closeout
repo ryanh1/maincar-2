@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Proves an issue may move to Linear Done. Run this from a surviving checkout
+# after the issue clone has been removed:
+#   mc-closeout MAI-123 --worktree ~/code/maincar-2-worktrees/mai-123-title
+set -euo pipefail
+source "$(dirname "$0")/mc-common.sh"
+
+issue="${1:-}"
+shift || true
+if ! [[ "$issue" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+  echo "usage: mc-closeout MAI-123 --worktree /exact/removed/issue-clone" >&2
+  exit 2
+fi
+issue="$(printf '%s' "$issue" | tr '[:lower:]' '[:upper:]')"
+
+worktree=""
+if [ "${1:-}" = "--worktree" ] && [ -n "${2:-}" ] && [ "$#" -eq 2 ]; then
+  worktree="$2"
+else
+  echo "usage: mc-closeout MAI-123 --worktree /exact/removed/issue-clone" >&2
+  exit 2
+fi
+
+receipt="$STATE/deliveries/$issue.tsv"
+if [ ! -f "$receipt" ]; then
+  echo "mc-closeout: no post-push delivery receipt for $issue. Use mc-merge first." >&2
+  exit 1
+fi
+if [ -e "$worktree" ]; then
+  echo "mc-closeout: $worktree still exists. Remove the clean, merged issue clone first." >&2
+  exit 1
+fi
+
+IFS=$'\t' read -r receipt_issue receipt_branch receipt_main_sha receipt_upstream receipt_at < "$receipt"
+[ "$receipt_issue" = "$issue" ] || { echo "mc-closeout: corrupt receipt for $issue" >&2; exit 1; }
+
+# Fetching here is the final GitHub check. The bare mirror's main is populated
+# only from GitHub's main, so it must still contain the recorded delivery.
+mc_sync_local_main
+if ! git -C "$LOCAL_MAIN_REPO" merge-base --is-ancestor "$receipt_main_sha" main; then
+  echo "mc-closeout: GitHub main no longer contains the recorded $issue delivery." >&2
+  exit 1
+fi
+
+mkdir -p "$STATE/linear-ready"
+mv "$receipt" "$STATE/linear-ready/$issue.tsv"
+echo "LINEAR_DONE_ALLOWED $issue $receipt_main_sha"

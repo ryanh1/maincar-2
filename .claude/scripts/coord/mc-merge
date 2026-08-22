@@ -89,12 +89,11 @@ if [ "$GATE" = 1 ]; then
     exit 1
   fi
 
-  # A rebase that pulls in someone else's schema change leaves a stale Prisma client,
-  # and typecheck then reports errors in files nobody touched.
-  if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q 'schema.prisma' || \
-     [ -f server/prisma/schema.prisma ]; then
-    echo "[mc-merge --gate] regenerating the prisma client after the rebase"
-    npm --prefix server run db:generate >/dev/null 2>&1 || true
+  # A rebase can pull a schema change into a checkout with an ignored stale
+  # client. Generate it here and fail loudly if that cannot happen.
+  if ! mc_ensure_prisma_client; then
+    echo "[mc-merge --gate] Could not generate the Prisma client. Not merging." >&2
+    exit 3
   fi
 
   echo "[mc-merge --gate] running the gates on the rebased tree"
@@ -115,6 +114,7 @@ if [ "$GATE" = 1 ]; then
   git -C "$TMP" push "$UPSTREAM" HEAD:main
   mc_sync_local_main
   git fetch --quiet origin
+  mc_record_delivery "$BR" "$(git -C "$LOCAL_MAIN_REPO" rev-parse main)" "$UPSTREAM"
   echo "[mc-merge --gate] merged and pushed. $BR is on main."
   mc_log "merge --gate done $BR"
   exit 0
@@ -168,5 +168,6 @@ git -C "$TMP" merge --no-ff "$BR" -F "$TMP/../mc-merge-msg.txt"
 git -C "$TMP" push "$UPSTREAM" HEAD:main
 mc_sync_local_main
 git fetch --quiet origin
+mc_record_delivery "$BR" "$(git -C "$LOCAL_MAIN_REPO" rev-parse main)" "$UPSTREAM"
 echo "[mc-merge] merged and pushed. $BR is on main."
 mc_log "merge done $BR"
