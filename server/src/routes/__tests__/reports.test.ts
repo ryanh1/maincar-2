@@ -42,6 +42,14 @@ const VIEWER_DAY_CONFIG = {
   timeBucket: { field: 'createdAt', grain: 'day' },
 }
 
+const ACTIVITY_GRID_CONFIG = {
+  baseObject: 'activity',
+  rows: [{ field: 'sourceType' }],
+  values: [{ field: 'id', aggregation: 'count' }],
+  timeZone: { mode: 'viewer' },
+  timeBucket: { field: 'occurredAt', grain: 'week' },
+}
+
 function authAsMember(): void {
   verifyTokenMock.mockResolvedValue({ uid: 'firebase-a' })
   prismaMock.user.findUnique.mockResolvedValue({
@@ -82,6 +90,31 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
       },
     })
     expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns activity event counts grouped into viewer-local weeks', async () => {
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      { weekStart: '2026-08-17', sourceType: 'call', count: '2' },
+      { weekStart: '2026-08-17', sourceType: 'email', count: '1' },
+      { weekStart: '2026-08-24', sourceType: 'meeting', count: '3' },
+    ])
+
+    const response = await request(app)
+      .post(URL)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ config: ACTIVITY_GRID_CONFIG })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      report: {
+        rows: [
+          { weekStart: '2026-08-17', sourceType: 'call', count: '2' },
+          { weekStart: '2026-08-17', sourceType: 'email', count: '1' },
+          { weekStart: '2026-08-24', sourceType: 'meeting', count: '3' },
+        ],
+      },
+    })
+    expect(prismaMock.$queryRaw.mock.calls[0][0].values).toEqual(['America/New_York', ORG_ID])
   })
 
   it('uses an active subject member zone instead of the viewer zone', async () => {

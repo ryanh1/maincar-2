@@ -42,6 +42,14 @@ const VIEWER_DAY_CONFIG = {
   timeBucket: { field: 'createdAt', grain: 'day' },
 }
 
+const ACTIVITY_GRID_CONFIG = {
+  baseObject: 'activity',
+  rows: [{ field: 'sourceType' }],
+  values: [{ field: 'id', aggregation: 'count' }],
+  timeZone: { mode: 'viewer' },
+  timeBucket: { field: 'occurredAt', grain: 'week' },
+}
+
 function authorization(firebaseUid: string): string {
   return `Bearer ${firebaseUid}`
 }
@@ -96,6 +104,56 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
     // of the implementation's grouped output.
     expect(response.body.report.rows.reduce((sum: bigint, row: { amountMinor: string }) => sum + BigInt(row.amountMinor), 0n))
       .toBe(12500n)
+  })
+
+  it('counts calls, emails, and meetings in their viewer-local week and excludes other activity', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    await prisma.user.update({ where: { id: orgA.adminUserId }, data: { timeZone: 'America/New_York' } })
+    const orgB = await seedOrgWithAdmin(prisma)
+
+    await prisma.activityEntry.createMany({
+      data: [
+        {
+          orgId: orgA.orgId, sourceType: 'call', sourceId: 'call-week-one', summary: 'Called', timelineTitle: 'Called',
+          occurredAt: new Date('2026-08-17T12:00:00.000Z'),
+        },
+        {
+          orgId: orgA.orgId, sourceType: 'email', sourceId: 'email-week-one', summary: 'Emailed', timelineTitle: 'Emailed',
+          occurredAt: new Date('2026-08-23T23:00:00.000Z'),
+        },
+        {
+          // This Monday UTC instant is still Sunday evening in New York, so it
+          // belongs in the first local-week bucket rather than the following one.
+          orgId: orgA.orgId, sourceType: 'meeting', sourceId: 'meeting-week-one', summary: 'Met', timelineTitle: 'Met',
+          occurredAt: new Date('2026-08-24T00:30:00.000Z'),
+        },
+        {
+          orgId: orgA.orgId, sourceType: 'call', sourceId: 'call-week-two', summary: 'Called', timelineTitle: 'Called',
+          occurredAt: new Date('2026-08-24T12:00:00.000Z'),
+        },
+        {
+          orgId: orgA.orgId, sourceType: 'note', sourceId: 'note-is-not-an-event-metric', summary: 'Not counted', timelineTitle: 'Not counted',
+          occurredAt: new Date('2026-08-20T12:00:00.000Z'),
+        },
+        {
+          orgId: orgB.orgId, sourceType: 'call', sourceId: 'foreign-call', summary: 'Foreign', timelineTitle: 'Foreign',
+          occurredAt: new Date('2026-08-17T12:00:00.000Z'),
+        },
+      ],
+    })
+
+    const response = await request(app)
+      .post(`/api/orgs/${orgA.orgId}/reports/run`)
+      .set('Authorization', authorization(orgA.adminFirebaseUid))
+      .send({ config: ACTIVITY_GRID_CONFIG })
+
+    expect(response.status).toBe(200)
+    expect(response.body.report.rows).toEqual([
+      { weekStart: '2026-08-17', sourceType: 'call', count: '1' },
+      { weekStart: '2026-08-17', sourceType: 'email', count: '1' },
+      { weekStart: '2026-08-17', sourceType: 'meeting', count: '1' },
+      { weekStart: '2026-08-24', sourceType: 'call', count: '1' },
+    ])
   })
 
   it('re-buckets the same report for New York and London viewers', async () => {
