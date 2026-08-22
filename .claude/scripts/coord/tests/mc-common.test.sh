@@ -45,6 +45,7 @@ if git -C "$SANDBOX/primary" commit -m 'Must not commit in primary' --quiet; the
   echo 'the primary checkout accepted a commit' >&2
   exit 1
 fi
+git -C "$SANDBOX/primary" reset --hard HEAD --quiet
 
 # A ticket cloned from the old primary checkout must migrate to the bare local
 # mirror before it fetches or merges.
@@ -68,8 +69,12 @@ if ! git -C "$SANDBOX/upstream.git" merge-base --is-ancestor "$(git -C "$SANDBOX
   echo 'merge did not reach the canonical upstream' >&2
   exit 1
 fi
-if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" = "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
-  echo 'dirty primary checkout was unexpectedly refreshed' >&2
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
+  echo 'primary checkout did not refresh across unrelated untracked files' >&2
+  exit 1
+fi
+if [ ! -e "$SANDBOX/primary/unrelated-wip" ]; then
+  echo 'primary refresh discarded an unrelated untracked file' >&2
   exit 1
 fi
 
@@ -90,10 +95,8 @@ if [ "$(git -C "$SANDBOX/issue-worktree" rev-parse origin/main)" != "$(git -C "$
   exit 1
 fi
 
-# Once unrelated local work is gone, a primary checkout may fast-forward. A
-# locally deleted tracked file is safe when the delivered main deletes it too.
-git -C "$SANDBOX/primary" reset --hard HEAD --quiet
-rm -f "$SANDBOX/primary/unrelated-wip"
+# A locally deleted tracked file is safe when the delivered main deletes it.
+# Unrelated untracked files remain in place across the refresh.
 rm -f "$SANDBOX/primary/tracked-placeholder"
 git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-primary-refresh" --quiet
 git -C "$SANDBOX/issue-primary-refresh" config user.name 'Coordination test'
@@ -117,6 +120,48 @@ if [ -e "$SANDBOX/primary/tracked-placeholder" ]; then
 fi
 if [ ! -e "$SANDBOX/primary/delivered-change" ]; then
   echo 'primary checkout did not receive a delivered file' >&2
+  exit 1
+fi
+
+# An untracked path that would be created by delivered main is not safe to
+# retain. It must block the refresh, leave an actionable receipt, and make the
+# coordination health check fail loudly rather than silently accumulating drift.
+printf '%s\n' 'local draft' > "$SANDBOX/primary/untracked-collision"
+git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-untracked-collision" --quiet
+git -C "$SANDBOX/issue-untracked-collision" config user.name 'Coordination test'
+git -C "$SANDBOX/issue-untracked-collision" config user.email 'coordination-test@example.test'
+git -C "$SANDBOX/issue-untracked-collision" checkout -b issue-untracked-collision --quiet
+printf '%s\n' 'delivered source' > "$SANDBOX/issue-untracked-collision/untracked-collision"
+git -C "$SANDBOX/issue-untracked-collision" add untracked-collision
+git -C "$SANDBOX/issue-untracked-collision" commit -m 'Deliver colliding path' --quiet
+primary_before_collision_delivery="$(git -C "$SANDBOX/primary" rev-parse HEAD)"
+(
+  cd "$SANDBOX/issue-untracked-collision"
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver colliding untracked path'
+)
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$primary_before_collision_delivery" ]; then
+  echo 'primary checkout refreshed across a colliding untracked path' >&2
+  exit 1
+fi
+if [ ! -f "$SANDBOX/state/state/primary-refresh-pending.tsv" ]; then
+  echo 'blocked primary refresh did not leave a durable pending receipt' >&2
+  exit 1
+fi
+if (
+  cd "$SANDBOX/primary"
+  MC_TICKET_ROOT="$SANDBOX/empty-ticket-root" env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-doctor" > "$SANDBOX/doctor.out" 2>&1
+); then
+  echo 'mc-doctor accepted a stale primary checkout' >&2
+  exit 1
+fi
+if ! grep -F 'REFRESH REQUIRED' "$SANDBOX/doctor.out" >/dev/null; then
+  echo 'mc-doctor did not explain the blocked primary refresh' >&2
+  exit 1
+fi
+rm -f "$SANDBOX/primary/untracked-collision"
+env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
+if [ -f "$SANDBOX/state/state/primary-refresh-pending.tsv" ]; then
+  echo 'successful primary refresh did not clear the pending receipt' >&2
   exit 1
 fi
 
