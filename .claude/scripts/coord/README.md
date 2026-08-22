@@ -13,8 +13,10 @@ again after pushing, so tickets retain a local fetch source without inheriting
 the primary checkout's state. The mirror rejects every push; only `mc-merge`
 may deliver to GitHub under the merge lock. After a successful delivery,
 `mc-merge` fast-forwards the runnable primary checkout from the refreshed mirror
-when it is already on `main` and has no local changes outside the delivered tree.
-If that is not safe, it leaves the checkout untouched and prints the exact reason.
+when it is already on `main` and local changes cannot be overwritten. Unrelated
+untracked files stay in place; only a path collision blocks the refresh. If a
+refresh is unsafe or requires dependency/Prisma provisioning, it leaves a durable
+`REFRESH REQUIRED` receipt and `mc-doctor` exits nonzero until reconciliation.
 
 Running `mc-local-main sync` also installs hard-block hooks in the primary
 checkout, so a commit or push there fails immediately.

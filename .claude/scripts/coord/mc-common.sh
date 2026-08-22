@@ -100,13 +100,57 @@ mc_prisma_refresh_required() {
   ! git -C "$primary" diff --quiet HEAD "$target" -- server/prisma/schema.prisma server/prisma/migrations
 }
 
+mc_primary_refresh_pending_file() { printf '%s\n' "$STATE/primary-refresh-pending.tsv"; }
+
+mc_record_primary_refresh_pending() {
+  local reason="$1" primary="${2:-}" target="${3:-}" file tmp primary_sha="-" target_sha="-"
+  file="$(mc_primary_refresh_pending_file)"
+  [ -n "$primary" ] && primary_sha="$(git -C "$primary" rev-parse --short HEAD 2>/dev/null || echo '-')"
+  [ -n "$target" ] && target_sha="$(git -C "$primary" rev-parse --short "$target" 2>/dev/null || echo '-')"
+  tmp="$(mktemp "$STATE/.primary-refresh-pending.XXXXXX")"
+  printf '%s\t%s\t%s\t%s\n' "$(mc_now)" "$primary_sha" "$target_sha" "$reason" > "$tmp"
+  mv "$tmp" "$file"
+  echo "[mc-primary] REFRESH REQUIRED: $reason" >&2
+}
+
+mc_clear_primary_refresh_pending() {
+  rm -f "$(mc_primary_refresh_pending_file)"
+}
+
+# Print untracked files that an incoming tree would overwrite or turn into a
+# directory. Unrelated untracked files are safe: a fast-forward leaves them
+# intact, so blocking on all of them makes the reference checkout drift forever.
+mc_untracked_paths_conflicting_with_target() {
+  local primary="$1" target="$2" path ancestor kind found=1
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if git -C "$primary" cat-file -e "$target:$path" 2>/dev/null; then
+      printf '%s\n' "$path"
+      found=0
+      continue
+    fi
+    ancestor="${path%/*}"
+    while [ "$ancestor" != "$path" ]; do
+      kind="$(git -C "$primary" cat-file -t "$target:$ancestor" 2>/dev/null || true)"
+      if [ "$kind" = "blob" ]; then
+        printf '%s\n' "$path"
+        found=0
+        break
+      fi
+      path="$ancestor"
+      ancestor="${path%/*}"
+    done
+  done < <(git -C "$primary" ls-files --others --exclude-standard)
+  return "$found"
+}
+
 # The primary checkout is for running and inspecting the application, never for
 # delivery. After GitHub accepts a delivery and the bare mirror is refreshed, it
 # can safely fast-forward that checkout only when doing so cannot overwrite local
 # work. A local deletion that is also present in delivered main is safe: the
 # checkout already has the delivered file state.
 mc_refresh_primary_checkout() {
-  local primary branch target path unsafe dependency_roots refresh_requirements prisma_refresh_required=0
+  local primary branch target path unsafe dependency_roots refresh_requirements prisma_refresh_required=0 untracked_conflicts
   primary="$(cd "$PRIMARY_CHECKOUT" && pwd -P)" || {
     echo "[mc-primary] not refreshed: primary checkout is unavailable: $PRIMARY_CHECKOUT" >&2
     return 0
@@ -114,23 +158,28 @@ mc_refresh_primary_checkout() {
   branch="$(git -C "$primary" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
   if [ "$branch" != "main" ]; then
     echo "[mc-primary] not refreshed: primary checkout is on ${branch:-detached}, not main." >&2
+    mc_record_primary_refresh_pending "primary checkout is on ${branch:-detached}, not main" "$primary"
     return 0
   fi
 
   if ! git -C "$primary" fetch --quiet "$LOCAL_MAIN_REPO" main:refs/remotes/origin/main; then
     echo "[mc-primary] not refreshed: could not read delivered main from the local mirror." >&2
+    mc_record_primary_refresh_pending 'could not read delivered main from the local mirror' "$primary"
     return 0
   fi
   target="origin/main"
 
   if ! git -C "$primary" merge-base --is-ancestor HEAD "$target"; then
     echo "[mc-primary] not refreshed: primary main has commits not in delivered main." >&2
+    mc_record_primary_refresh_pending 'primary main has commits not in delivered main' "$primary" "$target"
     return 0
   fi
 
-  if [ -n "$(git -C "$primary" ls-files --others --exclude-standard)" ]; then
-    echo "[mc-primary] not refreshed: local changes are not already represented by delivered main:" >&2
-    git -C "$primary" status --short >&2
+  untracked_conflicts="$(mc_untracked_paths_conflicting_with_target "$primary" "$target" || true)"
+  if [ -n "$untracked_conflicts" ]; then
+    echo "[mc-primary] not refreshed: delivered main would overwrite untracked path(s):" >&2
+    printf '%s\n' "$untracked_conflicts" | sed 's/^/  /' >&2
+    mc_record_primary_refresh_pending "delivered main conflicts with untracked path(s): $(tr '\n' ' ' <<< "$untracked_conflicts")" "$primary" "$target"
     return 0
   fi
 
@@ -147,6 +196,7 @@ mc_refresh_primary_checkout() {
   if [ "$unsafe" -eq 1 ]; then
     echo "[mc-primary] not refreshed: local changes are not already represented by delivered main:" >&2
     git -C "$primary" status --short >&2
+    mc_record_primary_refresh_pending 'tracked local changes conflict with delivered main' "$primary" "$target"
     return 0
   fi
 
@@ -160,6 +210,7 @@ mc_refresh_primary_checkout() {
   if [ -n "$refresh_requirements" ] && [ "${MC_PRIMARY_ALLOW_DEPENDENCY_REFRESH:-}" != "1" ]; then
     echo "[mc-primary] not refreshed: delivered $refresh_requirements changed; keeping the runnable checkout on $(git -C "$primary" rev-parse --short HEAD)." >&2
     echo "[mc-primary] run ./.claude/scripts/coord/mc-local-main refresh to fast-forward and synchronize the runnable environment." >&2
+    mc_record_primary_refresh_pending "delivered $refresh_requirements changed" "$primary" "$target"
     return 0
   fi
 
@@ -173,8 +224,10 @@ mc_refresh_primary_checkout() {
       echo "[mc-primary] applying tracked Prisma migrations."
       (cd "$primary/server" && npx prisma migrate deploy)
     fi
+    mc_clear_primary_refresh_pending
   else
     echo "[mc-primary] not refreshed: primary checkout could not fast-forward safely." >&2
+    mc_record_primary_refresh_pending 'primary checkout could not fast-forward safely' "$primary" "$target"
   fi
 }
 

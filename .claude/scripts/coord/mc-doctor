@@ -2,6 +2,7 @@
 # Health of the shared machine. Run it when something feels wrong.
 source "$(dirname "$0")/mc-common.sh"
 cd "$(mc_worktree)" 2>/dev/null || cd "$PRIMARY_CHECKOUT"
+health=0
 
 echo "=== load (check if >8 — higher means tests will fail at random) ==="; uptime
 echo; echo "=== gate runners busy ==="; ls "$STATE/locks/gate" 2>/dev/null | wc -l | tr -d ' '
@@ -40,18 +41,27 @@ else
     echo "  DIRTY: $mt_dirty uncommitted/untracked path(s) — identify its owner; do not reset, stash, or clean it"
   fi
   if [ "$mt_branch" = "main" ]; then
-    git -C "$main_tree" fetch origin --quiet 2>/dev/null
+    git -C "$main_tree" fetch "$LOCAL_MAIN_REPO" --quiet main:refs/remotes/origin/main 2>/dev/null
     ahead="$(git -C "$main_tree" rev-list --count origin/main..main 2>/dev/null || echo 0)"
     behind="$(git -C "$main_tree" rev-list --count main..origin/main 2>/dev/null || echo 0)"
     if [ "$ahead" != "0" ] && [ "$behind" != "0" ]; then
       echo "  DIVERGED: local main is $ahead ahead / $behind behind origin/main — do not merge here; recover the owner’s work in an issue clone."
+      health=1
     elif [ "$ahead" != "0" ]; then
       echo "  UNPUSHED: local main is $ahead commit(s) ahead of origin/main — do not push here; recover the owner’s work in an issue clone."
+      health=1
     elif [ "$behind" != "0" ]; then
-      echo "  behind: local main is $behind commit(s) behind origin/main (safe fast-forward — 'git pull --ff-only')"
+      echo "  REFRESH REQUIRED: local main is $behind commit(s) behind delivered main — run ./.claude/scripts/coord/mc-local-main refresh."
+      health=1
     else
       echo "  in sync with origin/main"
     fi
+  fi
+  pending_file="$(mc_primary_refresh_pending_file)"
+  if [ -f "$pending_file" ]; then
+    IFS=$'\t' read -r pending_at pending_head pending_target pending_reason < "$pending_file"
+    echo "  REFRESH REQUIRED since $pending_at ($pending_head → $pending_target): $pending_reason"
+    health=1
   fi
 fi
 
@@ -119,3 +129,5 @@ echo -n "  leftover test databases: "; docker exec maincar2-postgres psql -U pos
 echo; echo "=== duplicate migration timestamps (never renumber; write a new one) ==="
 dupes=$(ls server/prisma/migrations 2>/dev/null | sed -n 's#^\([0-9]\{14\}\)_.*#\1#p' | sort | uniq -d)
 [ -n "$dupes" ] && echo "$dupes" || echo "  none on this branch"
+
+exit "$health"
