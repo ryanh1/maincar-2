@@ -33,9 +33,12 @@ Every time-of-day shown to a person MUST render in an explicit timezone and carr
 **Use an issue clone per issue.** Multiple sessions work this repo at once. The
 primary checkout at `~/Documents/Coding/My Projects/maincar-2` is a reference
 checkout only: **never edit, stage, commit, change branches, merge, or push in
-it.** A hook and every `mc-*` delivery command reject it. If it is dirty, do
-not clean, reset, or stash it: identify the owner and move that work into an
-issue clone. Run `./.claude/scripts/coord/mc-doctor` when something looks stale.
+it directly.** The sole exception is `mc-merge`'s automatic safe refresh after
+GitHub accepts delivery: it fast-forwards `main` from the refreshed bare mirror
+only when no local work would be overwritten. A hook and every other `mc-*`
+delivery command reject it. If it is dirty, do not clean, reset, or stash it:
+identify the owner and move that work into an issue clone. Run
+`./.claude/scripts/coord/mc-doctor` when something looks stale.
 
 Ticket clones fetch from a local *bare* mirror, not the editable primary
 checkout. This keeps local fetches fast without allowing one session's WIP to

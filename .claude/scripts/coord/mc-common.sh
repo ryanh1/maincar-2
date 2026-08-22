@@ -62,6 +62,63 @@ mc_sync_local_main() {
   git -C "$LOCAL_MAIN_REPO" fetch upstream --prune '+refs/heads/main:refs/heads/main' >/dev/null
 }
 
+# The primary checkout is for running and inspecting the application, never for
+# delivery. After GitHub accepts a delivery and the bare mirror is refreshed, it
+# can safely fast-forward that checkout only when doing so cannot overwrite local
+# work. A local deletion that is also present in delivered main is safe: the
+# checkout already has the delivered file state.
+mc_refresh_primary_checkout() {
+  local primary branch target path unsafe
+  primary="$(cd "$PRIMARY_CHECKOUT" && pwd -P)" || {
+    echo "[mc-primary] not refreshed: primary checkout is unavailable: $PRIMARY_CHECKOUT" >&2
+    return 0
+  }
+  branch="$(git -C "$primary" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [ "$branch" != "main" ]; then
+    echo "[mc-primary] not refreshed: primary checkout is on ${branch:-detached}, not main." >&2
+    return 0
+  fi
+
+  if ! git -C "$primary" fetch --quiet "$LOCAL_MAIN_REPO" main:refs/remotes/origin/main; then
+    echo "[mc-primary] not refreshed: could not read delivered main from the local mirror." >&2
+    return 0
+  fi
+  target="origin/main"
+
+  if ! git -C "$primary" merge-base --is-ancestor HEAD "$target"; then
+    echo "[mc-primary] not refreshed: primary main has commits not in delivered main." >&2
+    return 0
+  fi
+
+  if [ -n "$(git -C "$primary" ls-files --others --exclude-standard)" ]; then
+    echo "[mc-primary] not refreshed: local changes are not already represented by delivered main:" >&2
+    git -C "$primary" status --short >&2
+    return 0
+  fi
+
+  # Compare only paths changed locally to delivered main. Comparing the entire
+  # worktree would incorrectly classify ordinary incoming files as local edits.
+  unsafe=0
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    if ! git -C "$primary" diff --quiet "$target" -- "$path"; then
+      unsafe=1
+      break
+    fi
+  done < <(git -C "$primary" diff --name-only HEAD)
+  if [ "$unsafe" -eq 1 ]; then
+    echo "[mc-primary] not refreshed: local changes are not already represented by delivered main:" >&2
+    git -C "$primary" status --short >&2
+    return 0
+  fi
+
+  if git -C "$primary" merge --ff-only "$target" >/dev/null; then
+    echo "[mc-primary] fast-forwarded runnable checkout to $(git -C "$primary" rev-parse --short HEAD)."
+  else
+    echo "[mc-primary] not refreshed: primary checkout could not fast-forward safely." >&2
+  fi
+}
+
 mc_adopt_local_main() {
   local current
   current="$(git remote get-url origin 2>/dev/null || true)"
