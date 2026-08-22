@@ -19,6 +19,18 @@ export interface ReportChartConfig {
   yAxisMax?: number
 }
 
+/** One exact dimension value behind a pivot cell. */
+export interface DealDrillFilter {
+  field: DealPivotDimension
+  value: string
+  label: string
+}
+
+/** The CRM records represented by a selected pivot value. */
+export interface ReportDrillSelection {
+  filters: DealDrillFilter[]
+}
+
 /** The interactive Deals pivot shape. */
 export interface ReportConfig {
   baseObject: 'deal'

@@ -200,9 +200,9 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
     // living in customJson (standardObjects.ts) — exercise both in one filter.
     await prisma.person.createMany({
       data: [
-        { orgId, firstName: 'Alice', attentionStatus: 'on_deck', customJson: { x_url: 'https://x.com/alice' } },
-        { orgId, firstName: 'Bob', attentionStatus: 'on_hold', customJson: {} },
-        { orgId, firstName: 'Carol', attentionStatus: 'on_deck', customJson: { x_url: 'https://x.com/carol' } },
+        { orgId, firstName: 'Alice', ownerUserId: 'owner-a', attentionStatus: 'on_deck', customJson: { x_url: 'https://x.com/alice' } },
+        { orgId, firstName: 'Bob', ownerUserId: 'owner-b', attentionStatus: 'on_hold', customJson: {} },
+        { orgId, firstName: 'Carol', ownerUserId: 'owner-a', attentionStatus: 'on_deck', customJson: { x_url: 'https://x.com/carol' } },
       ],
     })
 
@@ -217,6 +217,17 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
     expect(res.body.totalCount).toBe(2)
     expect(res.body.rows.map((r: { firstName: string }) => r.firstName)).toEqual(['Alice', 'Carol'])
     expect(res.body.rows[0].x_url).toBe('https://x.com/alice')
+
+    // A report drill uses the same grid endpoint. Owner is a stored user id, so
+    // its exact value must be a usable server-side filter rather than forcing a
+    // client-side, incomplete subset.
+    const ownerFiltered = await request(app)
+      .post(`/api/orgs/${orgId}/objects/${personObject.id}/list`)
+      .set('Authorization', as(adminFirebaseUid))
+      .send({ filter: { type: 'condition', field: 'ownerUserId', operator: 'eq', value: 'owner-a' } })
+    expect(ownerFiltered.status).toBe(200)
+    expect(ownerFiltered.body.totalCount).toBe(2)
+    expect(ownerFiltered.body.rows.map((row: { firstName: string }) => row.firstName).sort()).toEqual(['Alice', 'Carol'])
 
     // A field the compiler deliberately excludes (record_reference) is a clean 400,
     // not a silently-wrong match over its serialized JSON.

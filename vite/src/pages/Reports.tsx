@@ -37,11 +37,12 @@ import {
 } from '@/hooks/reports'
 import { useUrlInt } from '@/hooks/urlState'
 import { formatDateTime } from '@/lib/datetime'
-import type { OwnerTeamScope, ReportConfig, SavedReport } from '@/lib/reportTypes'
+import type { OwnerTeamScope, ReportConfig, ReportDrillSelection, SavedReport } from '@/lib/reportTypes'
 import { isRunnablePivot } from '@/lib/reportConfig'
 import { PageHeader } from '@/components/PageHeader'
 import { useAuth } from '@/providers/useAuth'
 import { Reports_OwnerTeamScope } from './Reports_OwnerTeamScope'
+import { Reports_DrillDrawer } from './Reports_DrillDrawer'
 import { ReportsPivotBuilder } from './Reports_PivotBuilder'
 
 const DEFAULT_REPORT_CONFIG: ReportConfig = {
@@ -85,6 +86,7 @@ export function Reports() {
   const [saveOpen, setSaveOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<SavedReport | null>(null)
+  const [drillSelection, setDrillSelection] = useState<ReportDrillSelection | null>(null)
   const [name, setName] = useState('')
 
   const reportQuery = useGetReport(orgId, openReportId)
@@ -96,6 +98,7 @@ export function Reports() {
   function startNewReport(): void {
     setOpenReportId(null)
     setDraftConfig(null)
+    setDrillSelection(null)
     setNewConfig(DEFAULT_REPORT_CONFIG)
     setIsNewReport(true)
   }
@@ -103,6 +106,7 @@ export function Reports() {
   function openReport(reportId: string): void {
     setIsNewReport(false)
     setDraftConfig(null)
+    setDrillSelection(null)
     setOpenReportId(reportId)
   }
 
@@ -110,6 +114,7 @@ export function Reports() {
     setOpenReportId(null)
     setIsNewReport(false)
     setDraftConfig(null)
+    setDrillSelection(null)
   }
 
   function setOwnerTeamScope(scope: OwnerTeamScope | undefined): void {
@@ -279,6 +284,12 @@ export function Reports() {
             isLoading={runQuery.isPending}
             hasActiveFilters={Boolean(activeConfig.filters?.ownerTeam)}
             onLoosenFilters={() => setOwnerTeamScope(undefined)}
+            onDrill={setDrillSelection}
+          />
+          <Reports_DrillDrawer
+            config={activeConfig}
+            selection={drillSelection}
+            onClose={() => setDrillSelection(null)}
           />
         </section>
       ) : (

@@ -148,7 +148,7 @@ const SAFE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 // back in row data — just not as a filter/sort target — until the query semantics
 // for them are designed (spec CHUNK-1 §A only scopes typed-column + customJson
 // scalar filtering).
-const UNFILTERABLE_TYPES = new Set(['multiselect', 'record_reference', 'user_reference', 'location', 'ai'])
+const UNFILTERABLE_TYPES = new Set(['multiselect', 'record_reference', 'location', 'ai'])
 
 type ValueKind = 'text' | 'number' | 'boolean' | 'date' | 'timestamp'
 
@@ -401,7 +401,10 @@ function mapRow(
   }
   for (const attr of attributes) {
     if (attr.storage === 'column' && mode === 'table') {
-      out[attr.slug] = row[attr.slug] ?? null
+      // JSON has no BigInt. Deal.amountMinor is one, and stringifying it keeps
+      // exact minor units intact for the CRM grid and report drill-through.
+      const value = row[attr.slug]
+      out[attr.slug] = typeof value === 'bigint' ? value.toString() : value ?? null
     } else if (attr.storage === 'custom') {
       out[attr.slug] = json[attr.slug] ?? null
     }

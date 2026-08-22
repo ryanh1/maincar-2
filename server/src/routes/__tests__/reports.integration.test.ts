@@ -44,6 +44,14 @@ const VIEWER_DAY_CONFIG = {
   timeBucket: { field: 'createdAt', grain: 'day' },
 }
 
+const OWNER_BY_STAGE_CONFIG = {
+  baseObject: 'deal',
+  rows: [{ field: 'owner' }],
+  columns: [{ field: 'stage' }],
+  values: [{ field: 'amountMinor', aggregation: 'sum' }],
+  timeZone: { mode: 'pinned', displayZone: 'UTC' },
+}
+
 const ACTIVITY_GRID_CONFIG = {
   baseObject: 'activity',
   rows: [{ field: 'sourceType' }],
@@ -118,6 +126,50 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
     // of the implementation's grouped output.
     expect(response.body.report.rows.reduce((sum: bigint, row: { amountMinor: string }) => sum + BigInt(row.amountMinor), 0n))
       .toBe(12500n)
+  })
+
+  it('returns CRM grid rows that re-add to a clicked Owner-by-Stage pivot value, then widens when a dimension is removed', async () => {
+    const org = await seedOrgWithAdmin(prisma, { seed: true })
+    const otherOwner = await seedMember(prisma, org.orgId)
+    const dealObject = await prisma.objectDef.findFirstOrThrow({ where: { orgId: org.orgId, slug: 'deal' } })
+    const { pipeline, discovery, proposal } = await createPipelineAndStages(org.orgId)
+    await prisma.deal.createMany({
+      data: [
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Discovery A', amountMinor: 1200n, ownerUserId: org.adminUserId },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Discovery B', amountMinor: 2300n, ownerUserId: org.adminUserId },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: proposal.id, name: 'Proposal', amountMinor: 9000n, ownerUserId: org.adminUserId },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Other owner', amountMinor: 5000n, ownerUserId: otherOwner.userId },
+      ],
+    })
+
+    const report = await request(app)
+      .post(`/api/orgs/${org.orgId}/reports/run`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({ config: OWNER_BY_STAGE_CONFIG })
+    expect(report.status).toBe(200)
+    const clicked = report.body.report.rows.find((row: { ownerId: string; stageId: string }) => row.ownerId === org.adminUserId && row.stageId === discovery.id)
+    expect(clicked).toMatchObject({ amountMinor: '3500' })
+
+    const drilled = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${dealObject.id}/list`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({
+        filter: {
+          type: 'group', op: 'and', children: [
+            { type: 'condition', field: 'ownerUserId', operator: 'eq', value: org.adminUserId },
+            { type: 'condition', field: 'stageId', operator: 'eq', value: discovery.id },
+          ],
+        },
+      })
+    expect(drilled.status).toBe(200)
+    expect(drilled.body.rows.reduce((sum: bigint, row: { amountMinor: string }) => sum + BigInt(row.amountMinor), 0n)).toBe(3500n)
+
+    const widened = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${dealObject.id}/list`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({ filter: { type: 'condition', field: 'ownerUserId', operator: 'eq', value: org.adminUserId } })
+    expect(widened.status).toBe(200)
+    expect(widened.body.rows.map((row: { name: string }) => row.name).sort()).toEqual(['Discovery A', 'Discovery B', 'Proposal'])
   })
 
   it('applies specific teams and multiple direct leads once per owner, without reading another organization', async () => {

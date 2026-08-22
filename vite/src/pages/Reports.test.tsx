@@ -13,6 +13,8 @@ const {
   useRenameReportMock,
   useDeleteReportMock,
   useGetTeamsMock,
+  useGetObjectsMock,
+  useGetObjectMock,
   useUpdateReportConfigMock,
   createMutateMock,
   renameMutateMock,
@@ -30,6 +32,8 @@ const {
   useRenameReportMock: vi.fn(),
   useDeleteReportMock: vi.fn(),
   useGetTeamsMock: vi.fn(),
+  useGetObjectsMock: vi.fn(),
+  useGetObjectMock: vi.fn(),
   useUpdateReportConfigMock: vi.fn(),
   createMutateMock: vi.fn(),
   renameMutateMock: vi.fn(),
@@ -54,6 +58,15 @@ vi.mock('sonner', () => ({ toast: { error: toastErrorMock, success: toastSuccess
 vi.mock('@/hooks/orgs', () => ({ useGetTeams: useGetTeamsMock }))
 vi.mock('@/dependencies/echarts', () => ({
   createECharts: () => ({ dispose: vi.fn(), getZr: () => ({ on: vi.fn() }), on: vi.fn(), resize: vi.fn(), setOption: createEChartsMock }),
+}))
+vi.mock('@/hooks/crm', () => ({
+  useGetObjects: useGetObjectsMock,
+  useGetObject: useGetObjectMock,
+}))
+vi.mock('@/components/crm/RecordGrid', () => ({
+  RecordGrid: ({ viewConfig }: { viewConfig: { filterTree?: unknown } }) => (
+    <div data-testid="drilled-record-grid">{JSON.stringify(viewConfig.filterTree)}</div>
+  ),
 }))
 
 import { Reports } from '@/pages/Reports'
@@ -124,6 +137,26 @@ beforeEach(() => {
     isPending: false,
     isError: false,
   }))
+  useGetObjectsMock.mockReturnValue({
+    data: { objects: [{ id: 'object-deal', slug: 'deal', name: 'Deal', namePlural: 'Deals', storage: 'table' }] },
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(),
+  })
+  useGetObjectMock.mockReturnValue({
+    data: {
+      object: {
+        id: 'object-deal', slug: 'deal', name: 'Deal', namePlural: 'Deals', storage: 'table',
+        attributes: [
+          { id: 'attribute-owner', slug: 'ownerUserId', name: 'Owner' },
+          { id: 'attribute-stage', slug: 'stageId', name: 'Stage' },
+        ],
+      },
+    },
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(),
+  })
 })
 
 function dragFieldToZone(field: string, zone: 'rows' | 'columns' | 'values') {
@@ -367,6 +400,29 @@ describe('Reports', () => {
 
     expect(screen.getByRole('button', { name: 'Save report' })).toBeEnabled()
     expect(screen.getByRole('rowheader', { name: 'Avery Admin' })).toBeInTheDocument()
+  })
+
+  it('opens the exact pivot records and widens them when a drill chip is removed', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    dragFieldToZone('Owner', 'rows')
+    dragFieldToZone('Stage', 'columns')
+    dragFieldToZone('Amount', 'values')
+
+    fireEvent.doubleClick(screen.getAllByText('$35.00')[0]!)
+
+    expect(screen.getByRole('heading', { name: 'Deals' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove filter Owner: Avery Admin' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove filter Stage: Discovery' })).toBeInTheDocument()
+    expect(screen.getByTestId('drilled-record-grid')).toHaveTextContent('attribute-owner')
+    expect(screen.getByTestId('drilled-record-grid')).toHaveTextContent('attribute-stage')
+
+    await user.click(screen.getByRole('button', { name: 'Remove filter Stage: Discovery' }))
+
+    expect(screen.getByTestId('drilled-record-grid')).toHaveTextContent('attribute-owner')
+    expect(screen.getByTestId('drilled-record-grid')).not.toHaveTextContent('attribute-stage')
   })
 
   it('saves, renames, and moves a report to Trash only after confirmation', async () => {
