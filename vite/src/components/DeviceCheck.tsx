@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { CircleAlert, CircleCheck, LoaderCircle, Mic, Volume2, Wifi, WifiOff } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { CircleAlert, CircleCheck, LoaderCircle, Wifi, WifiOff } from 'lucide-react'
 
+import { Meter } from '@/components/DeviceCheck_Meter'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import {
@@ -18,9 +19,6 @@ import { cn } from '@/lib/utils'
 // Audio plumbing
 // ---------------------------------------------------------------------------
 
-/** How long the microphone stays open during a test before it closes itself. */
-const TEST_DURATION_MS = 5_000
-
 /** Beep shape. Seconds, because that is what the Web Audio clock speaks. */
 const BEEP_FREQUENCY_HZ = 440
 const BEEP_PEAK_GAIN = 0.15
@@ -28,11 +26,23 @@ const BEEP_RAMP_S = 0.02
 const BEEP_HOLD_S = 0.26
 const BEEP_END_S = BEEP_RAMP_S * 2 + BEEP_HOLD_S
 
-/** Above this RMS the meter counts as "the rep's voice registered". */
+/** Above this RMS a frame counts as "real signal", not noise floor. */
 const HEARD_THRESHOLD = 0.02
 
-/** Chrome exposes `setSinkId` on the context itself; other browsers do not. */
-type SinkCapableAudioContext = AudioContext & { setSinkId?: (id: string) => Promise<void> }
+/** How long a selected, permitted microphone can stay silent before the nudge shows. */
+const SILENCE_NUDGE_MS = 4_000
+
+/** Speech sits well under full scale; tripling RMS puts normal talking mid-meter. */
+const METER_GAIN = 3
+
+/**
+ * `setSinkId` is standardized on `HTMLMediaElement`, not on `AudioContext` — the
+ * beep has to reach the chosen speaker through an `<audio>` element playing a
+ * `MediaStreamAudioDestinationNode`, the same route `browserCanChooseSpeaker`
+ * below actually feature-detects. Chrome and Edge implement it; TypeScript's
+ * DOM lib does not know about it yet.
+ */
+type SinkCapableMediaElement = HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }
 
 function getAudioContextCtor(): typeof AudioContext | null {
   if (typeof window === 'undefined') return null
@@ -64,12 +74,14 @@ function frameLevel(analyser: AnalyserNode, buffer: Uint8Array<ArrayBuffer>): nu
   return Math.sqrt(sum / buffer.length)
 }
 
+/** RMS is quiet by nature — amplify and clamp so the meter reads as a real level. */
+function meterLevel(rms: number): number {
+  return Math.min(1, rms * METER_GAIN)
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
-
-type BeepStatus = 'idle' | 'playing' | 'played' | 'failed'
-type MicStatus = 'idle' | 'listening' | 'heard' | 'silent' | 'failed'
 
 export interface DeviceSelection {
   microphoneId: string | null
@@ -83,11 +95,17 @@ export interface DeviceCheckProps {
 }
 
 /**
- * The pre-call device check: pick a microphone and a speaker, see whether the
- * browser will let Maincar hear you, and prove both work before dialling.
+ * The pre-call device check: pick a microphone and a speaker, see the meter
+ * move, and prove both work before dialling.
  *
- * Self-contained on purpose — MAI-22 drops it into a modal, but it renders and
- * works standing on its own.
+ * One row per device — a `Select` plus its own meter, with an inline note only
+ * when something needs saying. The microphone meter is live the instant a
+ * working, permitted mic is selected; there is no manual "Test" button for it.
+ * The speaker still needs a press, because there is no way to read back what
+ * came out of it.
+ *
+ * Self-contained on purpose — `GreenRoom` drops it into a modal, but it renders
+ * and works standing on its own.
  */
 export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) {
   const { microphones, speakers, isLoading, error, refetch } = useGetDevices()
@@ -100,12 +118,6 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
   const [preferredSpeakerId, setPreferredSpeakerId] = useState<string | null>(
     () => readDeviceChoice().speakerId,
   )
-
-  const [beep, setBeep] = useState<BeepStatus>('idle')
-  const [mic, setMic] = useState<MicStatus>('idle')
-  const [micProblem, setMicProblem] = useState<string | null>(null)
-  const [level, setLevel] = useState(0)
-  const [testing, setTesting] = useState(false)
 
   const canChooseSpeaker = browserCanChooseSpeaker()
   const canPlayAudio = getAudioContextCtor() !== null
@@ -127,70 +139,178 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
     selectionListener.current?.({ microphoneId, speakerId })
   }, [microphoneId, speakerId])
 
-  // Everything one test run holds open, so a single call releases all of it.
-  const running = useRef<{
+  // -------------------------------------------------------------------------
+  // Microphone: continuous listening, no button.
+  // -------------------------------------------------------------------------
+
+  const [micLevel, setMicLevel] = useState(0)
+  const [micSilent, setMicSilent] = useState(false)
+
+  const micRun = useRef<{
     stream: MediaStream | null
     context: AudioContext | null
     frame: number | null
-    timer: ReturnType<typeof setTimeout> | null
-  }>({ stream: null, context: null, frame: null, timer: null })
-  // Bumped by every start and every stop, so a run whose awaits landed late
-  // cannot write over the run that replaced it.
-  const runIdRef = useRef(0)
+  }>({ stream: null, context: null, frame: null })
+  const micRunIdRef = useRef(0)
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  /**
-   * Release the microphone and the audio context.
-   *
-   * A device check that leaves the mic hot is worse than no check: the browser's
-   * recording indicator stays lit and the device stays captured for as long as
-   * the page lives. Every exit path runs through here, including unmount.
-   */
-  const stopTest = useCallback(() => {
-    runIdRef.current += 1
-    const held = running.current
+  const stopMicListening = useCallback(() => {
+    micRunIdRef.current += 1
+    const held = micRun.current
     if (held.frame !== null) cancelAnimationFrame(held.frame)
-    if (held.timer !== null) clearTimeout(held.timer)
     held.stream?.getTracks().forEach((track) => track.stop())
     void held.context?.close?.()
-    running.current = { stream: null, context: null, frame: null, timer: null }
-    setLevel(0)
-    setTesting(false)
+    micRun.current = { stream: null, context: null, frame: null }
+    if (silenceTimerRef.current !== null) {
+      clearTimeout(silenceTimerRef.current)
+      silenceTimerRef.current = null
+    }
   }, [])
 
-  useEffect(() => stopTest, [stopTest])
+  useEffect(() => {
+    stopMicListening()
+    // Deferred a tick, the same way DialerProvider defers its own: a state
+    // update belongs in a callback an external system invokes, not
+    // synchronously in the effect body itself (react-hooks/set-state-in-effect).
+    queueMicrotask(() => {
+      setMicLevel(0)
+      setMicSilent(false)
+    })
 
-  const startTest = useCallback(async () => {
-    stopTest()
-    const runId = runIdRef.current
-    const isCurrent = () => runId === runIdRef.current
+    if (isLoading || !microphoneId || !canPlayAudio) return
 
-    setTesting(true)
-    setBeep('playing')
-    setMic('listening')
-    setMicProblem(null)
+    const Ctor = getAudioContextCtor()
+    if (!Ctor) return
+
+    const runId = ++micRunIdRef.current
+    const isCurrent = () => runId === micRunIdRef.current
+
+    void (async () => {
+      const media = navigator.mediaDevices
+      if (!media?.getUserMedia) return
+
+      let stream: MediaStream
+      try {
+        try {
+          stream = await media.getUserMedia({ audio: { deviceId: { exact: microphoneId } } })
+        } catch {
+          // The chosen device may have been unplugged between the read and now.
+          stream = await media.getUserMedia({ audio: true })
+        }
+      } catch {
+        // Nothing opened. The meter stays at zero, and the silence nudge below
+        // covers this the same way it covers a device that opened but never
+        // heard anything — there is no separate error line to keep in sync.
+        return
+      }
+
+      if (!isCurrent()) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
+
+      const context = new Ctor()
+      micRun.current.stream = stream
+      micRun.current.context = context
+
+      // Not detected within the window: nudge the rep toward another device.
+      silenceTimerRef.current = setTimeout(() => {
+        if (isCurrent()) setMicSilent(true)
+      }, SILENCE_NUDGE_MS)
+
+      try {
+        const source = context.createMediaStreamSource(stream)
+        const analyser = context.createAnalyser()
+        analyser.fftSize = 2048
+        source.connect(analyser)
+        const buffer = new Uint8Array(new ArrayBuffer(analyser.fftSize))
+
+        const tick = () => {
+          if (!isCurrent()) return
+          const value = frameLevel(analyser, buffer)
+          setMicLevel(value)
+          if (value >= HEARD_THRESHOLD) {
+            setMicSilent(false)
+            if (silenceTimerRef.current !== null) {
+              clearTimeout(silenceTimerRef.current)
+              silenceTimerRef.current = null
+            }
+          }
+          micRun.current.frame = requestAnimationFrame(tick)
+        }
+        tick()
+      } catch {
+        // Opened but unreadable — same fallback as above: the silence nudge
+        // covers it, since the level never leaves zero.
+      }
+    })()
+
+    return () => stopMicListening()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stopMicListening is stable (empty deps)
+  }, [microphoneId, isLoading, canPlayAudio])
+
+  useEffect(() => stopMicListening, [stopMicListening])
+
+  // -------------------------------------------------------------------------
+  // Speaker: a single test press, an envelope tied to the actual tone.
+  // -------------------------------------------------------------------------
+
+  const [speakerLevel, setSpeakerLevel] = useState(0)
+  const [speakerTesting, setSpeakerTesting] = useState(false)
+  const [speakerTested, setSpeakerTested] = useState(false)
+
+  const speakerRun = useRef<{
+    context: AudioContext | null
+    audio: HTMLAudioElement | null
+    frame: number | null
+    timer: ReturnType<typeof setTimeout> | null
+  }>({ context: null, audio: null, frame: null, timer: null })
+  const speakerRunIdRef = useRef(0)
+
+  const stopSpeakerTest = useCallback(() => {
+    speakerRunIdRef.current += 1
+    const held = speakerRun.current
+    if (held.frame !== null) cancelAnimationFrame(held.frame)
+    if (held.timer !== null) clearTimeout(held.timer)
+    held.audio?.pause()
+    if (held.audio) held.audio.srcObject = null
+    void held.context?.close?.()
+    speakerRun.current = { context: null, audio: null, frame: null, timer: null }
+    setSpeakerLevel(0)
+    setSpeakerTesting(false)
+  }, [])
+
+  useEffect(() => stopSpeakerTest, [stopSpeakerTest])
+
+  const testSpeaker = useCallback(async () => {
+    stopSpeakerTest()
+    const runId = speakerRunIdRef.current
+    const isCurrent = () => runId === speakerRunIdRef.current
+
+    setSpeakerTesting(true)
+    // Output can't be verified the way input can, so this always appears —
+    // it is a reminder, not an error state.
+    setSpeakerTested(true)
 
     const Ctor = getAudioContextCtor()
     if (!Ctor) {
-      setBeep('failed')
-      setMic('failed')
-      setMicProblem('This browser has no audio support. Open Maincar in Chrome or Edge.')
-      stopTest()
+      setSpeakerTesting(false)
       return
     }
 
-    const context: SinkCapableAudioContext = new Ctor()
-    running.current.context = context
+    const context = new Ctor()
+    speakerRun.current.context = context
 
-    // --- the beep -----------------------------------------------------------
     try {
       await context.resume?.()
-      if (canChooseSpeaker && speakerId && typeof context.setSinkId === 'function') {
-        await context.setSinkId(speakerId)
-      }
       if (!isCurrent()) return
+
       const now = context.currentTime
       const oscillator = context.createOscillator()
       const gain = context.createGain()
+      const analyser = context.createAnalyser()
+      const destination = context.createMediaStreamDestination()
+      analyser.fftSize = 2048
       oscillator.type = 'sine'
       oscillator.frequency.setValueAtTime(BEEP_FREQUENCY_HZ, now)
       // Ramp both ends. Starting and stopping at full volume is a click, not a
@@ -200,75 +320,45 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
       gain.gain.setValueAtTime(BEEP_PEAK_GAIN, now + BEEP_RAMP_S + BEEP_HOLD_S)
       gain.gain.exponentialRampToValueAtTime(0.0001, now + BEEP_END_S)
       oscillator.connect(gain)
-      gain.connect(context.destination)
+      // The meter reads the same signal that reaches the speaker, so its
+      // envelope is the beep's own envelope, not a stand-in animation.
+      gain.connect(analyser)
+      // `setSinkId` is only standardized on a media element, not on the audio
+      // context, so the tone has to leave through one: the graph renders into
+      // a `MediaStreamAudioDestinationNode`, and an `<audio>` element plays
+      // that stream on the chosen output device.
+      analyser.connect(destination)
       oscillator.start(now)
       oscillator.stop(now + BEEP_END_S)
-      setBeep('played')
-    } catch {
-      if (isCurrent()) setBeep('failed')
-    }
 
-    // --- the microphone -----------------------------------------------------
-    let stream: MediaStream
-    try {
-      const media = navigator.mediaDevices
-      if (!media?.getUserMedia) throw new Error('this browser cannot open a microphone')
-      try {
-        stream = await media.getUserMedia(
-          microphoneId ? { audio: { deviceId: { exact: microphoneId } } } : { audio: true },
-        )
-      } catch {
-        // The chosen device may have been unplugged between the read and now.
-        // Fall back to the system default rather than fail the whole test.
-        stream = await media.getUserMedia({ audio: true })
+      const audio: SinkCapableMediaElement = new Audio()
+      audio.srcObject = destination.stream
+      speakerRun.current.audio = audio
+      if (canChooseSpeaker && speakerId && typeof audio.setSinkId === 'function') {
+        await audio.setSinkId(speakerId)
       }
-    } catch {
-      if (isCurrent()) {
-        stopTest()
-        setMic('failed')
-        setMicProblem('Could not open that microphone. Pick another one, then test again.')
-      }
-      return
-    }
+      if (!isCurrent()) return
+      await audio.play()
 
-    if (!isCurrent()) {
-      // A newer run (or an unmount) replaced this one while getUserMedia was in
-      // flight. Nothing else will release this stream, so release it here.
-      stream.getTracks().forEach((track) => track.stop())
-      return
-    }
-    running.current.stream = stream
-
-    let peak = 0
-    try {
-      const source = context.createMediaStreamSource(stream)
-      const analyser = context.createAnalyser()
-      analyser.fftSize = 2048
-      source.connect(analyser)
       const buffer = new Uint8Array(new ArrayBuffer(analyser.fftSize))
-
       const tick = () => {
         if (!isCurrent()) return
-        const value = frameLevel(analyser, buffer)
-        peak = Math.max(peak, value)
-        setLevel(value)
-        if (peak >= HEARD_THRESHOLD) setMic('heard')
-        running.current.frame = requestAnimationFrame(tick)
+        setSpeakerLevel(frameLevel(analyser, buffer))
+        speakerRun.current.frame = requestAnimationFrame(tick)
       }
       tick()
-    } catch {
-      stopTest()
-      setMic('failed')
-      setMicProblem('Could not read that microphone. Pick another one, then test again.')
-      return
-    }
 
-    running.current.timer = setTimeout(() => {
-      const heard = peak >= HEARD_THRESHOLD
-      stopTest()
-      setMic(heard ? 'heard' : 'silent')
-    }, TEST_DURATION_MS)
-  }, [canChooseSpeaker, microphoneId, speakerId, stopTest])
+      speakerRun.current.timer = setTimeout(() => {
+        if (isCurrent()) stopSpeakerTest()
+      }, BEEP_END_S * 1000)
+    } catch {
+      if (isCurrent()) stopSpeakerTest()
+    }
+  }, [canChooseSpeaker, speakerId, stopSpeakerTest])
+
+  // -------------------------------------------------------------------------
+  // Choices
+  // -------------------------------------------------------------------------
 
   function chooseMicrophone(next: string) {
     setPreferredMicrophoneId(next)
@@ -278,19 +368,30 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
   function chooseSpeaker(next: string) {
     setPreferredSpeakerId(next)
     saveDeviceChoice({ speakerId: next })
+    setSpeakerTested(false)
   }
 
-  function onTestClick() {
-    if (testing) {
-      stopTest()
-      return
-    }
-    void startTest()
-  }
+  // -------------------------------------------------------------------------
+  // Row state
+  // -------------------------------------------------------------------------
 
-  // Speech sits well under full scale, so a raw RMS barely moves the bar. Three
-  // times RMS puts normal talking around the middle of the meter.
-  const levelPercent = testing ? Math.min(100, Math.round(level * 300)) : 0
+  const usableMicrophones = microphones.filter((device) => device.deviceId.length > 0)
+  const micRowDisabled = isLoading || usableMicrophones.length === 0
+  const micNote = micRowDisabled
+    ? 'No microphone found. Plug one in, then choose it here.'
+    : micSilent
+      ? "We're not picking up any sound. Try picking another microphone above."
+      : null
+
+  const usableSpeakers = canChooseSpeaker ? speakers.filter((device) => device.deviceId.length > 0) : []
+  const speakerRowDisabled = isLoading || !canChooseSpeaker || usableSpeakers.length === 0
+  const speakerNote = !canChooseSpeaker
+    ? "Your browser can't switch speakers — change it in your system settings."
+    : speakerRowDisabled
+      ? 'No speaker found. Plug one in, then choose it here.'
+      : speakerTested
+        ? "Didn't hear anything? Choose another speaker above."
+        : null
 
   return (
     <section
@@ -304,64 +405,54 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
       <PermissionStatus isLoading={isLoading} error={error} onRetry={refetch} />
       <NetworkStatusLine online={online} />
 
-      <div className="flex flex-col gap-3">
-        <DevicePicker
-          id="deviceCheckMicrophone"
-          label="Microphone"
-          devices={microphones}
-          value={microphoneId}
-          onChange={chooseMicrophone}
-          disabled={isLoading}
-          note="No microphone found. Plug one in, then choose it here."
-        />
-
-        <DevicePicker
-          id="deviceCheckSpeaker"
-          label="Speaker"
-          // Firefox and Safari cannot route audio to a chosen speaker at all, so
-          // the picker is emptied and disabled rather than left looking live.
-          devices={canChooseSpeaker ? speakers : []}
-          value={canChooseSpeaker ? speakerId : null}
-          onChange={chooseSpeaker}
-          disabled={isLoading || !canChooseSpeaker}
-          note={
-            canChooseSpeaker
-              ? 'No speaker found. Plug one in, then choose it here.'
-              : "Your browser can't switch speakers — change it in your system settings."
-          }
-        />
-      </div>
-
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={onTestClick}
-            disabled={!canPlayAudio || isLoading}
-          >
-            {testing ? 'Stop test' : 'Test'}
-          </Button>
-          <LevelMeter percent={levelPercent} />
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="deviceCheckMicrophone">Microphone</Label>
+          <div className="flex items-center gap-2">
+            <DeviceSelect
+              id="deviceCheckMicrophone"
+              label="Microphone"
+              devices={usableMicrophones}
+              value={microphoneId}
+              onChange={chooseMicrophone}
+              disabled={micRowDisabled}
+            />
+            <Meter level={meterLevel(micLevel)} label="Microphone level" />
+          </div>
+          {micNote && <p className="text-xs text-muted-foreground">{micNote}</p>}
         </div>
 
-        {!canPlayAudio && (
-          <p className="text-xs text-muted-foreground">
-            Your browser can&rsquo;t play test audio. Open Maincar in Chrome or Edge.
-          </p>
-        )}
-
-        {/* Two results, because the test does two things. Live, so a screen
-            reader announces each one as it lands. */}
-        <div aria-live="polite" className="flex flex-col gap-1">
-          <ResultLine icon={<Volume2 size={16} aria-hidden="true" />} text={beepMessage(beep)} />
-          <ResultLine
-            icon={<Mic size={16} aria-hidden="true" />}
-            text={micProblem ?? micMessage(mic)}
-          />
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="deviceCheckSpeaker">Speaker</Label>
+          <div className="flex items-center gap-2">
+            <DeviceSelect
+              id="deviceCheckSpeaker"
+              label="Speaker"
+              devices={usableSpeakers}
+              value={canChooseSpeaker ? speakerId : null}
+              onChange={chooseSpeaker}
+              disabled={speakerRowDisabled}
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => void testSpeaker()}
+              disabled={!canPlayAudio || speakerRowDisabled || speakerTesting || !speakerId}
+            >
+              Test speaker
+            </Button>
+            <Meter level={meterLevel(speakerLevel)} label="Speaker level" />
+          </div>
+          {speakerNote && <p className="text-xs text-muted-foreground">{speakerNote}</p>}
         </div>
       </div>
+
+      {!canPlayAudio && (
+        <p className="text-xs text-muted-foreground">
+          Your browser can&rsquo;t play test audio. Open Maincar in Chrome or Edge.
+        </p>
+      )}
     </section>
   )
 }
@@ -369,23 +460,6 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
 // ---------------------------------------------------------------------------
 // Pieces
 // ---------------------------------------------------------------------------
-
-function beepMessage(status: BeepStatus): string {
-  if (status === 'idle') return 'Speaker: not tested yet.'
-  if (status === 'playing') return 'Speaker: playing a beep.'
-  if (status === 'played') return 'Speaker: beep played. Pick another speaker if you heard nothing.'
-  return 'Speaker: could not play the beep. Pick another speaker, then test again.'
-}
-
-function micMessage(status: MicStatus): string {
-  if (status === 'idle') return 'Microphone: not tested yet.'
-  if (status === 'listening') return 'Microphone: listening. Say a few words.'
-  if (status === 'heard') return 'Microphone: your voice registered.'
-  if (status === 'silent') {
-    return 'Microphone: nothing came through. Pick another one, then test again.'
-  }
-  return 'Microphone: the test failed. Pick another one, then test again.'
-}
 
 /**
  * A name for a device the browser may not have named.
@@ -475,14 +549,13 @@ function NetworkStatusLine({ online }: { online: boolean }) {
   )
 }
 
-function DevicePicker({
+function DeviceSelect({
   id,
   label,
   devices,
   value,
   onChange,
   disabled,
-  note,
 }: {
   id: string
   label: string
@@ -490,62 +563,21 @@ function DevicePicker({
   value: string | null
   onChange: (next: string) => void
   disabled: boolean
-  note: string
 }) {
-  // Radix rejects an empty value, and the browser hands back empty ids before
-  // the page holds permission, so those entries never reach the list.
-  const usable = devices.filter((device) => device.deviceId.length > 0)
-  const isDisabled = disabled || usable.length === 0
+  const isDisabled = disabled || devices.length === 0
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>{label}</Label>
-      <Select value={value ?? undefined} onValueChange={onChange} disabled={isDisabled}>
-        <SelectTrigger id={id} size="sm" className="w-full">
-          <SelectValue placeholder={`No ${label.toLowerCase()} available`} />
-        </SelectTrigger>
-        <SelectContent>
-          {usable.map((device, index) => (
-            <SelectItem key={device.deviceId} value={device.deviceId}>
-              {deviceLabel(device, index, label)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {isDisabled && <p className="text-xs text-muted-foreground">{note}</p>}
-    </div>
-  )
-}
-
-/**
- * Visual only — a bare "42%" means nothing to a rep testing a microphone, so
- * the bar itself is the whole signal. `aria-valuetext` still gives a screen
- * reader an exact reading; only the sighted, rendered number is gone.
- */
-function LevelMeter({ percent }: { percent: number }) {
-  return (
-    <div
-      role="meter"
-      aria-label="Microphone level"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent}
-      aria-valuetext={`${percent} percent`}
-      className="h-2 w-40 overflow-hidden rounded-md border border-border bg-muted"
-    >
-      <div
-        className="h-full bg-status-success transition-[width] duration-150 ease-out motion-reduce:transition-none"
-        style={{ width: `${percent}%` }}
-      />
-    </div>
-  )
-}
-
-function ResultLine({ icon, text }: { icon: ReactNode; text: string }) {
-  return (
-    <p className="flex items-start gap-2 text-xs text-muted-foreground">
-      <span className="flex h-4 shrink-0 items-center">{icon}</span>
-      {text}
-    </p>
+    <Select value={value ?? undefined} onValueChange={onChange} disabled={isDisabled}>
+      <SelectTrigger id={id} size="sm" className="w-0 flex-1">
+        <SelectValue placeholder={`No ${label.toLowerCase()} available`} />
+      </SelectTrigger>
+      <SelectContent>
+        {devices.map((device, index) => (
+          <SelectItem key={device.deviceId} value={device.deviceId}>
+            {deviceLabel(device, index, label)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
