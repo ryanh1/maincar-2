@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
@@ -17,6 +17,7 @@ const {
   createMutateMock,
   renameMutateMock,
   deleteMutateMock,
+  updateConfigMutateMock,
   toastErrorMock,
   toastSuccessMock,
 } = vi.hoisted(() => ({
@@ -32,6 +33,7 @@ const {
   createMutateMock: vi.fn(),
   renameMutateMock: vi.fn(),
   deleteMutateMock: vi.fn(),
+  updateConfigMutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
   toastSuccessMock: vi.fn(),
 }))
@@ -54,7 +56,17 @@ import { Reports } from '@/pages/Reports'
 const CONFIG = {
   baseObject: 'deal' as const,
   rows: [{ field: 'stage' as const }],
+  columns: [],
   values: [{ field: 'amountMinor' as const, aggregation: 'sum' as const }],
+  timeZone: { mode: 'viewer' as const },
+}
+
+const OWNER_BY_STAGE_CONFIG = {
+  baseObject: 'deal' as const,
+  rows: [{ field: 'owner' as const }],
+  columns: [{ field: 'stage' as const }],
+  values: [{ field: 'amountMinor' as const, aggregation: 'sum' as const }],
+  timeZone: { mode: 'viewer' as const },
 }
 
 const REPORT = {
@@ -94,20 +106,32 @@ beforeEach(() => {
     isError: false,
   }))
   useRunReportMock.mockReturnValue({
-    data: { report: { rows: [{ stageId: 'stage-a', stageName: 'Discovery', amountMinor: '3500' }] } },
+    data: { report: { rows: [{ ownerId: 'user-a', ownerName: 'Avery Admin', stageId: 'stage-a', stageName: 'Discovery', amountMinor: '3500' }] } },
     isPending: false,
     isError: false,
   })
   useCreateReportMock.mockReturnValue({ mutate: createMutateMock, isPending: false })
   useRenameReportMock.mockReturnValue({ mutate: renameMutateMock, isPending: false })
   useDeleteReportMock.mockReturnValue({ mutate: deleteMutateMock, isPending: false })
-  useUpdateReportConfigMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
+  useUpdateReportConfigMock.mockReturnValue({ mutate: updateConfigMutateMock, isPending: false })
   useGetTeamsMock.mockImplementation((_orgId, params) => ({
     data: { teams: params?.isArchived ? [] : [ACTIVE_TEAM] },
     isPending: false,
     isError: false,
   }))
 })
+
+function dragFieldToZone(field: string, zone: 'rows' | 'columns' | 'values') {
+  const values = new Map<string, string>()
+  const dataTransfer = {
+    effectAllowed: 'none',
+    getData: (type: string) => values.get(type) ?? '',
+    setData: (type: string, value: string) => values.set(type, value),
+  }
+  fireEvent.dragStart(screen.getByRole('button', { name: field, exact: true }), { dataTransfer })
+  fireEvent.dragOver(screen.getByTestId(`drop-zone-${zone}`), { dataTransfer })
+  fireEvent.drop(screen.getByTestId(`drop-zone-${zone}`), { dataTransfer })
+}
 
 describe('Reports', () => {
   it('lists a rep’s saved reports and opens one with its stored result', async () => {
@@ -121,7 +145,7 @@ describe('Reports', () => {
 
     expect(screen.getByRole('heading', { name: 'Pipeline by stage' })).toBeInTheDocument()
     expect(screen.getByText('Discovery')).toBeInTheDocument()
-    expect(screen.getByText('$35.00')).toBeInTheDocument()
+    expect(screen.getAllByText('$35.00')).toHaveLength(2)
   })
 
   it('requires a name before it saves a new report', async () => {
@@ -129,6 +153,9 @@ describe('Reports', () => {
     renderWithProviders(<Reports />)
 
     await user.click(screen.getByRole('button', { name: 'New report' }))
+    dragFieldToZone('Owner', 'rows')
+    dragFieldToZone('Stage', 'columns')
+    dragFieldToZone('Amount', 'values')
     await user.click(screen.getByRole('button', { name: 'Save report' }))
     await user.type(screen.getByLabelText(/^Name/), '   ')
     await user.click(screen.getByRole('button', { name: 'Save' }))
@@ -191,7 +218,48 @@ describe('Reports', () => {
     await user.click(screen.getByRole('button', { name: 'Remove Former Revenue' }))
 
     expect(screen.getByText('All owners.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Save filters' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument()
+  })
+
+  it('builds an Owner-by-Stage pivot live and includes a grand total', async () => {
+    useRunReportMock.mockReturnValue({
+      data: {
+        report: {
+          rows: [
+            { ownerId: 'user-a', ownerName: 'Avery Admin', stageId: 'stage-a', stageName: 'Discovery', amountMinor: '3500' },
+            { ownerId: 'user-a', ownerName: 'Avery Admin', stageId: 'stage-b', stageName: 'Won', amountMinor: '1500' },
+          ],
+        },
+      },
+      isPending: false,
+      isError: false,
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    dragFieldToZone('Owner', 'rows')
+    dragFieldToZone('Stage', 'columns')
+    dragFieldToZone('Amount', 'values')
+
+    expect(screen.getByRole('columnheader', { name: 'Discovery' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Won' })).toBeInTheDocument()
+    expect(screen.getByRole('rowheader', { name: 'Avery Admin' })).toBeInTheDocument()
+    expect(screen.getByRole('rowheader', { name: 'Grand total' })).toBeInTheDocument()
+    expect(await screen.findAllByText('$50.00')).toHaveLength(2)
+  })
+
+  it('lets a keyboard user add fields to the builder', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    await user.click(screen.getByRole('button', { name: 'Owner', exact: true }))
+    await user.click(screen.getByRole('button', { name: 'Stage', exact: true }))
+    await user.click(screen.getByRole('button', { name: 'Amount', exact: true }))
+
+    expect(screen.getByRole('button', { name: 'Save report' })).toBeEnabled()
+    expect(screen.getByRole('rowheader', { name: 'Avery Admin' })).toBeInTheDocument()
   })
 
   it('saves, renames, and moves a report to Trash only after confirmation', async () => {
@@ -202,12 +270,15 @@ describe('Reports', () => {
     renderWithProviders(<Reports />)
 
     await user.click(screen.getByRole('button', { name: 'New report' }))
+    dragFieldToZone('Owner', 'rows')
+    dragFieldToZone('Stage', 'columns')
+    dragFieldToZone('Amount', 'values')
     await user.click(screen.getByRole('button', { name: 'Save report' }))
     await user.type(screen.getByLabelText(/^Name/), 'Quarterly pipeline')
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     expect(createMutateMock).toHaveBeenCalledWith(
-      { orgId: 'org-a', name: 'Quarterly pipeline', config: CONFIG },
+      { orgId: 'org-a', name: 'Quarterly pipeline', config: OWNER_BY_STAGE_CONFIG },
       expect.any(Object),
     )
 

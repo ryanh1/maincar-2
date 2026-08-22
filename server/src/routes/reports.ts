@@ -36,9 +36,12 @@ const ownerTeamScopeSchema = z.object({
 
 const dealReportFiltersSchema = z.object({ ownerTeam: ownerTeamScopeSchema }).strict()
 
+const pivotDimensionSchema = z.object({ field: z.enum(['owner', 'stage']) }).strict()
+
 const dealReportConfigSchema = z.object({
   baseObject: z.literal('deal'),
-  rows: z.tuple([z.object({ field: z.literal('stage') }).strict()]),
+  rows: z.array(pivotDimensionSchema).max(2),
+  columns: z.array(pivotDimensionSchema).max(2).default([]),
   values: z.tuple([z.object({ field: z.literal('amountMinor'), aggregation: z.literal('sum') }).strict()]),
   timeZone: timeZoneSchema,
   timeBucket: z.object({ field: z.literal('createdAt'), grain: z.literal('day') }).strict().optional(),
@@ -94,7 +97,20 @@ const reportConfigSchema = z.discriminatedUnion('baseObject', [
   activityGridConfigSchema,
   activityMetricsGridConfigSchema,
   dialerConnectRateConfigSchema,
-])
+]).superRefine((config, context) => {
+  if (config.baseObject !== 'deal') return
+
+  const dimensions = [...config.rows, ...config.columns]
+  if (dimensions.length === 0) {
+    context.addIssue({ code: 'custom', path: ['rows'], message: 'Add at least one Owner or Stage group.' })
+  }
+  if (dimensions.length > 2) {
+    context.addIssue({ code: 'custom', path: ['rows'], message: 'A pivot can use at most two groups.' })
+  }
+  if (new Set(dimensions.map((dimension) => dimension.field)).size !== dimensions.length) {
+    context.addIssue({ code: 'custom', path: ['columns'], message: 'A field can appear in only one pivot zone.' })
+  }
+})
 
 const runReportBodySchema = z.object({ config: reportConfigSchema }).strict()
 const reportNameSchema = z.string().trim().min(1, 'Name the report to save it.').max(200)
@@ -111,10 +127,12 @@ const reportListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
 
-interface RawDealStageSum {
+interface RawDealPivotRow {
   createdDay?: string
-  stageId: string
-  stageName: string
+  ownerId?: string
+  ownerName?: string
+  stageId?: string
+  stageName?: string
   amountMinor: string | number | bigint
 }
 
@@ -229,15 +247,15 @@ router.post(
       })
     }
 
-    const rows = await prisma.$queryRaw<RawDealStageSum[]>(query)
+    const rows = await prisma.$queryRaw<RawDealPivotRow[]>(query)
 
     // --- Return response ---
     return void res.json({
       report: {
         rows: rows.map((row) => ({
           ...(row.createdDay ? { createdDay: row.createdDay } : {}),
-          stageId: row.stageId,
-          stageName: row.stageName,
+          ...(row.ownerId && row.ownerName ? { ownerId: row.ownerId, ownerName: row.ownerName } : {}),
+          ...(row.stageId && row.stageName ? { stageId: row.stageId, stageName: row.stageName } : {}),
           // PostgreSQL returns the aggregate as text, preserving exact minor
           // units through JSON just like the Deals API does for one record.
           amountMinor: String(row.amountMinor),

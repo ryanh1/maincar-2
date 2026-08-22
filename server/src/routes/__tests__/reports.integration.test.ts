@@ -33,6 +33,7 @@ import { seedMember, seedOrgWithAdmin } from '../../test/integration/testPrisma.
 const CONFIG = {
   baseObject: 'deal',
   rows: [{ field: 'stage' }],
+  columns: [],
   values: [{ field: 'amountMinor', aggregation: 'sum' }],
   timeZone: { mode: 'pinned', displayZone: 'UTC' },
 }

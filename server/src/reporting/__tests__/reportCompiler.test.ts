@@ -37,6 +37,32 @@ describe('compileReport', () => {
     expect(query.values).toEqual(['org-a', 'owner-a', 'owner-b'])
   })
 
+  it('compiles an Owner-by-Stage pivot through registry-owned joins and grouping', () => {
+    const query = compileReport({
+      baseObject: 'deal',
+      rows: [{ field: 'owner' }],
+      columns: [{ field: 'stage' }],
+      values: [{ field: 'amountMinor', aggregation: 'sum' }],
+      timeZone: { mode: 'viewer' },
+    }, 'org-a', { viewerTimeZone: 'America/New_York' })
+
+    expect(query.sql).toContain('LEFT JOIN "User" AS "owner"')
+    expect(query.sql).toContain('INNER JOIN "PipelineStage" AS "stage"')
+    expect(query.sql).toContain('GROUP BY COALESCE("owner"."id", \'unassigned\')')
+    expect(query.sql).toContain('"stage"."id", "stage"."name"')
+    expect(query.values).toEqual(['org-a'])
+  })
+
+  it('rejects the same dimension appearing in more than one zone', () => {
+    expect(() => compileReport({
+      baseObject: 'deal',
+      rows: [{ field: 'stage' }],
+      columns: [{ field: 'stage' }],
+      values: [{ field: 'amountMinor', aggregation: 'sum' }],
+      timeZone: { mode: 'viewer' },
+    }, 'org-a', { viewerTimeZone: 'America/New_York' })).toThrow('A field can appear in only one pivot zone.')
+  })
+
   it('binds the viewer IANA zone before truncating a local day bucket', () => {
     const query = compileReport(DAY_BUCKETED_REPORT, 'org-a', {
       viewerTimeZone: 'America/New_York',

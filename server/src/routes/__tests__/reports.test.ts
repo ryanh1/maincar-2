@@ -33,6 +33,7 @@ const URL = `/api/orgs/${ORG_ID}/reports/run`
 const CONFIG = {
   baseObject: 'deal',
   rows: [{ field: 'stage' }],
+  columns: [],
   values: [{ field: 'amountMinor', aggregation: 'sum' }],
   timeZone: { mode: 'pinned', displayZone: 'UTC' },
 }
@@ -41,6 +42,14 @@ const VIEWER_DAY_CONFIG = {
   ...CONFIG,
   timeZone: { mode: 'viewer' },
   timeBucket: { field: 'createdAt', grain: 'day' },
+}
+
+const OWNER_BY_STAGE_CONFIG = {
+  baseObject: 'deal',
+  rows: [{ field: 'owner' }],
+  columns: [{ field: 'stage' }],
+  values: [{ field: 'amountMinor', aggregation: 'sum' }],
+  timeZone: { mode: 'viewer' },
 }
 
 const ACTIVITY_GRID_CONFIG = {
@@ -136,6 +145,24 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
       select: { id: true, members: { select: { userId: true } } },
     })
     expect(prismaMock.$queryRaw.mock.calls[0][0].values).toEqual([ORG_ID, 'owner-a', 'owner-b'])
+  })
+
+  it('returns the selected Owner and Stage dimensions for the pivot grid', async () => {
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      { ownerId: 'user-a', ownerName: 'Avery Admin', stageId: 'stage-discovery', stageName: 'Discovery', amountMinor: 3500n },
+      { ownerId: 'user-a', ownerName: 'Avery Admin', stageId: 'stage-won', stageName: 'Won', amountMinor: 9000n },
+    ])
+
+    const response = await request(app)
+      .post(URL)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ config: OWNER_BY_STAGE_CONFIG })
+
+    expect(response.status).toBe(200)
+    expect(response.body.report.rows).toEqual([
+      { ownerId: 'user-a', ownerName: 'Avery Admin', stageId: 'stage-discovery', stageName: 'Discovery', amountMinor: '3500' },
+      { ownerId: 'user-a', ownerName: 'Avery Admin', stageId: 'stage-won', stageName: 'Won', amountMinor: '9000' },
+    ])
   })
 
   it('returns activity event counts grouped into viewer-local weeks', async () => {
@@ -270,6 +297,10 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
       name: 'an attempted org override',
       config: { ...CONFIG, orgId: 'org-b' },
     },
+    {
+      name: 'a duplicate dimension across pivot zones',
+      config: { ...OWNER_BY_STAGE_CONFIG, columns: [{ field: 'owner' }] },
+    },
   ])('rejects $name before compiling a query', async ({ config }) => {
     const response = await request(app)
       .post(URL)
@@ -278,6 +309,23 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
 
     expect(response.status).toBe(400)
     expect(prismaMock.$queryRaw).not.toHaveBeenCalled()
+  })
+
+  it('refuses to save a pivot that has no group or repeats one across zones', async () => {
+    const noGroup = await request(app)
+      .post(`/api/orgs/${ORG_ID}/reports`)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ name: 'Incomplete', config: { ...CONFIG, rows: [], columns: [] } })
+    const duplicate = await request(app)
+      .post(`/api/orgs/${ORG_ID}/reports`)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ name: 'Duplicate', config: { ...OWNER_BY_STAGE_CONFIG, columns: [{ field: 'owner' }] } })
+
+    expect(noGroup.status).toBe(400)
+    expect(noGroup.body).toEqual({ error: 'Add at least one Owner or Stage group.' })
+    expect(duplicate.status).toBe(400)
+    expect(duplicate.body).toEqual({ error: 'A field can appear in only one pivot zone.' })
+    expect(prismaMock.report.create).not.toHaveBeenCalled()
   })
 })
 

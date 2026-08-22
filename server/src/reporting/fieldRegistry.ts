@@ -13,7 +13,15 @@ export const DEAL_FIELD_REGISTRY = {
       field: 'stage',
       select: '"stage"."id" AS "stageId", "stage"."name" AS "stageName"',
       groupBy: '"stage"."id", "stage"."name"',
+      orderBy: '"stage"."name" ASC',
       join: 'INNER JOIN "PipelineStage" AS "stage" ON "stage"."id" = "deal"."stageId" AND "stage"."orgId" = "deal"."orgId"',
+    },
+    owner: {
+      field: 'owner',
+      select: `COALESCE("owner"."id", 'unassigned') AS "ownerId", COALESCE(NULLIF(TRIM(CONCAT_WS(' ', "owner"."firstName", "owner"."lastName")), ''), "owner"."email", 'Unassigned') AS "ownerName"`,
+      groupBy: `COALESCE("owner"."id", 'unassigned'), COALESCE(NULLIF(TRIM(CONCAT_WS(' ', "owner"."firstName", "owner"."lastName")), ''), "owner"."email", 'Unassigned')`,
+      orderBy: '"ownerName" ASC',
+      join: 'LEFT JOIN "User" AS "owner" ON "owner"."id" = "deal"."ownerUserId"',
     },
   },
   measures: {

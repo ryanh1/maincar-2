@@ -3,7 +3,9 @@ import { expect, test } from '@playwright/test'
 const CONFIG = {
   baseObject: 'deal',
   rows: [{ field: 'stage' }],
+  columns: [],
   values: [{ field: 'amountMinor', aggregation: 'sum' }],
+  timeZone: { mode: 'viewer' },
 }
 
 const REPORT = {
@@ -42,7 +44,7 @@ test('opens, saves, renames, and moves a report to Trash in Chromium', async ({ 
     }
     if (request.method() === 'GET') return route.fulfill({ json: { report: REPORT } })
     if (request.method() === 'POST' && url.pathname.endsWith('/run')) {
-      return route.fulfill({ json: { report: { rows: [{ stageId: 'stage-a', stageName: 'Discovery', amountMinor: '3500' }] } } })
+      return route.fulfill({ json: { report: { rows: [{ ownerId: 'user-fixture', ownerName: 'Fixture Rep', stageId: 'stage-a', stageName: 'Discovery', amountMinor: '3500' }] } } })
     }
     if (request.method() === 'POST') return route.fulfill({ status: 201, json: { report: REPORT } })
     return route.fulfill({ json: { report: { id: REPORT.id, name: 'Pipeline Q3' } } })
@@ -56,12 +58,17 @@ test('opens, saves, renames, and moves a report to Trash in Chromium', async ({ 
   await expect(page.getByRole('heading', { name: /^Reports/ })).toBeVisible()
   await page.getByRole('button', { name: 'Open Pipeline by stage' }).click()
   await expect(page.getByText('Discovery')).toBeVisible()
-  await expect(page.getByText('$35.00')).toBeVisible()
+  await expect(page.getByText('$35.00').first()).toBeVisible()
 
   await page.getByRole('button', { name: 'Back to reports' }).click()
   await page.getByRole('button', { name: 'New report' }).click()
   await page.getByRole('checkbox', { name: 'Revenue' }).click()
   await expect(page.getByText('Owner is on Revenue.')).toBeVisible()
+  await page.getByRole('button', { name: 'Owner', exact: true }).dragTo(page.getByTestId('drop-zone-rows'))
+  await page.getByRole('button', { name: 'Stage', exact: true }).dragTo(page.getByTestId('drop-zone-columns'))
+  await page.getByRole('button', { name: 'Amount', exact: true }).dragTo(page.getByTestId('drop-zone-values'))
+  await expect(page.getByRole('rowheader', { name: 'Fixture Rep' })).toBeVisible()
+  await expect(page.getByRole('rowheader', { name: 'Grand total' })).toBeVisible()
   await page.getByRole('button', { name: 'Save report' }).click()
   await page.getByLabel(/^Name/).fill('Quarterly pipeline')
   await page.getByRole('button', { name: 'Save' }).click()
