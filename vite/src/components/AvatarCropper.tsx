@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import Cropper, { type Area } from 'react-easy-crop'
 
 import { Button } from '@/components/ui/button'
@@ -31,15 +31,11 @@ async function exportSquare(source: string, crop: Area): Promise<Blob> {
   return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('That image could not be prepared.')), 'image/png'))
 }
 
-export function AvatarCropper({ file, onCancel, onSave, saving }: { file: File | null; onCancel: () => void; onSave: (blob: Blob) => Promise<void>; saving: boolean }) {
-  const [source] = useState(() => file ? URL.createObjectURL(file) : null)
+export function AvatarCropper({ file, source, onCancel, onSave, saving }: { file: File | null; source: string | null; onCancel: () => void; onSave: (blob: Blob) => Promise<void>; saving: boolean }) {
   const [crop, setCrop] = useState({ x: 0, y: 0 })
   const [zoom, setZoom] = useState(1)
   const [pixels, setPixels] = useState<Area | null>(null)
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    return () => { if (source) URL.revokeObjectURL(source) }
-  }, [source])
   const complete = useCallback((_area: Area, areaPixels: Area) => setPixels(areaPixels), [])
   async function save() {
     if (!source || !pixels) return
