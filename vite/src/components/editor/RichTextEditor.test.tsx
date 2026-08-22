@@ -69,12 +69,11 @@ describe('RichTextEditor', () => {
     render(<RichTextEditor label="Message" initialHtml="<p>Hello there</p>" />)
 
     expect(bodyOf()).toHaveTextContent('Hello there')
-    for (const name of ['Bold', 'Italic', 'Bulleted list', 'Numbered list', 'Add link']) {
+    for (const name of ['Bold', 'Italic', 'Underline', 'Bulleted list', 'Numbered list', 'Add link']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
-    // Exactly five. A sixth button is a question for the spec, not a patch.
     expect(screen.getByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument()
-    expect(screen.getAllByRole('button')).toHaveLength(5)
+    expect(screen.getAllByRole('button')).toHaveLength(6)
   })
 
   it('does not report the seed upward', () => {
@@ -149,6 +148,7 @@ describe('RichTextEditor', () => {
     it.each([
       { button: 'Bold', tag: 'strong' },
       { button: 'Italic', tag: 'em' },
+      { button: 'Underline', tag: 'u' },
     ])('$button produces <$tag>', async ({ button, tag }) => {
       const onChange = vi.fn()
       const user = userEvent.setup()
@@ -636,6 +636,21 @@ describe('RichTextEditor', () => {
       await user.keyboard(`visit ${typed} today`)
 
       await waitFor(() => expect(anchorsIn(lastHtml(onChange))).toEqual([[href, typed]]))
+    })
+
+    it('turns a pasted web address into a link', async () => {
+      const onChange = vi.fn()
+      const user = userEvent.setup()
+      render(<RichTextEditor label="Message" onChange={onChange} />)
+
+      bodyOf().focus()
+      await user.paste('https://acme.com/pricing')
+
+      await waitFor(() =>
+        expect(anchorsIn(lastHtml(onChange))).toEqual([
+          ['https://acme.com/pricing', 'https://acme.com/pricing'],
+        ]),
+      )
     })
 
     /**

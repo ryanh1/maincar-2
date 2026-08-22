@@ -24,7 +24,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { useGetEmailSignatures, useGetEmailTemplates, useSendEmailDraft } from '@/hooks/email'
 import type { EmailSignature, EmailTemplate } from '@/hooks/email'
 import { useGetMailboxes } from '@/hooks/mailboxes'
@@ -208,23 +207,16 @@ export function ComposerCard({ draft }: ComposerCardProps) {
       body !== ''
     ) return
 
-    defaultSignatureInserted.current = true
+  defaultSignatureInserted.current = true
     setInsertedSignature(defaultSignature)
     editorActions.insertHtmlAtEnd(defaultSignature.bodyHtml)
   }, [body, draft.bodyHtml, editorActions, signatures])
 
-  // Cc and Bcc hide behind two links, "Add Cc" and "Add Bcc", and only one of
-  // the two fields can be open at a time — picking one commits to it and the
-  // other link never appears. Open from the start when the draft already
-  // carries one of them, so a rep who added a Cc and refreshed finds the row
-  // still there with its chip, not a link they have to press again. A draft
-  // carrying both (from before this field became exclusive) keeps Cc, since
-  // that is the field a rep reaches for first.
-  const [ccBcc, setCcBcc] = useState<'none' | 'cc' | 'bcc'>(() => {
-    if (draft.ccAddrs.length > 0) return 'cc'
-    if (draft.bccAddrs.length > 0) return 'bcc'
-    return 'none'
-  })
+  // Cc and Bcc are independently optional. Open a populated row on mount so a
+  // refresh never hides recipients, and leave the other control available until
+  // the rep explicitly opens it.
+  const [showCc, setShowCc] = useState(() => draft.ccAddrs.length > 0)
+  const [showBcc, setShowBcc] = useState(() => draft.bccAddrs.length > 0)
 
   // What has already been reported upward. Comparing against this is what makes
   // the first render silent — opening a card is not editing it, and a PATCH that
@@ -439,55 +431,47 @@ export function ComposerCard({ draft }: ComposerCardProps) {
         </Button>
       </header>
 
-      {/*
-        The Cc/Bcc link sits at the right end of the To row, the way Gmail's
-        does, and leaves once it has been pressed — a link that reveals a row
-        already on screen has nothing left to do. `has-[input:focus]` carries the
-        row's focus color across to the link's own bottom border, so the line
-        under the row is one color and not two.
-      */}
-      <div className="flex shrink-0 items-stretch has-[input:focus]:*:border-primary">
+      {/* Cc and Bcc controls sit at the right end of the To row until each is
+          opened, while the recipient border remains neutral on focus. */}
+      <div className="flex shrink-0 items-stretch">
         <div className="min-w-0 flex-1">
           <RecipientField label="To" chips={toChips} onChange={setToChips} autoFocus />
         </div>
-        {ccBcc === 'none' ? (
-          <div className="flex shrink-0 items-start border-b border-border px-3 py-1">
+        {!showCc || !showBcc ? (
+          <div className="flex shrink-0 items-start gap-1 border-b border-border px-3 py-1">
             {/* `flex items-start` on the wrapper rather than the buttons' own
                 centering: the row grows as chips wrap, and a link that drifts
                 to the middle of it stops lining up with the `To` label beside
                 it. */}
-            <button
-              type="button"
-              onClick={() => setCcBcc('cc')}
-              className="cursor-pointer text-xs leading-6 font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-            >
-              Add Cc
-            </button>
-            <span className="px-1 text-xs leading-6 text-muted-foreground" aria-hidden>
-              /
-            </span>
-            <button
-              type="button"
-              onClick={() => setCcBcc('bcc')}
-              className="cursor-pointer text-xs leading-6 font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-            >
-              Add Bcc
-            </button>
+            {!showCc ? (
+              <button
+                type="button"
+                onClick={() => setShowCc(true)}
+                className="cursor-pointer text-xs leading-6 font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+              >
+                Cc
+              </button>
+            ) : null}
+            {!showBcc ? (
+              <button
+                type="button"
+                onClick={() => setShowBcc(true)}
+                className="cursor-pointer text-xs leading-6 font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+              >
+                Bcc
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
 
-      {ccBcc === 'cc' ? <RecipientField label="Cc" chips={ccChips} onChange={setCcChips} /> : null}
-      {ccBcc === 'bcc' ? (
-        <RecipientField label="Bcc" chips={bccChips} onChange={setBccChips} />
-      ) : null}
+      {showCc ? <RecipientField label="Cc" chips={ccChips} onChange={setCcChips} /> : null}
+      {showBcc ? <RecipientField label="Bcc" chips={bccChips} onChange={setBccChips} /> : null}
 
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3">
-        <Label htmlFor={subjectId} className="w-8 shrink-0 text-xs font-medium text-muted-foreground">
-          Re
-        </Label>
+      <div className="flex shrink-0 items-center border-b border-border px-3">
         <Input
           id={subjectId}
+          aria-label="Subject"
           value={subject}
           onChange={(event) => setSubject(event.target.value)}
           // The route's own cap, so an over-long subject is refused at the

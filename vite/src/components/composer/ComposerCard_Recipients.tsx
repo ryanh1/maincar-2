@@ -122,10 +122,9 @@ export function RecipientField({ label, chips, onChange, autoFocus }: RecipientF
   return (
     <div className="shrink-0">
       <div
-        // The row's bottom border is the field's edge, and it turns `primary`
-        // on focus. A ring inside a bordered row would draw two lines where the
-        // design system asks for one.
-        className="flex items-start gap-2 border-b border-border px-3 py-1 focus-within:border-primary"
+        // The row's bottom border remains neutral on focus: the surrounding
+        // composer should not draw an extra focus line below recipient fields.
+        className="flex items-start gap-2 border-b border-border px-3 py-1"
         // Clicking the empty space beside the chips is clicking the field.
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) {

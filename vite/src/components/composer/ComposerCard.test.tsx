@@ -223,7 +223,7 @@ function renderCard(draft: EmailDraft = makeDraft()) {
 }
 
 function subjectField() {
-  return screen.getByLabelText('Re')
+  return screen.getByLabelText('Subject')
 }
 
 /** The editable region, as a screen reader finds it. */
@@ -293,6 +293,7 @@ describe('ComposerCard', () => {
     expect(header).toHaveClass('h-8', 'bg-muted', 'border-b', 'border-border', 'px-2')
     expect(screen.getByRole('button', { name: 'Minimize' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
+    expect(screen.queryByText('Re')).not.toBeInTheDocument()
   })
 
   it('titles the card with the subject and the first recipient, and renames as the rep types', () => {
@@ -562,12 +563,12 @@ function chipAddresses(): string[] {
     .map((button) => button.getAttribute('aria-label')!.replace(/^Remove /, ''))
 }
 
-function addCcLink() {
-  return screen.queryByRole('button', { name: 'Add Cc' })
+function addCcButton() {
+  return screen.queryByRole('button', { name: 'Cc' })
 }
 
-function addBccLink() {
-  return screen.queryByRole('button', { name: 'Add Bcc' })
+function addBccButton() {
+  return screen.queryByRole('button', { name: 'Bcc' })
 }
 
 describe('ComposerCard recipients', () => {
@@ -577,30 +578,29 @@ describe('ComposerCard recipients', () => {
     expect(recipientBox('To')).toHaveFocus()
   })
 
-  it('hides Cc and Bcc behind two links, and picking one leaves only that row', () => {
+  it('keeps Bcc available after adding Cc', () => {
     renderCard()
 
     expect(screen.queryByLabelText('Cc')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Bcc')).not.toBeInTheDocument()
 
-    fireEvent.click(addCcLink()!)
+    fireEvent.click(addCcButton()!)
 
     expect(screen.getByLabelText('Cc')).toBeInTheDocument()
     expect(screen.queryByLabelText('Bcc')).not.toBeInTheDocument()
-    // Mutually exclusive: neither link is left to reveal the other.
-    expect(addCcLink()).not.toBeInTheDocument()
-    expect(addBccLink()).not.toBeInTheDocument()
+    expect(addCcButton()).not.toBeInTheDocument()
+    expect(addBccButton()).toBeInTheDocument()
   })
 
-  it('picking Add Bcc shows only the Bcc row', () => {
+  it('keeps Cc available after adding Bcc', () => {
     renderCard()
 
-    fireEvent.click(addBccLink()!)
+    fireEvent.click(addBccButton()!)
 
     expect(screen.getByLabelText('Bcc')).toBeInTheDocument()
     expect(screen.queryByLabelText('Cc')).not.toBeInTheDocument()
-    expect(addCcLink()).not.toBeInTheDocument()
-    expect(addBccLink()).not.toBeInTheDocument()
+    expect(addCcButton()).toBeInTheDocument()
+    expect(addBccButton()).not.toBeInTheDocument()
   })
 
   it('shows the Cc row from the start when the draft already carries a Cc', () => {
@@ -608,7 +608,8 @@ describe('ComposerCard recipients', () => {
 
     expect(screen.getByLabelText('Cc')).toBeInTheDocument()
     expect(screen.queryByLabelText('Bcc')).not.toBeInTheDocument()
-    expect(addCcLink()).not.toBeInTheDocument()
+    expect(addCcButton()).not.toBeInTheDocument()
+    expect(addBccButton()).toBeInTheDocument()
     expect(chipAddresses()).toEqual(['bob@acme.test'])
   })
 
@@ -617,22 +618,20 @@ describe('ComposerCard recipients', () => {
 
     expect(screen.getByLabelText('Bcc')).toBeInTheDocument()
     expect(screen.queryByLabelText('Cc')).not.toBeInTheDocument()
-    expect(addBccLink()).not.toBeInTheDocument()
+    expect(addCcButton()).toBeInTheDocument()
+    expect(addBccButton()).not.toBeInTheDocument()
   })
 
   it('seeds every visible row from the draft it opened with', () => {
-    // Cc and Bcc are mutually exclusive on screen, so a draft carrying both
-    // (from before this field became exclusive) shows only Cc — the field it
-    // picks first. The Bcc chip stays in the draft's own data untouched; see
-    // "shows the Cc row from the start" above for the exclusivity itself.
     renderCard(
       makeDraft({
         toAddrs: ['ann@acme.test'],
         ccAddrs: ['bob@acme.test'],
+        bccAddrs: ['legal@acme.test'],
       }),
     )
 
-    expect(chipAddresses()).toEqual(['ann@acme.test', 'bob@acme.test'])
+    expect(chipAddresses()).toEqual(['ann@acme.test', 'bob@acme.test', 'legal@acme.test'])
   })
 
   it('rides the same debounce as the body, and sends only the field that changed', async () => {
@@ -657,7 +656,7 @@ describe('ComposerCard recipients', () => {
     const { saveDraft } = renderCard()
 
     addRecipient('To', 'ann@acme.test')
-    fireEvent.click(addCcLink()!)
+    fireEvent.click(addCcButton()!)
     addRecipient('Cc', 'bob@acme.test')
     type(subjectField(), 'Quote')
     await typeBody('Numbers attached.')
@@ -673,11 +672,11 @@ describe('ComposerCard recipients', () => {
     })
   })
 
-  it('sends Bcc instead of Cc when the rep picks Add Bcc', async () => {
+  it('sends Bcc when the rep picks Bcc', async () => {
     vi.useFakeTimers()
     const { saveDraft } = renderCard()
 
-    fireEvent.click(addBccLink()!)
+    fireEvent.click(addBccButton()!)
     addRecipient('Bcc', 'legal@acme.test')
 
     await advance(AUTOSAVE_DELAY_MS)
