@@ -196,12 +196,14 @@ describe('a call the browser Device originated (carries our callId)', () => {
 // No callId — not a call we originated (real inbound, stray request, etc.)
 // ============================================================
 describe('a request with no callId', () => {
-  it('returns empty TwiML and touches no row for a real inbound call', async () => {
+  it('tells an inbound caller that the number is not accepting calls and touches no row', async () => {
     const res = await post({ CallSid: CALL_SID, Direction: 'inbound' })
 
     expect(res.status).toBe(200)
     expect(res.type).toBe('text/xml')
     expect(res.text).toContain('<Response')
+    expect(res.text).toContain('<Say')
+    expect(res.text).toContain('This number is not accepting calls. Please try again later.')
     expect(res.text).not.toContain('<Dial')
     // No callId means neither looking up nor advancing a row.
     expect(prismaMock.call.findFirst).not.toHaveBeenCalled()

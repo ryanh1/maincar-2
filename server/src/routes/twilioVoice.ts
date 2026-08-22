@@ -18,20 +18,20 @@
  * })`, vite/src/components/dialer/DialerProvider.tsx) — it is TOLD which call by
  * the `callId` param that connect() carries, not by Twilio's `Direction`, because
  * that param can only be present on a request WE built. The same URL is where
- * purchased numbers point their INBOUND calls (a later issue), so a request with
- * no `callId` — including every real inbound call — is answered with empty TwiML
- * rather than mis-dialed. It tells Twilio to record the bridged call only when the
- * row's `recordingConsent` is `"granted"`. POST /voice/status is the call-progress
- * status callback: it maps Twilio's CallStatus onto Call.status and records
- * duration and end time. POST /voice/recording-status is the recording-progress
- * callback — the only place Twilio delivers a `RecordingSid` for a `<Dial
- * record>` call — and is where `recordingEnabled` is set from Twilio's own
- * confirmation and the upload/transcribe pipeline is kicked off.
+ * purchased numbers point their INBOUND calls (a later phase), so a request with
+ * no `callId` — including every real inbound call — hears an honest unavailable
+ * message rather than silence. It tells Twilio to record the bridged call only
+ * when the row's `recordingConsent` is `"granted"`. POST /voice/status is the
+ * call-progress status callback: it maps Twilio's CallStatus onto Call.status and
+ * records duration and end time. POST /voice/recording-status is the
+ * recording-progress callback — the only place Twilio delivers a `RecordingSid`
+ * for a `<Dial record>` call — and is where `recordingEnabled` is set from
+ * Twilio's own confirmation and the upload/transcribe pipeline is kicked off.
  */
 import express, { Router, type NextFunction, type Request, type Response } from 'express'
 
 import { logger } from '../../dependencies/logger.js'
-import { buildBridgeTwiml, buildEmptyTwiml, verifyTwilioSignature } from '../../dependencies/twilio.js'
+import { buildBridgeTwiml, buildInboundUnavailableTwiml, verifyTwilioSignature } from '../../dependencies/twilio.js'
 import { PUBLIC_BASE_URL } from '../config.js'
 import prisma from '../db.js'
 import { queueUploadRecording } from '../jobs/uploadRecording.js'
@@ -96,14 +96,15 @@ router.post(
     // callId is a custom param `Device.connect({ params: { callId } })` sends —
     // nothing else can produce it, so its absence means this request is not one of
     // our browser-originated calls (a real inbound call to a purchased number,
-    // most likely — a later issue). Valid, do-nothing TwiML rather than a mis-dial
-    // or a 500. No row is touched.
+    // most likely — a later phase). Tell the caller the number is unavailable
+    // instead of dropping them into silence. No row is touched: the future inbound
+    // and voicemail flow owns persistence.
     if (!callId) {
       logger.info(
         { route: 'POST /api/twilio/voice', requestId: req.id },
-        'twilio voice webhook with no callId; returning empty TwiML',
+        'twilio voice webhook with no callId; returning inbound unavailable TwiML',
       )
-      return void res.status(200).type('text/xml').send(buildEmptyTwiml())
+      return void res.status(200).type('text/xml').send(buildInboundUnavailableTwiml())
     }
 
     // --- Find the queued call ---
