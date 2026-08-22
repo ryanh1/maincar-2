@@ -16,12 +16,22 @@ async function stubComposerData(page: import('@playwright/test').Page) {
       total: 2,
     } }),
   )
-  await page.route('**/api/email/orgs/org-fixture/templates', (route) =>
-    route.fulfill({ json: {
-      templates: [{ id: 'template-fixture', name: 'Fixture template', subject: 'Fixture subject', bodyHtml: '<p>Fixture template body</p>', createdById: 'user-fixture', fieldsJson: null, createdAt: '2026-08-22T12:00:00.000Z', updatedAt: '2026-08-22T12:00:00.000Z' }],
-      total: 1,
-    } }),
-  )
+  const privateTemplates = [
+    { id: 'template-private', name: 'My fixture template', subject: 'Fixture subject', bodyHtml: '<p>Fixture template body</p>', visibility: 'PRIVATE', createdById: 'user-fixture', fieldsJson: null, createdAt: '2026-08-22T12:00:00.000Z', updatedAt: '2026-08-22T12:00:00.000Z' },
+  ]
+  const organizationTemplates = [
+    { id: 'template-organization-a', name: 'Organization fixture template', subject: 'Organization fixture subject', bodyHtml: '<p>Organization fixture body</p>', visibility: 'ORGANIZATION', createdById: 'user-fixture', fieldsJson: null, createdAt: '2026-08-22T12:00:00.000Z', updatedAt: '2026-08-22T12:00:00.000Z' },
+    { id: 'template-organization-b', name: 'Organization follow-up', subject: 'Organization follow-up subject', bodyHtml: '<p>Organization follow-up body</p>', visibility: 'ORGANIZATION', createdById: 'user-fixture', fieldsJson: null, createdAt: '2026-08-22T12:00:00.000Z', updatedAt: '2026-08-22T12:00:00.000Z' },
+  ]
+  await page.route('**/api/email/orgs/org-fixture/templates**', (route) => {
+    const scope = new URL(route.request().url()).searchParams.get('scope')
+    const templates = scope === 'private'
+      ? privateTemplates
+      : scope === 'organization'
+        ? organizationTemplates
+        : [...privateTemplates, ...organizationTemplates]
+    return route.fulfill({ json: { templates, total: templates.length, page: 1, limit: 100 } })
+  })
   await page.route('**/api/mailboxes/orgs/org-fixture', (route) => route.fulfill({ json: { mailboxes: [], total: 0 } }))
 }
 
@@ -70,8 +80,7 @@ test('recipient, template, and signature updates do not reset composer focus', a
 
   await actionsButton.click()
   await page.getByRole('menuitem', { name: 'Templates' }).hover()
-  await page.getByRole('menuitem', { name: 'Insert template' }).hover()
-  await page.getByRole('menuitem', { name: 'Fixture template' }).click()
+  await page.getByRole('menuitem', { name: 'My fixture template' }).click()
   await page.getByRole('button', { name: 'Replace' }).click()
   await expect(message).toBeFocused()
 
@@ -79,3 +88,45 @@ test('recipient, template, and signature updates do not reset composer focus', a
   await page.getByRole('menuitem', { name: 'Alternate' }).click()
   await expect(message).toBeFocused()
 })
+
+for (const { name, viewport } of [
+  { name: 'desktop', viewport: { width: 1024, height: 768 } },
+  { name: 'narrow', viewport: { width: 390, height: 844 } },
+]) {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`${name} ${theme} theme keeps organization templates in a secondary picker`, async ({ page }) => {
+      const consoleErrors: string[] = []
+      page.on('console', (message) => {
+        if (message.type() === 'error') consoleErrors.push(message.text())
+      })
+      await page.setViewportSize(viewport)
+      await stubComposerData(page)
+      await page.goto(`/__fixtures/composer-focus?mode=new&theme=${theme}`)
+
+      const to = page.getByRole('textbox', { name: 'To', exact: true })
+      await to.fill('casey@example.com')
+      await page.keyboard.press('Enter')
+
+      await page.getByRole('button', { name: 'Show email actions' }).click()
+      await page.getByRole('menuitem', { name: 'Templates' }).hover()
+      await expect(page.getByRole('menuitem', { name: 'My fixture template' })).toBeVisible()
+
+      const organizationTrigger = page.getByRole('menuitem', { name: 'Organization templates · 2' })
+      await organizationTrigger.hover()
+      const organizationTemplate = page.getByRole('menuitem', { name: 'Organization fixture template' })
+      await expect(organizationTemplate).toBeVisible()
+      const bounds = await organizationTemplate.boundingBox()
+      expect(bounds).not.toBeNull()
+      expect(bounds!.x).toBeGreaterThanOrEqual(0)
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width)
+      await organizationTemplate.click()
+      await page.getByRole('button', { name: 'Replace' }).click()
+
+      await expect(page.getByRole('textbox', { name: 'Subject', exact: true })).toHaveValue('Organization fixture subject')
+      await expect(page.getByRole('textbox', { name: 'Message' })).toContainText('Organization fixture body')
+      await expect(page.getByText('casey@example.com', { exact: true })).toBeVisible()
+      await expect(page.locator('html')).toHaveClass(theme === 'dark' ? /dark/ : /^(?!.*dark).*$/)
+      expect(consoleErrors).toEqual([])
+    })
+  }
+}

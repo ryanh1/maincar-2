@@ -90,7 +90,7 @@ function makeTemplate(overrides: Partial<EmailTemplate> = {}): EmailTemplate {
     name: 'Discovery follow-up',
     subject: 'Great speaking with you',
     bodyHtml: '<p>Thanks for your time.</p>',
-    visibility: 'ORGANIZATION',
+    visibility: 'PRIVATE',
     createdById: 'user-a',
     fieldsJson: null,
     createdAt: '2026-08-01T12:00:00.000Z',
@@ -789,7 +789,6 @@ async function openSubmenu(name: string) {
 async function openTemplateMenu(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: COMPOSER_ACTIONS_BUTTON }))
   await openSubmenu('Templates')
-  await openSubmenu('Insert template')
 }
 
 async function openSaveTemplateMenu(user: ReturnType<typeof userEvent.setup>) {
@@ -799,7 +798,7 @@ async function openSaveTemplateMenu(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('ComposerCard templates', () => {
-  it('lists the org templates in the order the route sorted them', async () => {
+  it('lists private templates as direct actions in the order the route sorted them', async () => {
     const user = userEvent.setup()
     useGetEmailTemplatesMock.mockReturnValue(
       templatesQuery({
@@ -817,6 +816,66 @@ describe('ComposerCard templates', () => {
     expect(await screen.findByRole('menuitem', { name: 'Aged quote' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Discovery follow-up' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Rate confirmation' })).toBeInTheDocument()
+  })
+
+  it('shows organization templates in a counted keyboard-accessible submenu and applies the selected template', async () => {
+    const user = userEvent.setup()
+    const privateTemplate = makeTemplate({ id: 'tpl-private', name: 'My follow-up' })
+    const organizationTemplates = [
+      makeTemplate({ id: 'tpl-org-a', name: 'Organization intro', subject: 'Welcome', visibility: 'ORGANIZATION' }),
+      makeTemplate({ id: 'tpl-org-b', name: 'Organization recap', visibility: 'ORGANIZATION' }),
+    ]
+    useGetEmailTemplatesMock.mockImplementation((_orgId, query) =>
+      query?.scope === 'organization'
+        ? templatesQuery({ templates: organizationTemplates })
+        : templatesQuery({ templates: [privateTemplate] }),
+    )
+    renderCard(makeDraft({ toAddrs: ['ann@acme.test'] }))
+
+    await openTemplateMenu(user)
+
+    expect(await screen.findByRole('menuitem', { name: 'My follow-up' })).toBeInTheDocument()
+
+    const organizationTrigger = screen.getByRole('menuitem', { name: 'Organization templates · 2' })
+    organizationTrigger.focus()
+    fireEvent.keyDown(organizationTrigger, { key: 'ArrowRight' })
+
+    await user.click(await screen.findByRole('menuitem', { name: 'Organization intro' }))
+
+    expect(subjectField()).toHaveValue('Welcome')
+    expect(bodyField()).toHaveTextContent('Thanks for your time.')
+    expect(chipAddresses()).toEqual(['ann@acme.test'])
+  })
+
+  it('opens the organization submenu when the pointer moves over its row', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockImplementation((_orgId, query) =>
+      query?.scope === 'organization'
+        ? templatesQuery({ templates: [makeTemplate({ id: 'tpl-org', name: 'Organization intro', visibility: 'ORGANIZATION' })] })
+        : templatesQuery({ templates: [makeTemplate()] }),
+    )
+    renderCard()
+
+    await openTemplateMenu(user)
+    fireEvent.pointerMove(screen.getByRole('menuitem', { name: 'Organization templates · 1' }), {
+      pointerType: 'mouse',
+    })
+
+    expect(await screen.findByRole('menuitem', { name: 'Organization intro' })).toBeInTheDocument()
+  })
+
+  it('does not show an organization submenu when the organization has no templates', async () => {
+    const user = userEvent.setup()
+    useGetEmailTemplatesMock.mockImplementation((_orgId, query) =>
+      query?.scope === 'organization'
+        ? templatesQuery()
+        : templatesQuery({ templates: [makeTemplate()] }),
+    )
+    renderCard()
+
+    await openTemplateMenu(user)
+
+    expect(screen.queryByRole('menuitem', { name: /Organization templates/ })).not.toBeInTheDocument()
   })
 
   it('replaces the subject and the body and leaves every recipient alone', async () => {
@@ -1005,12 +1064,16 @@ describe('ComposerCard templates', () => {
   it('requires the rep to choose an overwrite target before updating a template', async () => {
     const user = userEvent.setup()
     const existing = makeTemplate({ id: 'tpl-existing', name: 'Existing follow-up' })
-    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [existing] }))
+    useGetEmailTemplatesMock.mockImplementation((_orgId, query) =>
+      query?.scope === 'private'
+        ? templatesQuery({ templates: [existing] })
+        : templatesQuery(),
+    )
     renderCard(makeDraft({ subject: 'New subject', bodyHtml: '<p>New message.</p>' }))
 
     await openSaveTemplateMenu(user)
     await openSubmenu('Overwrite template')
-    await user.click(await screen.findByRole('menuitem', { name: 'Existing follow-up' }))
+    await user.click(screen.getAllByRole('menuitem', { name: 'Existing follow-up' }).at(-1)!)
 
     await waitFor(() => expect(saveEmailTemplateMock).toHaveBeenCalledWith({
       orgId: 'org-a',
@@ -1023,7 +1086,11 @@ describe('ComposerCard templates', () => {
   it('shows the server permission error when overwriting a template is denied', async () => {
     const user = userEvent.setup()
     const existing = makeTemplate({ id: 'tpl-shared', name: 'Shared follow-up' })
-    useGetEmailTemplatesMock.mockReturnValue(templatesQuery({ templates: [existing] }))
+    useGetEmailTemplatesMock.mockImplementation((_orgId, query) =>
+      query?.scope === 'private'
+        ? templatesQuery({ templates: [existing] })
+        : templatesQuery(),
+    )
     saveEmailTemplateMock.mockRejectedValue(
       new ApiError('Only the creator or an admin can manage this template', 403),
     )
@@ -1031,7 +1098,7 @@ describe('ComposerCard templates', () => {
 
     await openSaveTemplateMenu(user)
     await openSubmenu('Overwrite template')
-    await user.click(await screen.findByRole('menuitem', { name: 'Shared follow-up' }))
+    await user.click(screen.getAllByRole('menuitem', { name: 'Shared follow-up' }).at(-1)!)
 
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
       'Only the creator or an admin can manage this template',
