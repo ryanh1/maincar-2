@@ -57,4 +57,16 @@ When an issue depends on another:
 2. Click **"Related"** or **"Link"**
 3. Add relationship: "blocked by MAI-100" or "relates to MAI-50"
 
-Don't start work if you're blocked by an incomplete issue.
+## Dependency Readiness
+
+An upstream issue is ready to unblock its dependents when its Linear status is
+**"Ready to Review"**, **"In Review"**, or **"Done"** (including the team's
+equivalent final status). **Do not wait for "Done" when the prerequisite is in
+review.** Treating a review-ready issue as blocking serializes work that can
+proceed in parallel.
+
+When selecting work, an issue is blocked by a dependency only while that
+dependency is in a pre-review or explicitly blocked state (for example,
+Backlog, Todo, In Progress, or Blocked). If the dependency's reviewed code has
+not yet reached `main` and the dependent needs it, coordinate from the
+upstream's committed review head; do not wait solely for its final merge.
