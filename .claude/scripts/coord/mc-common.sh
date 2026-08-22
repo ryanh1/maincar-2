@@ -66,7 +66,11 @@ mc_sync_local_main() {
 # Return the affected package roots, one per line, so an explicit refresh can
 # reinstall exactly those roots from their committed locks.
 mc_changed_dependency_roots() {
-  local primary="$1" target="$2" path
+  local checkout="$1" from="HEAD" to="$2" path
+  if [ "$#" -eq 3 ]; then
+    from="$2"
+    to="$3"
+  fi
   while IFS= read -r path; do
     case "$path" in
       package.json|package-lock.json) printf '.\n' ;;
@@ -74,17 +78,17 @@ mc_changed_dependency_roots() {
       vite/package.json|vite/package-lock.json) printf 'vite\n' ;;
       firebase/package.json|firebase/package-lock.json) printf 'firebase\n' ;;
     esac
-  done < <(git -C "$primary" diff --name-only HEAD "$target") | sort -u
+  done < <(git -C "$checkout" diff --name-only "$from" "$to") | sort -u
 }
 
-mc_sync_primary_dependencies() {
-  local primary="$1" root
+mc_sync_dependencies() {
+  local checkout="$1" root
   while IFS= read -r root; do
     [ -n "$root" ] || continue
     if [ "$root" = '.' ]; then
-      npm --prefix "$primary" ci
+      npm --prefix "$checkout" ci
     else
-      npm --prefix "$primary/$root" ci
+      npm --prefix "$checkout/$root" ci
     fi
   done
 }
@@ -163,7 +167,7 @@ mc_refresh_primary_checkout() {
     echo "[mc-primary] fast-forwarded runnable checkout to $(git -C "$primary" rev-parse --short HEAD)."
     if [ -n "$dependency_roots" ]; then
       echo "[mc-primary] synchronizing dependencies for: $(tr '\n' ' ' <<< "$dependency_roots")"
-      printf '%s\n' "$dependency_roots" | mc_sync_primary_dependencies "$primary"
+      printf '%s\n' "$dependency_roots" | mc_sync_dependencies "$primary"
     fi
     if [ "$prisma_refresh_required" -eq 1 ]; then
       echo "[mc-primary] applying tracked Prisma migrations."
