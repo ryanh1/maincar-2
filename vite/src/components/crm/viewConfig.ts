@@ -119,6 +119,19 @@ function encodeSharedConfig(config: ViewConfig): string | null {
   return btoa(JSON.stringify(shared))
 }
 
+function mergeConfigWithAttributes(defaults: ViewConfig, current: ViewConfig): ViewConfig {
+  const knownAttributeIds = new Set(defaults.columns.map((column) => column.attributeId))
+  const retainedColumns = current.columns.filter((column) => knownAttributeIds.has(column.attributeId))
+  const retainedIds = new Set(retainedColumns.map((column) => column.attributeId))
+  const newColumns = defaults.columns.filter((column) => !retainedIds.has(column.attributeId))
+
+  return {
+    ...defaults,
+    ...current,
+    columns: [...retainedColumns, ...newColumns],
+  }
+}
+
 function toRecordListFilter(node: ViewFilterNode, attributesById: Map<string, AttributeDef>): RecordListFilter | null {
   if (node.type === 'condition') {
     const attribute = attributesById.get(node.attributeId)
@@ -147,24 +160,30 @@ export function toRecordListQuery(config: ViewConfig, attributes: AttributeDef[]
 
 /**
  * Route-owned live view state. The `v` parameter holds only versioned,
- * allow-listed display state; filter literals remain in memory so PII never
- * leaks into a shared URL.
+ * allow-listed sort state; filter literals and local display controls remain
+ * in memory so PII never leaks into a shared URL.
  */
 export function useViewConfig(attributes: AttributeDef[]): [ViewConfig, (update: (current: ViewConfig) => ViewConfig) => void] {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [filterTree, setFilterTree] = useState<ViewFilterNode | undefined>()
   const baseConfig = useMemo(() => {
     const defaults = createViewConfig(attributes)
     const shared = decodeSharedConfig(searchParams.get('v'), attributes)
     return shared ? { ...defaults, sorts: shared.sorts } : defaults
   }, [attributes, searchParams])
 
-  const config = useMemo(() => ({ ...baseConfig, ...(filterTree ? { filterTree } : {}) }), [baseConfig, filterTree])
+  const [localConfig, setLocalConfig] = useState<ViewConfig | null>(null)
+  // Attribute data can arrive after the route mounts. Merge it at render time so
+  // a newly available field gets a default column without an effect-driven reset
+  // of the controls a person has already changed.
+  const config = useMemo(
+    () => (localConfig ? mergeConfigWithAttributes(baseConfig, localConfig) : baseConfig),
+    [baseConfig, localConfig],
+  )
 
   const updateConfig = useCallback(
     (update: (current: ViewConfig) => ViewConfig) => {
       const next = update(config)
-      setFilterTree(next.filterTree)
+      setLocalConfig(next)
       const encoded = encodeSharedConfig(next)
       setSearchParams(
         (previous) => {

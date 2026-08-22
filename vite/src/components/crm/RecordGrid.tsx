@@ -21,7 +21,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { useRecordWindow } from '@/hooks/crm'
 import { useAuth } from '@/providers/useAuth'
-import type { AttributeDef, ObjectDef } from '@/lib/crmTypes'
+import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { buildGridCell, coerceForType, FLAGGED_THEME } from './cellBuilder'
 import { chipCellRenderer, type ChipCellData } from './chipCell'
 import { GridViewToolbar } from './GridViewToolbar'
@@ -32,6 +32,7 @@ import { createViewConfig, toRecordListQuery, type ViewConfig } from './viewConf
 
 const LEADING_COLUMN_WIDTH = 220
 const DEFAULT_COLUMN_WIDTH = 160
+const ROW_HEIGHTS = { compact: 34, comfortable: 44, tall: 56 } as const
 // Glide asks for the next window once the reader has scrolled within this many
 // rows of the end of what is loaded, so the fetch lands before blank rows do.
 const PREFETCH_MARGIN = 60
@@ -68,6 +69,10 @@ function replaceMatch(value: string, query: string, replacement: string, matchCa
     : new RegExp(escapeRegExp(query), matchCase ? 'g' : 'gi')
   return value.replace(expression, replacement)
 }
+
+type DisplayRow =
+  | { kind: 'group'; key: string; label: string; count: number }
+  | { kind: 'record'; record: RecordRow }
 
 interface RecordGridProps {
   orgId: string
@@ -117,21 +122,64 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     [attributes],
   )
 
-  const gridColumns: GridColumn[] = useMemo(
-    () =>
-      columns.map((attr, index) => ({
-        id: attr.slug,
-        title: attr.name,
-        width: index === 0 ? LEADING_COLUMN_WIDTH : DEFAULT_COLUMN_WIDTH,
-      })),
-    [columns],
-  )
-
   const fallbackConfig = useMemo(() => createViewConfig(attributes), [attributes])
   const config = viewConfig ?? fallbackConfig
+  const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
+
+  const visibleColumns = useMemo(() => {
+    const configured = new Map(config.columns.map((column) => [column.attributeId, column]))
+    return columns
+      .filter((attribute) => configured.get(attribute.id)?.visible ?? true)
+      .sort((left, right) => (configured.get(left.id)?.order ?? left.sortOrder) - (configured.get(right.id)?.order ?? right.sortOrder))
+  }, [columns, config.columns])
+
+  const gridColumns: GridColumn[] = useMemo(
+    () =>
+      visibleColumns.map((attr, index) => ({
+        id: attr.slug,
+        title: attr.name,
+        width: config.columnWidths[attr.id] ?? (index === 0 ? LEADING_COLUMN_WIDTH : DEFAULT_COLUMN_WIDTH),
+      })),
+    [visibleColumns, config.columnWidths],
+  )
+  const firstGridColumn = gridColumns[0]
+  const leadingColumnWidth =
+    firstGridColumn && 'width' in firstGridColumn && typeof firstGridColumn.width === 'number'
+      ? firstGridColumn.width
+      : LEADING_COLUMN_WIDTH
+
   const listQuery = useMemo(() => toRecordListQuery(config, attributes), [config, attributes])
   const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
     useRecordWindow(orgId, object.id, listQuery)
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const groupAttribute = config.groupBy[0] ? columns.find((attribute) => attribute.id === config.groupBy[0]?.attributeId) : undefined
+  const displayRows = useMemo<DisplayRow[]>(() => {
+    if (!groupAttribute) return rows.map((record) => ({ kind: 'record', record }))
+
+    const groups = new Map<string, { label: string; records: RecordRow[] }>()
+    for (const record of rows) {
+      const value = record[groupAttribute.slug]
+      const option = Array.isArray(groupAttribute.optionsJson)
+        ? (groupAttribute.optionsJson as Array<{ value?: unknown; label?: unknown }>).find((candidate) => candidate.value === value)
+        : undefined
+      const label = typeof option?.label === 'string' ? option.label : value === null || value === undefined || value === '' ? 'No value' : String(value)
+      const key = `${groupAttribute.id}:${label}`
+      const group = groups.get(key) ?? { label, records: [] }
+      group.records.push(record)
+      groups.set(key, group)
+    }
+
+    return [...groups.entries()].flatMap(([key, group]) => [
+      { kind: 'group' as const, key, label: group.label, count: group.records.length },
+      ...(collapsedGroups.has(key) ? [] : group.records.map((record) => ({ kind: 'record' as const, record }))),
+    ])
+  }, [rows, groupAttribute, collapsedGroups])
+
+  const recordAtRow = useCallback((row: number) => {
+    const displayRow = displayRows[row]
+    return displayRow?.kind === 'record' ? displayRow.record : null
+  }, [displayRows])
 
   // Local-only edit state (see the class doc comment): a per-record patch of
   // slug → value, plus which cells are currently flagged (accept-but-flag,
@@ -156,16 +204,21 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
 
   const getCellContent = useCallback(
     ([col, row]: Item): GridCell => {
-      const record = rows[row]
-      const attr = columns[col]
-      if (!record || !attr) {
+      const displayRow = displayRows[row]
+      const attr = visibleColumns[col]
+      if (!displayRow || !attr) {
         return { kind: GridCellKind.Loading, allowOverlay: false }
       }
+      if (displayRow.kind === 'group') {
+        const label = col === 0 ? `${collapsedGroups.has(displayRow.key) ? '▸' : '▾'} ${displayRow.label} · ${displayRow.count}` : ''
+        return { kind: GridCellKind.Text, data: label, displayData: label, readonly: true, allowOverlay: false }
+      }
+      const record = displayRow.record
       const value = cellValue(record, attr)
       const flagged = flaggedCells.has(`${record.id}:${attr.slug}`)
       return buildGridCell(attr, value, { timeZone: user?.timeZone, flagged })
     },
-    [rows, columns, user?.timeZone, cellValue, flaggedCells],
+    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups],
   )
 
   // The single coercion seam: runs for a typed commit AND a paste (glide
@@ -174,8 +227,8 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const validateCell = useCallback(
     (item: Item, newValue: EditableGridCell): boolean | ValidatedGridCell => {
       const [col, row] = item
-      const record = rows[row]
-      const attr = columns[col]
+      const record = recordAtRow(row)
+      const attr = visibleColumns[col]
       if (!record || !attr) return true
 
       const cellKey = `${record.id}:${attr.slug}`
@@ -202,13 +255,13 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
 
       return true
     },
-    [rows, columns, cellValue],
+    [recordAtRow, visibleColumns, cellValue],
   )
 
   const onCellEdited = useCallback(
     ([col, row]: Item, newValue: EditableGridCell) => {
-      const record = rows[row]
-      const attr = columns[col]
+      const record = recordAtRow(row)
+      const attr = visibleColumns[col]
       if (!record || !attr) return
 
       let stored: unknown
@@ -231,22 +284,22 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         return next
       })
     },
-    [rows, columns],
+    [recordAtRow, visibleColumns],
   )
 
   const onVisibleRegionChanged = useCallback(
     (range: Rectangle) => {
       if (!hasNextPage || isFetchingNextPage) return
-      if (range.y + range.height >= rows.length - PREFETCH_MARGIN) {
+      if (range.y + range.height >= displayRows.length - PREFETCH_MARGIN) {
         void fetchNextPage()
       }
     },
-    [rows.length, hasNextPage, isFetchingNextPage, fetchNextPage],
+    [displayRows.length, hasNextPage, isFetchingNextPage, fetchNextPage],
   )
 
   const onHeaderClicked = useCallback(
     (columnIndex: number) => {
-      const attribute = columns[columnIndex]
+      const attribute = visibleColumns[columnIndex]
       if (!attribute || !onViewConfigChange) return
 
       onViewConfigChange((current) => {
@@ -256,7 +309,52 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         return { ...current, sorts: direction ? [{ attributeId: attribute.id, direction }] : [] }
       })
     },
-    [columns, onViewConfigChange],
+    [visibleColumns, onViewConfigChange],
+  )
+
+  const onColumnMoved = useCallback(
+    (startIndex: number, endIndex: number) => {
+      if (!onViewConfigChange) return
+      onViewConfigChange((current) => {
+        const visible = current.columns
+          .filter((column) => column.visible)
+          .slice()
+          .sort((left, right) => left.order - right.order)
+        const [moved] = visible.splice(startIndex, 1)
+        if (!moved) return current
+        visible.splice(endIndex, 0, moved)
+        const orderedIds = visible.map((column) => column.attributeId)
+        const hiddenIds = current.columns
+          .filter((column) => !column.visible)
+          .slice()
+          .sort((left, right) => left.order - right.order)
+          .map((column) => column.attributeId)
+        return {
+          ...current,
+          columns: [...orderedIds, ...hiddenIds].map((attributeId, order) => ({
+            ...(current.columns.find((column) => column.attributeId === attributeId)!),
+            order,
+          })),
+        }
+      })
+    },
+    [onViewConfigChange],
+  )
+
+  const onColumnResize = useCallback(
+    (_column: GridColumn, width: number, columnIndex: number) => {
+      if (!onViewConfigChange) return
+      const selectedIndexes = gridSelection.columns.items.flatMap(([start, end]) =>
+        Array.from({ length: end - start }, (_, index) => start + index),
+      )
+      const indexes = selectedIndexes.length > 0 ? selectedIndexes : [columnIndex]
+      const attributeIds = indexes.map((index) => visibleColumns[index]?.id).filter((id): id is string => Boolean(id))
+      onViewConfigChange((current) => ({
+        ...current,
+        columnWidths: { ...current.columnWidths, ...Object.fromEntries(attributeIds.map((id) => [id, width])) },
+      }))
+    },
+    [gridSelection.columns.items, onViewConfigChange, visibleColumns],
   )
 
   const theme: Partial<Theme> = useMemo(
@@ -271,14 +369,14 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
       bgHeaderHasFocus: colors.headerBg,
       bgHeaderHovered: colors.headerBg,
       borderColor: colors.border,
+      horizontalBorderColor: config.gridLines ? colors.border : 'transparent',
       fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
     }),
-    [colors],
+    [colors, config.gridLines],
   )
 
   // --- Row focus (controlled selection) + the peek drawer (MAI-167) ---
 
-  const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
   const focusedRow = gridSelection.current?.cell[1] ?? null
   const dataEditorRef = useRef<DataEditorRef>(null)
   const findInputRef = useRef<HTMLInputElement>(null)
@@ -304,13 +402,15 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   )
   const matches = useMemo<FindMatch[]>(() => {
     if (!matcher) return []
-    return rows.flatMap((record, row) =>
-      columns.flatMap((attribute, col) => {
+    return displayRows.flatMap((displayRow, row) => {
+      if (displayRow.kind !== 'record') return []
+      return visibleColumns.flatMap((attribute, col) => {
+        const record = displayRow.record
         const display = formatCellValue(cellValue(record, attribute), attribute.type, user?.timeZone)
         return matcher(display) ? [{ col, row, record, attribute, display }] : []
-      }),
-    )
-  }, [rows, columns, cellValue, matcher, user?.timeZone])
+      })
+    })
+  }, [displayRows, visibleColumns, cellValue, matcher, user?.timeZone])
   const [activeMatchIndex, setActiveMatchIndex] = useState(0)
   const currentMatchIndex = matches.length === 0 ? 0 : Math.min(activeMatchIndex, matches.length - 1)
   const finderSelection: GridSelection | null =
@@ -384,11 +484,11 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
 
   const openPeek = useCallback(
     (row: number) => {
-      if (row < 0 || row >= rows.length) return
+      if (!recordAtRow(row)) return
       focusRow(row)
       setPeekIndex(row)
     },
-    [rows.length, focusRow],
+    [recordAtRow, focusRow],
   )
 
   const closePeek = useCallback(() => setPeekIndex(null), [])
@@ -397,12 +497,14 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     (delta: 1 | -1) => {
       setPeekIndex((prev) => {
         if (prev === null) return prev
-        const next = Math.min(Math.max(prev + delta, 0), rows.length - 1)
-        if (next !== prev) focusRow(next)
+        let next = prev + delta
+        while (next >= 0 && next < displayRows.length && !recordAtRow(next)) next += delta
+        if (next < 0 || next >= displayRows.length) return prev
+        focusRow(next)
         return next
       })
     },
-    [rows.length, focusRow],
+    [displayRows.length, recordAtRow, focusRow],
   )
 
   // Space opens the drawer for the focused row (DECISIONS D3 — not Enter, which
@@ -455,6 +557,26 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     setHoveredRow({ row, y: args.bounds.y, height: args.bounds.height })
   }, [])
 
+  const onCellClicked = useCallback(([_column, row]: Item) => {
+    const displayRow = displayRows[row]
+    if (displayRow?.kind !== 'group') return
+    setCollapsedGroups((previous) => {
+      const next = new Set(previous)
+      if (next.has(displayRow.key)) next.delete(displayRow.key)
+      else next.add(displayRow.key)
+      return next
+    })
+  }, [displayRows])
+
+  const [scrollOffsetX, setScrollOffsetX] = useState(0)
+  const onGridVisibleRegionChanged = useCallback((range: Rectangle, tx: number) => {
+    onVisibleRegionChanged(range)
+    const widthBeforeVisibleColumn = gridColumns
+      .slice(config.frozenCols, Math.max(config.frozenCols, range.x))
+      .reduce((total, column) => total + ('width' in column && typeof column.width === 'number' ? column.width : 0), 0)
+    setScrollOffsetX(Math.max(0, widthBeforeVisibleColumn - tx))
+  }, [onVisibleRegionChanged, gridColumns, config.frozenCols])
+
   const gridRef = useRef<HTMLDivElement>(null)
 
   if (isPending) {
@@ -482,7 +604,8 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     )
   }
 
-  const peekRecord = peekIndex !== null ? (rows[peekIndex] ?? null) : null
+  const peekRecord = peekIndex !== null ? recordAtRow(peekIndex) : null
+  const gridRowCount = groupAttribute ? displayRows.length : totalCount
 
   return (
     <div className="flex h-full min-h-0 flex-col border border-border bg-bg">
@@ -495,13 +618,18 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         onCellEdited={onCellEdited}
         validateCell={validateCell}
         customRenderers={[chipCellRenderer]}
-        rows={totalCount}
-        freezeColumns={1}
+        rows={gridRowCount}
+        freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
+        rowHeight={ROW_HEIGHTS[config.rowHeight]}
+        verticalBorder={config.gridLines}
+        onColumnMoved={onColumnMoved}
+        onColumnResize={onColumnResize}
         rowMarkers="none"
         smoothScrollX
         smoothScrollY
-        onVisibleRegionChanged={onVisibleRegionChanged}
+        onVisibleRegionChanged={onGridVisibleRegionChanged}
         onHeaderClicked={onHeaderClicked}
+        onCellClicked={onCellClicked}
         gridSelection={finderSelection ?? gridSelection}
         onGridSelectionChange={setGridSelection}
         onMouseMove={onMouseMove}
@@ -598,6 +726,33 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
           </div>
         )}
 
+        {config.frozenRows > 0 && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 z-10 border-b border-border bg-bg"
+            data-row-count={config.frozenRows}
+            data-testid="frozen-rows-overlay"
+            style={{ top: 36, height: config.frozenRows * ROW_HEIGHTS[config.rowHeight] }}
+          >
+            <DataEditor
+              className="record-grid-frozen-rows"
+              columns={gridColumns}
+              getCellContent={getCellContent}
+              rows={config.frozenRows}
+              freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
+              rowMarkers="none"
+              rowHeight={ROW_HEIGHTS[config.rowHeight]}
+              headerHeight={0}
+              scrollOffsetX={scrollOffsetX}
+              smoothScrollX
+              theme={theme}
+              verticalBorder={config.gridLines}
+              width="100%"
+              height="100%"
+            />
+          </div>
+        )}
+
         {hoveredRow && (
         <button
           type="button"
@@ -606,7 +761,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
           className="absolute z-10 flex items-center justify-center rounded-sm border border-border bg-background text-muted-foreground shadow-sm hover:bg-accent hover:text-foreground"
           style={{
             top: hoveredRow.y + hoveredRow.height / 2 - 10,
-            left: LEADING_COLUMN_WIDTH - 26,
+            left: leadingColumnWidth - 26,
             width: 20,
             height: 20,
           }}
