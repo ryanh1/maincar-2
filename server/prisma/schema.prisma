@@ -30,11 +30,12 @@ model Org {
   avatarKey String?
   enabled   Boolean @default(true)
 
-  // Organization-level outbound call recording policy. An empty allowlist means
-  // every mapped US state is eligible, subject to the other two settings.
+  // Organization-level outbound call recording policy. The saved blocked set is
+  // authoritative; UNKNOWN covers a number whose destination state cannot resolve.
   recordCalls                Boolean  @default(true)
   blockTwoPartyConsentStates Boolean  @default(true)
   recordingAllowedStates     String[] @default([])
+  recordingBlockedStates     String[] @default(["CA", "CT", "DE", "FL", "IL", "MD", "MA", "MI", "MT", "NV", "NH", "OR", "PA", "WA", "UNKNOWN"])
 
   // Which version of the standard-schema seed (server/src/crm/standardObjects.ts)
   // this org has had applied. Set by seedOrg on org creation; a later release bumps

@@ -1,15 +1,7 @@
-import { ChevronDown, X } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { IconButton } from '@/components/ui/icon-button'
-import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Label } from '@/components/ui/label'
+import { SelectedValuesPicker } from '@/components/ui/selected-values-picker'
 import { Switch } from '@/components/ui/switch'
 import { useGetRecordingPolicy, useUpdateRecordingPolicy } from '@/hooks/recordingPolicy'
 import type { RecordingPolicyPatch } from '@/lib/recordingPolicyTypes'
@@ -28,8 +20,11 @@ const US_STATES = [
   ['WV', 'West Virginia'], ['WI', 'Wisconsin'], ['WY', 'Wyoming'], ['DC', 'District of Columbia'],
 ] as const
 
-const STATE_NAMES = new Map(US_STATES)
-type StateCode = (typeof US_STATES)[number][0]
+const TWO_PARTY_CONSENT_STATES = ['CA', 'CT', 'DE', 'FL', 'IL', 'MD', 'MA', 'MI', 'MT', 'NV', 'NH', 'OR', 'PA', 'WA']
+const BLOCKED_STATE_OPTIONS = [
+  { value: 'UNKNOWN', label: 'Unknown destination state' },
+  ...US_STATES.map(([value, label]) => ({ value, label })),
+]
 
 function SettingRow({
   id,
@@ -78,13 +73,6 @@ export function Settings_CallRecordingsTab() {
     }
   }
 
-  function toggleState(state: StateCode) {
-    const allowedStates = policy.allowedStates.includes(state)
-      ? policy.allowedStates.filter((value) => value !== state)
-      : [...policy.allowedStates, state].sort()
-    void save({ allowedStates })
-  }
-
   return (
     <section className="max-w-2xl">
       <h2 className="text-sm font-semibold">Call recordings</h2>
@@ -94,58 +82,23 @@ export function Settings_CallRecordingsTab() {
         <SettingRow
           id="record-calls"
           label="Record calls"
-          description="Record outbound calls when the safeguards below allow it."
+          description="Record outbound calls unless the blocked state set prevents it."
           checked={policy.recordCalls}
           disabled={disabled}
           onCheckedChange={(recordCalls) => void save({ recordCalls })}
         />
-        <SettingRow
-          id="block-two-party-states"
-          label="Do not record in two-party-consent states"
-          description="Do not record when the destination area code indicates a two-party-consent state. Unknown destinations are not recorded too."
-          checked={policy.blockTwoPartyConsentStates}
-          disabled={disabled || !policy.recordCalls}
-          onCheckedChange={(blockTwoPartyConsentStates) => void save({ blockTwoPartyConsentStates })}
-        />
         <div className="py-4">
-          <Label>States to record</Label>
-          <p className="mt-1 text-xs text-text-muted">Leave empty to record every state allowed by the settings above.</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {policy.allowedStates.map((state) => (
-              <span key={state} className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-2 py-1 text-xs">
-                {state}
-                <IconButton
-                  type="button"
-                  tooltip={`Remove ${STATE_NAMES.get(state as StateCode) ?? state} from allowed states`}
-                  onClick={() => toggleState(state as StateCode)}
-                  disabled={disabled}
-                  className="size-4"
-                >
-                  <X size={12} aria-hidden="true" />
-                </IconButton>
-              </span>
-            ))}
-          </div>
-          <div className="mt-3 flex items-center gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button type="button" variant="secondary" size="sm" disabled={disabled}>
-                  Select states <ChevronDown size={16} aria-hidden="true" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="max-h-72 w-56">
-                {US_STATES.map(([code, name]) => (
-                  <DropdownMenuCheckboxItem key={code} checked={policy.allowedStates.includes(code)} onCheckedChange={() => toggleState(code)}>
-                    {name}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {policy.allowedStates.length > 0 ? (
-              <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={() => void save({ allowedStates: [] })}>
-                Clear states
-              </Button>
-            ) : null}
+          <Label>Do not record in the following states</Label>
+          <p className="mt-1 text-xs text-text-muted">Select states and Unknown to prevent recording when the destination matches.</p>
+          <div className="mt-3">
+            <SelectedValuesPicker
+              label="Select states"
+              options={BLOCKED_STATE_OPTIONS}
+              value={policy.blockedStates}
+              disabled={disabled || !policy.recordCalls}
+              presets={[{ label: 'Two-party consent states', values: TWO_PARTY_CONSENT_STATES }]}
+              onValueChange={(blockedStates) => void save({ blockedStates })}
+            />
           </div>
         </div>
       </div>

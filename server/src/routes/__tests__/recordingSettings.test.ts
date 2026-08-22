@@ -31,8 +31,7 @@ function orgRow(overrides: Record<string, unknown> = {}) {
     logo: null,
     enabled: true,
     recordCalls: true,
-    blockTwoPartyConsentStates: true,
-    recordingAllowedStates: [],
+    recordingBlockedStates: ['CA', 'CT', 'UNKNOWN'],
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -74,8 +73,7 @@ describe('recording policy settings', () => {
     expect(response.body).toEqual({
       recordingPolicy: {
         recordCalls: true,
-        blockTwoPartyConsentStates: true,
-        allowedStates: [],
+        blockedStates: ['CA', 'CT', 'UNKNOWN'],
       },
     })
   })
@@ -89,20 +87,20 @@ describe('recording policy settings', () => {
     expect(prismaMock.org.updateMany).not.toHaveBeenCalled()
   })
 
-  it('updates a single setting and normalizes the selected state allowlist', async () => {
+  it('updates a single setting and normalizes the selected blocked-state set', async () => {
     await request(app)
       .patch(URL)
       .set('Authorization', AUTH)
-      .send({ allowedStates: ['ny', 'CA', 'NY'] })
+      .send({ blockedStates: ['unknown', 'ny', 'CA', 'NY'] })
 
     expect(prismaMock.org.updateMany).toHaveBeenCalledWith({
       where: { id: ORG_ID, enabled: true },
-      data: { recordingAllowedStates: ['CA', 'NY'] },
+      data: { recordingBlockedStates: ['CA', 'NY', 'UNKNOWN'] },
     })
   })
 
   it('rejects an invalid state code without writing', async () => {
-    const response = await request(app).patch(URL).set('Authorization', AUTH).send({ allowedStates: ['ZZ'] })
+    const response = await request(app).patch(URL).set('Authorization', AUTH).send({ blockedStates: ['ZZ'] })
 
     expect(response.status).toBe(400)
     expect(prismaMock.org.updateMany).not.toHaveBeenCalled()

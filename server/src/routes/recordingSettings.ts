@@ -9,32 +9,30 @@ import { NPA_TO_STATE } from '../lib/npaToState.js'
 
 const router = Router({ mergeParams: true })
 const US_STATE_CODES = new Set(Object.values(NPA_TO_STATE))
+const BLOCKED_STATE_VALUES = new Set([...US_STATE_CODES, 'UNKNOWN'])
 
-const stateCodesSchema = z
-  .array(z.string().trim().toUpperCase().length(2))
-  .refine((states) => states.every((state) => US_STATE_CODES.has(state)), {
-    error: 'Choose two-letter US state codes.',
+const blockedStatesSchema = z
+  .array(z.string().trim().toUpperCase())
+  .refine((states) => states.every((state) => BLOCKED_STATE_VALUES.has(state)), {
+    error: 'Choose US states or Unknown.',
   })
   .transform((states) => [...new Set(states)].sort())
 
 const patchSchema = z
   .object({
     recordCalls: z.boolean().optional(),
-    blockTwoPartyConsentStates: z.boolean().optional(),
-    allowedStates: stateCodesSchema.optional(),
+    blockedStates: blockedStatesSchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, { error: 'Choose a recording setting to update.' })
 
 function mapPolicy(org: {
   recordCalls: boolean
-  blockTwoPartyConsentStates: boolean
-  recordingAllowedStates: string[]
+  recordingBlockedStates: string[]
 }) {
   return {
     recordCalls: org.recordCalls,
-    blockTwoPartyConsentStates: org.blockTwoPartyConsentStates,
-    allowedStates: org.recordingAllowedStates,
+    blockedStates: org.recordingBlockedStates,
   }
 }
 
@@ -67,12 +65,9 @@ router.patch(
       where: { id: orgId, enabled: true },
       data: {
         ...(parsed.data.recordCalls === undefined ? {} : { recordCalls: parsed.data.recordCalls }),
-        ...(parsed.data.blockTwoPartyConsentStates === undefined
+        ...(parsed.data.blockedStates === undefined
           ? {}
-          : { blockTwoPartyConsentStates: parsed.data.blockTwoPartyConsentStates }),
-        ...(parsed.data.allowedStates === undefined
-          ? {}
-          : { recordingAllowedStates: parsed.data.allowedStates }),
+          : { recordingBlockedStates: parsed.data.blockedStates }),
       },
     })
     if (result.count === 0) return void res.status(404).json({ error: 'Organization not found' })
@@ -81,8 +76,7 @@ router.patch(
       where: { id: orgId, enabled: true },
       select: {
         recordCalls: true,
-        blockTwoPartyConsentStates: true,
-        recordingAllowedStates: true,
+        recordingBlockedStates: true,
       },
     })
     if (!org) return void res.status(404).json({ error: 'Organization not found' })

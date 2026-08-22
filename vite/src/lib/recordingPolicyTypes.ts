@@ -1,7 +1,6 @@
 export interface RecordingPolicy {
   recordCalls: boolean
-  blockTwoPartyConsentStates: boolean
-  allowedStates: string[]
+  blockedStates: string[]
 }
 
 export interface RecordingPolicyResponse {

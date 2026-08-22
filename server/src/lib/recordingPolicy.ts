@@ -1,11 +1,9 @@
-import { isTwoPartyConsentState } from './consentStates.js'
 import { usStateForE164 } from './npaToState.js'
 
 export const RECORDING_DECISION_REASONS = [
   'allowed',
   'recording-disabled',
-  'two-party-consent-state',
-  'state-not-allowed',
+  'state-blocked',
   'unknown-destination-state',
 ] as const
 
@@ -13,8 +11,8 @@ export type RecordingDecisionReason = (typeof RECORDING_DECISION_REASONS)[number
 
 export interface RecordingPolicy {
   recordCalls: boolean
-  blockTwoPartyConsentStates: boolean
-  allowedStates: string[]
+  /** USPS codes plus UNKNOWN. This persisted set is the policy source of truth. */
+  blockedStates: string[]
 }
 
 export interface RecordingPolicyDecision {
@@ -37,18 +35,12 @@ export function decideRecordingPolicy(
     return { record: false, destinationState, reason: 'recording-disabled' }
   }
 
-  if (destinationState === null) {
-    return policy.blockTwoPartyConsentStates
-      ? { record: false, destinationState, reason: 'unknown-destination-state' }
-      : { record: true, destinationState, reason: 'allowed' }
+  if (destinationState === null && policy.blockedStates.includes('UNKNOWN')) {
+    return { record: false, destinationState, reason: 'unknown-destination-state' }
   }
 
-  if (policy.blockTwoPartyConsentStates && isTwoPartyConsentState(destinationState)) {
-    return { record: false, destinationState, reason: 'two-party-consent-state' }
-  }
-
-  if (policy.allowedStates.length > 0 && !policy.allowedStates.includes(destinationState)) {
-    return { record: false, destinationState, reason: 'state-not-allowed' }
+  if (destinationState !== null && policy.blockedStates.includes(destinationState)) {
+    return { record: false, destinationState, reason: 'state-blocked' }
   }
 
   return { record: true, destinationState, reason: 'allowed' }

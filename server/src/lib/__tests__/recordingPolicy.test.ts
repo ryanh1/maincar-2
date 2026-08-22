@@ -5,8 +5,7 @@ import { decideRecordingPolicy } from '../recordingPolicy.js'
 describe('decideRecordingPolicy', () => {
   const defaults = {
     recordCalls: true,
-    blockTwoPartyConsentStates: true,
-    allowedStates: [] as string[],
+    blockedStates: [] as string[],
   }
 
   it('records a mapped one-party state when the policy uses its defaults', () => {
@@ -25,33 +24,25 @@ describe('decideRecordingPolicy', () => {
     })
   })
 
-  it('does not record a two-party-consent state while its safeguard is enabled', () => {
-    expect(decideRecordingPolicy(defaults, '+14155550123')).toEqual({
+  it('does not record a state in the saved blocked set', () => {
+    expect(decideRecordingPolicy({ ...defaults, blockedStates: ['CA'] }, '+14155550123')).toEqual({
       record: false,
       destinationState: 'CA',
-      reason: 'two-party-consent-state',
+      reason: 'state-blocked',
     })
   })
 
-  it('allows a two-party-consent state when the safeguard is disabled', () => {
-    expect(
-      decideRecordingPolicy({ ...defaults, blockTwoPartyConsentStates: false }, '+14155550123'),
-    ).toMatchObject({ record: true, destinationState: 'CA', reason: 'allowed' })
-  })
-
-  it('does not record a mapped state excluded by the organization allowlist', () => {
-    expect(decideRecordingPolicy({ ...defaults, allowedStates: ['NY'] }, '+12025550123')).toEqual({
-      record: false,
-      destinationState: 'DC',
-      reason: 'state-not-allowed',
-    })
-  })
-
-  it('takes the conservative path for unknown and non-US numbers while safeguarded', () => {
-    expect(decideRecordingPolicy(defaults, '+442071838750')).toEqual({
+  it('does not record an unknown destination only when Unknown is in the saved blocked set', () => {
+    expect(decideRecordingPolicy({ ...defaults, blockedStates: ['UNKNOWN'] }, '+442071838750')).toEqual({
       record: false,
       destinationState: null,
       reason: 'unknown-destination-state',
+    })
+
+    expect(decideRecordingPolicy(defaults, '+442071838750')).toMatchObject({
+      record: true,
+      destinationState: null,
+      reason: 'allowed',
     })
   })
 })

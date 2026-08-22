@@ -149,6 +149,7 @@ function recordingMessage(call: CallDetail): string {
   }
   switch (call.recordingReason) {
     case 'recording-disabled': return 'Recording was disabled for the organization.'
+    case 'state-blocked': return 'Recording was off because the destination is blocked by the organization policy.'
     case 'two-party-consent-state': return 'Recording was off because the destination appeared to be in a two-party-consent state.'
     case 'state-not-allowed': return 'Recording was off because the destination was not in the organization’s allowed states.'
     case 'unknown-destination-state': return 'Recording was off because the destination state could not be determined.'
