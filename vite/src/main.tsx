@@ -11,6 +11,7 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { ReportsFixture } from './pages/ReportsFixture'
 import { CallTranscriptFixture } from './pages/CallTranscriptFixture'
 import { RecordsFixture } from './pages/RecordsFixture'
+import { ComposerCardFixture } from './components/composer/ComposerCardFixture'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,6 +38,8 @@ createRoot(document.getElementById('root')!).render(
       <CallTranscriptFixture />
     ) : import.meta.env.DEV && window.location.pathname.startsWith('/__fixtures/records/') ? (
       <RecordsFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/composer-focus' ? (
+      <ComposerCardFixture />
     ) : (
       <QueryClientProvider client={queryClient}>
         <App />

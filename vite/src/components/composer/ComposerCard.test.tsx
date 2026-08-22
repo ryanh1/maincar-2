@@ -1041,6 +1041,23 @@ describe('ComposerCard templates', () => {
 const SIGNATURE_BUTTON = 'Choose a signature for this email'
 
 describe('ComposerCard signatures', () => {
+  it('keeps the recipient focus and puts typed message text before a default signature', async () => {
+    const user = userEvent.setup()
+    useGetEmailSignaturesMock.mockReturnValue(
+      signaturesQuery([signature('sig-work', 'Work', '<p>Ari Rep</p>', true)]),
+    )
+
+    renderCard()
+
+    await waitFor(() => expect(bodyField()).toHaveTextContent('Ari Rep'))
+    expect(recipientBox('To')).toHaveFocus()
+
+    bodyField().focus()
+    await user.keyboard('Hello ')
+
+    await waitFor(() => expect(bodyField()).toHaveTextContent('Hello Ari Rep'))
+  })
+
   it('inserts the default signature into a newly created blank draft', async () => {
     useGetEmailSignaturesMock.mockReturnValue(
       signaturesQuery([signature('sig-work', 'Work', '<p>Ari Rep</p>', true)]),
