@@ -30,6 +30,12 @@ interface GridColumnFilterMenuProps {
   attribute: AttributeDef
   anchor: GridMenuAnchor
   config: ViewConfig
+  freezeActions?: {
+    freezeLabel: string
+    onFreeze: () => void
+    onUnfreeze: () => void
+    unfreezeLabel: string
+  }
   onConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
   onOpenChange: (open: boolean) => void
   open: boolean
@@ -41,7 +47,7 @@ interface GridColumnFilterMenuProps {
  * The shared header-owned control for every record grid. It owns a draft until
  * Apply, so a menu can be explored without changing the record query beneath it.
  */
-export function GridColumnFilterMenu({ attribute, anchor, config, onConfigChange, onOpenChange, open, values }: GridColumnFilterMenuProps) {
+export function GridColumnFilterMenu({ attribute, anchor, config, freezeActions, onConfigChange, onOpenChange, open, values }: GridColumnFilterMenuProps) {
   const currentFilter = filterForAttribute(config, attribute.id)
   const activeSort = config.sorts[0]
   const [draftSort, setDraftSort] = useState<'asc' | 'desc' | undefined>(activeSort?.attributeId === attribute.id ? activeSort.direction : undefined)
@@ -99,6 +105,16 @@ export function GridColumnFilterMenu({ attribute, anchor, config, onConfigChange
     closeMenu()
   }
 
+  function freezeColumn() {
+    freezeActions?.onFreeze()
+    closeMenu()
+  }
+
+  function unfreezeColumns() {
+    freezeActions?.onUnfreeze()
+    closeMenu()
+  }
+
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverAnchor asChild>
@@ -110,6 +126,12 @@ export function GridColumnFilterMenu({ attribute, anchor, config, onConfigChange
         </PopoverHeader>
 
         <div className="mt-3 flex flex-col gap-3">
+          {freezeActions && (
+            <div className="flex flex-col gap-1 border-b border-border pb-3">
+              <Button size="sm" variant="secondary" className="w-full justify-start" onClick={freezeColumn}>{freezeActions.freezeLabel}</Button>
+              <Button size="sm" variant="secondary" className="w-full justify-start" onClick={unfreezeColumns}>{freezeActions.unfreezeLabel}</Button>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-text-muted">Sort</span>
             <Button size="sm" variant={draftSort === 'asc' && !clearSort ? 'default' : 'secondary'} onClick={() => { setDraftSort('asc'); setClearSort(false) }}>A to Z</Button>

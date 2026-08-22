@@ -315,6 +315,95 @@ describe('RecordGrid', () => {
     expect(dataEditorProps.frozenRows).toMatchObject({ rows: 2, freezeColumns: 1, headerHeight: 0, scrollOffsetX: 0 })
   })
 
+  it('writes draggable freeze boundaries and header menu actions through the shared config', async () => {
+    const user = userEvent.setup()
+    useRecordWindow.mockReturnValue({
+      rows: [
+        { id: 'r1', firstName: 'Ada', lastName: 'Lovelace' },
+        { id: 'r2', firstName: 'Grace', lastName: 'Hopper' },
+      ],
+      totalCount: 2,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const config = createViewConfig(ATTRIBUTES)
+    const onViewConfigChange = vi.fn()
+
+    renderWithProviders(
+      <RecordGrid
+        orgId="org-1"
+        object={TEST_OBJECT}
+        attributes={ATTRIBUTES}
+        viewConfig={config}
+        onViewConfigChange={onViewConfigChange}
+      />,
+    )
+
+    fireEvent.pointerDown(screen.getByTestId('column-freeze-line'), { clientX: 220 })
+    fireEvent.pointerMove(window, { clientX: 380 })
+    fireEvent.pointerUp(window)
+    const dragColumnsUpdate = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(dragColumnsUpdate(config).frozenCols).toBe(2)
+
+    fireEvent.pointerDown(screen.getByTestId('row-freeze-line'), { clientY: 36 })
+    fireEvent.pointerMove(window, { clientY: 104 })
+    fireEvent.pointerUp(window)
+    const dragRowsUpdate = onViewConfigChange.mock.calls[1][0] as (current: typeof config) => typeof config
+    expect(dragRowsUpdate(config).frozenRows).toBe(2)
+
+    act(() => {
+      ;(dataEditorProps.current!.onHeaderMenuClick as (column: number, bounds: { x: number; y: number; width: number; height: number }) => void)(1, {
+        x: 220,
+        y: 0,
+        width: 160,
+        height: 36,
+      })
+    })
+    await user.click(await screen.findByRole('button', { name: 'Freeze up to this column' }))
+    const freezeColumnUpdate = onViewConfigChange.mock.calls[2][0] as (current: typeof config) => typeof config
+    expect(freezeColumnUpdate(config).frozenCols).toBe(2)
+
+    act(() => {
+      ;(dataEditorProps.current!.onHeaderMenuClick as (column: number, bounds: { x: number; y: number; width: number; height: number }) => void)(1, {
+        x: 220,
+        y: 0,
+        width: 160,
+        height: 36,
+      })
+    })
+    await user.click(await screen.findByRole('button', { name: 'Unfreeze columns' }))
+    const unfreezeColumnUpdate = onViewConfigChange.mock.calls[3][0] as (current: typeof config) => typeof config
+    expect(unfreezeColumnUpdate(config).frozenCols).toBe(0)
+
+    act(() => {
+      ;(dataEditorProps.current!.onMouseMove as (args: { kind: 'cell'; location: [number, number]; bounds: { x: number; y: number; width: number; height: number } }) => void)({
+        kind: 'cell',
+        location: [0, 1],
+        bounds: { x: 32, y: 70, width: 220, height: 34 },
+      })
+    })
+    await user.click(screen.getByRole('button', { name: 'Show actions for row 2' }))
+    await user.click(await screen.findByRole('button', { name: 'Freeze up to this row' }))
+    const freezeRowUpdate = onViewConfigChange.mock.calls[4][0] as (current: typeof config) => typeof config
+    expect(freezeRowUpdate(config).frozenRows).toBe(2)
+
+    act(() => {
+      ;(dataEditorProps.current!.onMouseMove as (args: { kind: 'cell'; location: [number, number]; bounds: { x: number; y: number; width: number; height: number } }) => void)({
+        kind: 'cell',
+        location: [0, 1],
+        bounds: { x: 32, y: 70, width: 220, height: 34 },
+      })
+    })
+    await user.click(screen.getByRole('button', { name: 'Show actions for row 2' }))
+    await user.click(await screen.findByRole('button', { name: 'Unfreeze rows' }))
+    const unfreezeRowUpdate = onViewConfigChange.mock.calls[5][0] as (current: typeof config) => typeof config
+    expect(unfreezeRowUpdate(config).frozenRows).toBe(0)
+  })
+
   it('writes column drag, resize, and selected-column resize through the shared config', () => {
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
