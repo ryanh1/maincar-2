@@ -30,7 +30,8 @@
     "db:migrate": "npm --prefix server run db:migrate",
     "db:check": "bash scripts/check-prisma-migration-drift.sh",
     "db:deploy": "npm --prefix server run db:deploy",
-    "db:studio": "npm --prefix server run db:studio"
+    "db:studio": "npm --prefix server run db:studio",
+    "schema:dump": "npm --prefix server run schema:dump --"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

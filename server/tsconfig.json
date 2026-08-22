@@ -20,6 +20,6 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src/**/*", "dependencies/**/*", "prisma.config.ts", "vitest.config.ts"],
+  "include": ["src/**/*", "scripts/**/*", "dependencies/**/*", "prisma.config.ts", "vitest.config.ts"],
   "exclude": ["node_modules", "dist", "src/generated"]
 }
