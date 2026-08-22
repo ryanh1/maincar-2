@@ -42,6 +42,11 @@ vi.mock('../queue.js', () => ({
   workJob: queue.workJob,
 }))
 
+const transcribe = vi.hoisted(() => ({ queueTranscribeVoicemail: vi.fn() }))
+vi.mock('../transcribeVoicemail.js', () => ({
+  queueTranscribeVoicemail: transcribe.queueTranscribeVoicemail,
+}))
+
 import { logger } from '../../../dependencies/logger.js'
 import {
   queueUploadVoicemail,
@@ -74,6 +79,7 @@ beforeEach(() => {
   twilio.fetchRecordingMp3.mockResolvedValue({ ...MEDIA })
   twilio.deleteRecording.mockResolvedValue(undefined)
   s3.putRecording.mockResolvedValue(undefined)
+  transcribe.queueTranscribeVoicemail.mockResolvedValue('transcribe_job_1')
 })
 
 describe('voicemailObjectKey', () => {
@@ -109,6 +115,12 @@ describe('uploadVoicemailJob — happy path', () => {
     await uploadVoicemailJob(PAYLOAD)
 
     expect(twilio.deleteRecording).toHaveBeenCalledWith(RECORDING_SID)
+  })
+
+  it('queues transcription only after the recording URL is stored', async () => {
+    await uploadVoicemailJob(PAYLOAD)
+
+    expect(transcribe.queueTranscribeVoicemail).toHaveBeenCalledWith(ROW.id)
   })
 
   // The row must never point at an object that is not in S3 yet.

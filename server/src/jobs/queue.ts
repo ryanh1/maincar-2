@@ -30,6 +30,8 @@ export const JOB_REAP_STALE_CALLS = 'reap-stale-calls'
 
 export const JOB_UPLOAD_VOICEMAIL = 'upload-voicemail'
 
+export const JOB_TRANSCRIBE_VOICEMAIL = 'transcribe-voicemail'
+
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
   JOB_RELEASE_NUMBER,
@@ -37,6 +39,7 @@ export const JOB_NAMES = [
   JOB_TRANSCRIBE_RECORDING,
   JOB_REAP_STALE_CALLS,
   JOB_UPLOAD_VOICEMAIL,
+  JOB_TRANSCRIBE_VOICEMAIL,
 ] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
@@ -72,6 +75,7 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }
   // One retry, thirty seconds later — the same shape as JOB_UPLOAD_RECORDING,
   // its outbound twin. See jobs/uploadVoicemail.ts.
   [JOB_UPLOAD_VOICEMAIL]: { retryLimit: 1, retryDelay: 30 },
+  [JOB_TRANSCRIBE_VOICEMAIL]: { retryLimit: 1, retryDelay: 30 },
 }
 
 let boss: PgBoss | null = null

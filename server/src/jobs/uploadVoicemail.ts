@@ -3,6 +3,7 @@ import { putRecording } from '../../dependencies/s3.js'
 import { logger } from '../../dependencies/logger.js'
 import prisma from '../db.js'
 import { JOB_UPLOAD_VOICEMAIL, sendJob, workJob } from './queue.js'
+import { queueTranscribeVoicemail } from './transcribeVoicemail.js'
 
 // The job that turns a finished inbound voicemail recording into an object we
 // own: fetch the MP3 from Twilio, put it in S3 under a stable key, point the
@@ -149,6 +150,10 @@ export async function uploadVoicemailJob(
     )
     return
   }
+
+  // The S3 key is committed before this queue handoff, so the transcription
+  // worker can safely read it and never observes a not-yet-uploaded recording.
+  await queueTranscribeVoicemail(voicemailId)
 
   // --- Delete Twilio's copy (best effort) ---
   //
