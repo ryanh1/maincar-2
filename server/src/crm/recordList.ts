@@ -26,12 +26,42 @@ import { InvalidTeamScopeError, resolveOwnerTeamScope, type TeamScope } from '..
 // query. Every standard object that has landed a table (standardObjects.ts) goes
 // here. An object not in this map (storage="table" but no table yet, e.g. email/sms
 // before Phase 3/4) is a server misconfiguration, not a caller error.
-export const TABLE_STORAGE_TABLES: Record<string, string> = {
-  person: 'Person',
-  company: 'Company',
-  deal: 'Deal',
-  call: 'Call',
-}
+//
+// Keep the raw-SQL fields beside the table mapping. The static Prisma contract and
+// migrated-Postgres contract tests consume this same definition, so deleting or
+// renaming a required list field cannot leave this compiler pointing at a phantom
+// column.
+const RAW_LIST_REQUIRED_COLUMNS = [
+  { name: 'id', prismaType: 'String' },
+  { name: 'orgId', prismaType: 'String' },
+  { name: 'customJson', prismaType: 'Json' },
+  { name: 'deletedAt', prismaType: 'DateTime' },
+  { name: 'createdAt', prismaType: 'DateTime' },
+  { name: 'updatedAt', prismaType: 'DateTime' },
+] as const
+
+export const TABLE_STORAGE_LIST_CONTRACT = {
+  person: {
+    tableName: 'Person',
+    requiredColumns: RAW_LIST_REQUIRED_COLUMNS,
+  },
+  company: {
+    tableName: 'Company',
+    requiredColumns: RAW_LIST_REQUIRED_COLUMNS,
+  },
+  deal: {
+    tableName: 'Deal',
+    requiredColumns: RAW_LIST_REQUIRED_COLUMNS,
+  },
+  call: {
+    tableName: 'Call',
+    requiredColumns: RAW_LIST_REQUIRED_COLUMNS,
+  },
+} as const
+
+export const TABLE_STORAGE_TABLES: Record<string, string> = Object.fromEntries(
+  Object.entries(TABLE_STORAGE_LIST_CONTRACT).map(([objectSlug, { tableName }]) => [objectSlug, tableName]),
+)
 
 // This is the one capability policy for generic record-list surfaces. Table-backed
 // objects are supported only after their table is registered above; generic-record
