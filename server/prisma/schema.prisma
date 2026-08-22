@@ -32,9 +32,9 @@ model Org {
 
   // Organization-level outbound call recording policy. An empty allowlist means
   // every mapped US state is eligible, subject to the other two settings.
-  recordCalls                  Boolean  @default(true)
-  blockTwoPartyConsentStates   Boolean  @default(true)
-  recordingAllowedStates       String[] @default([])
+  recordCalls                Boolean  @default(true)
+  blockTwoPartyConsentStates Boolean  @default(true)
+  recordingAllowedStates     String[] @default([])
 
   // Which version of the standard-schema seed (server/src/crm/standardObjects.ts)
   // this org has had applied. Set by seedOrg on org creation; a later release bumps
@@ -132,14 +132,12 @@ model Org {
   notificationObjects NotificationObject[]
   notifications       Notification[]
 
-  // Inbound voicemail and pre-recorded drops (MAI-39 through MAI-53).
-  // Back-relations so deleting an org cascades its voicemail rows, greeting, and
-  // reusable drops away — the same onDelete: Cascade the rest of the dialer
-  // models already use. voicemailGreeting is a single object, not an array,
-  // because VoicemailGreeting.orgId is @unique.
-  voicemails        Voicemail[]
-  voicemailGreeting VoicemailGreeting?
-  voicemailDrops    VoicemailDrop[]
+  // Inbound voicemail and pre-recorded drops (MAI-39 through MAI-53). Greeting
+  // candidates keep the active greeting playable while a replacement validates.
+  // All relations cascade when the tenant is deleted, like the other dialer data.
+  voicemails         Voicemail[]
+  voicemailGreetings VoicemailGreeting[]
+  voicemailDrops     VoicemailDrop[]
 }
 
 model User {
@@ -358,7 +356,7 @@ model Call {
   recordingPlanned Boolean?
   // Allowed values: "allowed", "recording-disabled", "two-party-consent-state",
   // "state-not-allowed", "unknown-destination-state". Null for legacy calls.
-  recordingReason String?
+  recordingReason  String?
   // USPS state resolved from the destination NPA, or null when unknown/non-US.
   destinationState String?
 
@@ -508,29 +506,41 @@ model CallSpeaker {
   @@index([orgId, personId])
 }
 
-// An org's single outgoing voicemail greeting, played to inbound callers before
-// <Record> starts (MAI-39). One per org — orgId is @unique so an upload always
-// updates the existing row instead of accumulating history.
+// An immutable personal-greeting candidate. At most one candidate per org has
+// status "active"; workers may only move a candidate to "ready", and an
+// authorized explicit promotion moves it to "active".
 model VoicemailGreeting {
   id String @id @default(cuid())
 
-  orgId String @unique
+  orgId String
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
-  // The bare S3 object KEY for the MP3 (e.g.
-  // "maincar-voicemail-greetings/{orgId}/greeting.mp3"), written by the
-  // transcode job (MAI-43). Null until the org has uploaded and converted one.
-  audioUrl String?
+  // Bare object keys only — never signed URLs. sourceKey is the immutable upload
+  // and storageKey is the converted MP3 that can be signed after authorization.
+  sourceKey  String?
+  storageKey String?
 
-  // Allowed values: "pending", "ready", "failed". The transcode worker sets
-  // this so a failed conversion remains visible after pg-boss has spent its
-  // single retry (jobs/transcodeGreeting.ts).
-  status String @default("pending")
+  // Allowed values: "uploading", "transcoding", "ready", "failed", "active",
+  // "deleted". The worker never activates a candidate; a member confirms that
+  // transition after it has been made ready.
+  status String @default("uploading")
 
-  uploadedAt DateTime?
+  // A required caller-supplied key makes a retry of one upload intent return the
+  // same candidate instead of producing duplicate media. Its request hash keeps
+  // accidental key reuse with different bytes from silently succeeding.
+  idempotencyKey String
+  contentHash    String
+
+  durationSeconds Int?
+  failureReason   String?
+  uploadedAt      DateTime?
+  deletedAt       DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([orgId, idempotencyKey])
+  @@index([orgId, status])
 }
 
 // A reusable, pre-recorded voicemail drop in an org's library (MAI-53). The
@@ -708,9 +718,9 @@ model EmailTemplate {
   createdById String?
   createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
-  name     String
-  subject  String
-  bodyHtml String
+  name       String
+  subject    String
+  bodyHtml   String
   visibility EmailTemplateVisibility @default(PRIVATE)
 
   // The distinct merge-field ids this template uses, derived server-side from the
@@ -2159,7 +2169,7 @@ model NotificationObject {
   // The source actor. SetNull preserves the notification event if an account is
   // removed; the writer only accepts an active member as the initial actor.
   actorUserId String?
-  actor       User?  @relation("NotificationActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actor       User?   @relation("NotificationActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   // Validated strings, never Prisma enums. `verb` names what happened; the typed
   // object pair is the source contract that later resolves a deep-link destination.

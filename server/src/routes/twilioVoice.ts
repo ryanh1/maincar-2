@@ -125,8 +125,10 @@ async function handleInboundCall(
   // --- Fetch the org's personal greeting, or fall back to the default ---
   // A presigned GET URL, not the bare S3 key: Twilio's <Play> fetches it directly
   // over HTTPS, exactly as a browser would a recording download link.
-  const greeting = await prisma.voicemailGreeting.findFirst({ where: { orgId: phoneNumber.orgId } })
-  const greetingAudioUrl = greeting?.audioUrl ? await getRecordingDownloadUrl(greeting.audioUrl) : null
+  const greeting = await prisma.voicemailGreeting.findFirst({
+    where: { orgId: phoneNumber.orgId, status: 'active' },
+  })
+  const greetingAudioUrl = greeting?.storageKey ? await getRecordingDownloadUrl(greeting.storageKey) : null
 
   // --- Create the Voicemail row ---
   // Upserted on callSid (unique): Twilio's webhook delivery is at-least-once, so a
@@ -140,7 +142,7 @@ async function handleInboundCall(
       callSid,
       fromE164: fromE164 ?? '',
       toE164,
-      greeting: greeting?.audioUrl ?? null,
+      greeting: greeting?.storageKey ?? null,
     },
     update: {},
   })

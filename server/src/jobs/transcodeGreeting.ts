@@ -1,4 +1,4 @@
-import { transcodeWebmToMp3 } from '../../dependencies/ffmpeg.js'
+import { getAudioDurationSeconds, transcodeWebmToMp3 } from '../../dependencies/ffmpeg.js'
 import { logger } from '../../dependencies/logger.js'
 import { deleteObject, getObjectBytes, putObjectBytes } from '../../dependencies/s3.js'
 import prisma from '../db.js'
@@ -6,7 +6,7 @@ import { JOB_TRANSCODE_GREETING, sendJob, workJob } from './queue.js'
 
 export interface TranscodeGreetingPayload {
   orgId: string
-  tempObjectKey: string
+  greetingId: string
 }
 
 export interface TranscodeGreetingAttempt {
@@ -16,22 +16,29 @@ export interface TranscodeGreetingAttempt {
 
 export const TRANSCODE_GREETING_RETRY_LIMIT = 1
 export const TRANSCODE_GREETING_RETRY_DELAY_SECONDS = 30
+export const MAX_GREETING_DURATION_SECONDS = 120
 
-export function greetingObjectKey(orgId: string): string {
-  return `maincar-voicemail-greetings/${orgId}/greeting.mp3`
+class GreetingValidationError extends Error {}
+
+export function greetingObjectKey(orgId: string, greetingId: string): string {
+  return `maincar-voicemail-greetings/${orgId}/${greetingId}.mp3`
 }
 
-async function markGreetingFailed(orgId: string): Promise<void> {
+async function markGreetingFailed(
+  orgId: string,
+  greetingId: string,
+  failureReason: string,
+): Promise<void> {
   await prisma.voicemailGreeting.updateMany({
-    where: { orgId, status: 'pending' },
-    data: { status: 'failed' },
+    where: { id: greetingId, orgId, status: 'transcoding' },
+    data: { status: 'failed', failureReason },
   })
 }
 
 /**
- * Convert one queued temporary greeting into the stable MP3 the inbound TwiML
- * route plays. pg-boss is at-least-once, so completed or failed rows are never
- * reprocessed and the database update is a status compare-and-set.
+ * Convert one immutable uploaded candidate into an immutable MP3. pg-boss is
+ * at-least-once, so only a transcoding candidate can settle to ready; activation
+ * remains an explicit authorized route action.
  */
 export async function transcodeGreetingJob(
   payload: TranscodeGreetingPayload,
@@ -40,10 +47,10 @@ export async function transcodeGreetingJob(
     retryLimit: TRANSCODE_GREETING_RETRY_LIMIT,
   },
 ): Promise<void> {
-  const { orgId, tempObjectKey } = payload
-  const greeting = await prisma.voicemailGreeting.findUnique({
-    where: { orgId },
-    select: { id: true, orgId: true, audioUrl: true, status: true },
+  const { orgId, greetingId } = payload
+  const greeting = await prisma.voicemailGreeting.findFirst({
+    where: { id: greetingId, orgId },
+    select: { id: true, orgId: true, sourceKey: true, storageKey: true, status: true },
   })
 
   if (!greeting) {
@@ -51,20 +58,43 @@ export async function transcodeGreetingJob(
     return
   }
 
-  if (greeting.status !== 'pending') {
+  if (greeting.status !== 'transcoding' || !greeting.sourceKey) {
     logger.info({ orgId, status: greeting.status }, 'transcode greeting: already settled, skipping')
     return
   }
 
-  const outputKey = greetingObjectKey(orgId)
+  const outputKey = greetingObjectKey(orgId, greeting.id)
 
   try {
-    const webm = await getObjectBytes(tempObjectKey)
+    const webm = await getObjectBytes(greeting.sourceKey)
     const mp3 = await transcodeWebmToMp3(webm)
+    const durationSeconds = Math.ceil(await getAudioDurationSeconds(mp3))
+    if (durationSeconds > MAX_GREETING_DURATION_SECONDS) {
+      throw new GreetingValidationError(
+        `Greeting is longer than ${MAX_GREETING_DURATION_SECONDS} seconds. Upload a shorter candidate.`,
+      )
+    }
     await putObjectBytes({ key: outputKey, body: mp3, contentType: 'audio/mpeg' })
-    await deleteObject(tempObjectKey)
+    await deleteObject(greeting.sourceKey)
+
+    const updated = await prisma.voicemailGreeting.updateMany({
+      where: { id: greeting.id, orgId, status: 'transcoding' },
+      data: {
+        storageKey: outputKey,
+        status: 'ready',
+        durationSeconds,
+        uploadedAt: new Date(),
+        failureReason: null,
+      },
+    })
+
+    if (updated.count === 0) {
+      logger.warn({ orgId }, 'transcode greeting: converted but greeting was already settled')
+      await deleteObject(outputKey)
+      return
+    }
   } catch (error) {
-    if (attempt.retryCount < attempt.retryLimit) {
+    if (!(error instanceof GreetingValidationError) && attempt.retryCount < attempt.retryLimit) {
       logger.warn(
         { orgId, retryCount: attempt.retryCount, error },
         'transcode greeting: failure, handing it back to the queue',
@@ -72,9 +102,15 @@ export async function transcodeGreetingJob(
       throw error
     }
 
-    await markGreetingFailed(orgId)
+    await markGreetingFailed(
+      orgId,
+      greeting.id,
+      error instanceof GreetingValidationError
+        ? error.message
+        : 'Audio conversion failed. Upload a new candidate.',
+    )
     try {
-      await deleteObject(tempObjectKey)
+      await Promise.all([deleteObject(greeting.sourceKey), deleteObject(outputKey)])
     } catch (cleanupError) {
       logger.warn(
         { orgId, cleanupError },
@@ -85,16 +121,6 @@ export async function transcodeGreetingJob(
       { orgId, retryCount: attempt.retryCount, error },
       'transcode greeting: could not convert the greeting',
     )
-    return
-  }
-
-  const updated = await prisma.voicemailGreeting.updateMany({
-    where: { orgId, status: 'pending' },
-    data: { audioUrl: outputKey, status: 'ready', uploadedAt: new Date() },
-  })
-
-  if (updated.count === 0) {
-    logger.warn({ orgId }, 'transcode greeting: converted but greeting was already settled')
     return
   }
 

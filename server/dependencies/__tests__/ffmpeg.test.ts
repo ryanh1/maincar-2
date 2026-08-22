@@ -4,7 +4,7 @@ import { dirname } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { transcodeWebmToMp3 } from '../ffmpeg.js'
+import { getAudioDurationSeconds, transcodeWebmToMp3 } from '../ffmpeg.js'
 
 describe('transcodeWebmToMp3', () => {
   it('removes its temporary input and output directory after conversion', async () => {
@@ -33,6 +33,35 @@ describe('transcodeWebmToMp3', () => {
         },
       }),
     ).rejects.toThrow('ffmpeg failed')
+
+    expect(existsSync(temporaryDirectory)).toBe(false)
+  })
+})
+
+describe('getAudioDurationSeconds', () => {
+  it('reads a positive duration and removes its temporary source', async () => {
+    let temporaryDirectory = ''
+
+    await expect(getAudioDurationSeconds(Buffer.from('mp3'), {
+      run: async (inputPath) => {
+        temporaryDirectory = dirname(inputPath)
+        await expect(readFile(inputPath)).resolves.toEqual(Buffer.from('mp3'))
+        return '12.4\\n'
+      },
+    })).resolves.toBe(12.4)
+
+    expect(existsSync(temporaryDirectory)).toBe(false)
+  })
+
+  it('rejects an invalid duration and still removes the temporary source', async () => {
+    let temporaryDirectory = ''
+
+    await expect(getAudioDurationSeconds(Buffer.from('mp3'), {
+      run: async (inputPath) => {
+        temporaryDirectory = dirname(inputPath)
+        return 'NaN'
+      },
+    })).rejects.toThrow('invalid audio duration')
 
     expect(existsSync(temporaryDirectory)).toBe(false)
   })

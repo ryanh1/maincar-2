@@ -1,19 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const db = vi.hoisted(() => ({
-  findUnique: vi.fn(),
+  findFirst: vi.fn(),
   updateMany: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({
-  default: { voicemailGreeting: { findUnique: db.findUnique, updateMany: db.updateMany } },
+  default: { voicemailGreeting: { findFirst: db.findFirst, updateMany: db.updateMany } },
 }))
 
 const s3 = vi.hoisted(() => ({ getObjectBytes: vi.fn(), putObjectBytes: vi.fn(), deleteObject: vi.fn() }))
 
 vi.mock('../../../dependencies/s3.js', () => s3)
 
-const ffmpeg = vi.hoisted(() => ({ transcodeWebmToMp3: vi.fn() }))
+const ffmpeg = vi.hoisted(() => ({ transcodeWebmToMp3: vi.fn(), getAudioDurationSeconds: vi.fn() }))
 
 vi.mock('../../../dependencies/ffmpeg.js', () => ffmpeg)
 
@@ -31,31 +31,45 @@ vi.mock('../queue.js', () => ({
 
 import {
   greetingObjectKey,
+  MAX_GREETING_DURATION_SECONDS,
   queueTranscodeGreeting,
   registerTranscodeGreetingWorker,
   TRANSCODE_GREETING_RETRY_LIMIT,
   transcodeGreetingJob,
 } from '../transcodeGreeting.js'
 
-const ROW = { id: 'greeting_1', orgId: 'org_1', audioUrl: null, status: 'pending' }
-const PAYLOAD = { orgId: ROW.orgId, tempObjectKey: 'voicemail-greeting-uploads/org_1/upload.webm' }
-const OBJECT_KEY = 'maincar-voicemail-greetings/org_1/greeting.mp3'
+const ROW = {
+  id: 'greeting_1',
+  orgId: 'org_1',
+  sourceKey: 'voicemail-greeting-uploads/org_1/greeting_1.webm',
+  storageKey: null,
+  status: 'transcoding',
+}
+const PAYLOAD = { orgId: ROW.orgId, greetingId: ROW.id }
+const OBJECT_KEY = 'maincar-voicemail-greetings/org_1/greeting_1.mp3'
 const WEBM = Buffer.from('webm')
 const MP3 = Buffer.from('mp3')
 
 beforeEach(() => {
   vi.clearAllMocks()
-  db.findUnique.mockResolvedValue({ ...ROW })
+  db.findFirst.mockResolvedValue({ ...ROW })
   db.updateMany.mockResolvedValue({ count: 1 })
   s3.getObjectBytes.mockResolvedValue(WEBM)
   ffmpeg.transcodeWebmToMp3.mockResolvedValue(MP3)
+  ffmpeg.getAudioDurationSeconds.mockResolvedValue(12.4)
   s3.putObjectBytes.mockResolvedValue(undefined)
   s3.deleteObject.mockResolvedValue(undefined)
 })
 
 describe('greetingObjectKey', () => {
   it('stores each org greeting at its stable MP3 key', () => {
-    expect(greetingObjectKey('org_1')).toBe(OBJECT_KEY)
+    expect(greetingObjectKey('org_1', 'greeting_1')).toBe(OBJECT_KEY)
+  })
+
+  it('gives each replacement candidate an immutable output key', () => {
+    expect(greetingObjectKey('org_1', 'greeting_2')).toBe(
+      'maincar-voicemail-greetings/org_1/greeting_2.mp3',
+    )
   })
 })
 
@@ -63,7 +77,7 @@ describe('transcodeGreetingJob', () => {
   it('fetches the temporary upload, transcodes it, and writes the stable MP3', async () => {
     await transcodeGreetingJob(PAYLOAD)
 
-    expect(s3.getObjectBytes).toHaveBeenCalledWith(PAYLOAD.tempObjectKey)
+    expect(s3.getObjectBytes).toHaveBeenCalledWith(ROW.sourceKey)
     expect(ffmpeg.transcodeWebmToMp3).toHaveBeenCalledWith(WEBM)
     expect(s3.putObjectBytes).toHaveBeenCalledWith({
       key: OBJECT_KEY,
@@ -76,15 +90,36 @@ describe('transcodeGreetingJob', () => {
     await transcodeGreetingJob(PAYLOAD)
 
     expect(db.updateMany).toHaveBeenCalledWith({
-      where: { orgId: ROW.orgId, status: 'pending' },
-      data: { audioUrl: OBJECT_KEY, status: 'ready', uploadedAt: expect.any(Date) },
+      where: { id: ROW.id, orgId: ROW.orgId, status: 'transcoding' },
+      data: {
+        storageKey: OBJECT_KEY,
+        status: 'ready',
+        durationSeconds: 13,
+        uploadedAt: expect.any(Date),
+        failureReason: null,
+      },
     })
+  })
+
+  it('fails an overlong candidate without retrying or changing an active greeting', async () => {
+    ffmpeg.getAudioDurationSeconds.mockResolvedValue(MAX_GREETING_DURATION_SECONDS + 1)
+
+    await expect(transcodeGreetingJob(PAYLOAD)).resolves.toBeUndefined()
+
+    expect(db.updateMany).toHaveBeenCalledWith({
+      where: { id: ROW.id, orgId: ROW.orgId, status: 'transcoding' },
+      data: {
+        status: 'failed',
+        failureReason: 'Greeting is longer than 120 seconds. Upload a shorter candidate.',
+      },
+    })
+    expect(s3.putObjectBytes).not.toHaveBeenCalled()
   })
 
   it('deletes the temporary S3 object after a successful conversion', async () => {
     await transcodeGreetingJob(PAYLOAD)
 
-    expect(s3.deleteObject).toHaveBeenCalledWith(PAYLOAD.tempObjectKey)
+    expect(s3.deleteObject).toHaveBeenCalledWith(ROW.sourceKey)
   })
 
   it('retries once for a transient failure, then marks the greeting failed', async () => {
@@ -102,15 +137,15 @@ describe('transcodeGreetingJob', () => {
     ).resolves.toBeUndefined()
 
     expect(db.updateMany).toHaveBeenLastCalledWith({
-      where: { orgId: ROW.orgId, status: 'pending' },
-      data: { status: 'failed' },
+      where: { id: ROW.id, orgId: ROW.orgId, status: 'transcoding' },
+      data: { status: 'failed', failureReason: 'Audio conversion failed. Upload a new candidate.' },
     })
-    expect(s3.deleteObject).toHaveBeenCalledWith(PAYLOAD.tempObjectKey)
+    expect(s3.deleteObject).toHaveBeenCalledWith(ROW.sourceKey)
   })
 
-  it('does not redo a greeting that has already reached ready or failed', async () => {
-    for (const status of ['ready', 'failed']) {
-      db.findUnique.mockResolvedValue({ ...ROW, status, audioUrl: OBJECT_KEY })
+  it('does not redo a greeting that has already reached ready, active, failed, or deleted', async () => {
+    for (const status of ['ready', 'active', 'failed', 'deleted']) {
+      db.findFirst.mockResolvedValue({ ...ROW, status, storageKey: OBJECT_KEY })
 
       await transcodeGreetingJob(PAYLOAD)
 
