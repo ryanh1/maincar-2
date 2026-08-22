@@ -85,6 +85,11 @@ export interface SeedObject {
   attributes: SeedAttribute[]
 }
 
+/** Server-owned, user-navigable surfaces for a standard object. */
+export interface ObjectSurfaceCapabilities {
+  list: boolean
+}
+
 export interface SeedStage {
   name: string
   color: string
@@ -297,6 +302,23 @@ export const STANDARD_OBJECTS: SeedObject[] = [
   TASK,
   NOTE,
 ]
+
+// Keep this adjacent to the standard-object registry, not in a client component:
+// adding a first-class object is an explicit product decision about which surfaces
+// it can safely expose. The registry test pairs this declaration with the real
+// record-list implementation, so a new table-backed object cannot be advertised
+// before its list query exists.
+export const STANDARD_OBJECT_SURFACE_CAPABILITIES: Readonly<Record<string, ObjectSurfaceCapabilities>> = {
+  company: { list: true },
+  person: { list: true },
+  deal: { list: true },
+  call: { list: true },
+  email: { list: false },
+  sms: { list: false },
+  meeting: { list: false },
+  task: { list: false },
+  note: { list: false },
+}
 
 // The one default pipeline every org starts with (spec §10.1). isDefault is set by
 // the seeder. Exactly one is seeded; a second (e.g. "Renewals") needs no migration.

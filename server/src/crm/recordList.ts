@@ -21,6 +21,7 @@
 import { Prisma } from '../generated/prisma/client.js'
 import type { PrismaClient, ObjectDef, AttributeDef } from '../generated/prisma/client.js'
 import { InvalidTeamScopeError, resolveOwnerTeamScope, type TeamScope } from '../lib/teamScope.js'
+import { getObjectSurfaceCapabilities, type ObjectSurfaceCapabilitySubject } from './objectCapabilities.js'
 
 // storage="table" ObjectDefs whose real Postgres table this endpoint knows how to
 // query. Every standard object that has landed a table (standardObjects.ts) goes
@@ -67,8 +68,25 @@ export const TABLE_STORAGE_TABLES: Record<string, string> = Object.fromEntries(
 // objects are supported only after their table is registered above; generic-record
 // objects are supported by the Record table. Routes expose this result so a client
 // never needs a second, stale allow-list to decide what it can navigate to.
-export function isRecordListSupported(object: Pick<ObjectDef, 'slug' | 'storage'>): boolean {
-  return object.storage === 'record' || object.slug in TABLE_STORAGE_TABLES
+export interface RecordListSurface {
+  mode: 'table' | 'record'
+  tableName: string
+  jsonColumnName: 'customJson' | 'valuesJson'
+}
+
+/** The implementation registry the record-list compiler can actually query. */
+export function getRecordListSurface(object: ObjectSurfaceCapabilitySubject): RecordListSurface | null {
+  if (object.storage === 'record') {
+    return { mode: 'record', tableName: 'Record', jsonColumnName: 'valuesJson' }
+  }
+
+  const tableName = TABLE_STORAGE_TABLES[object.slug]
+  return tableName ? { mode: 'table', tableName, jsonColumnName: 'customJson' } : null
+}
+
+/** True only when the server advertises and can implement the list surface. */
+export function isRecordListSupported(object: ObjectSurfaceCapabilitySubject): boolean {
+  return getObjectSurfaceCapabilities(object).list && getRecordListSurface(object) !== null
 }
 
 // Grid creation is deliberately narrower than listing. Record-backed objects
@@ -422,13 +440,13 @@ export interface ListRecordsArgs {
 
 export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): Promise<ListResult> {
   const { orgId, object, attributes, query } = args
-  const mode: 'table' | 'record' = object.storage === 'table' ? 'table' : 'record'
+  const capabilities = getObjectSurfaceCapabilities(object)
+  const surface = getRecordListSurface(object)
 
-  if (!isRecordListSupported(object)) {
+  if (!capabilities.list || !surface) {
     throw new ListQueryError(`No list surface is available for object "${object.slug}" yet.`)
   }
-  const tableName = mode === 'table' ? TABLE_STORAGE_TABLES[object.slug]! : 'Record'
-  const jsonColumnName: 'customJson' | 'valuesJson' = mode === 'table' ? 'customJson' : 'valuesJson'
+  const { mode, tableName, jsonColumnName } = surface
 
   const attrsBySlug = new Map(attributes.map((a) => [a.slug, a]))
   const ctx: FieldContext = { attrsBySlug, jsonColumnName }

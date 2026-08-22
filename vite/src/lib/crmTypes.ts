@@ -71,8 +71,10 @@ export interface ObjectDef {
   storage: 'table' | 'record'
   isStandard: boolean
   isFirstClass: boolean
-  isListSupported: boolean
   isGridCreateSupported: boolean
+  capabilities: {
+    list: boolean
+  }
   isHidden: boolean
   isArchived: boolean
   createdAt: string

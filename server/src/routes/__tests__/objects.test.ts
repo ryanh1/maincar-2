@@ -241,26 +241,38 @@ describe('GET /api/orgs/:orgId/objects', () => {
     })
   })
 
-  it('reports list and grid-create support from the server capability policies', async () => {
+  it('reports server-owned list and grid-create capabilities', async () => {
     prismaMock.objectDef.findMany.mockResolvedValue([
       objectRow({ id: 'person', slug: 'person', storage: 'table' }),
+      objectRow({ id: 'company', slug: 'company', storage: 'table' }),
+      objectRow({ id: 'deal', slug: 'deal', storage: 'table' }),
       objectRow({ id: 'call', slug: 'call', storage: 'table' }),
       objectRow({ id: 'email', slug: 'email', storage: 'table' }),
+      objectRow({ id: 'sms', slug: 'sms', storage: 'table' }),
+      objectRow({ id: 'meeting', slug: 'meeting', storage: 'table' }),
+      objectRow({ id: 'task', slug: 'task', storage: 'table' }),
+      objectRow({ id: 'note', slug: 'note', storage: 'table' }),
       objectRow({ id: 'project', slug: 'project', storage: 'record' }),
     ])
 
     const res = await request(app).get(URL_A).set('Authorization', AUTH)
 
     expect(res.status).toBe(200)
-    expect(res.body.objects.map((object: { slug: string; isListSupported: boolean; isGridCreateSupported: boolean }) => ({
+    expect(res.body.objects.map((object: { slug: string; capabilities: { list: boolean }; isGridCreateSupported: boolean }) => ({
       slug: object.slug,
-      isListSupported: object.isListSupported,
+      list: object.capabilities.list,
       isGridCreateSupported: object.isGridCreateSupported,
     }))).toEqual([
-      { slug: 'person', isListSupported: true, isGridCreateSupported: true },
-      { slug: 'call', isListSupported: true, isGridCreateSupported: false },
-      { slug: 'email', isListSupported: false, isGridCreateSupported: false },
-      { slug: 'project', isListSupported: true, isGridCreateSupported: true },
+      { slug: 'person', list: true, isGridCreateSupported: true },
+      { slug: 'company', list: true, isGridCreateSupported: true },
+      { slug: 'deal', list: true, isGridCreateSupported: false },
+      { slug: 'call', list: true, isGridCreateSupported: false },
+      { slug: 'email', list: false, isGridCreateSupported: false },
+      { slug: 'sms', list: false, isGridCreateSupported: false },
+      { slug: 'meeting', list: false, isGridCreateSupported: false },
+      { slug: 'task', list: false, isGridCreateSupported: false },
+      { slug: 'note', list: false, isGridCreateSupported: false },
+      { slug: 'project', list: true, isGridCreateSupported: true },
     ])
   })
 
