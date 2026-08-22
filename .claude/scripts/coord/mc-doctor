@@ -21,6 +21,45 @@ while IFS= read -r d; do
 done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
 [ "$found" = 0 ] && echo "  none"
 
+echo; echo "=== SHARED MAIN TREE (the primary checkout — not a worktree — should stay on main, clean, in sync) ==="
+# Every other worktree is expendable and issue-scoped; this one is not. Sessions
+# have repeatedly bypassed the worktree-per-issue rule (CLAUDE.md) and checked
+# out a feature branch, or merged locally, directly in this checkout. That is
+# invisible until someone notices the app is serving stale code — this is the
+# check that used to be missing and let it happen silently more than once.
+main_tree="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+if [ -z "$main_tree" ]; then
+  echo "  could not determine the primary checkout"
+else
+  mt_branch="$(git -C "$main_tree" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  mt_dirty="$(git -C "$main_tree" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  echo "  path: $main_tree"
+  if [ "$mt_branch" = "main" ]; then
+    echo "  branch: main (ok)"
+  else
+    echo "  BRANCH: checked out to '$mt_branch', not main — a session bypassed the worktree-per-issue rule; work should happen in its own worktree instead"
+  fi
+  if [ "$mt_dirty" = "0" ]; then
+    echo "  working tree: clean"
+  else
+    echo "  DIRTY: $mt_dirty uncommitted/untracked path(s) — should be clean, or is stray WIP from a session that skipped its own worktree"
+  fi
+  if [ "$mt_branch" = "main" ]; then
+    git -C "$main_tree" fetch origin --quiet 2>/dev/null
+    ahead="$(git -C "$main_tree" rev-list --count origin/main..main 2>/dev/null || echo 0)"
+    behind="$(git -C "$main_tree" rev-list --count main..origin/main 2>/dev/null || echo 0)"
+    if [ "$ahead" != "0" ] && [ "$behind" != "0" ]; then
+      echo "  DIVERGED: local main is $ahead ahead / $behind behind origin/main — plain 'git pull' will refuse; needs 'git merge origin/main' then push. Someone committed/merged locally on main without going through mc-merge."
+    elif [ "$ahead" != "0" ]; then
+      echo "  UNPUSHED: local main is $ahead commit(s) ahead of origin/main — push it (mc-merge, or 'git push' if solo)"
+    elif [ "$behind" != "0" ]; then
+      echo "  behind: local main is $behind commit(s) behind origin/main (safe fast-forward — 'git pull --ff-only')"
+    else
+      echo "  in sync with origin/main"
+    fi
+  fi
+fi
+
 echo; echo "=== ORPHANED WORKTREES (commits not on origin/main) ==="
 # Sub-agent waves (Agent tool isolation:"worktree", or /linear-execute-project)
 # land under .claude/worktrees/*. A wave that never got "landed" leaves one of

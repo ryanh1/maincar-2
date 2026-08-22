@@ -31,7 +31,13 @@ Every time-of-day shown to a person MUST render in an explicit timezone and carr
 ## Git and branching
 
 **Use a worktree per issue.** Multiple sessions work this repo at once. Give each
-one its own checkout and branch instead of sharing the main tree:
+one its own checkout and branch instead of sharing the main tree. **Never `git
+checkout` a feature branch, or `git merge` outside of `mc-merge`, in the main
+tree at `~/Documents/Coding/My Projects/maincar-2` itself** — it has happened
+more than once, silently: the main tree ended up stranded on a stale branch, or
+with local commits never pushed to `origin/main`, and nobody noticed until it
+served stale code. `./scripts/coord/mc-doctor` checks the main tree's branch,
+cleanliness, and sync with `origin/main` — run it if something looks stale.
 
 ```bash
 cd ~/code/maincar-2-worktrees
