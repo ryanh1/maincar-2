@@ -90,6 +90,7 @@ function makeTemplate(overrides: Partial<EmailTemplate> = {}): EmailTemplate {
     name: 'Discovery follow-up',
     subject: 'Great speaking with you',
     bodyHtml: '<p>Thanks for your time.</p>',
+    visibility: 'ORGANIZATION',
     createdById: 'user-a',
     fieldsJson: null,
     createdAt: '2026-08-01T12:00:00.000Z',

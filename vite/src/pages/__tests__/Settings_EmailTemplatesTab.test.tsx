@@ -97,6 +97,7 @@ function template(overrides: Record<string, unknown> = {}) {
     name: 'Discovery follow-up',
     subject: 'Great speaking with you',
     bodyHtml: '<p>Thanks for your time.</p>',
+    visibility: 'ORGANIZATION',
     createdById: 'user-a',
     fieldsJson: null,
     createdAt: '2026-08-01T12:00:00.000Z',
@@ -119,6 +120,8 @@ function templatesResponse(overrides: Record<string, unknown> = {}) {
       }),
     ],
     total: 3,
+    page: 1,
+    limit: 25,
     ...overrides,
   }
 }

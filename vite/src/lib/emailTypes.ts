@@ -102,10 +102,33 @@ export interface RecipientChip {
  * absent for the same reason it is absent from a draft — the caller named the
  * org in the path.
  *
- * A template is ORG-SHARED, not private to whoever wrote it, which is why there
- * is no `userId` here and no way to ask for "my" templates. Any member may read,
- * edit, or delete any of them (SPEC-composer-templates.md § 2).
+ * Visibility is the server-side authorization boundary: a private template is
+ * visible only to its creator, while an organization template is visible to
+ * every current member. `createdById` remains attribution, not a client-side
+ * access control mechanism.
  */
+/** The audience the server stored for a template. */
+export type EmailTemplateVisibility = 'PRIVATE' | 'ORGANIZATION'
+
+/** The server-side filter that decides which templates may appear in a list. */
+export type EmailTemplateScope = 'private' | 'organization' | 'all'
+
+/** The only columns the server accepts for a template-list sort. */
+export type EmailTemplateSort = 'name' | 'subject' | 'author'
+
+/** The server's ordering direction for template lists. */
+export type EmailTemplateSortDirection = 'asc' | 'desc'
+
+/** Optional query parameters for the template-list endpoint. */
+export interface EmailTemplateListQuery {
+  scope?: EmailTemplateScope
+  page?: number
+  limit?: number
+  sort?: EmailTemplateSort
+  dir?: EmailTemplateSortDirection
+  q?: string
+}
+
 export interface EmailTemplate {
   id: string
   /** What the dropdown shows. Never blank — the route refuses an empty name. */
@@ -116,6 +139,8 @@ export interface EmailTemplate {
    */
   subject: string
   bodyHtml: string
+  /** Whether only its creator or every organization member can read it. */
+  visibility: EmailTemplateVisibility
   /**
    * Attribution only, never a filter. **Null is not an error** — it means the
    * rep who wrote this template has left the org, and the template outlived
@@ -145,6 +170,7 @@ export interface EmailTemplateInput {
   name: string
   subject?: string
   bodyHtml?: string
+  visibility?: EmailTemplateVisibility
 }
 
 /**
@@ -156,12 +182,15 @@ export interface EmailTemplatePatch {
   name?: string
   subject?: string
   bodyHtml?: string
+  visibility?: EmailTemplateVisibility
 }
 
-/** The templates list. Alphabetical, because that is what the settings screen shows. */
+/** The server's paged template-list response. */
 export interface GetEmailTemplatesResponse {
   templates: EmailTemplate[]
   total: number
+  page: number
+  limit: number
 }
 
 /** What POST and PATCH return: the stored row, wrapped. */
