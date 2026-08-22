@@ -2,24 +2,47 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
+import { ApiError } from '@/lib/api'
 import type { EmailDraft, EmailTemplate } from '@/lib/emailTypes'
+import type { Mailbox } from '@/lib/mailboxTypes'
 import { makeTestQueryClient, withProviders } from '@/test/utils'
 
 /**
- * The card reads two things beyond its own props: which org the rep is in, and
- * that org's templates. Both are stubbed. What this file has to prove is that
- * the card puts a template into the right two fields and leaves the third
- * alone, not that a query works, and a real one would make every test in here
- * wait on a request it does not care about.
+ * The card reads several things beyond its own props: which org the rep is in,
+ * that org's templates, that org's mailboxes (whether Send can fire at all),
+ * and the send mutation itself. All are stubbed. What this file has to prove
+ * is what the card DOES with them — which field a template lands in, when Send
+ * is enabled, which call fires on a click — not that a query or a mutation
+ * works, and a real one would make every test in here wait on a request it
+ * does not care about.
  */
-const { useAuthMock, useGetEmailTemplatesMock, refetchMock } = vi.hoisted(() => ({
+const {
+  useAuthMock,
+  useGetEmailTemplatesMock,
+  useGetMailboxesMock,
+  useSendEmailDraftMock,
+  sendEmailDraftMock,
+  toastSuccessMock,
+  toastErrorMock,
+  refetchMock,
+} = vi.hoisted(() => ({
   useAuthMock: vi.fn(),
   useGetEmailTemplatesMock: vi.fn(),
+  useGetMailboxesMock: vi.fn(),
+  useSendEmailDraftMock: vi.fn(),
+  sendEmailDraftMock: vi.fn(),
+  toastSuccessMock: vi.fn(),
+  toastErrorMock: vi.fn(),
   refetchMock: vi.fn(),
 }))
 
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
-vi.mock('@/hooks/email', () => ({ useGetEmailTemplates: useGetEmailTemplatesMock }))
+vi.mock('@/hooks/email', () => ({
+  useGetEmailTemplates: useGetEmailTemplatesMock,
+  useSendEmailDraft: useSendEmailDraftMock,
+}))
+vi.mock('@/hooks/mailboxes', () => ({ useGetMailboxes: useGetMailboxesMock }))
+vi.mock('sonner', () => ({ toast: { success: toastSuccessMock, error: toastErrorMock } }))
 
 import { ComposerCard } from './ComposerCard'
 import { ComposerContext, type ComposerContextValue } from './composerContext'
@@ -82,6 +105,28 @@ function templatesQuery(
   }
 }
 
+/** A connected send-from mailbox, the shape `useGetMailboxes` returns. */
+function makeMailbox(overrides: Partial<Mailbox> = {}): Mailbox {
+  return {
+    id: 'box-1',
+    provider: 'google',
+    providerLabel: 'Google',
+    emailAddress: 'rep@acme.test',
+    displayName: null,
+    isPrimary: true,
+    status: 'connected',
+    statusDetail: '',
+    connectionId: 'conn-1',
+    connectedAt: '2026-08-01T12:00:00.000Z',
+    ...overrides,
+  }
+}
+
+/** `useGetMailboxes`, with no mailbox connected unless a test says otherwise. */
+function mailboxesQuery(mailboxes: Mailbox[] = []) {
+  return { data: { mailboxes }, isPending: false }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   useAuthMock.mockReturnValue({
@@ -89,6 +134,11 @@ beforeEach(() => {
     user: { id: 'user-a' },
   })
   useGetEmailTemplatesMock.mockReturnValue(templatesQuery())
+  useGetMailboxesMock.mockReturnValue(mailboxesQuery())
+  useSendEmailDraftMock.mockReturnValue({ mutateAsync: sendEmailDraftMock, isPending: false })
+  sendEmailDraftMock.mockResolvedValue({
+    message: { id: 'email-1', providerMsgId: 'p-1', threadId: null, sentAt: '2026-08-21T09:00:00.000Z' },
+  })
 })
 
 function makeDraft(overrides: Partial<EmailDraft> = {}): EmailDraft {
@@ -876,5 +926,117 @@ describe('ComposerCard templates', () => {
     )
 
     expect(refetchMock).toHaveBeenCalled()
+  })
+})
+
+/**
+ * The footer's Send button.
+ *
+ * What these protect:
+ *   - disabled says which of "a connected mailbox" or "a recipient" is missing,
+ *     never both at once and never a bare "Send"
+ *   - enabled only with BOTH (SPEC-composer-send.md → Acceptance criteria, 1)
+ *   - a click flushes first, so the last keystrokes are what gets sent
+ *   - success closes the card through `discardDraft`, never a second delete of
+ *     a live row — the server already removed it
+ *   - failure leaves the card open with its text, and the server's own message
+ *     reaches the toast
+ */
+describe('ComposerCard send', () => {
+  it('disables Send and names the missing mailbox when none is connected', () => {
+    renderCard(makeDraft({ toAddrs: ['ann@acme.test'] }))
+
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    expect(
+      screen.getByText('Connect a mailbox in Settings → Integrations to send.'),
+    ).toBeInTheDocument()
+  })
+
+  it('disables Send and asks for a recipient once a mailbox is connected', () => {
+    useGetMailboxesMock.mockReturnValue(mailboxesQuery([makeMailbox()]))
+    renderCard()
+
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    expect(screen.getByText('Add a recipient to send.')).toBeInTheDocument()
+  })
+
+  it('enables Send once a mailbox is connected and a recipient is set', () => {
+    useGetMailboxesMock.mockReturnValue(mailboxesQuery([makeMailbox()]))
+    renderCard(makeDraft({ toAddrs: ['ann@acme.test'] }))
+
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+  })
+
+  it('stays disabled with a mailbox that is connected but not primary', () => {
+    // Exactly one mailbox is ever primary, and Send uses that one — a second,
+    // non-primary connected mailbox is not what a rep sends from without a
+    // picker to choose it.
+    useGetMailboxesMock.mockReturnValue(
+      mailboxesQuery([makeMailbox({ id: 'box-2', isPrimary: false })]),
+    )
+    renderCard(makeDraft({ toAddrs: ['ann@acme.test'] }))
+
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+  })
+
+  it('stays disabled when the primary mailbox is limited, not connected', () => {
+    useGetMailboxesMock.mockReturnValue(mailboxesQuery([makeMailbox({ status: 'limited' })]))
+    renderCard(makeDraft({ toAddrs: ['ann@acme.test'] }))
+
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+  })
+
+  it('flushes the last keystroke, then sends, then closes the card as sent', async () => {
+    const user = userEvent.setup()
+    useGetMailboxesMock.mockReturnValue(mailboxesQuery([makeMailbox()]))
+    const { saveDraft, discardDraft } = renderCard(makeDraft({ toAddrs: ['ann@acme.test'] }))
+
+    await typeBody('Last line before sending')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(sendEmailDraftMock).toHaveBeenCalledWith({
+      orgId: 'org-a',
+      draftId: 'draft-1',
+    }))
+    // The flush landed before the send call, so the provider gets the sentence
+    // the rep just finished, not a stale autosave.
+    expect(saveDraft).toHaveBeenCalledWith('draft-1', {
+      bodyHtml: '<p>Last line before sending</p>',
+    })
+    expect(saveDraft.mock.invocationCallOrder[0]).toBeLessThan(
+      sendEmailDraftMock.mock.invocationCallOrder[0],
+    )
+    expect(toastSuccessMock).toHaveBeenCalledWith('Email sent.')
+    // The server already deleted the row; this drops the card from the dock
+    // rather than issuing a second, meaningful delete.
+    await waitFor(() => expect(discardDraft).toHaveBeenCalledWith('draft-1'))
+  })
+
+  it('leaves the card open and toasts the server message on a failed send', async () => {
+    const user = userEvent.setup()
+    useGetMailboxesMock.mockReturnValue(mailboxesQuery([makeMailbox()]))
+    sendEmailDraftMock.mockRejectedValue(
+      new ApiError('Gmail would not accept the message. Nothing was sent.', 502, 'provider_error'),
+    )
+    const { discardDraft } = renderCard(makeDraft({ toAddrs: ['ann@acme.test'] }))
+
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        'Gmail would not accept the message. Nothing was sent.',
+      ),
+    )
+    expect(discardDraft).not.toHaveBeenCalled()
+    expect(screen.getByRole('article', { name: /ann@acme.test/ })).toBeInTheDocument()
+  })
+
+  it('shows "Sending…" and disables the button while the request is in flight', () => {
+    useGetMailboxesMock.mockReturnValue(mailboxesQuery([makeMailbox()]))
+    useSendEmailDraftMock.mockReturnValue({ mutateAsync: sendEmailDraftMock, isPending: true })
+    renderCard(makeDraft({ toAddrs: ['ann@acme.test'] }))
+
+    const button = screen.getByRole('button', { name: 'Sending…' })
+    expect(button).toBeDisabled()
   })
 })

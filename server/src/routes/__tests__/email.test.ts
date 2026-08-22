@@ -48,8 +48,41 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   revokeFirebaseRefreshTokens: vi.fn(),
 }))
 
+// sendDraftEmail is the whole orchestration (validate → resolve → sanitise →
+// send → record); its own behaviour is proved by sendEmail.test.ts. What this
+// file protects is the ROUTE around it: ownership, the 404 for a draft that is
+// not the caller's, and the status-code mapping from each thrown error to the
+// response SPEC-composer-send.md defines. The two error classes are mocked
+// alongside it — the route does `instanceof` against exactly these — so a test
+// can throw one without dragging in the real module's provider dependencies.
+const { sendDraftEmailMock, NoMailboxErrorMock, BadRecipientErrorMock } = vi.hoisted(() => {
+  class NoMailboxError extends Error {
+    constructor(message = 'Connect a mailbox in Settings → Integrations to send.') {
+      super(message)
+      this.name = 'NoMailboxError'
+    }
+  }
+  class BadRecipientError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'BadRecipientError'
+    }
+  }
+  return {
+    sendDraftEmailMock: vi.fn(),
+    NoMailboxErrorMock: NoMailboxError,
+    BadRecipientErrorMock: BadRecipientError,
+  }
+})
+vi.mock('../../lib/mail/sendEmail.js', () => ({
+  sendDraftEmail: sendDraftEmailMock,
+  NoMailboxError: NoMailboxErrorMock,
+  BadRecipientError: BadRecipientErrorMock,
+}))
+
 import app from '../../app.js'
 import { MAX_OPEN_DRAFTS, DRAFT_LIST_LIMIT } from '../email.js'
+import { MailApiError, MailAuthError, MailboxNotFoundError, RateLimitedError } from '../../lib/mail/mailErrors.js'
 
 const NOW = new Date('2026-08-20T12:00:00.000Z')
 const AUTH = 'Bearer fake-token'
@@ -641,6 +674,124 @@ describe('DELETE /api/email/orgs/:orgId/drafts/:draftId', () => {
 
     expect(res.status).toBe(401)
     expect(prismaMock.emailDraft.deleteMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/email/orgs/:orgId/drafts/:draftId/send', () => {
+  const SEND_A = `${ONE_A}/send`
+
+  beforeEach(() => {
+    sendDraftEmailMock.mockReset()
+  })
+
+  it('sends the draft and returns the receipt (SPEC-composer-send.md → API)', async () => {
+    const sentAt = new Date('2026-08-21T09:00:00.000Z')
+    sendDraftEmailMock.mockResolvedValue({
+      id: 'email-1',
+      providerMsgId: 'gmail-msg-1',
+      threadId: 'gmail-thread-1',
+      sentAt,
+    })
+
+    const res = await request(app).post(SEND_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.message).toEqual({
+      id: 'email-1',
+      providerMsgId: 'gmail-msg-1',
+      threadId: 'gmail-thread-1',
+      sentAt: sentAt.toISOString(),
+    })
+  })
+
+  it('reads the draft it already owns rather than taking a payload', async () => {
+    sendDraftEmailMock.mockResolvedValue({
+      id: 'email-1',
+      providerMsgId: 'p-1',
+      threadId: null,
+      sentAt: new Date(),
+    })
+
+    await request(app).post(SEND_A).set('Authorization', AUTH).send({ subject: 'ignored' })
+
+    expect(sendDraftEmailMock).toHaveBeenCalledWith(
+      ORG_A,
+      'user-a',
+      expect.objectContaining({ id: DRAFT_ID }),
+    )
+  })
+
+  it('404s a draft that does not belong to the caller, without calling sendDraftEmail', async () => {
+    prismaMock.emailDraft.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).post(SEND_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(sendDraftEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('409s with code no_mailbox when nothing is connected', async () => {
+    sendDraftEmailMock.mockRejectedValue(new NoMailboxErrorMock())
+
+    const res = await request(app).post(SEND_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('no_mailbox')
+  })
+
+  it('409s with code no_mailbox for a race where the mailbox vanished mid-send', async () => {
+    sendDraftEmailMock.mockRejectedValue(new MailboxNotFoundError())
+
+    const res = await request(app).post(SEND_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('no_mailbox')
+  })
+
+  it('400s with code bad_recipient naming the address', async () => {
+    sendDraftEmailMock.mockRejectedValue(
+      new BadRecipientErrorMock('This is not a valid email address: ann@'),
+    )
+
+    const res = await request(app).post(SEND_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('bad_recipient')
+    expect(res.body.error).toBe('This is not a valid email address: ann@')
+  })
+
+  it.each([
+    ['MailApiError', new MailApiError()],
+    ['MailAuthError', new MailAuthError()],
+    ['RateLimitedError', new RateLimitedError(1000)],
+  ])('502s with code provider_error on a %s', async (_name, err) => {
+    sendDraftEmailMock.mockRejectedValue(err)
+
+    const res = await request(app).post(SEND_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(502)
+    expect(res.body.code).toBe('provider_error')
+  })
+
+  it('rejects an unauthenticated send', async () => {
+    const res = await request(app).post(SEND_A)
+
+    expect(res.status).toBe(401)
+    expect(sendDraftEmailMock).not.toHaveBeenCalled()
+  })
+
+  it("404s another member's draft, never a 403", async () => {
+    authAs(membershipRow({ id: 'mem-b', userId: 'user-b' }))
+    prismaMock.user.findUnique.mockResolvedValue(
+      userRow({ id: 'user-b', firebaseUid: 'uid-b', email: 'b@orga.com' }),
+    )
+    prismaMock.emailDraft.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).post(SEND_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.status).not.toBe(403)
+    expect(sendDraftEmailMock).not.toHaveBeenCalled()
   })
 })
 

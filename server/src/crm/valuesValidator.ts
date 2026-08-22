@@ -91,7 +91,10 @@ function isEmpty(value: unknown): boolean {
 // is wrong for the type, or null when it is fine. Multiplicity (isMulti) is handled
 // by the caller, which applies these to each element.
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+// Exported: composer-send (server/src/lib/mail/sendEmail.ts) reuses this exact
+// pattern for deliverability validation, rather than a second regex drifting
+// from this one.
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const URL_RE = /^https?:\/\/.+/i
 // A registrable-domain shape: label(.label)+, no scheme/path. Loose on purpose.
 const DOMAIN_RE = /^([a-z0-9-]+\.)+[a-z]{2,}$/i
