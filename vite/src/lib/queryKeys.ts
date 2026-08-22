@@ -1,3 +1,5 @@
+import type { EmailTemplateListQuery } from './emailTypes'
+
 /**
  * The centralized React Query key registry.
  *
@@ -39,11 +41,12 @@ export const queryKeys = {
     // previous org's half-written emails. Not keyed by user: the cache is
     // cleared on sign-out, so one signed-in rep only ever sees their own rows.
     drafts: (orgId: string) => ['email', 'drafts', orgId] as const,
-    // Keyed by org only, like the drafts list, and for a stronger reason: a
-    // template belongs to the ORG rather than to the rep who wrote it, so every
-    // member of an org reads and writes this one entry. There is no per-user
-    // key to add — see lib/emailTypes.ts → EmailTemplate.
-    templates: (orgId: string) => ['email', 'templates', orgId] as const,
+    // The bare organization key is deliberately the prefix for every template
+    // list. Mutations invalidate it to refresh every visible scope and page,
+    // while a read adds its complete server query so private data cannot satisfy
+    // an organization-only request (or vice versa).
+    templates: (orgId: string, query?: EmailTemplateListQuery) =>
+      query ? (['email', 'templates', orgId, query] as const) : (['email', 'templates', orgId] as const),
     // The server scopes a signature to the authenticated rep, and a signed-in
     // browser has one rep at a time. The org still belongs in the key because it
     // is part of the verified request path and changes with the active context.

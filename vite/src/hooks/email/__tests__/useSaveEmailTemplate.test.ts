@@ -23,6 +23,7 @@ function template(id: string, name: string): EmailTemplate {
     name,
     subject: 'Following up',
     bodyHtml: '<p>Hi there</p>',
+    visibility: 'PRIVATE',
     createdById: 'user-1',
     fieldsJson: null,
     createdAt: '2026-08-20T12:00:00.000Z',
