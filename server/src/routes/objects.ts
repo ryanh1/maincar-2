@@ -54,6 +54,7 @@ function mapObjectToApi(object: ObjectDef & { attributes?: AttributeDef[] }) {
     storage: object.storage,
     isStandard: object.isStandard,
     isFirstClass: object.isFirstClass,
+    timelineEventsEnabled: object.timelineEventsEnabled,
     isHidden: object.isHidden,
     isArchived: object.isArchived,
     createdAt: object.createdAt.toISOString(),
@@ -170,6 +171,7 @@ const objectBodySchema = z.object({
   icon: optionalText,
   iconColor: optionalText,
   isFirstClass: z.boolean().optional(),
+  timelineEventsEnabled: z.boolean().optional(),
   isHidden: z.boolean().optional(),
   isArchived: z.boolean().optional(),
 })
@@ -340,6 +342,7 @@ router.post(
       storage: 'record',
       isStandard: false,
       isFirstClass: body.isFirstClass ?? true,
+      timelineEventsEnabled: body.timelineEventsEnabled ?? false,
     }
     let created: ObjectDef
     try {
@@ -405,6 +408,7 @@ router.patch(
     if ('icon' in raw) data.icon = blankToNull(raw.icon) as string | null
     if ('iconColor' in raw) data.iconColor = blankToNull(raw.iconColor) as string | null
     if (body.isFirstClass !== undefined) data.isFirstClass = body.isFirstClass
+    if (body.timelineEventsEnabled !== undefined) data.timelineEventsEnabled = body.timelineEventsEnabled
     if (body.isHidden !== undefined) data.isHidden = body.isHidden
     if (body.isArchived !== undefined) data.isArchived = body.isArchived
 

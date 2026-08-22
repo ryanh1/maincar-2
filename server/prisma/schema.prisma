@@ -1394,6 +1394,9 @@ model ObjectDef {
 
   isStandard   Boolean @default(false) // app-seeded and app-depended-on
   isFirstClass Boolean @default(true) // gets a navbar link and a table
+  // Custom records write account-timeline markers only when an administrator opts
+  // this definition in. Off by default keeps generic record creation quiet.
+  timelineEventsEnabled Boolean @default(false)
 
   isHidden   Boolean   @default(false)
   isArchived Boolean   @default(false)

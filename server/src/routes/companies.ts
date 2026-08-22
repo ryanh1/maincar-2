@@ -26,6 +26,7 @@ import { logger } from '../../dependencies/logger.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { activityFromRecordCreated, recordActivityInTx } from '../crm/activityFeed.js'
 import type { Company, Prisma } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
@@ -334,7 +335,19 @@ router.post(
     }
     let created: Company
     try {
-      created = await prisma.company.create({ data })
+      created = await prisma.$transaction(async (tx) => {
+        const company = await tx.company.create({ data })
+        await recordActivityInTx(
+          tx,
+          activityFromRecordCreated(company, {
+            kind: 'company',
+            name: company.name ?? company.domain ?? 'Untitled company',
+            links: { companyId: company.id },
+            actorUserId: userId,
+          }),
+        )
+        return company
+      })
     } catch (error) {
       // A race-safe duplicate check: the @@unique([orgId, domain]) index is the
       // single source of truth, so two concurrent creates cannot both win.

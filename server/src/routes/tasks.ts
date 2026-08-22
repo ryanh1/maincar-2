@@ -29,10 +29,9 @@
  *      timestamp; a row where they disagree is a row that appears in one and not
  *      the other.
  *
- * NO FEED ROW. Tasks are deliberately absent from ActivityEntry: `sourceType` is
- * the list of things that HAPPENED (spec §6 — call, email, sms, meeting, note,
- * stage_change), and a task is a thing that has not. Notes DO write one; see
- * server/src/routes/notes.ts.
+ * ONE FEED ROW. A task's create, complete, and reopen transitions refresh the
+ * same idempotent `ActivityEntry`; due-date edits remain scheduling changes, not
+ * account-history events.
  */
 import { Router } from 'express'
 import { z } from 'zod'
@@ -49,7 +48,9 @@ import {
   TASK_TYPES,
   mapLinksToApi,
   mapTaskToApi,
+  rollUpSpineLinks,
 } from '../crm/taskNote.js'
+import { activityFromTask, recordActivityInTx } from '../crm/activityFeed.js'
 import {
   MAX_LINKS_PER_WORK_ITEM,
   dedupeLinkTargets,
@@ -398,6 +399,7 @@ router.post(
         },
       })
       await syncWorkLinks(tx, { orgId, source: 'task', sourceId: task.id, targets })
+      await recordActivityInTx(tx, activityFromTask(task, 'created', rollUpSpineLinks(targets), userId))
       return task
     })
 
@@ -476,9 +478,13 @@ router.patch(
     // The flag and its timestamp, written as a pair (rule 3). Re-completing an
     // already-done task keeps the ORIGINAL doneAt: "when was this finished" must
     // not move because somebody re-ticked a box.
-    if (body.isDone !== undefined && body.isDone !== existing.isDone) {
+    const transitionAt = new Date()
+    const transition = body.isDone === undefined || body.isDone === existing.isDone
+      ? null
+      : body.isDone ? 'completed' as const : 'reopened' as const
+    if (transition) {
       data.isDone = body.isDone
-      data.doneAt = body.isDone ? new Date() : null
+      data.doneAt = body.isDone ? transitionAt : null
     }
 
     // --- Execute the write atomically ---
@@ -491,6 +497,18 @@ router.patch(
       }
       if (targets) {
         await syncWorkLinks(tx, { orgId, source: 'task', sourceId: id, targets })
+      }
+      if (transition) {
+        const finalLinks = targets ?? mapLinksToApi(await loadWorkLinks(tx, { orgId, source: 'task', sourceId: id }))
+        await recordActivityInTx(
+          tx,
+          activityFromTask(
+            { ...existing, doneAt: data.doneAt as Date | null, updatedAt: transitionAt },
+            transition,
+            rollUpSpineLinks(finalLinks),
+            userId,
+          ),
+        )
       }
     })
 

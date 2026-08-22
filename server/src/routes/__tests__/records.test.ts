@@ -23,6 +23,7 @@ const { prismaMock, verifyTokenMock, filterMock } = vi.hoisted(() => ({
       delete: vi.fn(),
     },
     recordLink: { findMany: vi.fn(), deleteMany: vi.fn(), create: vi.fn() },
+    activityEntry: { upsert: vi.fn() },
     // Field history (MAI-136): a values change writes its history rows inside the
     // same transaction as the update.
     fieldHistory: { createMany: vi.fn() },
@@ -64,7 +65,7 @@ function membershipRow(overrides: Record<string, unknown> = {}) {
   }
 }
 function objectRow(overrides: Record<string, unknown> = {}) {
-  return { id: 'obj-project', slug: 'project', storage: 'record', ...overrides }
+  return { id: 'obj-project', slug: 'project', name: 'Project', storage: 'record', timelineEventsEnabled: false, ...overrides }
 }
 function attrRow(overrides: Record<string, unknown> & { slug: string; type: string }) {
   return {
@@ -107,6 +108,7 @@ beforeEach(() => {
   prismaMock.recordLink.findMany.mockResolvedValue([])
   prismaMock.recordLink.deleteMany.mockResolvedValue({ count: 0 })
   prismaMock.recordLink.create.mockResolvedValue({})
+  prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'activity-1' })
   prismaMock.fieldHistory.createMany.mockResolvedValue({ count: 1 })
   filterMock.mockResolvedValue([])
 })
@@ -126,6 +128,30 @@ describe('POST /api/orgs/:orgId/records', () => {
     expect(data.orgId).toBe(ORG_A)
     // Whitespace trimmed by the validator before it lands.
     expect(data.valuesJson).toEqual({ title: 'Acme', count: 3 })
+  })
+
+  it('projects creation only when the custom object has explicitly opted into timeline events', async () => {
+    prismaMock.objectDef.findFirst.mockResolvedValue(objectRow({ timelineEventsEnabled: true }))
+
+    await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ objectId: 'obj-project', values: { title: 'Acme' } })
+
+    const activity = prismaMock.activityEntry.upsert.mock.calls[0][0].create
+    expect(activity).toMatchObject({
+      orgId: ORG_A, sourceType: 'custom', sourceId: 'rec-new',
+      timelineSubtype: 'created', timelineIntensity: 1,
+    })
+  })
+
+  it('does not project a custom record when its object has not opted in', async () => {
+    await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ objectId: 'obj-project', values: { title: 'Acme' } })
+
+    expect(prismaMock.activityEntry.upsert).not.toHaveBeenCalled()
   })
 
   it('422s a create whose value has the wrong type (validator)', async () => {

@@ -25,6 +25,8 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
       delete: vi.fn(),
       deleteMany: vi.fn(),
     },
+    activityEntry: { upsert: vi.fn() },
+    $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
 }))
@@ -123,6 +125,8 @@ beforeEach(() => {
   prismaMock.company.count.mockResolvedValue(1)
   prismaMock.company.create.mockResolvedValue(companyRow())
   prismaMock.company.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'activity-1' })
+  prismaMock.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prismaMock))
 })
 
 // ============================================================

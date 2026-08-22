@@ -34,7 +34,7 @@ import { logger } from '../../dependencies/logger.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
-import { activityFromStageChange, recordActivityInTx } from '../crm/activityFeed.js'
+import { activityFromRecordCreated, activityFromStageChange, recordActivityInTx } from '../crm/activityFeed.js'
 import type { Deal, DealPersonRole, Prisma } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
@@ -369,7 +369,19 @@ router.post(
       ownerUserId: body.ownerUserId,
       ...(body.customJson ? { customJson: body.customJson as Prisma.InputJsonValue } : {}),
     }
-    const created = await prisma.deal.create({ data })
+    const created = await prisma.$transaction(async (tx) => {
+      const deal = await tx.deal.create({ data })
+      await recordActivityInTx(
+        tx,
+        activityFromRecordCreated(deal, {
+          kind: 'deal',
+          name: deal.name,
+          links: { companyId: deal.companyId, dealId: deal.id },
+          actorUserId: userId,
+        }),
+      )
+      return deal
+    })
 
     logger.info({ orgId, userId, dealId: created.id }, 'created a deal')
 

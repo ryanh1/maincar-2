@@ -16,8 +16,10 @@ import {
   activityFromEmail,
   activityFromMeeting,
   activityFromNote,
+  activityFromRecordCreated,
   activityFromSms,
   activityFromStageChange,
+  activityFromTask,
   condense,
   formatDuration,
   isActivityDirection,
@@ -492,6 +494,64 @@ describe('activityFromMeeting', () => {
     expect(activityFromMeeting(meetingRow({ status: 'cancelled' })).timeline).toMatchObject({
       subtype: 'cancelled',
     })
+  })
+})
+
+describe('activityFromTask', () => {
+  const task = {
+    id: 'task-1',
+    orgId: 'org-a',
+    title: 'Follow up with Acme',
+    isDone: false,
+    doneAt: null,
+    createdAt: EARLIER,
+    updatedAt: NOW,
+  }
+
+  it('writes one lifecycle row whose phase, time, and spine links come from the actual transition', () => {
+    const created = activityFromTask(task, 'created', { companyId: 'co-1', personId: null, dealId: null })
+    const completed = activityFromTask({ ...task, doneAt: NOW }, 'completed')
+    const reopened = activityFromTask(task, 'reopened')
+
+    expect(created).toMatchObject({
+      sourceType: 'task', sourceId: 'task-1', summary: 'Task created: Follow up with Acme',
+      occurredAt: EARLIER, companyId: 'co-1', personId: null, dealId: null,
+      timeline: { title: 'Task created: Follow up with Acme', subtype: 'created', intensity: 1 },
+    })
+    expect(completed).toMatchObject({
+      occurredAt: NOW,
+      timeline: { title: 'Task completed: Follow up with Acme', subtype: 'completed', intensity: 1 },
+    })
+    expect(reopened).toMatchObject({
+      occurredAt: NOW,
+      timeline: { title: 'Task reopened: Follow up with Acme', subtype: 'reopened', intensity: 1 },
+    })
+  })
+})
+
+describe('activityFromRecordCreated', () => {
+  it('projects a core record once, and marks a newly-created deal without inventing a stage move', () => {
+    const person = activityFromRecordCreated(
+      { id: 'person-1', orgId: 'org-a', createdAt: EARLIER },
+      { kind: 'person', name: 'Jane Doe', links: { personId: 'person-1', companyId: 'co-1' } },
+    )
+    const deal = activityFromRecordCreated(
+      { id: 'deal-1', orgId: 'org-a', createdAt: NOW },
+      { kind: 'deal', name: 'Enterprise renewal', links: { dealId: 'deal-1', companyId: 'co-1' } },
+    )
+
+    expect(person).toMatchObject({
+      sourceType: 'record_created', sourceId: 'person-1', summary: 'Person created: Jane Doe',
+      timeline: { subtype: 'created', intensity: 1, display: { personName: 'Jane Doe' } },
+    })
+    expect(deal).toMatchObject({
+      sourceType: 'record_created', sourceId: 'deal-1', summary: 'Deal created: Enterprise renewal',
+      timeline: {
+        subtype: 'created', intensity: 1, display: { dealName: 'Enterprise renewal' },
+        marker: { type: 'deal_created' },
+      },
+    })
+    expect(deal.timeline?.marker?.type).not.toBe('stage_moved')
   })
 })
 

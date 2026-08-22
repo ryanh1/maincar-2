@@ -34,6 +34,7 @@ import { logger } from '../../dependencies/logger.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { activityFromRecordCreated, recordActivityInTx } from '../crm/activityFeed.js'
 import {
   diffFieldValues,
   loadHistoryAttributes,
@@ -609,10 +610,20 @@ router.post(
       await reconcilePrimary(tx.personPhone as unknown as PrimaryDelegate, person.id, orgId, preferPhoneId)
       await reconcilePrimary(tx.personEmail as unknown as PrimaryDelegate, person.id, orgId, preferEmailId)
 
-      return tx.person.findFirstOrThrow({
+      const created = await tx.person.findFirstOrThrow({
         where: { id: person.id, orgId },
         include: { phones: true, addresses: true },
       })
+      await recordActivityInTx(
+        tx,
+        activityFromRecordCreated(created, {
+          kind: 'person',
+          name: displayName(created, created.phones, created.addresses),
+          links: { personId: created.id, companyId: created.companyId },
+          actorUserId: userId,
+        }),
+      )
+      return created
     })
 
     logger.info({ orgId, userId, personId: created.id }, 'created a person')

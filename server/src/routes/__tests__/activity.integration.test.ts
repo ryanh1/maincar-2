@@ -27,6 +27,7 @@ import {
   activityFromNote,
   activityFromSms,
   activityFromStageChange,
+  activityFromTask,
   recordActivityInTx,
   type NewActivityEntry,
 } from '../../crm/activityFeed.js'
@@ -56,6 +57,31 @@ describe('ActivityEntry feed (integration, real Postgres)', () => {
 
   afterAll(async () => {
     await prisma.$disconnect()
+  })
+
+  it('keeps task create, complete, and reopen as one retry-idempotent row in its own org', async () => {
+    const { orgId, adminUserId } = await seedOrgWithAdmin(prisma)
+    const company = await seedCompany(prisma, { orgId, name: 'Acme' })
+    const task = await prisma.task.create({ data: { orgId, title: 'Follow up' } })
+
+    await prisma.$transaction(async (tx) => {
+      await recordActivityInTx(tx, activityFromTask(task, 'created', { companyId: company.id }, adminUserId))
+      await recordActivityInTx(tx, activityFromTask(task, 'created', { companyId: company.id }, adminUserId))
+    })
+
+    const completedAt = new Date('2026-08-22T18:00:00.000Z')
+    const completed = await prisma.task.update({ where: { id: task.id }, data: { isDone: true, doneAt: completedAt } })
+    await prisma.$transaction((tx) =>
+      recordActivityInTx(tx, activityFromTask(completed, 'completed', { companyId: company.id }, adminUserId)),
+    )
+    const reopened = await prisma.task.update({ where: { id: task.id }, data: { isDone: false, doneAt: null } })
+    await prisma.$transaction((tx) =>
+      recordActivityInTx(tx, activityFromTask(reopened, 'reopened', { companyId: company.id }, adminUserId)),
+    )
+
+    const rows = await prisma.activityEntry.findMany({ where: { orgId, sourceType: 'task', sourceId: task.id } })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ companyId: company.id, timelineSubtype: 'reopened', timelineIntensity: 1 })
   })
 
   /**
