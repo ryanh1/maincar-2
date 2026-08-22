@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { MICROPHONE_PERMISSION_MESSAGE, useGetDevices, type AudioDevice } from '@/hooks/devices'
+import { normalizeAudioLevel } from '@/lib/audioLevel'
 import { readDeviceChoice, resolveDeviceId, saveDeviceChoice } from '@/lib/deviceStorage'
 import { cn } from '@/lib/utils'
 
@@ -31,9 +32,6 @@ const HEARD_THRESHOLD = 0.02
 
 /** How long a selected, permitted microphone can stay silent before the nudge shows. */
 const SILENCE_NUDGE_MS = 4_000
-
-/** Speech sits well under full scale; tripling RMS puts normal talking mid-meter. */
-const METER_GAIN = 3
 
 /**
  * `setSinkId` is standardized on `HTMLMediaElement`, not on `AudioContext` — the
@@ -72,11 +70,6 @@ function frameLevel(analyser: AnalyserNode, buffer: Uint8Array<ArrayBuffer>): nu
     sum += centered * centered
   }
   return Math.sqrt(sum / buffer.length)
-}
-
-/** RMS is quiet by nature — amplify and clamp so the meter reads as a real level. */
-function meterLevel(rms: number): number {
-  return Math.min(1, rms * METER_GAIN)
 }
 
 // ---------------------------------------------------------------------------
@@ -197,9 +190,9 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
           stream = await media.getUserMedia({ audio: true })
         }
       } catch {
-        // Nothing opened. The meter stays at zero, and the silence nudge below
-        // covers this the same way it covers a device that opened but never
-        // heard anything — there is no separate error line to keep in sync.
+        // Nothing opened. Surface the same actionable recovery text as a
+        // microphone that opens but never hears sound.
+        if (isCurrent()) setMicSilent(true)
         return
       }
 
@@ -376,11 +369,19 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
 
   const usableMicrophones = microphones.filter((device) => device.deviceId.length > 0)
   const micRowDisabled = isLoading || usableMicrophones.length === 0
-  const micNote = micRowDisabled
-    ? 'No microphone found. Plug one in, then choose it here.'
-    : micSilent
-      ? "We're not picking up any sound. Try picking another microphone above."
-      : null
+  const micStatus = isLoading
+    ? 'Checking microphone.'
+    : micRowDisabled
+      ? 'No microphone found. Connect one, then select it in your system input settings.'
+      : !canPlayAudio
+        ? 'Microphone level unavailable in this browser.'
+        : micSilent
+          ? 'No sound detected. Check your system input settings or choose another microphone.'
+          : micLevel >= HEARD_THRESHOLD
+            ? 'Sound detected.'
+            : micLevel > 0
+              ? 'Low input detected.'
+              : 'Listening for sound.'
 
   const usableSpeakers = canChooseSpeaker ? speakers.filter((device) => device.deviceId.length > 0) : []
   const speakerRowDisabled = isLoading || !canChooseSpeaker || usableSpeakers.length === 0
@@ -410,10 +411,17 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
               value={microphoneId}
               onChange={chooseMicrophone}
               disabled={micRowDisabled}
+              describedBy="deviceCheckMicrophoneStatus"
             />
-            <Meter level={meterLevel(micLevel)} label="Microphone level" />
+            <Meter
+              level={normalizeAudioLevel(micLevel)}
+              label="Microphone level"
+              describedBy="deviceCheckMicrophoneStatus"
+            />
           </div>
-          {micNote && <p className="text-xs text-muted-foreground">{micNote}</p>}
+          <p id="deviceCheckMicrophoneStatus" className="text-xs text-muted-foreground">
+            {micStatus}
+          </p>
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -436,7 +444,7 @@ export function DeviceCheck({ onSelectionChange, className }: DeviceCheckProps) 
             >
               Test speaker
             </Button>
-            <Meter level={meterLevel(speakerLevel)} label="Speaker level" />
+            <Meter level={normalizeAudioLevel(speakerLevel)} label="Speaker level" />
           </div>
           {speakerNote && <p className="text-xs text-muted-foreground">{speakerNote}</p>}
         </div>
@@ -538,6 +546,7 @@ function DeviceSelect({
   value,
   onChange,
   disabled,
+  describedBy,
 }: {
   id: string
   label: string
@@ -545,12 +554,13 @@ function DeviceSelect({
   value: string | null
   onChange: (next: string) => void
   disabled: boolean
+  describedBy?: string
 }) {
   const isDisabled = disabled || devices.length === 0
 
   return (
     <Select value={value ?? undefined} onValueChange={onChange} disabled={isDisabled}>
-      <SelectTrigger id={id} size="sm" className="w-0 flex-1">
+      <SelectTrigger id={id} size="sm" className="w-0 flex-1" aria-describedby={describedBy}>
         <SelectValue placeholder={`No ${label.toLowerCase()} available`} />
       </SelectTrigger>
       <SelectContent>
