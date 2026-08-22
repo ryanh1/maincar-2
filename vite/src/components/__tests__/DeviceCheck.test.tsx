@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { DEVICE_CHOICE_KEY } from '@/lib/deviceStorage'
@@ -168,10 +168,12 @@ describe('DeviceCheck', () => {
     expect(await screen.findByRole('option', { name: 'Headset Microphone' })).toBeInTheDocument()
   })
 
-  it('says the microphone is allowed once the devices are read', () => {
+  it('does not repeat status-strip copy after the devices are read', () => {
     render(<DeviceCheck />)
 
-    expect(screen.getByText('Microphone allowed.')).toBeInTheDocument()
+    expect(screen.queryByText('Check your audio')).not.toBeInTheDocument()
+    expect(screen.queryByText('Microphone allowed.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Connected.')).not.toBeInTheDocument()
   })
 
   // MAI-213: one row per device, no separate "Test" button for the mic and no
@@ -190,40 +192,6 @@ describe('DeviceCheck', () => {
     expect(speakerMeter()).toHaveAttribute('aria-valuenow', '0')
   })
 
-  describe('network status', () => {
-    afterEach(() => {
-      Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
-    })
-
-    it('says the rep is connected when the browser has a network', () => {
-      Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
-      render(<DeviceCheck />)
-
-      expect(screen.getByText('Connected.')).toBeInTheDocument()
-    })
-
-    it('names the problem when the browser has no network', () => {
-      Object.defineProperty(navigator, 'onLine', { configurable: true, value: false })
-      render(<DeviceCheck />)
-
-      expect(
-        screen.getByText('No internet connection. Check your network, then try again.'),
-      ).toBeInTheDocument()
-    })
-
-    it('updates when the browser goes offline mid-check', () => {
-      render(<DeviceCheck />)
-      expect(screen.getByText('Connected.')).toBeInTheDocument()
-
-      Object.defineProperty(navigator, 'onLine', { configurable: true, value: false })
-      fireEvent(window, new Event('offline'))
-
-      expect(
-        screen.getByText('No internet connection. Check your network, then try again.'),
-      ).toBeInTheDocument()
-    })
-  })
-
   it('says it is checking while the read is in flight', () => {
     mockDevices({ isLoading: true, microphones: [], speakers: [] })
 
@@ -232,18 +200,20 @@ describe('DeviceCheck', () => {
     expect(screen.getByText('Checking your microphone.')).toBeInTheDocument()
   })
 
-  // The hook's sentence already names the rep's next action, so it is shown
-  // verbatim rather than wrapped in a generic message.
-  it('shows the permission error verbatim and still renders', () => {
-    const denied =
-      'Maincar needs your microphone to make calls. Allow microphone access in your browser settings, then try again.'
-    mockDevices({ error: denied, microphones: [], speakers: [] })
+  it('shows a permission request link and still renders', async () => {
+    const user = userEvent.setup()
+    const refetch = vi.fn()
+    const denied = 'Allow the microphone in your browser settings to start calling.'
+    mockDevices({ error: denied, microphones: [], speakers: [], refetch })
 
     render(<DeviceCheck />)
 
-    expect(screen.getByText(denied)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Allow your microphone' })).toBeInTheDocument()
+    expect(screen.getByText('in your browser settings to start calling.')).toBeInTheDocument()
     expect(micTrigger()).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: 'Allow your microphone' }))
+    expect(refetch).toHaveBeenCalledTimes(1)
   })
 
   it('re-reads the devices when the rep retries after a denial', async () => {

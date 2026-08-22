@@ -1,13 +1,10 @@
 import { useCallback, useRef, useState } from 'react'
-import { CircleAlert } from 'lucide-react'
-
 import { DeviceCheck, type DeviceSelection } from '@/components/DeviceCheck'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -115,16 +112,11 @@ export function GreenRoom({ open, onOpenChange, onConfirm, confirmLabel }: Green
   // decision hook watches the permission, so allowing it re-enables the button
   // without a reload.
   const micDenied = reason === 'mic-denied'
-  const guidance = micDenied
-    ? 'Allow the microphone in your browser settings to start calling.'
-    : null
-
   // Radix warns when a dialog has no description, and there is nothing honest to
   // put under "Check your devices" — the screen is its own explanation. Passing
-  // the prop explicitly is Radix's own way to say "there is none".
-  const noDescription: { 'aria-describedby'?: undefined } = guidance
-    ? {}
-    : { 'aria-describedby': undefined }
+  // the prop explicitly is Radix's own way to say "there is none". The actionable
+  // permission link lives in DeviceCheck so Settings and the GreenRoom match.
+  const noDescription = { 'aria-describedby': undefined }
 
   function handleConfirm() {
     // Record BEFORE handing control over. `onConfirm` starts a call and may
@@ -188,14 +180,6 @@ export function GreenRoom({ open, onOpenChange, onConfirm, confirmLabel }: Green
           {/* `text-lg` is forbidden outside auth, so the primitive's size is
               pinned to the page-title step. */}
           <DialogTitle className="text-base font-semibold">Check your devices</DialogTitle>
-          {guidance && (
-            <DialogDescription className="flex items-start gap-2 text-status-attention">
-              <span className="flex h-5 shrink-0 items-center">
-                <CircleAlert size={16} aria-hidden="true" />
-              </span>
-              {guidance}
-            </DialogDescription>
-          )}
         </DialogHeader>
 
         <DeviceCheck className="max-w-none" onSelectionChange={handleSelectionChange} />

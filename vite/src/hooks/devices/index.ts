@@ -1,6 +1,6 @@
 // The barrel is the only thing components import from this domain
 // (CLAUDE.md → Hooks Organization).
-export { useGetDevices } from './useGetDevices'
+export { MICROPHONE_PERMISSION_MESSAGE, useGetDevices } from './useGetDevices'
 export { useGreenRoomDecision } from './useGreenRoomDecision'
 export { useNetworkStatus } from './useNetworkStatus'
 export { clearGreenRoomCheckInStore } from './greenRoomCheckStore'

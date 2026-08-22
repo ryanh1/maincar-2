@@ -197,7 +197,7 @@ function storedCheck(): GreenRoomCheck | null {
 /** The dialog is up and `useGetDevices` has finished its real read. */
 async function waitForReadyDialog() {
   await screen.findByRole('dialog')
-  await waitFor(() => expect(screen.getByText('Microphone allowed.')).toBeInTheDocument())
+  await waitFor(() => expect(screen.queryByText('Checking your microphone.')).not.toBeInTheDocument())
 }
 
 // ---------------------------------------------------------------------------
@@ -364,14 +364,9 @@ describe('a microphone blocked in browser settings', () => {
     await user.click(screen.getByRole('button', { name: 'Call' }))
     await screen.findByRole('dialog')
 
-    // The DOMException never reaches the rep; the sentence that names the fix does.
-    expect(
-      await screen.findByText(
-        'Maincar needs your microphone to make calls. Allow microphone access in your browser settings, then try again.',
-      ),
-    ).toBeInTheDocument()
+    // The DOMException never reaches the rep; the permission action names the fix.
+    expect(await screen.findByRole('button', { name: 'Allow your microphone' })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: 'Microphone' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   })
 
   it('disables the primary button and names the fix once a recorded pass turns into a denial', async () => {
@@ -386,9 +381,7 @@ describe('a microphone blocked in browser settings', () => {
     await user.click(screen.getByRole('button', { name: 'Call' }))
     await screen.findByRole('dialog')
 
-    expect(
-      await screen.findByText('Allow the microphone in your browser settings to start calling.'),
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Allow your microphone' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Start call' })).toBeDisabled()
     // Never a trap: the way out is always live.
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
@@ -410,11 +403,9 @@ describe('a microphone blocked in browser settings', () => {
 
     await user.click(screen.getByRole('button', { name: 'Call' }))
     await screen.findByRole('dialog')
-    await screen.findByText(/Allow microphone access in your browser settings/)
+    await screen.findByRole('button', { name: 'Allow your microphone' })
 
-    expect(
-      await screen.findByText('Allow the microphone in your browser settings to start calling.'),
-    ).toBeInTheDocument()
+    expect(screen.getByText('in your browser settings to start calling.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Start call' })).toBeDisabled()
 
     // And the guard holds: pressing it records nothing and places no call.
