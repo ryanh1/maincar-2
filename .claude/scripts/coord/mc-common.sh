@@ -13,6 +13,34 @@ mc_worktree() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
 mc_branch()   { git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached; }
 mc_now()      { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# A ticket checkout is normally cloned from the shared delivery checkout, so its
+# `origin` is a local, non-bare repository. Fetching from it is convenient, but
+# pushing to it fails whenever that checkout has unrelated edits. Resolve through
+# it to the actual upstream so delivery never depends on the main checkout being
+# clean. A checkout cloned directly from GitHub simply returns its own origin.
+mc_upstream_url() {
+  local origin upstream
+  origin="$(git config --get remote.origin.pushurl 2>/dev/null || git config --get remote.origin.url 2>/dev/null || true)"
+  [ -n "$origin" ] || { echo "mc: remote.origin is not configured" >&2; return 1; }
+
+  if [ -d "$origin" ] && git -C "$origin" rev-parse --git-dir >/dev/null 2>&1; then
+    upstream="$(git -C "$origin" config --get remote.origin.pushurl 2>/dev/null || git -C "$origin" config --get remote.origin.url 2>/dev/null || true)"
+    if [ -n "$upstream" ]; then
+      printf '%s\n' "$upstream"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "$origin"
+}
+
+# Update origin/main from the canonical upstream even when this ticket checkout's
+# origin is the shared delivery checkout. This keeps merge/rebase decisions based
+# on the branch that will actually receive the push.
+mc_fetch_upstream_main() {
+  git fetch "$@" "$(mc_upstream_url)" '+refs/heads/main:refs/remotes/origin/main'
+}
+
 # Log every coordination event so the coordinator can see history.
 mc_log() { printf '%s\t%s\t%s\t%s\n' "$(mc_now)" "$$" "$(basename "$(mc_worktree)")" "$*" >> "$COORD/log/events.tsv"; }
 
