@@ -68,4 +68,34 @@ describe('viewConfig', () => {
     expect(result.current.search).toContain('v=')
     expect(result.current.search).not.toContain('open')
   })
+
+  it('keeps display-only grid controls live in the route config', () => {
+    const { result } = renderHook(() => useViewConfig(attributes), { wrapper })
+
+    act(() => {
+      result.current[1]((current) => ({
+        ...current,
+        columns: [
+          { attributeId: 'status', visible: true, order: 0 },
+          { attributeId: 'first-name', visible: false, order: 1 },
+        ],
+        groupBy: [{ attributeId: 'status', direction: 'asc' }],
+        frozenRows: 2,
+        frozenCols: 2,
+        gridLines: false,
+        columnWidths: { status: 240 },
+      }))
+    })
+
+    const config = result.current[0]
+    expect(config.columns).toEqual([
+      { attributeId: 'status', visible: true, order: 0 },
+      { attributeId: 'first-name', visible: false, order: 1 },
+    ])
+    expect(config.groupBy).toEqual([{ attributeId: 'status', direction: 'asc' }])
+    expect(config.frozenRows).toBe(2)
+    expect(config.frozenCols).toBe(2)
+    expect(config.gridLines).toBe(false)
+    expect(config.columnWidths).toEqual({ status: 240 })
+  })
 })

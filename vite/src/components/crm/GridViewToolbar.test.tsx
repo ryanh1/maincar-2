@@ -49,4 +49,33 @@ describe('GridViewToolbar', () => {
     const update = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
     expect(update(config).sorts).toEqual([{ attributeId: 'status', direction: 'asc' }])
   })
+
+  it('writes field visibility, grouping, row height, and grid lines through the shared config', async () => {
+    const user = userEvent.setup()
+    const onConfigChange = vi.fn()
+    const config = createViewConfig(attributes)
+
+    renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={onConfigChange} />)
+
+    await user.click(screen.getByRole('button', { name: 'Fields' }))
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Status' }))
+    const visibilityUpdate = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(visibilityUpdate(config).columns).toEqual([{ attributeId: 'status', visible: false, order: 0 }])
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('button', { name: 'Group' }))
+    await user.click(await screen.findByText('Group by Status'))
+    const groupUpdate = onConfigChange.mock.calls[1][0] as (current: typeof config) => typeof config
+    expect(groupUpdate(config).groupBy).toEqual([{ attributeId: 'status', direction: 'asc' }])
+
+    await user.click(screen.getByRole('button', { name: 'Row height' }))
+    await user.click(await screen.findByText('Comfortable'))
+    const heightUpdate = onConfigChange.mock.calls[2][0] as (current: typeof config) => typeof config
+    expect(heightUpdate(config).rowHeight).toBe('comfortable')
+
+    await user.click(screen.getByRole('button', { name: 'Row height' }))
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Show grid lines' }))
+    const linesUpdate = onConfigChange.mock.calls[3][0] as (current: typeof config) => typeof config
+    expect(linesUpdate(config).gridLines).toBe(false)
+  })
 })

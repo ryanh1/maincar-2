@@ -26,9 +26,16 @@ vi.mock('@/providers/useAuth', () => ({
 // test is about RecordGrid's own wiring (columns, freezing, cell lookup,
 // prefetch) rather than canvas drawing — so the whole module is replaced, not
 // partially mocked over the real one.
-const dataEditorProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }))
+const dataEditorProps = vi.hoisted(() => ({
+  current: null as Record<string, unknown> | null,
+  frozenRows: null as Record<string, unknown> | null,
+}))
 vi.mock('@glideapps/glide-data-grid', () => ({
   DataEditor: (props: Record<string, unknown>) => {
+    if (props.className === 'record-grid-frozen-rows') {
+      dataEditorProps.frozenRows = props
+      return <div data-testid="frozen-rows-editor" />
+    }
     dataEditorProps.current = props
     const ref = props.ref as { current: { scrollTo: typeof dataEditorScrollTo } | null } | undefined
     if (ref) ref.current = { scrollTo: dataEditorScrollTo }
@@ -94,6 +101,7 @@ beforeEach(() => {
   useRecordWindow.mockReset()
   dataEditorProps.current = null
   dataEditorScrollTo.mockReset()
+  dataEditorProps.frozenRows = null
 })
 
 describe('RecordGrid', () => {
@@ -154,6 +162,167 @@ describe('RecordGrid', () => {
     expect(columns.map((c) => c.id)).toEqual(['firstName', 'lastName'])
     expect(props.freezeColumns).toBe(1)
     expect(props.rows).toBe(1)
+  })
+
+  it('uses the shared config to show ordered columns, widths, frozen rows, and frozen columns', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const config = {
+      ...createViewConfig(ATTRIBUTES),
+      columns: [
+        { attributeId: 'lastName', visible: true, order: 0 },
+        { attributeId: 'firstName', visible: false, order: 1 },
+      ],
+      columnWidths: { lastName: 280 },
+      frozenRows: 2,
+      frozenCols: 1,
+      gridLines: false,
+      rowHeight: 'comfortable' as const,
+    }
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={vi.fn()} />,
+    )
+
+    const props = dataEditorProps.current!
+    expect((props.columns as { id: string; width: number }[])).toEqual([
+      expect.objectContaining({ id: 'lastName', width: 280 }),
+    ])
+    expect(props.freezeColumns).toBe(1)
+    expect(props.rowHeight).toBe(44)
+    expect(props.verticalBorder).toBe(false)
+    expect((props.theme as { horizontalBorderColor: string }).horizontalBorderColor).toBe('transparent')
+    expect(screen.getByTestId('frozen-rows-overlay')).toHaveAttribute('data-row-count', '2')
+    expect(dataEditorProps.frozenRows).toMatchObject({ rows: 2, freezeColumns: 1, headerHeight: 0, scrollOffsetX: 0 })
+  })
+
+  it('writes column drag, resize, and selected-column resize through the shared config', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const onViewConfigChange = vi.fn()
+    const config = createViewConfig(ATTRIBUTES)
+
+    renderWithProviders(
+      <RecordGrid
+        orgId="org-1"
+        object={TEST_OBJECT}
+        attributes={ATTRIBUTES}
+        viewConfig={config}
+        onViewConfigChange={onViewConfigChange}
+      />,
+    )
+
+    const props = dataEditorProps.current!
+    const onColumnMoved = props.onColumnMoved as (start: number, end: number) => void
+    onColumnMoved(0, 1)
+    const moveUpdate = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(moveUpdate(config).columns).toEqual([
+      { attributeId: 'lastName', visible: true, order: 0 },
+      { attributeId: 'firstName', visible: true, order: 1 },
+    ])
+
+    act(() => {
+      ;(props.onGridSelectionChange as (selection: unknown) => void)({
+        current: undefined,
+        columns: { items: [[0, 2]] },
+        rows: { items: [] },
+      })
+    })
+    const onColumnResize = dataEditorProps.current!.onColumnResize as (
+      column: { id: string },
+      width: number,
+      index: number,
+    ) => void
+    onColumnResize({ id: 'firstName' }, 240, 0)
+    const resizeUpdate = onViewConfigChange.mock.calls[1][0] as (current: typeof config) => typeof config
+    expect(resizeUpdate(config).columnWidths).toEqual({ firstName: 240, lastName: 240 })
+  })
+
+  it('keeps the frozen-row overlay horizontally synchronized with the scrolling grid', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [
+        { id: 'r1', firstName: 'Ada', lastName: 'Lovelace' },
+        { id: 'r2', firstName: 'Grace', lastName: 'Hopper' },
+      ],
+      totalCount: 2,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const config = { ...createViewConfig(ATTRIBUTES), frozenRows: 2, frozenCols: 2 }
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={vi.fn()} />,
+    )
+
+    act(() => {
+      ;(dataEditorProps.current!.onVisibleRegionChanged as (range: { x: number; y: number; width: number; height: number }, tx: number) => void)(
+        { x: 2, y: 2, width: 1, height: 1 },
+        -40,
+      )
+    })
+
+    expect(dataEditorProps.frozenRows).toMatchObject({ scrollOffsetX: 40, freezeColumns: 2 })
+  })
+
+  it('groups by any configured field with collapsible sections that show counts only', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [
+        { id: 'r1', firstName: 'Ada', lastName: 'Lovelace', status: 'open' },
+        { id: 'r2', firstName: 'Grace', lastName: 'Hopper', status: 'closed' },
+      ],
+      totalCount: 2,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const groupedAttributes = [
+      attribute({ slug: 'firstName', name: 'First name', sortOrder: 0 }),
+      attribute({ slug: 'status', name: 'Status', sortOrder: 1, type: 'status', optionsJson: [{ value: 'open', label: 'Open' }, { value: 'closed', label: 'Closed' }] }),
+    ]
+    const config = { ...createViewConfig(groupedAttributes), groupBy: [{ attributeId: 'status', direction: 'asc' as const }] }
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={groupedAttributes} viewConfig={config} onViewConfigChange={vi.fn()} />,
+    )
+
+    expect(dataEditorProps.current!.rows).toBe(4)
+    const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => { data: string }
+    expect(getCellContent([0, 0]).data).toBe('▾ Open · 1')
+    expect(getCellContent([0, 0]).data).not.toMatch(/sum|avg/i)
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true, cancelable: true }))
+    })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Find in grid' }), { target: { value: 'Ada' } })
+    expect(dataEditorProps.current!.gridSelection).toMatchObject({ current: { cell: [0, 1] } })
+
+    act(() => {
+      ;(dataEditorProps.current!.onCellClicked as (item: [number, number]) => void)([0, 0])
+    })
+    expect(dataEditorProps.current!.rows).toBe(3)
   })
 
   it('reads a cell from the loaded row at that column and row index', () => {
