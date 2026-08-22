@@ -11,7 +11,7 @@ export function useRunReport(
   config: ReportConfig | null | undefined,
 ) {
   return useQuery({
-    queryKey: queryKeys.reports.run(orgId ?? 'none', reportId ?? 'none'),
+    queryKey: queryKeys.reports.run(orgId ?? 'none', reportId ?? 'none', config ?? null),
     enabled: !!orgId && !!reportId && !!config,
     queryFn: () =>
       jsonFetch<RunReportResponse>(`/api/orgs/${orgId}/reports/run`, {

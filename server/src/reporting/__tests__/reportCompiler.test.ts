@@ -25,6 +25,16 @@ describe('compileReport', () => {
     expect(query.values).toEqual(['org-a'])
   })
 
+  it('adds the shared scope\'s deduplicated owner ids to a Deals query', () => {
+    const query = compileReport({
+      ...DEAL_STAGE_AMOUNT_REPORT,
+      filters: { ownerTeam: { teamIds: ['team-a'], leadUserIds: ['lead-b'] } },
+    }, 'org-a', { ownerTeamUserIds: ['owner-a', 'owner-b'] })
+
+    expect(query.sql).toContain('"deal"."ownerUserId" IN (?,?)')
+    expect(query.values).toEqual(['org-a', 'owner-a', 'owner-b'])
+  })
+
   it('binds the viewer IANA zone before truncating a local day bucket', () => {
     const query = compileReport(DAY_BUCKETED_REPORT, 'org-a', {
       viewerTimeZone: 'America/New_York',

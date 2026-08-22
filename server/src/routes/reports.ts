@@ -5,6 +5,7 @@ import type { Report } from '../generated/prisma/client.js'
 import prisma from '../db.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { resolveOwnerTeamScope } from '../lib/teamScope.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { compileReport, InvalidReportConfigError, type ReportConfig } from '../reporting/reportCompiler.js'
 
@@ -18,12 +19,23 @@ const timeZoneSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('subject'), subjectUserId: z.string().trim().min(1).max(100) }).strict(),
 ])
 
+const ownerTeamScopeSchema = z.object({
+  teamIds: z.array(z.string().trim().min(1)).min(1).max(200).optional(),
+  leadUserIds: z.array(z.string().trim().min(1)).min(1).max(200).optional(),
+}).strict().refine(
+  (scope) => (scope.teamIds?.length ?? 0) + (scope.leadUserIds?.length ?? 0) > 0,
+  { error: 'Choose at least one team or team lead.' },
+)
+
+const dealReportFiltersSchema = z.object({ ownerTeam: ownerTeamScopeSchema }).strict()
+
 const dealReportConfigSchema = z.object({
   baseObject: z.literal('deal'),
   rows: z.tuple([z.object({ field: z.literal('stage') }).strict()]),
   values: z.tuple([z.object({ field: z.literal('amountMinor'), aggregation: z.literal('sum') }).strict()]),
   timeZone: timeZoneSchema,
   timeBucket: z.object({ field: z.literal('createdAt'), grain: z.literal('day') }).strict().optional(),
+  filters: dealReportFiltersSchema.optional(),
 }).strict()
 
 const activityGridConfigSchema = z.object({
@@ -39,7 +51,13 @@ const reportConfigSchema = z.discriminatedUnion('baseObject', [dealReportConfigS
 const runReportBodySchema = z.object({ config: reportConfigSchema }).strict()
 const reportNameSchema = z.string().trim().min(1, 'Name the report to save it.').max(200)
 const saveReportBodySchema = z.object({ name: reportNameSchema, config: reportConfigSchema }).strict()
-const renameReportBodySchema = z.object({ name: reportNameSchema }).strict()
+const updateReportBodySchema = z.object({
+  name: reportNameSchema.optional(),
+  config: reportConfigSchema.optional(),
+}).strict().refine(
+  (body) => body.name !== undefined || body.config !== undefined,
+  { error: 'Send a report name or configuration to update.' },
+)
 const reportListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -107,9 +125,14 @@ router.post(
       subjectTimeZone = subjectMembership.user.timeZone
     }
 
+    const ownerTeamPredicate = parsed.data.config.baseObject === 'deal' && parsed.data.config.filters?.ownerTeam
+      ? await resolveOwnerTeamScope(prisma, orgId, parsed.data.config.filters.ownerTeam)
+      : undefined
+
     const query = compileReport(parsed.data.config as ReportConfig, orgId, {
       viewerTimeZone: authReq.user!.timeZone,
       subjectTimeZone,
+      ownerTeamUserIds: ownerTeamPredicate?.ownerUserId.in,
     })
     if (parsed.data.config.baseObject === 'activity') {
       const rows = await prisma.$queryRaw<RawActivityWeekCount[]>(query)
@@ -245,7 +268,7 @@ router.patch(
     if (!membership) return
 
     // --- Parse & validate params ---
-    const parsed = renameReportBodySchema.safeParse(req.body)
+    const parsed = updateReportBodySchema.safeParse(req.body)
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
@@ -253,12 +276,21 @@ router.patch(
     // --- Execute query ---
     const result = await prisma.report.updateMany({
       where: { id: reportId, orgId, ownerId: authReq.user!.id, deletedAt: null },
-      data: { name: parsed.data.name },
+      data: {
+        ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
+        ...(parsed.data.config === undefined ? {} : { configJson: parsed.data.config }),
+      },
     })
     if (result.count === 0) return void res.status(404).json({ error: 'Report not found' })
 
     // --- Return response ---
-    return void res.json({ report: { id: reportId, name: parsed.data.name } })
+    return void res.json({
+      report: {
+        id: reportId,
+        ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
+        ...(parsed.data.config === undefined ? {} : { config: parsed.data.config }),
+      },
+    })
   }),
 )
 

@@ -15,6 +15,19 @@ const REPORT = {
   updatedAt: '2026-08-22T12:00:00.000Z',
 }
 
+const TEAM = {
+  id: 'team-revenue',
+  orgId: 'org-fixture',
+  name: 'Revenue',
+  leadUserId: 'user-fixture',
+  isArchived: false,
+  archivedAt: null,
+  memberUserIds: ['user-fixture'],
+  members: [{ userId: 'user-fixture', email: 'fixture@example.com', firstName: 'Fixture', lastName: 'Rep', title: null }],
+  createdAt: '2026-08-22T12:00:00.000Z',
+  updatedAt: '2026-08-22T12:00:00.000Z',
+}
+
 test('opens, saves, renames, and moves a report to Trash in Chromium', async ({ page }) => {
   const consoleErrors: string[] = []
   page.on('console', (message) => {
@@ -34,6 +47,10 @@ test('opens, saves, renames, and moves a report to Trash in Chromium', async ({ 
     if (request.method() === 'POST') return route.fulfill({ status: 201, json: { report: REPORT } })
     return route.fulfill({ json: { report: { id: REPORT.id, name: 'Pipeline Q3' } } })
   })
+  await page.route('**/api/orgs/org-fixture/teams**', async (route) => {
+    const url = new URL(route.request().url())
+    return route.fulfill({ json: { teams: url.searchParams.get('isArchived') === 'true' ? [] : [TEAM] } })
+  })
 
   await page.goto('/__fixtures/reports')
   await expect(page.getByRole('heading', { name: /^Reports/ })).toBeVisible()
@@ -43,6 +60,8 @@ test('opens, saves, renames, and moves a report to Trash in Chromium', async ({ 
 
   await page.getByRole('button', { name: 'Back to reports' }).click()
   await page.getByRole('button', { name: 'New report' }).click()
+  await page.getByRole('checkbox', { name: 'Revenue' }).click()
+  await expect(page.getByText('Owner is on Revenue.')).toBeVisible()
   await page.getByRole('button', { name: 'Save report' }).click()
   await page.getByLabel(/^Name/).fill('Quarterly pipeline')
   await page.getByRole('button', { name: 'Save' }).click()

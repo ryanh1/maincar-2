@@ -32,12 +32,14 @@ import {
   useGetReports,
   useRenameReport,
   useRunReport,
+  useUpdateReportConfig,
 } from '@/hooks/reports'
 import { useUrlInt } from '@/hooks/urlState'
 import { formatDateTime } from '@/lib/datetime'
-import type { ReportConfig, SavedReport } from '@/lib/reportTypes'
+import type { OwnerTeamScope, ReportConfig, SavedReport } from '@/lib/reportTypes'
 import { PageHeader } from '@/components/PageHeader'
 import { useAuth } from '@/providers/useAuth'
+import { Reports_OwnerTeamScope } from './Reports_OwnerTeamScope'
 
 // The only config MAI-143's engine accepts. P1.4 replaces this starter with
 // the pivot builder; saving still uses the same stored config contract.
@@ -72,9 +74,12 @@ export function Reports() {
   const createReport = useCreateReport()
   const renameReport = useRenameReport()
   const deleteReport = useDeleteReport()
+  const updateReportConfig = useUpdateReportConfig()
 
   const [openReportId, setOpenReportId] = useState<string | null>(null)
   const [isNewReport, setIsNewReport] = useState(false)
+  const [newReportConfig, setNewReportConfig] = useState<ReportConfig>(DEFAULT_REPORT_CONFIG)
+  const [editedConfig, setEditedConfig] = useState<ReportConfig | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<SavedReport | null>(null)
@@ -82,23 +87,49 @@ export function Reports() {
 
   const reportQuery = useGetReport(orgId, openReportId)
   const openedReport = reportQuery.data?.report
-  const activeConfig = openedReport?.config ?? (isNewReport ? DEFAULT_REPORT_CONFIG : null)
+  const activeConfig = isNewReport ? newReportConfig : (editedConfig ?? openedReport?.config ?? null)
   const activeReportId = openReportId ?? (isNewReport ? 'new-report' : null)
   const runQuery = useRunReport(orgId, activeReportId, activeConfig)
 
   function startNewReport(): void {
     setOpenReportId(null)
+    setEditedConfig(null)
+    setNewReportConfig(DEFAULT_REPORT_CONFIG)
     setIsNewReport(true)
   }
 
   function openReport(reportId: string): void {
     setIsNewReport(false)
+    setEditedConfig(null)
     setOpenReportId(reportId)
   }
 
   function closeActiveReport(): void {
     setOpenReportId(null)
+    setEditedConfig(null)
     setIsNewReport(false)
+  }
+
+  function setOwnerTeamScope(scope: OwnerTeamScope | undefined): void {
+    if (!activeConfig) return
+    const { filters: _filters, ...withoutFilters } = activeConfig
+    const nextConfig = scope ? { ...withoutFilters, filters: { ownerTeam: scope } } : withoutFilters
+    if (isNewReport) setNewReportConfig(nextConfig)
+    else setEditedConfig(nextConfig)
+  }
+
+  function saveFilters(): void {
+    if (!orgId || !openedReport || !editedConfig) return
+    updateReportConfig.mutate(
+      { orgId, reportId: openedReport.id, config: editedConfig },
+      {
+        onSuccess: () => {
+          setEditedConfig(null)
+          toast.success('Report filters saved.')
+        },
+        onError: () => toast.error('Could not save the report filters. Try again.'),
+      },
+    )
   }
 
   function save(event: FormEvent): void {
@@ -201,6 +232,11 @@ export function Reports() {
                 </Button>
               ) : (
                 <>
+                  {editedConfig && (
+                    <Button size="sm" onClick={saveFilters} disabled={updateReportConfig.isPending}>
+                      {updateReportConfig.isPending ? 'Saving…' : 'Save filters'}
+                    </Button>
+                  )}
                   <Button size="sm" variant="secondary" onClick={beginRename}>
                     Rename report
                   </Button>
@@ -214,6 +250,12 @@ export function Reports() {
               </Button>
             </div>
           </div>
+
+          <Reports_OwnerTeamScope
+            orgId={orgId}
+            value={activeConfig.filters?.ownerTeam}
+            onChange={setOwnerTeamScope}
+          />
 
           {reportQuery.isPending && openReportId && <Skeleton className="h-32 w-full" />}
           {reportQuery.isError && <p className="text-sm text-destructive">Could not open this report. Try again.</p>}

@@ -8,6 +8,7 @@ export interface DealStageAmountReportConfig {
   values: [{ field: 'amountMinor'; aggregation: 'sum' }]
   timeZone: ReportTimeZone
   timeBucket?: { field: 'createdAt'; grain: 'day' }
+  filters?: { ownerTeam: OwnerTeamScope }
 }
 
 export interface ActivityEventCountsGridReportConfig {
@@ -20,6 +21,12 @@ export interface ActivityEventCountsGridReportConfig {
 
 export type ReportConfig = DealStageAmountReportConfig | ActivityEventCountsGridReportConfig
 
+/** A persisted selection resolved by the shared Team scope at query time. */
+export interface OwnerTeamScope {
+  teamIds?: readonly string[]
+  leadUserIds?: readonly string[]
+}
+
 export type ReportTimeZone =
   | { mode: 'pinned'; displayZone: string }
   | { mode: 'viewer' }
@@ -28,6 +35,8 @@ export type ReportTimeZone =
 export interface ReportExecutionContext {
   viewerTimeZone?: string | null
   subjectTimeZone?: string | null
+  /** Owner ids returned by resolveOwnerTeamScope; reports never expand teams themselves. */
+  ownerTeamUserIds?: readonly string[]
 }
 
 export const DEAL_STAGE_AMOUNT_REPORT: DealStageAmountReportConfig = {
@@ -130,6 +139,8 @@ function compileDealStageAmountReport(
     throw new InvalidReportConfigError('Only Deal created-at day buckets are available yet.')
   }
 
+  const ownerTeamPredicate = compileOwnerTeamPredicate(context.ownerTeamUserIds)
+
   if (config.timeBucket) {
     return Prisma.sql([
       // Prisma maps DateTime to `timestamp without time zone`; it stores UTC
@@ -142,10 +153,11 @@ FROM "${DEAL_FIELD_REGISTRY.table}" AS "deal"
 ${dimension.join}
 WHERE "deal"."orgId" = `,
       `
-  AND "deal"."deletedAt" IS NULL
+  AND "deal"."deletedAt" IS NULL`,
+      `
 GROUP BY 1, ${dimension.groupBy}
 ORDER BY "createdDay" ASC, "stage"."name" ASC`,
-    ], timeZone, orgId)
+    ], timeZone, orgId, ownerTeamPredicate)
   }
 
   return Prisma.sql([
@@ -154,10 +166,18 @@ FROM "${DEAL_FIELD_REGISTRY.table}" AS "deal"
 ${dimension.join}
 WHERE "deal"."orgId" = `,
     `
-  AND "deal"."deletedAt" IS NULL
+  AND "deal"."deletedAt" IS NULL`,
+    `
 GROUP BY ${dimension.groupBy}
 ORDER BY "stage"."name" ASC`,
-  ], orgId)
+  ], orgId, ownerTeamPredicate)
+}
+
+/** Adds a deduplicated owner predicate returned by the shared Team scope. */
+function compileOwnerTeamPredicate(ownerUserIds: readonly string[] | undefined): Prisma.Sql {
+  if (ownerUserIds === undefined) return Prisma.empty
+  if (ownerUserIds.length === 0) return Prisma.sql` AND FALSE`
+  return Prisma.sql` AND "deal"."ownerUserId" IN (${Prisma.join(ownerUserIds)})`
 }
 
 function compileActivityEventCountsGrid(

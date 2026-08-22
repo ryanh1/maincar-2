@@ -23,6 +23,8 @@ export const queryKeys = {
     members: (orgId: string, query?: Record<string, unknown>) =>
       ['orgs', 'members', orgId, query ?? {}] as const,
     membersAll: (orgId: string) => ['orgs', 'members', orgId] as const,
+    teams: (orgId: string, query?: Record<string, unknown>) =>
+      ['orgs', 'teams', orgId, query ?? {}] as const,
     invitations: (orgId: string) => ['orgs', 'invitations', orgId] as const,
   },
   email: {
@@ -150,7 +152,7 @@ export const queryKeys = {
     all: (orgId: string) => ['reports', orgId] as const,
     list: (orgId: string, query?: Record<string, unknown>) => ['reports', orgId, 'list', query ?? {}] as const,
     detail: (orgId: string, reportId: string) => ['reports', orgId, 'detail', reportId] as const,
-    run: (orgId: string, reportId: string) => ['reports', orgId, 'run', reportId] as const,
+    run: (orgId: string, reportId: string, config: unknown) => ['reports', orgId, 'run', reportId, config] as const,
   },
   accountTimeline: {
     all: (orgId: string) => ['accountTimeline', orgId] as const,

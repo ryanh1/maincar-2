@@ -12,6 +12,8 @@ const {
   useCreateReportMock,
   useRenameReportMock,
   useDeleteReportMock,
+  useGetTeamsMock,
+  useUpdateReportConfigMock,
   createMutateMock,
   renameMutateMock,
   deleteMutateMock,
@@ -25,6 +27,8 @@ const {
   useCreateReportMock: vi.fn(),
   useRenameReportMock: vi.fn(),
   useDeleteReportMock: vi.fn(),
+  useGetTeamsMock: vi.fn(),
+  useUpdateReportConfigMock: vi.fn(),
   createMutateMock: vi.fn(),
   renameMutateMock: vi.fn(),
   deleteMutateMock: vi.fn(),
@@ -40,8 +44,10 @@ vi.mock('@/hooks/reports', () => ({
   useCreateReport: useCreateReportMock,
   useRenameReport: useRenameReportMock,
   useDeleteReport: useDeleteReportMock,
+  useUpdateReportConfig: useUpdateReportConfigMock,
 }))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock, success: toastSuccessMock } }))
+vi.mock('@/hooks/orgs', () => ({ useGetTeams: useGetTeamsMock }))
 
 import { Reports } from '@/pages/Reports'
 
@@ -58,6 +64,14 @@ const REPORT = {
   config: CONFIG,
   createdAt: '2026-08-22T12:00:00.000Z',
   updatedAt: '2026-08-22T12:00:00.000Z',
+}
+
+const ACTIVE_TEAM = {
+  id: 'team-revenue',
+  name: 'Revenue',
+  leadUserId: 'lead-jordan',
+  isArchived: false,
+  members: [{ userId: 'lead-jordan', email: 'jordan@example.com', firstName: 'Jordan', lastName: 'Lee', title: null }],
 }
 
 function listState(overrides: Record<string, unknown> = {}) {
@@ -87,6 +101,12 @@ beforeEach(() => {
   useCreateReportMock.mockReturnValue({ mutate: createMutateMock, isPending: false })
   useRenameReportMock.mockReturnValue({ mutate: renameMutateMock, isPending: false })
   useDeleteReportMock.mockReturnValue({ mutate: deleteMutateMock, isPending: false })
+  useUpdateReportConfigMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
+  useGetTeamsMock.mockImplementation((_orgId, params) => ({
+    data: { teams: params?.isArchived ? [] : [ACTIVE_TEAM] },
+    isPending: false,
+    isError: false,
+  }))
 })
 
 describe('Reports', () => {
@@ -115,6 +135,63 @@ describe('Reports', () => {
 
     expect(toastErrorMock).toHaveBeenCalledWith('Name the report to save it.')
     expect(createMutateMock).not.toHaveBeenCalled()
+  })
+
+  it('saves an owner team scope and summarizes the live selection', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Revenue' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Teams led by Jordan Lee' }))
+
+    expect(screen.getByText('Owner is on Revenue or teams led by Jordan Lee.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Save report' }))
+    await user.type(screen.getByLabelText(/^Name/), 'Jordan pipeline')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(createMutateMock).toHaveBeenCalledWith(
+      {
+        orgId: 'org-a',
+        name: 'Jordan pipeline',
+        config: {
+          ...CONFIG,
+          filters: { ownerTeam: { teamIds: ['team-revenue'], leadUserIds: ['lead-jordan'] } },
+        },
+      },
+      expect.any(Object),
+    )
+  })
+
+  it('shows an archived saved team as unavailable and lets the member remove it', async () => {
+    const archivedReport = {
+      ...REPORT,
+      config: { ...CONFIG, filters: { ownerTeam: { teamIds: ['team-archived'] } } },
+    }
+    useGetReportMock.mockImplementation((_orgId, reportId) => ({
+      data: reportId ? { report: archivedReport } : undefined,
+      isPending: false,
+      isError: false,
+    }))
+    useGetTeamsMock.mockImplementation((_orgId, params) => ({
+      data: {
+        teams: params?.isArchived
+          ? [{ ...ACTIVE_TEAM, id: 'team-archived', name: 'Former Revenue', isArchived: true }]
+          : [ACTIVE_TEAM],
+      },
+      isPending: false,
+      isError: false,
+    }))
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'Open Pipeline by stage' }))
+    expect(screen.getByText('Former Revenue (Unavailable)')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove Former Revenue' }))
+
+    expect(screen.getByText('All owners.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save filters' })).toBeInTheDocument()
   })
 
   it('saves, renames, and moves a report to Trash only after confirmation', async () => {

@@ -27,7 +27,7 @@ vi.mock('../../db.js', async () => {
 
 import app from '../../app.js'
 import prisma from '../../db.js'
-import { seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
+import { seedMember, seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
 
 const CONFIG = {
   baseObject: 'deal',
@@ -104,6 +104,76 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
     // of the implementation's grouped output.
     expect(response.body.report.rows.reduce((sum: bigint, row: { amountMinor: string }) => sum + BigInt(row.amountMinor), 0n))
       .toBe(12500n)
+  })
+
+  it('applies specific teams and multiple direct leads once per owner, without reading another organization', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const explicitMember = await seedMember(prisma, org.orgId)
+    const firstLead = await seedMember(prisma, org.orgId)
+    const secondLead = await seedMember(prisma, org.orgId)
+    const { pipeline, discovery } = await createPipelineAndStages(org.orgId)
+
+    const explicitTeam = await prisma.team.create({
+      data: {
+        orgId: org.orgId, name: 'Revenue', leadUserId: org.adminUserId,
+        members: { create: [
+          { orgId: org.orgId, userId: org.adminUserId },
+          { orgId: org.orgId, userId: explicitMember.userId },
+        ] },
+      },
+    })
+    await prisma.team.create({
+      data: {
+        orgId: org.orgId, name: 'East', leadUserId: firstLead.userId,
+        members: { create: [
+          { orgId: org.orgId, userId: org.adminUserId },
+          { orgId: org.orgId, userId: firstLead.userId },
+        ] },
+      },
+    })
+    await prisma.team.create({
+      data: {
+        orgId: org.orgId, name: 'West', leadUserId: secondLead.userId,
+        members: { create: [
+          { orgId: org.orgId, userId: org.adminUserId },
+          { orgId: org.orgId, userId: secondLead.userId },
+        ] },
+      },
+    })
+    await prisma.deal.createMany({
+      data: [
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Admin', amountMinor: 100n, ownerUserId: org.adminUserId },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Explicit', amountMinor: 200n, ownerUserId: explicitMember.userId },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'East', amountMinor: 300n, ownerUserId: firstLead.userId },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'West', amountMinor: 400n, ownerUserId: secondLead.userId },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Outside', amountMinor: 500n },
+      ],
+    })
+    const foreign = await seedOrgWithAdmin(prisma)
+    const foreignPipeline = await createPipelineAndStages(foreign.orgId)
+    await prisma.deal.create({
+      data: { orgId: foreign.orgId, pipelineId: foreignPipeline.pipeline.id, stageId: foreignPipeline.discovery.id, name: 'Foreign', amountMinor: 9999n, ownerUserId: foreign.adminUserId },
+    })
+
+    const response = await request(app)
+      .post(`/api/orgs/${org.orgId}/reports/run`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({
+        config: {
+          ...CONFIG,
+          filters: {
+            ownerTeam: {
+              teamIds: [explicitTeam.id],
+              leadUserIds: [firstLead.userId, secondLead.userId],
+            },
+          },
+        },
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.report.rows).toEqual([
+      { stageId: discovery.id, stageName: 'Discovery', amountMinor: '1000' },
+    ])
   })
 
   it('counts calls, emails, and meetings in their viewer-local week and excludes other activity', async () => {
