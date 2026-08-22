@@ -76,11 +76,11 @@ describe('Sidebar', () => {
       if (input.endsWith('/objects')) {
         return Promise.resolve({
           objects: [
-            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false, isListSupported: true },
-            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false, isListSupported: true },
-            { id: 'deferred', slug: 'deferred', namePlural: 'Deferred', isHidden: false, isArchived: false, isListSupported: false },
-            { id: 'hidden', slug: 'hidden', namePlural: 'Hidden', isHidden: true, isArchived: false, isListSupported: true },
-            { id: 'archived', slug: 'archived', namePlural: 'Archived', isHidden: false, isArchived: true, isListSupported: true },
+            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false, capabilities: { list: true } },
+            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false, capabilities: { list: true } },
+            { id: 'deferred', slug: 'deferred', namePlural: 'Deferred', isHidden: false, isArchived: false, capabilities: { list: false } },
+            { id: 'hidden', slug: 'hidden', namePlural: 'Hidden', isHidden: true, isArchived: false, capabilities: { list: true } },
+            { id: 'archived', slug: 'archived', namePlural: 'Archived', isHidden: false, isArchived: true, capabilities: { list: true } },
           ],
         })
       }
@@ -122,8 +122,8 @@ describe('Sidebar', () => {
       if (input.endsWith('/objects')) {
         return Promise.resolve({
           objects: [
-            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false, isListSupported: true },
-            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false, isListSupported: true },
+            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false, capabilities: { list: true } },
+            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false, capabilities: { list: true } },
           ],
         })
       }

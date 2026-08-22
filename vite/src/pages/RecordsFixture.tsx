@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/authStore'
 
 import { Records } from './Records'
 
-/** Development-only shell for the MAI-307 create-from-grid browser journey. */
+/** Development-only shell for record-grid browser journeys. */
 export function RecordsFixture() {
   const client = useMemo(
     () => new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }),

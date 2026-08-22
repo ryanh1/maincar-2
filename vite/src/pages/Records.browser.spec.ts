@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 const companyObject = {
   id: 'company', slug: 'company', name: 'Company', namePlural: 'Companies', icon: null, iconColor: null,
-  storage: 'table', isStandard: true, isFirstClass: true, isListSupported: true, isGridCreateSupported: true,
+  storage: 'table', isStandard: true, isFirstClass: true, capabilities: { list: true }, isGridCreateSupported: true,
   isHidden: false, isArchived: false, createdAt: '2026-08-22T12:00:00.000Z', updatedAt: '2026-08-22T12:00:00.000Z',
 }
 
@@ -55,5 +55,37 @@ test('creates a Company from its grid after a recoverable validation error', asy
   await expect(page.getByRole('textbox', { name: 'Name' })).toHaveCount(0)
   await expect(page.getByTestId('data-grid-canvas')).toBeVisible()
   expect(companies).toEqual([expect.objectContaining({ id: 'company-1', name: 'Acme' })])
+  expect(consoleErrors).toEqual([])
+})
+
+test('keeps an unsupported direct object URL out of the grid and list API', async ({ page }) => {
+  const consoleErrors: string[] = []
+  const listRequests: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('request', (request) => {
+    if (request.url().includes('/api/') && request.url().endsWith('/list')) listRequests.push(request.url())
+  })
+
+  await page.route('**/api/orgs/org-fixture/objects', (route) =>
+    route.fulfill({
+      json: {
+        objects: [
+          {
+            id: 'email-object', slug: 'email', namePlural: 'Emails', isHidden: false,
+            isArchived: false, capabilities: { list: false },
+          },
+        ],
+      },
+    }),
+  )
+
+  await page.goto('/__fixtures/records/email')
+
+  await expect(page.getByRole('heading', { name: 'Emails' })).toBeVisible()
+  await expect(page.getByText('This object is unavailable. Choose another object.')).toBeVisible()
+  await expect(page.getByRole('grid')).toHaveCount(0)
+  expect(listRequests).toEqual([])
   expect(consoleErrors).toEqual([])
 })

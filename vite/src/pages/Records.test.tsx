@@ -31,7 +31,7 @@ function object(overrides: Record<string, unknown> = {}) {
     namePlural: 'People',
     isHidden: false,
     isArchived: false,
-    isListSupported: true,
+    capabilities: { list: true },
     attributes: [],
     ...overrides,
   }
@@ -58,7 +58,7 @@ describe('Records', () => {
   })
 
   it.each([
-    ['deferred', object({ id: 'email', slug: 'email', namePlural: 'Emails', isListSupported: false })],
+    ['deferred', object({ id: 'email', slug: 'email', namePlural: 'Emails', capabilities: { list: false } })],
     ['hidden', object({ isHidden: true })],
     ['archived', object({ isArchived: true })],
   ])('shows %s objects as unavailable instead of rendering a grid', (_case, unavailable) => {
@@ -67,7 +67,8 @@ describe('Records', () => {
 
     renderRecords(`/records/${unavailable.slug}`)
 
-    expect(screen.getByText('This object is not available.')).toBeInTheDocument()
+    expect(screen.getByText('This object is unavailable. Choose another object.')).toBeInTheDocument()
     expect(screen.queryByRole('grid')).not.toBeInTheDocument()
+    expect(useGetObjectMock).toHaveBeenCalledWith('org-1', null)
   })
 })

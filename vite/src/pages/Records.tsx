@@ -20,7 +20,7 @@ export function Records() {
 
   const objectsQuery = useGetObjects(orgId)
   const object = objectsQuery.data?.objects.find((o) => o.slug === slug) ?? null
-  const isUnavailable = object !== null && (object.isHidden || object.isArchived || !object.isListSupported)
+  const isUnavailable = object !== null && (object.isHidden || object.isArchived || !object.capabilities.list)
 
   const objectQuery = useGetObject(orgId, isUnavailable ? null : object?.id ?? null)
   const detail = objectQuery.data?.object ?? null
@@ -62,7 +62,7 @@ export function Records() {
 
         {!isPending && !isError && isUnavailable && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            This object is not available.
+            This object is unavailable. Choose another object.
           </div>
         )}
 
