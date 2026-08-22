@@ -69,4 +69,27 @@ describe('POST /api/orgs/:orgId/reports/run', () => {
     })
     expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1)
   })
+
+  it.each([
+    {
+      name: 'a raw database column',
+      config: { ...CONFIG, rows: [{ field: 'deal.amountMinor' }] },
+    },
+    {
+      name: 'SQL-like field input',
+      config: { ...CONFIG, rows: [{ field: 'stage; DROP TABLE "Deal"' }] },
+    },
+    {
+      name: 'an attempted org override',
+      config: { ...CONFIG, orgId: 'org-b' },
+    },
+  ])('rejects $name before compiling a query', async ({ config }) => {
+    const response = await request(app)
+      .post(URL)
+      .set('Authorization', 'Bearer fake-token')
+      .send({ config })
+
+    expect(response.status).toBe(400)
+    expect(prismaMock.$queryRaw).not.toHaveBeenCalled()
+  })
 })
