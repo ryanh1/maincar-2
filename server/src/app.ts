@@ -5,6 +5,7 @@ import { logger } from '../dependencies/logger.js'
 import { WEB_ORIGIN } from './config.js'
 import { requestId } from './middleware/requestId.js'
 import activityRouter from './routes/activity.js'
+import accountTimelineRouter from './routes/accountTimeline.js'
 import authRouter from './routes/auth.js'
 import callsRouter from './routes/calls.js'
 import callCommentsRouter from './routes/callComments.js'
@@ -118,6 +119,10 @@ app.use('/api/orgs/:orgId/meetings', meetingsRouter)
 // activity's own transaction (server/src/crm/activityFeed.ts). A POST here would be
 // a way to put a line in the feed that nothing stands behind.
 app.use('/api/orgs/:orgId/activity', activityRouter)
+
+// The account timeline is the read-time Company/Deal history. Its own route keeps
+// the richer range and cursor contract separate from the compact CRM activity feed.
+app.use('/api/orgs/:orgId/account-timeline', accountTimelineRouter)
 
 // Schema-as-data (MAI-133 T5): ObjectDef + AttributeDef describe every object and
 // field. Both org-scoped; the org is in the path so the tenant boundary is checked
