@@ -2,6 +2,7 @@ import { useRef, useState, type PointerEvent } from 'react'
 import { Check, Copy, Download, Phone } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { AudioPlayer, type AudioMediaSource } from '@/components/call-review/AudioPlayer'
 import { Button } from '@/components/ui/button'
 import type { CallDetail } from '@/hooks/dialer'
 import { getCallDirectionLabel, getCallStatusLabel } from '@/lib/callLabels'
@@ -103,12 +104,14 @@ export function CallDetail_Workbench({ call, timeZone, userId }: { call: CallDet
 
 function PlaybackPane({ call, timeZone }: { call: CallDetail; timeZone: string | null | undefined }) {
   const review = call.review
-  const recordingUrl = review?.recording.source?.kind === 'audio' ? review.recording.source.url : call.recordingUrl
+  const source = review?.recording.source?.kind === 'audio'
+    ? review.recording.source as AudioMediaSource
+    : call.recordingUrl ? { kind: 'audio' as const, url: call.recordingUrl, expiresAt: '' } : null
   const transcript = review?.transcript.pass?.plainText ?? (call.transcriptStatus === 'done' ? call.transcript : null)
   const segments = review?.transcript.pass?.segments ?? []
   return <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
     <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">Playback</h2></div>
-    <section aria-labelledby="recording-title" className="border border-border bg-surface p-3"><h3 id="recording-title" className="text-sm font-semibold">Recording</h3>{recordingUrl ? <div className="mt-3 flex flex-col gap-3"><audio controls src={recordingUrl} className="w-full" aria-label={`Recording of the call to ${call.toE164}`}>Your browser cannot play this recording.</audio><div><Button asChild variant="secondary" size="sm"><a href={recordingUrl} download><Download size={16} aria-hidden />Download</a></Button></div></div> : <p className="mt-3 text-sm text-text-muted">{recordingMessage(call)}</p>}</section>
+    <section aria-labelledby="recording-title" className="border border-border bg-surface p-3"><h3 id="recording-title" className="text-sm font-semibold">Recording</h3>{source ? <div className="mt-3 flex flex-col gap-3"><AudioPlayer source={source} recordingState={review?.recording.state ?? 'ready'} callLabel={call.toE164} /><div><Button asChild variant="secondary" size="sm"><a href={source.url} download><Download size={16} aria-hidden />Download</a></Button></div></div> : <p className="mt-3 text-sm text-text-muted">{recordingMessage(call)}</p>}</section>
     <CallFacts call={call} timeZone={timeZone} />
     <section aria-labelledby="transcript-title" className="min-h-0 flex-1 border border-border p-3"><div className="flex items-center justify-between gap-2"><h3 id="transcript-title" className="text-sm font-semibold">Transcript</h3>{transcript?.trim() && <CopyTranscriptButton text={transcript} />}</div><div className="mt-3 flex flex-col gap-3">{segments.length > 0 ? segments.map((segment) => <p key={segment.id} className="text-sm whitespace-pre-wrap"><span className="mr-2 text-xs text-text-muted tabular-nums">{formatElapsed(segment.startMs / 1000)}</span>{segment.text}</p>) : transcript?.trim() ? <p className="text-sm whitespace-pre-wrap">{transcript}</p> : <p className="text-sm text-text-muted">{transcriptMessage(call)}</p>}</div></section>
   </div>
@@ -137,7 +140,13 @@ function transcriptMessage(call: CallDetail): string {
 }
 
 function recordingMessage(call: CallDetail): string {
-  if (call.review?.recording.state === 'unavailable-by-consent') return 'Recording was unavailable because consent was not granted.'
+  switch (call.review?.recording.state) {
+    case 'queued': return 'Recording is queued.'
+    case 'processing': return 'Recording is processing.'
+    case 'failed':
+    case 'missing': return 'Recording could not be prepared. Refresh the call and try again.'
+    case 'unavailable-by-consent': return 'Recording was unavailable because consent was not granted.'
+  }
   switch (call.recordingReason) {
     case 'recording-disabled': return 'Recording was disabled for the organization.'
     case 'two-party-consent-state': return 'Recording was off because the destination appeared to be in a two-party-consent state.'

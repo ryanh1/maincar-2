@@ -243,6 +243,22 @@ describe('the recording', () => {
     expect(screen.queryByLabelText('Recording of the call to +12015550111')).not.toBeInTheDocument()
     expect(screen.getByText('This call has no recording.')).toBeInTheDocument()
   })
+
+  it('names a recording lifecycle state when no signed source is ready yet', () => {
+    useGetCallDetailMock.mockReturnValue(
+      detailState({
+        data: {
+          call: callDetail({
+            recordingUrl: null,
+            review: { ...review(), recording: { state: 'processing', source: null } },
+          }),
+        },
+      }),
+    )
+    renderDetail()
+
+    expect(screen.getByText('Recording is processing.')).toBeInTheDocument()
+  })
 })
 
 describe('the controls', () => {
