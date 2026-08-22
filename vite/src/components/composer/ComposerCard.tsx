@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { FileText, Minus, Trash2, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FileSignature, FileText, Minus, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { RichTextEditor, type LinkRequest } from '@/components/editor/RichTextEditor'
+import { RichTextEditor, type LinkRequest, type RichTextEditorActions } from '@/components/editor/RichTextEditor'
 import { RichTextEditorUrlDialog } from '@/components/editor/RichTextEditor_UrlDialog'
 import { sanitizeStoredHtml } from '@/components/editor/sanitizeStoredHtml'
 import {
@@ -25,8 +25,8 @@ import {
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useGetEmailTemplates, useSendEmailDraft } from '@/hooks/email'
-import type { EmailTemplate } from '@/hooks/email'
+import { useGetEmailSignatures, useGetEmailTemplates, useSendEmailDraft } from '@/hooks/email'
+import type { EmailSignature, EmailTemplate } from '@/hooks/email'
 import { useGetMailboxes } from '@/hooks/mailboxes'
 import { ApiError } from '@/lib/api'
 import type { EmailDraft, EmailDraftPatch, RecipientChip } from '@/lib/emailTypes'
@@ -145,6 +145,11 @@ export function ComposerCard({ draft }: ComposerCardProps) {
   // card costs nothing once the list is warm.
   const templatesQuery = useGetEmailTemplates(org?.id ?? null)
   const templates = templatesQuery.data?.templates ?? []
+  const signaturesQuery = useGetEmailSignatures(org?.id ?? null)
+  const signatures = useMemo(
+    () => signaturesQuery.data?.signatures ?? [],
+    [signaturesQuery.data?.signatures],
+  )
 
   // The same list Settings → Integrations reads. Exactly one is ever primary
   // (schema.prisma → MailAccount), and that is the mailbox Send uses: there is
@@ -173,6 +178,9 @@ export function ComposerCard({ draft }: ComposerCardProps) {
   // a save response can rebuild the editor.
   const [bodySeed, setBodySeed] = useState(() => ({ html: draft.bodyHtml ?? '', mount: 0 }))
   const [body, setBody] = useState(bodySeed.html)
+  const [editorActions, setEditorActions] = useState<RichTextEditorActions | null>(null)
+  const [insertedSignature, setInsertedSignature] = useState<EmailSignature | null>(null)
+  const defaultSignatureInserted = useRef(false)
   // The open link request, or null. The editor raises it; the dialog collects a
   // URL and calls back into the selection the rep actually had.
   const [linkRequest, setLinkRequest] = useState<LinkRequest | null>(null)
@@ -184,6 +192,26 @@ export function ComposerCard({ draft }: ComposerCardProps) {
   // they answer. Null the rest of the time, including for a template going into
   // an empty card, which needs no question.
   const [confirmTemplate, setConfirmTemplate] = useState<EmailTemplate | null>(null)
+
+  // A default belongs in a genuinely new, blank draft. The effect waits for the
+  // editor action surface rather than re-seeding it, so a late query response
+  // appends one deliberate block and never replaces a live document or moves a
+  // rep's caret. A draft that already has a body is an existing draft, even if
+  // the body is currently empty after editing, and is left alone.
+  useEffect(() => {
+    const defaultSignature = signatures.find((signature) => signature.isDefault)
+    if (
+      defaultSignatureInserted.current ||
+      !defaultSignature ||
+      !editorActions ||
+      draft.bodyHtml !== null ||
+      body !== ''
+    ) return
+
+    defaultSignatureInserted.current = true
+    setInsertedSignature(defaultSignature)
+    editorActions.insertHtmlAtEnd(defaultSignature.bodyHtml)
+  }, [body, draft.bodyHtml, editorActions, signatures])
 
   // Cc and Bcc hide behind two links, "Add Cc" and "Add Bcc", and only one of
   // the two fields can be open at a time — picking one commits to it and the
@@ -357,6 +385,22 @@ export function ComposerCard({ draft }: ComposerCardProps) {
     applyTemplate(template)
   }
 
+  /** Replaces only the signature block this card inserted, never the rep's message. */
+  function pickSignature(nextSignature: EmailSignature | null) {
+    const currentSignatureHtml = insertedSignature ? sanitizeStoredHtml(insertedSignature.bodyHtml) : ''
+    const index = currentSignatureHtml ? body.lastIndexOf(currentSignatureHtml) : -1
+    const withoutCurrent = index === -1
+      ? body
+      : `${body.slice(0, index)}${body.slice(index + currentSignatureHtml.length)}`
+    const nextBody = nextSignature ? `${withoutCurrent}${nextSignature.bodyHtml}` : withoutCurrent
+
+    setInsertedSignature(nextSignature)
+    setBody(nextBody)
+    // Choosing a signature is an explicit request for a different block. Like
+    // choosing a template, remounting is the editor's safe way to show it.
+    setBodySeed((current) => ({ html: nextBody, mount: current.mount + 1 }))
+  }
+
   // Built from the LOCAL subject and the LOCAL chips, so the header renames
   // itself as the rep types and as the first recipient changes, rather than a
   // save later.
@@ -473,6 +517,7 @@ export function ComposerCard({ draft }: ComposerCardProps) {
         initialHtml={bodySeed.html}
         onChange={setBody}
         onRequestLink={setLinkRequest}
+        onReady={setEditorActions}
         className="min-h-0 flex-1"
       />
 
@@ -529,6 +574,28 @@ export function ComposerCard({ draft }: ComposerCardProps) {
               <DropdownMenuItem key={template.id} onSelect={() => pickTemplate(template)}>
                 {template.name}
               </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <IconButton tooltip="Choose a signature for this email">
+              <FileSignature size={16} aria-hidden />
+            </IconButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" side="top">
+            {signaturesQuery.isPending && <DropdownMenuItem disabled>Loading signatures…</DropdownMenuItem>}
+            {signaturesQuery.isError && (
+              <DropdownMenuItem onSelect={(event) => { event.preventDefault(); void signaturesQuery.refetch() }}>
+                Could not load your signatures. Try again.
+              </DropdownMenuItem>
+            )}
+            {signaturesQuery.isSuccess && signatures.length === 0 && (
+              <DropdownMenuItem disabled>Write a signature in Settings → Signatures.</DropdownMenuItem>
+            )}
+            {insertedSignature && <DropdownMenuItem onSelect={() => pickSignature(null)}>No signature</DropdownMenuItem>}
+            {signatures.map((signature) => (
+              <DropdownMenuItem key={signature.id} onSelect={() => pickSignature(signature)}>{signature.name}</DropdownMenuItem>
             ))}
           </DropdownMenuContent>
         </DropdownMenu>

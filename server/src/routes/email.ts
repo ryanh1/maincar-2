@@ -34,7 +34,7 @@ import { sanitizeOptionalRichTextHtml, sanitizeRichTextHtml } from '../lib/sanit
 import { MailApiError, MailAuthError, MailboxNotFoundError, RateLimitedError } from '../lib/mail/mailErrors.js'
 import { BadRecipientError, NoMailboxError, sendDraftEmail } from '../lib/mail/sendEmail.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
-import type { EmailDraft, EmailTemplate, Prisma } from '../generated/prisma/client.js'
+import type { EmailDraft, EmailSignature, EmailTemplate, Prisma } from '../generated/prisma/client.js'
 
 const router = Router()
 
@@ -747,6 +747,221 @@ router.delete(
     // --- Return response ---
     // The id comes back so the client can drop exactly that row.
     res.json({ template: { id: templateId } })
+  }),
+)
+
+// ============================================================
+// Signatures
+// ============================================================
+// A signature belongs to its rep, not their organization. The organization in
+// the URL still verifies the active context: a caller outside it gets the same
+// 404 as every other email route, but a rep's sign-off follows them between the
+// organizations they belong to.
+
+export const SIGNATURE_LIST_LIMIT = 200
+export const SIGNATURE_NAME_MAX = 200
+export const SIGNATURE_BODY_MAX = 100_000
+
+const signatureNameSchema = z
+  .string({ error: 'A signature needs a name.' })
+  .trim()
+  .min(1, 'A signature needs a name.')
+  .max(SIGNATURE_NAME_MAX, `A signature name can be at most ${SIGNATURE_NAME_MAX} characters.`)
+
+const signatureBodySchema = z
+  .string()
+  .max(SIGNATURE_BODY_MAX, `A signature can be at most ${SIGNATURE_BODY_MAX} characters.`)
+
+export const signatureInputSchema = z.object({
+  name: signatureNameSchema,
+  bodyHtml: signatureBodySchema.optional(),
+  isDefault: z.boolean().optional(),
+})
+
+export const signaturePatchSchema = z.object({
+  name: signatureNameSchema.optional(),
+  bodyHtml: signatureBodySchema.optional(),
+  isDefault: z.boolean().optional(),
+})
+
+function mapSignatureToApi(signature: EmailSignature) {
+  return {
+    id: signature.id,
+    name: signature.name,
+    bodyHtml: signature.bodyHtml,
+    isDefault: signature.isDefault,
+    createdAt: signature.createdAt.toISOString(),
+    updatedAt: signature.updatedAt.toISOString(),
+  }
+}
+
+// ============================================================
+// GET /api/email/orgs/:orgId/signatures — this rep's signatures
+// ============================================================
+router.get(
+  '/orgs/:orgId/signatures',
+  wrapRoute('GET /api/email/orgs/:orgId/signatures', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    const rows = await prisma.emailSignature.findMany({
+      where: { userId },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }, { id: 'asc' }],
+      take: SIGNATURE_LIST_LIMIT,
+    })
+
+    // --- Return response ---
+    const signatures = rows.map(mapSignatureToApi)
+    res.json({ signatures, total: signatures.length })
+  }),
+)
+
+// ============================================================
+// POST /api/email/orgs/:orgId/signatures — create one
+// ============================================================
+router.post(
+  '/orgs/:orgId/signatures',
+  wrapRoute('POST /api/email/orgs/:orgId/signatures', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = signatureInputSchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // --- Execute query ---
+    const data = parsed.data
+    const signature = data.isDefault
+      ? await prisma.$transaction(async (tx) => {
+          await tx.emailSignature.updateMany({
+            where: { userId },
+            data: { isDefault: false, defaultForUser: null },
+          })
+          return tx.emailSignature.create({
+            data: {
+              userId,
+              name: data.name,
+              bodyHtml: sanitizeRichTextHtml(data.bodyHtml ?? ''),
+              isDefault: true,
+              defaultForUser: userId,
+            },
+          })
+        })
+      : await prisma.emailSignature.create({
+          data: {
+            userId,
+            name: data.name,
+            bodyHtml: sanitizeRichTextHtml(data.bodyHtml ?? ''),
+            isDefault: false,
+            defaultForUser: null,
+          },
+        })
+
+    // --- Return response ---
+    res.status(201).json({ signature: mapSignatureToApi(signature) })
+  }),
+)
+
+// ============================================================
+// PATCH /api/email/orgs/:orgId/signatures/:signatureId — edit one
+// ============================================================
+router.patch(
+  '/orgs/:orgId/signatures/:signatureId',
+  wrapRoute('PATCH /api/email/orgs/:orgId/signatures/:signatureId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const signatureId = String(req.params.signatureId)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = signaturePatchSchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    // --- Build filters ---
+    const body = parsed.data
+    const data: Prisma.EmailSignatureUncheckedUpdateManyInput = {}
+    if ('name' in body) data.name = body.name
+    if ('bodyHtml' in body) data.bodyHtml = sanitizeRichTextHtml(body.bodyHtml ?? '')
+    if ('isDefault' in body) {
+      data.isDefault = body.isDefault
+      data.defaultForUser = body.isDefault ? userId : null
+    }
+    if (Object.keys(data).length === 0) {
+      return void res.status(400).json({ error: 'Name a field to save.' })
+    }
+
+    // Confirm ownership before clearing another default. In particular, a
+    // guessed id must never reset the caller's existing default signature.
+    const existing = await prisma.emailSignature.findFirst({ where: { id: signatureId, userId } })
+    if (!existing) {
+      return void res.status(404).json({ error: 'Signature not found' })
+    }
+
+    // --- Execute query ---
+    if (body.isDefault === true) {
+      await prisma.$transaction(async (tx) => {
+        await tx.emailSignature.updateMany({
+          where: { userId, id: { not: signatureId } },
+          data: { isDefault: false, defaultForUser: null },
+        })
+        await tx.emailSignature.updateMany({ where: { id: signatureId, userId }, data })
+      })
+    } else {
+      await prisma.emailSignature.updateMany({ where: { id: signatureId, userId }, data })
+    }
+
+    const signature = await prisma.emailSignature.findFirst({ where: { id: signatureId, userId } })
+    if (!signature) {
+      return void res.status(404).json({ error: 'Signature not found' })
+    }
+
+    // --- Return response ---
+    res.json({ signature: mapSignatureToApi(signature) })
+  }),
+)
+
+// ============================================================
+// DELETE /api/email/orgs/:orgId/signatures/:signatureId — remove one
+// ============================================================
+router.delete(
+  '/orgs/:orgId/signatures/:signatureId',
+  wrapRoute('DELETE /api/email/orgs/:orgId/signatures/:signatureId', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const signatureId = String(req.params.signatureId)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    const result = await prisma.emailSignature.deleteMany({ where: { id: signatureId, userId } })
+    if (result.count === 0) {
+      return void res.status(404).json({ error: 'Signature not found' })
+    }
+
+    // --- Return response ---
+    res.json({ signature: { id: signatureId } })
   }),
 )
 

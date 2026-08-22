@@ -36,6 +36,12 @@ export interface LinkRequest {
   apply: (href: string | null, text?: string) => void
 }
 
+/** The narrow imperative surface for a host that needs to add trusted editor HTML. */
+export interface RichTextEditorActions {
+  /** Inserts an allowed rich-text fragment after the document's existing content. */
+  insertHtmlAtEnd: (html: string) => void
+}
+
 export interface RichTextEditorProps {
   /**
    * The HTML the editor OPENS with. **Read once, on mount, and never again.**
@@ -63,6 +69,8 @@ export interface RichTextEditorProps {
    * nothing, and `Cmd/Ctrl+K` falls through to the browser.
    */
   onRequestLink?: (request: LinkRequest) => void
+  /** Receives a small action surface after the editor mounts, then null on unmount. */
+  onReady?: (actions: RichTextEditorActions | null) => void
   className?: string
 }
 
@@ -111,6 +119,7 @@ export function RichTextEditor({
   placeholder = 'Write a message',
   label,
   onRequestLink,
+  onReady,
   className,
 }: RichTextEditorProps) {
   // Rule 2. A `useState` initializer runs on the first render and never again,
@@ -174,6 +183,25 @@ export function RichTextEditor({
     // Rule 3, written out. Do not add to this array.
     [],
   )
+
+  // This intentionally offers only append-at-end. A host that can replace the
+  // full document has recreated a controlled editor and can move the rep's
+  // caret on every save response; appending a user-requested block does not.
+  useEffect(() => {
+    if (!editor) return
+    const actions: RichTextEditorActions = {
+      insertHtmlAtEnd: (html) => {
+        editor
+          .chain()
+          .focus()
+          .setTextSelection(editor.state.doc.content.size)
+          .insertContent(html)
+          .run()
+      },
+    }
+    onReady?.(actions)
+    return () => onReady?.(null)
+  }, [editor, onReady])
 
   /**
    * Raise a link request for whatever is selected right now.

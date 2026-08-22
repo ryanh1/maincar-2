@@ -37,6 +37,10 @@ export const queryKeys = {
     // member of an org reads and writes this one entry. There is no per-user
     // key to add — see lib/emailTypes.ts → EmailTemplate.
     templates: (orgId: string) => ['email', 'templates', orgId] as const,
+    // The server scopes a signature to the authenticated rep, and a signed-in
+    // browser has one rep at a time. The org still belongs in the key because it
+    // is part of the verified request path and changes with the active context.
+    signatures: (orgId: string) => ['email', 'signatures', orgId] as const,
   },
   calls: {
     all: ['calls'] as const,

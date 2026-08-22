@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -84,6 +84,17 @@ describe('RichTextEditor', () => {
     // Opening a card is not editing it. A host compares against its own saved
     // copy, and a first-render write would be a wasted PATCH on every open.
     expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('lets a host insert safe HTML at the end without re-seeding the document', async () => {
+    const onChange = vi.fn()
+    let actions: { insertHtmlAtEnd: (html: string) => void } | null = null
+    render(<RichTextEditor label="Message" initialHtml="<p>Hello</p>" onChange={onChange} onReady={(next) => { actions = next }} />)
+
+    await waitFor(() => expect(actions).not.toBeNull())
+    await act(async () => actions!.insertHtmlAtEnd('<p>Ari Rep</p>'))
+
+    await waitFor(() => expect(lastHtml(onChange)).toContain('<p>Hello</p><p>Ari Rep</p>'))
   })
 
   /**

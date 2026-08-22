@@ -8,6 +8,9 @@ export { useSendEmailDraft } from './useSendEmailDraft'
 export { useGetEmailTemplates } from './useGetEmailTemplates'
 export { useSaveEmailTemplate } from './useSaveEmailTemplate'
 export { useDeleteEmailTemplate } from './useDeleteEmailTemplate'
+export { useGetEmailSignatures } from './useGetEmailSignatures'
+export { useSaveEmailSignature } from './useSaveEmailSignature'
+export { useDeleteEmailSignature } from './useDeleteEmailSignature'
 // What each mutation is called with. These are hook shapes, not API shapes, so
 // they live beside the hook rather than in lib/emailTypes.ts — that file mirrors
 // the server's responses and nothing else.
@@ -21,6 +24,8 @@ export type {
 } from './useSendEmailDraft'
 export type { SaveEmailTemplateVariables } from './useSaveEmailTemplate'
 export type { DeleteEmailTemplateVariables } from './useDeleteEmailTemplate'
+export type { SaveEmailSignatureVariables } from './useSaveEmailSignature'
+export type { DeleteEmailSignatureVariables } from './useDeleteEmailSignature'
 // The shapes themselves live in lib/emailTypes.ts, because the recipient fields
 // need RecipientChip without reaching for a hook. Re-exported here so a
 // component that already imports the hook does not need a second import path.
@@ -38,4 +43,10 @@ export type {
   GetEmailTemplatesResponse,
   EmailTemplateResponse,
   DeleteEmailTemplateResponse,
+  EmailSignature,
+  EmailSignatureInput,
+  EmailSignaturePatch,
+  GetEmailSignaturesResponse,
+  EmailSignatureResponse,
+  DeleteEmailSignatureResponse,
 } from '@/lib/emailTypes'
