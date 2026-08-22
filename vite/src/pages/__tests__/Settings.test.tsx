@@ -49,6 +49,7 @@ describe('Settings', () => {
       'Members',
       'Phone numbers',
       'Call recordings',
+      'Call dispositions',
       'Voicemail greeting',
       'Email templates',
       'Signatures',

@@ -11,6 +11,7 @@ import callsRouter from './routes/calls.js'
 import callCommentsRouter from './routes/callComments.js'
 import companiesRouter from './routes/companies.js'
 import dealsRouter from './routes/deals.js'
+import dispositionsRouter from './routes/dispositions.js'
 import emailRouter from './routes/email.js'
 import emailsRouter from './routes/emails.js'
 import attributesRouter from './routes/attributes.js'
@@ -83,6 +84,7 @@ app.use('/api/email', emailRouter)
 app.use('/api/orgs/:orgId/phone-numbers', phoneNumbersRouter)
 app.use('/api/orgs/:orgId/calls', callsRouter)
 app.use('/api/orgs/:orgId/calls/:callId/comments', callCommentsRouter)
+app.use('/api/orgs/:orgId/dispositions', dispositionsRouter)
 app.use('/api/orgs/:orgId/voicemail-greeting', voicemailGreetingRouter)
 app.use('/api/orgs/:orgId/voicemail-drops', voicemailDropsRouter)
 app.use('/api/orgs/:orgId/voicemails', voicemailsRouter)

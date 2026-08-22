@@ -25,6 +25,7 @@ import type { Prisma, PrismaClient } from '../generated/prisma/client.js'
 import {
   CURRENT_SEED_VERSION,
   DEFAULT_PIPELINE,
+  STANDARD_DISPOSITIONS,
   STANDARD_OBJECTS,
   type SeedAttribute,
 } from './standardObjects.js'
@@ -112,6 +113,21 @@ export async function seedOrgInTx(tx: SeedClient, orgId: string): Promise<void> 
         },
       })
     }
+  }
+
+  // --- Standard call dispositions ---
+  // Like objects and attributes above, this is insert-missing-only: an
+  // organization's edited labels, categories, colors, and retired defaults are
+  // never overwritten by a later seed run.
+  for (const disposition of STANDARD_DISPOSITIONS) {
+    const existing = await tx.dispositionDef.findFirst({
+      where: { orgId, value: disposition.value },
+      select: { id: true },
+    })
+    if (existing) continue
+    await tx.dispositionDef.create({
+      data: { orgId, ...disposition, isStandard: true },
+    })
   }
 
   // --- Stamp the seed version last, inside the same transaction ---

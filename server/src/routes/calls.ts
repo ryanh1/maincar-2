@@ -89,7 +89,31 @@ function mapCallToHistoryApi(call: Call) {
 // a freshly signed link (or null), because the stored value is a bare object key.
 // orgId and userId stay absent, as in the other mappers — the caller is the
 // requester and the org is the path.
-function mapCallToDetailApi(call: Call, recordingUrl: string | null) {
+type CallDisposition = {
+  id: string
+  value: string
+  label: string
+  color: string
+  icon: string | null
+  category: string
+}
+
+type CallWithDisposition = Call & { disposition?: CallDisposition | null }
+
+function mapDispositionToApi(disposition: CallDisposition | null | undefined) {
+  return disposition
+    ? {
+        id: disposition.id,
+        value: disposition.value,
+        label: disposition.label,
+        color: disposition.color,
+        icon: disposition.icon,
+        category: disposition.category,
+      }
+    : null
+}
+
+function mapCallToDetailApi(call: CallWithDisposition, recordingUrl: string | null) {
   return {
     id: call.id,
     direction: call.direction,
@@ -103,6 +127,8 @@ function mapCallToDetailApi(call: Call, recordingUrl: string | null) {
     recordingUrl,
     transcriptStatus: call.transcriptStatus,
     transcript: call.transcript,
+    disposition: mapDispositionToApi(call.disposition),
+    noteText: call.noteText,
     twilioCallSid: call.twilioCallSid,
     durationS: call.durationS,
     startedAt: call.startedAt ? call.startedAt.toISOString() : null,
@@ -123,7 +149,7 @@ type ReviewLifecycleState =
   | 'failed'
   | 'missing'
 
-type CallReviewRecord = Call & {
+type CallReviewRecord = CallWithDisposition & {
   person: {
     id: string
     firstName: string | null
@@ -254,6 +280,7 @@ function mapCallReviewApi(call: CallReviewRecord, source: SignedAudioSource | nu
 }
 
 const callReviewInclude = {
+  disposition: { select: { id: true, value: true, label: true, color: true, icon: true, category: true } },
   person: { select: { id: true, firstName: true, lastName: true, preferredFirstName: true, title: true } },
   company: { select: { id: true, name: true } },
   deal: { select: { id: true, name: true, status: true } },
@@ -311,6 +338,11 @@ const createCallSchema = z.object({
       'Enter the number in E.164 form — a plus, the country code, then digits, like +12025550123.',
     ),
 })
+
+const logCallSchema = z.object({
+  dispositionId: z.string().trim().min(1).max(128),
+  noteText: z.string().trim().max(5_000).nullable().optional(),
+}).strict()
 
 // --- List input ---
 
@@ -466,6 +498,53 @@ router.get(
       identity: voiceToken.identity,
       ttlSeconds: voiceToken.ttlSeconds,
     })
+  }),
+)
+
+// ============================================================
+// PATCH /api/orgs/:orgId/calls/:id/disposition — log a rep outcome
+// ============================================================
+// `status` stays the dialer's technical lifecycle. This endpoint records the
+// business outcome and an optional rep note without ever letting a disposition
+// from another organization be attached to the call.
+router.patch(
+  '/:id/disposition',
+  wrapRoute('PATCH /api/orgs/:orgId/calls/:id/disposition', async (req, res) => {
+    const authReq = req as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = logCallSchema.safeParse(req.body ?? {})
+    if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
+
+    // --- Verify ownership ---
+    const disposition = await prisma.dispositionDef.findFirst({
+      where: { id: parsed.data.dispositionId, orgId, isArchived: false },
+      select: { id: true },
+    })
+    if (!disposition) return void res.status(400).json({ error: 'Choose an active disposition from this organization.' })
+
+    // --- Execute query ---
+    const result = await prisma.call.updateMany({
+      where: { id, orgId },
+      data: {
+        dispositionId: disposition.id,
+        noteText: parsed.data.noteText?.trim() || null,
+      },
+    })
+    if (result.count === 0) return void res.status(404).json({ error: 'Call not found' })
+
+    const call = await prisma.call.findFirst({ where: { id, orgId }, include: callReviewInclude })
+    if (!call) return void res.status(404).json({ error: 'Call not found' })
+    const source = await signReviewAudioSource(call)
+
+    // --- Return response ---
+    res.json({ call: { ...mapCallToDetailApi(call, source?.url ?? null), review: mapCallReviewApi(call, source) } })
   }),
 )
 

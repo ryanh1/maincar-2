@@ -20,14 +20,18 @@ import { Route, Routes } from 'react-router-dom'
 
 import { renderWithProviders } from '@/test/utils'
 
-const { useAuthMock, useGetCallDetailMock, toastErrorMock } = vi.hoisted(() => ({
+const { useAuthMock, useGetCallDetailMock, useLogCallDispositionMock, toastErrorMock } = vi.hoisted(() => ({
   useAuthMock: vi.fn(),
   useGetCallDetailMock: vi.fn(),
+  useLogCallDispositionMock: vi.fn(),
   toastErrorMock: vi.fn(),
 }))
 
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
-vi.mock('@/hooks/dialer', () => ({ useGetCallDetail: useGetCallDetailMock }))
+vi.mock('@/hooks/dialer', () => ({
+  useGetCallDetail: useGetCallDetailMock,
+  useLogCallDisposition: useLogCallDispositionMock,
+}))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
 
 import { CallDetail } from '@/pages/CallDetail'
@@ -97,6 +101,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   useAuthMock.mockReturnValue({ user: { id: 'user-a', timeZone: 'America/New_York' }, org: ORG })
   useGetCallDetailMock.mockReturnValue(detailState())
+  useLogCallDispositionMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
   // navigator.clipboard is a getter-only property in jsdom, so it is redefined
   // rather than assigned.
   Object.defineProperty(navigator, 'clipboard', {

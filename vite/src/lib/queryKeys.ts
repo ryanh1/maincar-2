@@ -60,6 +60,7 @@ export const queryKeys = {
     voiceToken: (orgId: string) => ['calls', 'voiceToken', orgId] as const,
   },
   recordingPolicy: (orgId: string) => ['recordingPolicy', orgId] as const,
+  dispositions: (orgId: string) => ['dispositions', orgId] as const,
   voicemails: {
     all: ['voicemails'] as const,
     list: (orgId: string, query?: Record<string, unknown>) =>

@@ -156,8 +156,20 @@ export interface CallDetail extends CallHistoryItem {
   recordingEnabled: boolean | null
   recordingUrl: string | null
   transcript: string | null
+  disposition?: CallDisposition | null
+  noteText?: string | null
   /** Present on authenticated GET detail responses; optional while DELETE remains legacy-compatible. */
   review?: CallReviewReadModel
+}
+
+/** A logged call outcome. Category is what reporting uses for connected calls. */
+export interface CallDisposition {
+  id: string
+  value: string
+  label: string
+  color: string
+  icon: string | null
+  category: 'connected' | 'not_connected'
 }
 
 /** What POST accepts. Recording is decided by the organization policy. */
@@ -195,6 +207,11 @@ export interface CreateCallResponse {
 /** What GET :id and DELETE :id return: the full record, wrapped. */
 export interface CallDetailResponse {
   call: CallDetail
+}
+
+export interface LogCallDispositionInput {
+  dispositionId: string
+  noteText?: string | null
 }
 
 /** What GET /voice-token returns: a short-lived credential for `new Device(token)`. */

@@ -22,7 +22,27 @@
 // Bump this when this file adds a standard object, field, or default option. The
 // backfill compares an org's stored seedVersion against it to decide whether to
 // re-run the insert-missing-only pass (spec §10.2).
-export const CURRENT_SEED_VERSION = 1
+export const CURRENT_SEED_VERSION = 2
+
+export interface SeedDisposition {
+  value: string
+  label: string
+  color: string
+  category: 'connected' | 'not_connected'
+  sortOrder: number
+}
+
+// A new organization starts with a practical call-outcome set. Labels and
+// colors remain editable; the stable values are what reporting filters use.
+export const STANDARD_DISPOSITIONS: SeedDisposition[] = [
+  { value: 'connected', label: 'Connected', color: 'option-1', category: 'connected', sortOrder: 0 },
+  { value: 'voicemail', label: 'Left voicemail', color: 'option-2', category: 'not_connected', sortOrder: 1 },
+  { value: 'no_answer', label: 'No answer', color: 'option-3', category: 'not_connected', sortOrder: 2 },
+  { value: 'busy', label: 'Busy', color: 'option-4', category: 'not_connected', sortOrder: 3 },
+  { value: 'wrong_number', label: 'Wrong number', color: 'option-5', category: 'not_connected', sortOrder: 4 },
+  { value: 'not_interested', label: 'Not interested', color: 'option-6', category: 'connected', sortOrder: 5 },
+  { value: 'callback', label: 'Call back', color: 'option-7', category: 'connected', sortOrder: 6 },
+]
 
 // One editable picklist option (spec §5.6a). The record stores `value`; the UI
 // shows `label`. Renaming a label never rewrites a record, and retiring an option

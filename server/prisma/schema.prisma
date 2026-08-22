@@ -49,6 +49,7 @@ model Org {
   invitations        Invitation[]
   phoneNumbers       PhoneNumber[]
   calls              Call[]
+  dispositions       DispositionDef[]
   transcripts        Transcript[]
   transcriptSegments TranscriptSegment[]
   callSpeakers       CallSpeaker[]
@@ -447,6 +448,12 @@ model Call {
   transcriptStatus String  @default("pending")
   transcript       String?
 
+  // The rep-logged business outcome. This is deliberately separate from
+  // `status`, which remains the technical Twilio lifecycle.
+  dispositionId String?
+  disposition   DispositionDef? @relation(fields: [dispositionId], references: [id], onDelete: SetNull)
+  noteText      String?
+
   // The canonical final pass. The legacy flat `transcript` stays temporarily so
   // existing readers remain compatible while consumers move to timed segments.
   finalTranscript Transcript?
@@ -495,6 +502,37 @@ model Call {
   @@index([orgId, personId, createdAt])
   @@index([orgId, companyId, createdAt])
   @@index([orgId, dealId, createdAt])
+  @@index([orgId, dispositionId])
+}
+
+// A managed, organization-scoped call outcome. `value` is the stable machine
+// key used in filters while `label` is safe for a rep to rename.
+model DispositionDef {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  value String
+  label String
+  // One of option-1 through option-8. Stored as a semantic token name so the
+  // UI keeps working in dark mode rather than persisting a raw color.
+  color String @default("option-1")
+  // Optional Lucide icon name.
+  icon String?
+  // Allowed values: "connected", "not_connected".
+  category String @default("not_connected")
+  isStandard Boolean @default(false)
+  sortOrder Int @default(0)
+  isArchived Boolean @default(false)
+
+  calls Call[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, value])
+  @@index([orgId, isArchived, sortOrder])
 }
 
 // One canonical final pass for a call. Provider-owned text and timing live below
