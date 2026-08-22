@@ -853,7 +853,7 @@ describe('structural', () => {
   // `prisma.task.update({ where: { id } })` could write across a tenant boundary.
   const ORG_SCOPED_MODELS = [
     'membership', 'invitation', 'phoneNumber', 'call', 'emailDraft', 'emailTemplate',
-    'task', 'note',
+    'task', 'note', 'voicemailDrop',
   ]
   const routesDir = path.resolve(import.meta.dirname, '..')
 
