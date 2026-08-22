@@ -24,7 +24,7 @@ function isCall(value: unknown): value is Call {
     typeof call.id === 'string' &&
     typeof call.status === 'string' &&
     IN_FLIGHT_STATUSES.has(call.status as Call['status']) &&
-    (call.recordingConsent === 'granted' || call.recordingConsent === 'declined' || call.recordingConsent === null)
+    (call.recordingPlanned === true || call.recordingPlanned === false || call.recordingPlanned === null)
   )
 }
 
@@ -75,7 +75,7 @@ export function useCreateCall() {
       startCall({
         orgId: variables.orgId,
         callId: data.call.id,
-        recording: data.call.recordingConsent === 'granted',
+        recording: data.call.recordingPlanned === true,
       })
       // Connect the Device with the row's id, so the voice webhook
       // (routes/twilioVoice.ts) can find it. A failure here — the Device is not
@@ -102,7 +102,7 @@ export function useCreateCall() {
         {
           orgId: variables.orgId,
           callId: call.id,
-          recording: call.recordingConsent === 'granted',
+          recording: call.recordingPlanned === true,
         },
         call.status,
       )

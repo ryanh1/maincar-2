@@ -126,10 +126,6 @@ function headphonesButton(): HTMLButtonElement {
   return screen.getByRole('button', { name: 'Check your microphone and speaker' })
 }
 
-function consentBox(): HTMLElement {
-  return screen.getByRole('checkbox', { name: 'Record this call' })
-}
-
 function render(ui: Parameters<typeof renderWithProviders>[0]) {
   return renderWithProviders(ui)
 }
@@ -220,7 +216,6 @@ describe('NumericKeypad', () => {
     expect(mutateMock.mock.calls[0][0]).toEqual({
       orgId: 'org-1',
       toE164: E164,
-      recordingConsent: 'declined',
     })
   })
 
@@ -360,7 +355,6 @@ describe('NumericKeypad', () => {
     expect(mutateMock.mock.calls[0][0]).toEqual({
       orgId: 'org-1',
       toE164: E164,
-      recordingConsent: 'declined',
     })
   })
 
@@ -478,120 +472,6 @@ describe('NumericKeypad', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Recording consent (MAI-192)
-// ---------------------------------------------------------------------------
-// The rule the whole feature rests on is that `granted` only ever comes from a
-// rep ticking the box — so these cover the untouched default, the grant, and
-// the un-grant, each all the way to what the mutation is actually called with
-// rather than to the checkbox's own state.
-
-describe('recording consent', () => {
-  it('offers the choice unticked, so no call records by default', () => {
-    render(<NumericKeypad />)
-
-    expect(consentBox()).not.toBeChecked()
-  })
-
-  it('sends declined when the rep never touches the box', () => {
-    render(<NumericKeypad />)
-
-    NATIONAL.split('').forEach(pressKey)
-    fireEvent.click(callButton())
-
-    expect(mutateMock.mock.calls[0][0]).toEqual({
-      orgId: 'org-1',
-      toE164: E164,
-      recordingConsent: 'declined',
-    })
-  })
-
-  it('sends granted once the rep ticks the box', () => {
-    render(<NumericKeypad />)
-
-    NATIONAL.split('').forEach(pressKey)
-    fireEvent.click(consentBox())
-    expect(consentBox()).toBeChecked()
-
-    fireEvent.click(callButton())
-
-    expect(mutateMock).toHaveBeenCalledTimes(1)
-    expect(mutateMock.mock.calls[0][0]).toEqual({
-      orgId: 'org-1',
-      toE164: E164,
-      recordingConsent: 'granted',
-    })
-  })
-
-  it('goes back to declined when the rep unticks the box', () => {
-    render(<NumericKeypad />)
-
-    NATIONAL.split('').forEach(pressKey)
-    fireEvent.click(consentBox())
-    fireEvent.click(consentBox())
-    expect(consentBox()).not.toBeChecked()
-
-    fireEvent.click(callButton())
-
-    expect(mutateMock.mock.calls[0][0]).toEqual({
-      orgId: 'org-1',
-      toE164: E164,
-      recordingConsent: 'declined',
-    })
-  })
-
-  it('carries the granted value through an Enter-key dial too', () => {
-    render(<NumericKeypad />)
-
-    NATIONAL.split('').forEach(pressKey)
-    fireEvent.click(consentBox())
-    fireEvent.keyDown(phoneInput(), { key: 'Enter' })
-
-    expect(mutateMock.mock.calls[0][0]).toEqual({
-      orgId: 'org-1',
-      toE164: E164,
-      recordingConsent: 'granted',
-    })
-  })
-
-  it('carries the granted value through the greenroom gate too', () => {
-    useGreenRoomDecisionMock.mockReturnValue({ shouldShow: true })
-    render(<NumericKeypad />)
-
-    NATIONAL.split('').forEach(pressKey)
-    fireEvent.click(consentBox())
-    fireEvent.click(callButton())
-    fireEvent.click(screen.getByRole('button', { name: 'Start call' }))
-
-    expect(mutateMock.mock.calls[0][0]).toEqual({
-      orgId: 'org-1',
-      toE164: E164,
-      recordingConsent: 'granted',
-    })
-  })
-
-  it('locks the choice while a placed call is still in flight', () => {
-    useCreateCallMock.mockReturnValue({ mutate: mutateMock, isPending: true })
-    render(<NumericKeypad />)
-
-    expect(consentBox()).toBeDisabled()
-  })
-
-  it('locks the choice while a call is live', () => {
-    useDialerMock.mockReturnValue({ dialing: true, sendDigits: sendDigitsMock })
-    render(<NumericKeypad />)
-
-    expect(consentBox()).toBeDisabled()
-  })
-
-  it('offers no recording choice when there is no number to call from', () => {
-    useGetNumbersMock.mockReturnValue({ data: { numbers: [], total: 0, activeCount: 0 } })
-    render(<NumericKeypad />)
-
-    expect(screen.queryByRole('checkbox', { name: 'Record this call' })).not.toBeInTheDocument()
-  })
-})
-
-// ---------------------------------------------------------------------------
 // The greenroom gate (MAI-193)
 // ---------------------------------------------------------------------------
 
@@ -621,7 +501,6 @@ describe('the greenroom gate', () => {
     expect(mutateMock.mock.calls[0][0]).toEqual({
       orgId: 'org-1',
       toE164: E164,
-      recordingConsent: 'declined',
     })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })

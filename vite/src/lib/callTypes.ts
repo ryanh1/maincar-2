@@ -29,8 +29,12 @@ export type CallStatus =
   | 'no-answer'
   | 'canceled'
 
-/** The rep's per-call recording choice, made before the call was placed. Null if never asked. */
-export type RecordingConsent = 'granted' | 'declined'
+export type RecordingDecisionReason =
+  | 'allowed'
+  | 'recording-disabled'
+  | 'two-party-consent-state'
+  | 'state-not-allowed'
+  | 'unknown-destination-state'
 
 /** Allowed values mirror the comments on `Call.transcriptStatus` in schema.prisma. */
 export type TranscriptStatus = 'pending' | 'done' | 'failed' | 'skipped-not-recorded'
@@ -42,7 +46,8 @@ export interface Call {
   status: CallStatus
   fromE164: string
   toE164: string
-  recordingConsent: RecordingConsent | null
+  recordingPlanned: boolean | null
+  recordingReason: RecordingDecisionReason | null
   /** Null until Twilio accepts the call. */
   twilioCallSid: string | null
   createdAt: string
@@ -70,15 +75,15 @@ export interface CallHistoryItem extends Call {
  * time, so it is null until a recording exists.
  */
 export interface CallDetail extends CallHistoryItem {
+  destinationState: string | null
   recordingEnabled: boolean | null
   recordingUrl: string | null
   transcript: string | null
 }
 
-/** What POST accepts. `toE164` and `recordingConsent` are both required. */
+/** What POST accepts. Recording is decided by the organization policy. */
 export interface CreateCallInput {
   toE164: string
-  recordingConsent: RecordingConsent
 }
 
 /** The columns the history list may sort on. Mirrors `SORT_FIELDS` on the server. */

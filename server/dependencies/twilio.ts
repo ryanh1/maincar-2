@@ -363,8 +363,8 @@ export interface BridgeCallRequest {
   callerId: string
   /**
    * Record the bridged call. The route is responsible for this being true ONLY
-   * when the Call row's `recordingConsent` is `"granted"` — this function does
-   * not read consent itself, it only wires the TwiML once told to.
+   * when the Call row's server-resolved `recordingPlanned` decision is true —
+   * this function does not evaluate policy itself, it only wires the TwiML once told to.
    */
   record: boolean
 }
