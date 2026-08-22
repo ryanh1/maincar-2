@@ -80,6 +80,7 @@ if [ "$GATE" = 1 ]; then
   mc_log "merge --gate start $BR"
 
   mc_fetch_local_main --quiet
+  PRE_REBASE_HEAD="$(git rev-parse HEAD)"
   echo "[mc-merge --gate] rebasing onto $(git rev-parse --short origin/main)"
   if ! git rebase origin/main; then
     echo >&2
@@ -87,6 +88,18 @@ if [ "$GATE" = 1 ]; then
     echo "The lock is released, so other sessions are not blocked while you fix it." >&2
     git rebase --abort 2>/dev/null || true
     exit 1
+  fi
+
+  # The rebase can pull package manifests or locks into this worktree after its
+  # local gate has passed. Synchronize just those roots before any generated
+  # client or verification command reads the stale dependency tree.
+  rebased_dependency_roots="$(mc_changed_dependency_roots "$WT" "$PRE_REBASE_HEAD" HEAD)"
+  if [ -n "$rebased_dependency_roots" ]; then
+    echo "[mc-merge --gate] synchronizing dependencies introduced by the rebase: $(tr '\n' ' ' <<< "$rebased_dependency_roots")"
+    if ! printf '%s\n' "$rebased_dependency_roots" | mc_sync_dependencies "$WT"; then
+      echo "[mc-merge --gate] Could not synchronize dependencies after rebase. Not merging." >&2
+      exit 3
+    fi
   fi
 
   # A rebase can pull a schema change into a checkout with an ignored stale

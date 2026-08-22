@@ -147,7 +147,7 @@ fi
 mkdir -p "$SANDBOX/fake-bin"
 cat > "$SANDBOX/fake-bin/npm" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$MC_NPM_LOG"
+[ -z "${MC_NPM_LOG:-}" ] || printf '%s\n' "$*" >> "$MC_NPM_LOG"
 EOF
 chmod +x "$SANDBOX/fake-bin/npm"
 MC_NPM_LOG="$SANDBOX/npm.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
@@ -158,6 +158,47 @@ fi
 primary_real="$(cd "$SANDBOX/primary" && pwd -P)"
 if ! grep -Fx -- "--prefix $primary_real/vite ci" "$SANDBOX/npm.log" >/dev/null; then
   echo 'explicit primary refresh did not reinstall the changed frontend dependency root' >&2
+  exit 1
+fi
+
+# A ticket's lockfile can become stale between its local gate and the locked
+# rebase in mc-merge --gate. The merge gate must synchronize dependencies pulled
+# in by that rebase before it runs verification.
+git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-rebase-dependency" --quiet
+git -C "$SANDBOX/issue-rebase-dependency" config user.name 'Coordination test'
+git -C "$SANDBOX/issue-rebase-dependency" config user.email 'coordination-test@example.test'
+git -C "$SANDBOX/issue-rebase-dependency" checkout -b issue-rebase-dependency --quiet
+touch "$SANDBOX/issue-rebase-dependency/ticket-change"
+git -C "$SANDBOX/issue-rebase-dependency" add ticket-change
+git -C "$SANDBOX/issue-rebase-dependency" commit -m 'Ticket change before dependency update' --quiet
+
+git clone "$SANDBOX/state/local-main.git" "$SANDBOX/main-add-firebase-dependency" --quiet
+git -C "$SANDBOX/main-add-firebase-dependency" config user.name 'Coordination test'
+git -C "$SANDBOX/main-add-firebase-dependency" config user.email 'coordination-test@example.test'
+git -C "$SANDBOX/main-add-firebase-dependency" checkout -b main-add-firebase-dependency --quiet
+mkdir -p "$SANDBOX/main-add-firebase-dependency/firebase"
+printf '{"lockfileVersion": 3}\n' > "$SANDBOX/main-add-firebase-dependency/firebase/package-lock.json"
+git -C "$SANDBOX/main-add-firebase-dependency" add firebase/package-lock.json
+git -C "$SANDBOX/main-add-firebase-dependency" commit -m 'Add Firebase dependency lockfile' --quiet
+(
+  cd "$SANDBOX/main-add-firebase-dependency"
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver Firebase dependency lockfile'
+)
+
+touch "$SANDBOX/issue-rebase-dependency/.env"
+printf '.env\n' >> "$SANDBOX/issue-rebase-dependency/.git/info/exclude"
+mkdir -p "$SANDBOX/issue-rebase-dependency/node_modules" \
+  "$SANDBOX/issue-rebase-dependency/server/node_modules" \
+  "$SANDBOX/issue-rebase-dependency/vite/node_modules"
+: > "$SANDBOX/rebase-npm.log"
+rebase_worktree="$(cd "$SANDBOX/issue-rebase-dependency" && pwd -P)"
+(
+  cd "$SANDBOX/issue-rebase-dependency"
+  MC_NPM_LOG="$SANDBOX/rebase-npm.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" \
+    "$ROOT/.claude/scripts/coord/mc-merge" --gate -m 'Merge ticket after Firebase dependency update'
+)
+if ! grep -Fx -- "--prefix $rebase_worktree/firebase ci" "$SANDBOX/rebase-npm.log" >/dev/null; then
+  echo 'mc-merge --gate did not synchronize dependencies introduced by its rebase' >&2
   exit 1
 fi
 
