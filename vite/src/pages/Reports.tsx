@@ -25,6 +25,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RequiredAsterisk } from '@/components/ui/RequiredAsterisk'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/EmptyState'
 import {
   useCreateReport,
   useDeleteReport,
@@ -219,9 +220,11 @@ export function Reports() {
         title="Reports"
         count={reportsQuery.data?.total}
         action={
-          <Button size="sm" onClick={startNewReport}>
-            New report
-          </Button>
+          reportsQuery.data?.reports.length === 0 ? undefined : (
+            <Button size="sm" onClick={startNewReport}>
+              New report
+            </Button>
+          )
         }
       />
 
@@ -269,7 +272,14 @@ export function Reports() {
           {reportQuery.isPending && openReportId && <Skeleton className="h-32 w-full" />}
           {reportQuery.isError && <p className="text-sm text-destructive">Could not open this report. Try again.</p>}
           {runQuery.isError && <p className="text-sm text-destructive">Could not run this report. Try again.</p>}
-          <ReportsPivotBuilder config={activeConfig} onChange={changeConfig} result={runQuery.data?.report} />
+          <ReportsPivotBuilder
+            config={activeConfig}
+            onChange={changeConfig}
+            result={runQuery.data?.report}
+            isLoading={runQuery.isPending}
+            hasActiveFilters={Boolean(activeConfig.filters?.ownerTeam)}
+            onLoosenFilters={() => setOwnerTeamScope(undefined)}
+          />
         </section>
       ) : (
         <section className="flex flex-col gap-3" aria-labelledby="my-reports-title">
@@ -287,9 +297,10 @@ export function Reports() {
             </div>
           )}
           {reportsQuery.data && reportsQuery.data.reports.length === 0 && (
-            <div className="rounded-md border border-border p-6 text-sm text-text-muted">
-              Create a report to track your pipeline.
-            </div>
+            <EmptyState title="Build your first report">
+              <p>Create a report to see your pipeline.</p>
+              <Button size="sm" onClick={startNewReport}>New report</Button>
+            </EmptyState>
           )}
           {reportsQuery.data && reportsQuery.data.reports.length > 0 && (
             <div className="overflow-x-auto rounded-md border border-border">

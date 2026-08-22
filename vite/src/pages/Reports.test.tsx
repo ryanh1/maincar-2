@@ -148,6 +148,75 @@ describe('Reports', () => {
     expect(screen.getAllByText('$35.00')).toHaveLength(2)
   })
 
+  it('guides a rep from an empty reports home into a blank report', async () => {
+    useGetReportsMock.mockReturnValue(listState({ data: { reports: [], total: 0 } }))
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    expect(screen.getByText('Create a report to see your pipeline.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+
+    expect(screen.getByRole('heading', { name: 'Build a report in 3 steps' })).toBeInTheDocument()
+    expect(screen.getByText('1 Pick data: Deals')).toBeInTheDocument()
+    expect(screen.getByText('2 Drag a field to Rows')).toBeInTheDocument()
+    expect(screen.getByText('3 Drag Amount to Values')).toBeInTheDocument()
+    expect(screen.getByText('Drag a field here to group rows.')).toBeInTheDocument()
+  })
+
+  it('explains how to finish a not-yet-computable pivot and offers the next action', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    await user.click(screen.getByRole('button', { name: 'Amount', exact: true }))
+
+    expect(screen.getByRole('heading', { name: 'Add a group' })).toBeInTheDocument()
+    expect(screen.getByText('Add a Row or Column to break Amount down.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Add Owner to Rows' }))
+
+    expect(screen.getByRole('rowheader', { name: 'Avery Admin' })).toBeInTheDocument()
+  })
+
+  it('explains when filters match no records and lets a rep loosen them', async () => {
+    useRunReportMock.mockReturnValue({
+      data: { report: { rows: [] } },
+      isPending: false,
+      isError: false,
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Revenue' }))
+    dragFieldToZone('Owner', 'rows')
+    dragFieldToZone('Amount', 'values')
+
+    expect(screen.getByText('No records match these filters.')).toBeInTheDocument()
+    expect(screen.getByText('Owner\'s team filter')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Loosen filters' }))
+
+    expect(screen.getByText('All owners.')).toBeInTheDocument()
+  })
+
+  it('labels a report that is still preparing instead of leaving a blank grid', async () => {
+    useRunReportMock.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isError: false,
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    dragFieldToZone('Owner', 'rows')
+    dragFieldToZone('Amount', 'values')
+
+    expect(screen.getByText('Preparing this report…')).toBeInTheDocument()
+  })
+
   it('requires a name before it saves a new report', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Reports />)
