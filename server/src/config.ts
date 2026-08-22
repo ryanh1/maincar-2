@@ -151,6 +151,12 @@ export const TWILIO_TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID ?? ''
 // that needed it rather than the server.
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? ''
 
+// --- Deepgram (final call transcription) ---
+// Kept optional at boot for the same reason as Twilio and S3: health checks and
+// deterministic tests do not need a provider credential. The adapter throws a
+// named error only when a transcription job actually needs to call Deepgram.
+export const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY ?? ''
+
 // --- Outbound calling ---
 // A user can queue three browser-originated calls per minute by default. This is
 // configurable for an environment that needs a different operational ceiling,
