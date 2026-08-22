@@ -141,7 +141,6 @@ function draftRow(overrides: Record<string, unknown> = {}) {
     subject: null,
     bodyHtml: null,
     isOpen: true,
-    isMinimized: false,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -234,7 +233,6 @@ describe('GET /api/email/orgs/:orgId/drafts', () => {
         'ccAddrs',
         'createdAt',
         'id',
-        'isMinimized',
         'isOpen',
         'mailAccountId',
         'recordObject',
@@ -261,7 +259,6 @@ describe('POST /api/email/orgs/:orgId/drafts', () => {
       subject: null,
       bodyHtml: null,
       isOpen: true,
-      isMinimized: false,
     })
     expect(prismaMock.emailDraft.create.mock.calls[0][0].data).toMatchObject({
       orgId: ORG_A,
@@ -556,11 +553,11 @@ describe('PATCH /api/email/orgs/:orgId/drafts/:draftId', () => {
     expect(res.body.draft).not.toHaveProperty('userId')
   })
 
-  it('writes ONLY the keys the body carries — collapsing a card cannot blank the body', async () => {
-    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ isMinimized: true })
+  it('writes ONLY the keys the body carries — putting a draft away cannot blank the body', async () => {
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ isOpen: false })
 
     const args = prismaMock.emailDraft.updateMany.mock.calls[0][0]
-    expect(args.data).toEqual({ isMinimized: true })
+    expect(args.data).toEqual({ isOpen: false })
     // The half-written email is the whole point of the feature. None of these
     // may appear in the update just because the body left them out.
     expect(args.data).not.toHaveProperty('bodyHtml')
@@ -972,8 +969,8 @@ describe('bodyHtml is sanitised before it is stored', () => {
 
   it('PATCH does not touch bodyHtml when the body did not carry it', async () => {
     // Sanitising must not become a reason to write a key the caller left out —
-    // that would blank a half-written email every time a card is collapsed.
-    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ isMinimized: true })
+    // that would blank a half-written email every time a draft is put away.
+    await request(app).patch(ONE_A).set('Authorization', AUTH).send({ isOpen: false })
 
     expect(prismaMock.emailDraft.updateMany.mock.calls[0][0].data).not.toHaveProperty('bodyHtml')
   })

@@ -486,14 +486,8 @@ model EmailDraft {
   subject  String?
   bodyHtml String?
 
-  // Dock state, so a refresh restores the corner exactly as the rep left it.
-  //
-  // Two flags, not one, because Gmail's X and its - are different acts. isOpen
-  // false means the card is out of the dock but the draft is KEPT — closing an
-  // email has never meant throwing it away. isMinimized means the card is still
-  // in the dock, collapsed to a chip. Discarding is a DELETE, and nothing else is.
-  isOpen      Boolean @default(true)
-  isMinimized Boolean @default(false)
+  // `false` means this draft was put away but kept. Discarding is a DELETE.
+  isOpen Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

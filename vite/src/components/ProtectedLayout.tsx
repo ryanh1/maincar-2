@@ -6,6 +6,7 @@ import { APP_NAME } from '@/config'
 import { ComposerCard } from '@/components/composer/ComposerCard'
 import { ComposerDock } from '@/components/composer/ComposerDock'
 import { ComposerProvider } from '@/components/composer/ComposerProvider'
+import { CommandBar } from '@/components/command-bar/CommandBar'
 import { DialerDock } from '@/components/dialer/DialerDock'
 import { DialerProvider } from '@/components/dialer/DialerProvider'
 import { KeyboardProvider } from '@/components/keyboard/KeyboardProvider'
@@ -19,6 +20,8 @@ export function ProtectedLayout() {
   const { isLoading, isAuthenticated, needsOnboarding, needsOrg } = useAuth()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [hiddenDraftIds, setHiddenDraftIds] = useState<string[]>([])
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null)
 
   if (isLoading) return <PageLoader />
 
@@ -84,7 +87,12 @@ export function ProtectedLayout() {
           </div>
         </KeyboardProvider>
 
-        <ComposerDock renderCard={(draft) => <ComposerCard draft={draft} />} />
+        <ComposerDock
+          renderCard={(draft) => <ComposerCard draft={draft} />}
+          selectedDraftId={selectedDraftId}
+          onHiddenDraftIdsChange={setHiddenDraftIds}
+        />
+        <CommandBar hiddenDraftIds={hiddenDraftIds} onSelectDraft={setSelectedDraftId} />
       </ComposerProvider>
       <DialerDock />
     </DialerProvider>

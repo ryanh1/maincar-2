@@ -28,15 +28,13 @@ export interface ComposerContextValue {
   openComposer: (seed?: EmailDraftInput) => Promise<EmailDraft | null>
   /**
    * One save. Send ONLY the keys that changed: the route writes exactly the keys
-   * the body carries, so `{ isMinimized: true }` leaves a half-written body alone.
+   * the body carries, so a state change leaves a half-written body alone.
    */
   saveDraft: (draftId: string, patch: EmailDraftPatch) => Promise<void>
   /** Take the card out of the dock and KEEP the draft. A save, never a delete. */
   closeCard: (draftId: string) => Promise<void>
-  /** Put a kept draft back in the dock, expanded. */
+  /** Put a saved draft back in the dock. */
   reopenCard: (draftId: string) => Promise<void>
-  /** Collapse a card to a chip, or restore it. */
-  setMinimized: (draftId: string, isMinimized: boolean) => Promise<void>
   /** Throw the draft away. The only call here that destroys one. */
   discardDraft: (draftId: string) => Promise<void>
 }

@@ -32,7 +32,6 @@ describe('EmailDraft (integration, real Postgres)', () => {
     })
 
     expect(draft.isOpen).toBe(true)
-    expect(draft.isMinimized).toBe(false)
     expect(draft.toAddrs).toEqual([])
     expect(draft.ccAddrs).toEqual([])
     expect(draft.bccAddrs).toEqual([])

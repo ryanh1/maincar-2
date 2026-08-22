@@ -164,7 +164,6 @@ function makeDraft(overrides: Partial<EmailDraft> = {}): EmailDraft {
     subject: null,
     bodyHtml: null,
     isOpen: true,
-    isMinimized: false,
     createdAt: '2026-08-20T12:00:00.000Z',
     updatedAt: '2026-08-20T12:00:00.000Z',
     ...overrides,
@@ -174,7 +173,6 @@ function makeDraft(overrides: Partial<EmailDraft> = {}): EmailDraft {
 interface Stubs {
   saveDraft: ReturnType<typeof vi.fn>
   closeCard: ReturnType<typeof vi.fn>
-  setMinimized: ReturnType<typeof vi.fn>
   discardDraft: ReturnType<typeof vi.fn>
 }
 
@@ -188,7 +186,6 @@ function renderCard(draft: EmailDraft = makeDraft()) {
   const stubs: Stubs = {
     saveDraft: vi.fn().mockResolvedValue(undefined),
     closeCard: vi.fn().mockResolvedValue(undefined),
-    setMinimized: vi.fn().mockResolvedValue(undefined),
     discardDraft: vi.fn().mockResolvedValue(undefined),
   }
 
@@ -291,9 +288,7 @@ describe('ComposerCard', () => {
 
     const header = screen.getByRole('heading', { level: 2 }).closest('header')
     expect(header).toHaveClass('h-8', 'bg-muted', 'border-b', 'border-border', 'px-2')
-    expect(screen.getByRole('button', { name: 'Minimize' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
-    expect(screen.queryByText('Re')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Put this draft away' })).toBeInTheDocument()
   })
 
   it('titles the card with the subject and the first recipient, and renames as the rep types', () => {
@@ -367,18 +362,18 @@ describe('ComposerCard', () => {
     })
   })
 
-  it('flushes the pending save before it collapses to a chip', async () => {
-    const { saveDraft, setMinimized } = renderCard()
+  it('flushes the pending save before it puts the draft away', async () => {
+    const { saveDraft, closeCard } = renderCard()
 
     await typeBody('Half a sentence')
-    fireEvent.click(screen.getByRole('button', { name: 'Minimize' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Put this draft away' }))
 
-    await waitFor(() => expect(setMinimized).toHaveBeenCalledWith('draft-1', true))
+    await waitFor(() => expect(closeCard).toHaveBeenCalledWith('draft-1'))
     expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: '<p>Half a sentence</p>' })
     // Order matters: collapsing first would unmount the card and take the text
     // with it.
     expect(saveDraft.mock.invocationCallOrder[0]).toBeLessThan(
-      setMinimized.mock.invocationCallOrder[0],
+      closeCard.mock.invocationCallOrder[0],
     )
   })
 
@@ -386,7 +381,7 @@ describe('ComposerCard', () => {
     const { saveDraft, closeCard, discardDraft } = renderCard()
 
     await typeBody('Keep this')
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Put this draft away' }))
 
     await waitFor(() => expect(closeCard).toHaveBeenCalledWith('draft-1'))
     expect(saveDraft).toHaveBeenCalledWith('draft-1', { bodyHtml: '<p>Keep this</p>' })
@@ -514,7 +509,7 @@ describe('ComposerCard', () => {
     await user.click(screen.getByRole('button', { name: 'Add' }))
 
     // The X flushes on the way out, so no clock is needed to see the save.
-    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await user.click(screen.getByRole('button', { name: 'Put this draft away' }))
 
     await waitFor(() => expect(saveDraft).toHaveBeenCalled())
     const [, patch] = saveDraft.mock.calls[0] as [string, { bodyHtml: string }]

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FileSignature, FileText, Minus, Trash2, X } from 'lucide-react'
+import { FileSignature, FileText, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { RichTextEditor, type LinkRequest, type RichTextEditorActions } from '@/components/editor/RichTextEditor'
@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import { useGetEmailSignatures, useGetEmailTemplates, useSendEmailDraft } from '@/hooks/email'
 import type { EmailSignature, EmailTemplate } from '@/hooks/email'
 import { useGetMailboxes } from '@/hooks/mailboxes'
@@ -109,6 +110,10 @@ interface ComposerCardProps {
    * state below.
    */
   draft: EmailDraft
+  /** Phones give the editor the whole viewport instead of squeezing a desktop card. */
+  fullScreen?: boolean
+  /** Lets the mobile shell return to its action bar once this card leaves. */
+  onDismiss?: () => void
 }
 
 /**
@@ -134,8 +139,8 @@ interface ComposerCardProps {
  * 6). That is a remount with a new `key`, not a re-seed — see `applyTemplate`,
  * which is the only writer of `bodySeed` and is reachable from nowhere else.
  */
-export function ComposerCard({ draft }: ComposerCardProps) {
-  const { saveDraft, closeCard, setMinimized, discardDraft } = useComposer()
+export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerCardProps) {
+  const { saveDraft, closeCard, discardDraft } = useComposer()
   const { org } = useAuth()
   const draftId = draft.id
 
@@ -286,16 +291,14 @@ export function ComposerCard({ draft }: ComposerCardProps) {
 
   // Every way the card can leave the screen flushes first. The rep's last
   // sentence is still inside the debounce at the moment they press these.
-  async function minimize() {
+  async function putAway() {
     await flush()
-    await setMinimized(draftId, true)
-  }
-
-  async function close() {
-    await flush()
-    // A save with `isOpen: false`. Closing an email has never meant throwing it
-    // away, and the dock's "3 drafts" button is the way back to this one.
-    await closeCard(draftId)
+    const meaningful = Boolean(
+      addressesOf(toChips).some((address) => address.trim()) || subject.trim() || hasWrittenText('', body),
+    )
+    if (meaningful) await closeCard(draftId)
+    else await discardDraft(draftId)
+    onDismiss?.()
   }
 
   async function discard() {
@@ -304,6 +307,7 @@ export function ComposerCard({ draft }: ComposerCardProps) {
     // and the row that comes back should hold what the rep actually typed.
     await flush()
     await discardDraft(draftId)
+    onDismiss?.()
   }
 
   const { mutateAsync: sendEmailDraft, isPending: isSending } = useSendEmailDraft()
@@ -334,6 +338,7 @@ export function ComposerCard({ draft }: ComposerCardProps) {
       await sendEmailDraft({ orgId: org.id, draftId })
       toast.success('Email sent.')
       await discardDraft(draftId)
+      onDismiss?.()
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Could not send the email. Try again.')
     }
@@ -407,28 +412,19 @@ export function ComposerCard({ draft }: ComposerCardProps) {
       // `w-80` matches the dialer's own expanded card (`DialerDock.tsx`) — the
       // two are the only cards that float above the dock, and MAI-209 asks
       // that they read as the same size.
-      className="flex h-96 w-80 flex-col overflow-hidden rounded-t-md border border-border bg-background shadow-md"
+      className={cn(
+        'flex h-96 w-80 flex-col overflow-hidden rounded-t-md border border-border bg-background shadow-md',
+        fullScreen && 'fixed inset-0 z-[160] h-[100dvh] w-full rounded-none border-0',
+      )}
     >
       <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-muted px-2">
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{title}</h2>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Minimize"
-          onClick={() => void minimize()}
-        >
-          <Minus size={16} />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Close"
-          onClick={() => void close()}
+        <IconButton
+          tooltip="Put this draft away"
+          onClick={() => void putAway()}
         >
           <X size={16} />
-        </Button>
+        </IconButton>
       </header>
 
       {/* Cc and Bcc controls sit at the right end of the To row until each is
