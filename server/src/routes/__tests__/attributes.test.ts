@@ -9,6 +9,7 @@ import request from 'supertest'
 
 const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   prismaMock: {
+    $queryRaw: vi.fn(),
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
     objectDef: { findFirst: vi.fn() },
@@ -121,6 +122,7 @@ beforeEach(() => {
   prismaMock.attributeDef.findMany.mockResolvedValue([attributeRow()])
   prismaMock.attributeDef.create.mockResolvedValue(attributeRow())
   prismaMock.attributeDef.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.$queryRaw.mockResolvedValue([{ valueCount: 0 }])
 })
 
 // ============================================================
@@ -271,6 +273,31 @@ describe('GET /api/orgs/:orgId/attributes', () => {
 
     expect(res.status).toBe(404)
     expect(res.body.error).toBe('Field not found')
+  })
+})
+
+// ============================================================
+// GET — delete impact
+// ============================================================
+describe('GET /api/orgs/:orgId/attributes/:id/impact', () => {
+  it('returns the count of records with a non-empty value', async () => {
+    prismaMock.attributeDef.findFirst.mockResolvedValueOnce(attributeRow({ id: 'attr-renewal' }))
+    prismaMock.$queryRaw.mockResolvedValueOnce([{ valueCount: 2 }])
+
+    const res = await request(app).get(`${URL_A}/attr-renewal/impact`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ valueCount: 2 })
+    expect(prismaMock.$queryRaw).toHaveBeenCalledOnce()
+  })
+
+  it('404s a field in another org', async () => {
+    prismaMock.attributeDef.findFirst.mockResolvedValueOnce(null)
+
+    const res = await request(app).get(`${URL_A}/attr-in-b/impact`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Field not found' })
   })
 })
 
