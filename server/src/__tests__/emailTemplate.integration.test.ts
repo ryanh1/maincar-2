@@ -23,7 +23,7 @@ describe('EmailTemplate (integration, real Postgres)', () => {
     await prisma.$disconnect()
   })
 
-  it('stores a name, a subject, and a body, and starts with no field list', async () => {
+  it('stores a name, a subject, and a body, and starts private with no field list', async () => {
     // Exactly what EC-17's POST will send: the three the rep typed, plus who
     // typed them. fieldsJson stays null until merge fields land.
     const org = await seedOrgWithAdmin(prisma)
@@ -42,6 +42,7 @@ describe('EmailTemplate (integration, real Postgres)', () => {
     expect(template.subject).toBe('Great speaking with you')
     // Stored verbatim: the write path never reformats the body.
     expect(template.bodyHtml).toBe('<p>Thanks for your time today.</p>')
+    expect(template.visibility).toBe('PRIVATE')
     expect(template.fieldsJson).toBeNull()
     expect(template.createdAt).toBeInstanceOf(Date)
     expect(template.updatedAt).toBeInstanceOf(Date)
@@ -77,37 +78,20 @@ describe('EmailTemplate (integration, real Postgres)', () => {
     expect(defs).toMatch(/\("orgId", name\)/)
   })
 
-  it('shows a teammate’s template to the whole org, alphabetically', async () => {
-    // The Templates screen's only query, verbatim: orgId ALONE, ordered by name.
-    // A rep sees what a colleague wrote — that is what "org-wide" buys.
+  it('persists organization visibility when an author shares a template', async () => {
     const org = await seedOrgWithAdmin(prisma)
-    const colleague = await seedMember(prisma, org.orgId)
 
-    await prisma.emailTemplate.create({
-      data: {
-        orgId: org.orgId,
-        createdById: colleague.userId,
-        name: 'Zebra',
-        subject: 's',
-        bodyHtml: '<p>b</p>',
-      },
-    })
-    await prisma.emailTemplate.create({
+    const shared = await prisma.emailTemplate.create({
       data: {
         orgId: org.orgId,
         createdById: org.adminUserId,
-        name: 'Apple',
+        visibility: 'ORGANIZATION',
+        name: 'Shared template',
         subject: 's',
         bodyHtml: '<p>b</p>',
       },
     })
-
-    const found = await prisma.emailTemplate.findMany({
-      where: { orgId: org.orgId },
-      orderBy: { name: 'asc' },
-    })
-
-    expect(found.map((t) => t.name)).toEqual(['Apple', 'Zebra'])
+    expect(shared.visibility).toBe('ORGANIZATION')
   })
 
   it('never leaks another org’s template into the list', async () => {
@@ -126,9 +110,7 @@ describe('EmailTemplate (integration, real Postgres)', () => {
     expect(found.map((t) => t.id)).toEqual([ours.id])
   })
 
-  it('outlives the rep who wrote it — the author’s id goes null, the template stays', async () => {
-    // The org-wide decision, proved at the database level. If this ever cascades,
-    // a departing rep takes the team's templates with them.
+  it('keeps an organization template when its author leaves', async () => {
     const org = await seedOrgWithAdmin(prisma)
     const author = await seedMember(prisma, org.orgId)
 
@@ -136,6 +118,7 @@ describe('EmailTemplate (integration, real Postgres)', () => {
       data: {
         orgId: org.orgId,
         createdById: author.userId,
+        visibility: 'ORGANIZATION',
         name: 'Written by someone who left',
         subject: 's',
         bodyHtml: '<p>b</p>',
@@ -147,7 +130,47 @@ describe('EmailTemplate (integration, real Postgres)', () => {
     const after = await prisma.emailTemplate.findUnique({ where: { id: template.id } })
     expect(after).not.toBeNull()
     expect(after!.createdById).toBeNull()
+    expect(after!.visibility).toBe('ORGANIZATION')
     expect(after!.bodyHtml).toBe('<p>b</p>')
+  })
+
+  it('deletes only private templates when a member loses this organization', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const anotherOrg = await seedOrgWithAdmin(prisma)
+    const member = await seedMember(prisma, org.orgId)
+    await prisma.membership.create({
+      data: { userId: member.userId, orgId: anotherOrg.orgId, roles: ['basic'] },
+    })
+    const privateTemplate = await prisma.emailTemplate.create({
+      data: { orgId: org.orgId, createdById: member.userId, name: 'Private', subject: 's', bodyHtml: '<p>b</p>' },
+    })
+    const sharedTemplate = await prisma.emailTemplate.create({
+      data: {
+        orgId: org.orgId,
+        createdById: member.userId,
+        visibility: 'ORGANIZATION',
+        name: 'Shared',
+        subject: 's',
+        bodyHtml: '<p>b</p>',
+      },
+    })
+    const otherPrivateTemplate = await prisma.emailTemplate.create({
+      data: { orgId: anotherOrg.orgId, createdById: member.userId, name: 'Other private', subject: 's', bodyHtml: '<p>b</p>' },
+    })
+
+    await prisma.$transaction(async (tx) => {
+      await tx.membership.updateMany({
+        where: { userId: member.userId, orgId: org.orgId, isActive: true },
+        data: { isActive: false },
+      })
+      await tx.emailTemplate.deleteMany({
+        where: { orgId: org.orgId, createdById: member.userId, visibility: 'PRIVATE' },
+      })
+    })
+
+    expect(await prisma.emailTemplate.findUnique({ where: { id: privateTemplate.id } })).toBeNull()
+    expect(await prisma.emailTemplate.findUnique({ where: { id: sharedTemplate.id } })).not.toBeNull()
+    expect(await prisma.emailTemplate.findUnique({ where: { id: otherPrivateTemplate.id } })).not.toBeNull()
   })
 
   it('cascades from Org', async () => {

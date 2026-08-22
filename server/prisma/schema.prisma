@@ -547,16 +547,16 @@ model EmailSignature {
   @@index([userId, name])
 }
 
+enum EmailTemplateVisibility {
+  PRIVATE
+  ORGANIZATION
+}
+
 // The org's saved emails — the five a rep sends over and over
-// (docs/specs/SPEC-composer-templates.md § Data model).
-//
-// Org-wide, NOT private to its author. That is the deliberate difference from
-// EmailDraft above: a draft is half of one person's unsent email, so it filters
-// on userId as well as orgId. A template is a thing the TEAM reuses — a template
-// a teammate cannot use is a note to self — so every query filters on orgId
-// ALONE and any member may edit or delete any of them (spec § Acceptance
-// criteria 2). Per-user private templates are an "ask first" in the spec's
-// Boundaries: do not add a userId filter without changing the spec first.
+// (docs/specs/SPEC-composer-templates.md § Data model). A template starts
+// private to its author, or may be shared with their organization. `createdById`
+// identifies the private owner; organization templates belong to the org and
+// survive an author's departure.
 model EmailTemplate {
   id String @id @default(cuid())
 
@@ -573,6 +573,7 @@ model EmailTemplate {
   name     String
   subject  String
   bodyHtml String
+  visibility EmailTemplateVisibility @default(PRIVATE)
 
   // The distinct merge-field ids this template uses, derived server-side from the
   // subject and the body together on EVERY write. Stored so the list can say

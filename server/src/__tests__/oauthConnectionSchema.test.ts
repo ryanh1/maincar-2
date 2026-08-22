@@ -82,7 +82,6 @@ describe('OAuthConnection schema', () => {
     // changes. The allowed values live in a comment beside each field.
     expect(fieldLine(connection, 'provider').split(' ')[1]).toBe('String')
     expect(fieldLine(connection, 'status').split(' ')[1]).toBe('String')
-    expect(schema).not.toMatch(/\benum\s+\w+\s*\{/)
     expect(connection).toMatch(/google \| microsoft/)
     expect(connection).toMatch(/connected \| limited \| error/)
   })

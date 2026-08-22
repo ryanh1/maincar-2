@@ -302,6 +302,13 @@ router.delete(
         })
         if (result.count === 0) throw new Error(NOT_FOUND)
 
+        // Private templates have no audience after their author leaves this org.
+        // Shared templates remain the organization's asset, even though their
+        // creator no longer has membership here.
+        await tx.emailTemplate.deleteMany({
+          where: { orgId, createdById: targetUserId, visibility: 'PRIVATE' },
+        })
+
         // Do not leave the removed person pointed at an org they cannot open.
         // Scoped to this org, so someone working elsewhere keeps their place.
         await tx.user.updateMany({
