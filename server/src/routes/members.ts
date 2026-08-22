@@ -51,6 +51,7 @@ const NOT_FOUND_ERROR = 'Member not found'
 /** Sentinels thrown inside a transaction so the rollback and the reply agree. */
 const LAST_ADMIN = 'LAST_ADMIN'
 const NOT_FOUND = 'NOT_FOUND'
+const TEAM_LEAD = 'TEAM_LEAD'
 
 router.use(requireAuth)
 
@@ -292,10 +293,28 @@ router.delete(
     // --- Execute query ---
     try {
       await prisma.$transaction(async (tx) => {
+        // Team roster writes lock the active memberships they validate. Taking
+        // this same lock first makes a lead reassignment/create and an offboard
+        // serialize, so neither can leave a team led by an inactive member.
+        await tx.$queryRaw`
+          SELECT 1 FROM "Membership"
+          WHERE "userId" = ${targetUserId}
+            AND "orgId" = ${orgId}
+            AND "isActive" = true
+          FOR UPDATE
+        `
+
         if (hasAdminAuthority(target.roles)) {
           const admins = await lockAndCountActiveAdmins(tx, orgId)
           if (admins <= 1) throw new Error(LAST_ADMIN)
         }
+
+        // A Team lead is a required active roster member, not a permission. Do
+        // not let offboarding make an existing team's coordination lead stale;
+        // the caller must reassign that team first (MAI-290).
+        const teamsLed = await tx.team.count({ where: { orgId, leadUserId: targetUserId } })
+        if (teamsLed > 0) throw new Error(TEAM_LEAD)
+
         const result = await tx.membership.updateMany({
           where: { userId: targetUserId, orgId, isActive: true },
           data: { isActive: false },
@@ -322,6 +341,9 @@ router.delete(
       }
       if (err instanceof Error && err.message === NOT_FOUND) {
         return void res.status(404).json({ error: NOT_FOUND_ERROR })
+      }
+      if (err instanceof Error && err.message === TEAM_LEAD) {
+        return void res.status(422).json({ error: 'Assign a new team lead before removing this member.' })
       }
       throw err
     }

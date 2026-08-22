@@ -20,6 +20,7 @@ const { prismaMock, verifyTokenMock, revokeTokensMock } = vi.hoisted(() => ({
       updateMany: vi.fn(),
     },
     emailTemplate: { deleteMany: vi.fn() },
+    team: { count: vi.fn() },
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   },
@@ -148,6 +149,7 @@ beforeEach(() => {
   prismaMock.membership.findMany.mockResolvedValue([])
   prismaMock.membership.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.emailTemplate.deleteMany.mockResolvedValue({ count: 0 })
+  prismaMock.team.count.mockResolvedValue(0)
   prismaMock.user.updateMany.mockResolvedValue({ count: 1 })
   revokeTokensMock.mockResolvedValue(undefined)
   // The routes' transaction bodies are plain code, so running the callback
@@ -538,6 +540,20 @@ describe('DELETE /api/orgs/:orgId/members/:userId', () => {
     // Removing someone from Org A must not lock them out of Org B, so the
     // account is never disabled and never deleted.
     expect(prismaMock.user.update).not.toHaveBeenCalled()
+  })
+
+  it('refuses to offboard a team lead until another active member is assigned', async () => {
+    authAs(callerMembership(), targetMembership())
+    prismaMock.team.count.mockResolvedValue(1)
+
+    const res = await request(app)
+      .delete(`/api/orgs/${ORG_A}/members/user-b`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(422)
+    expect(res.body.error).toBe('Assign a new team lead before removing this member.')
+    expect(prismaMock.membership.updateMany).not.toHaveBeenCalled()
+    expect(prismaMock.team.count).toHaveBeenCalledWith({ where: { orgId: ORG_A, leadUserId: 'user-b' } })
   })
 
   it('clears currentOrgId only when it pointed at THIS org', async () => {
