@@ -40,7 +40,7 @@ describe('Settings', () => {
     expect(screen.getByText('profile tab content')).toBeInTheDocument()
   })
 
-  it('renders Devices last without reordering the other settings tabs', () => {
+  it('does not present Devices as a standalone Settings destination', () => {
     renderWithProviders(<Settings />)
 
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
@@ -51,8 +51,8 @@ describe('Settings', () => {
       'Email templates',
       'Signatures',
       'Integrations',
-      'Devices',
     ])
+    expect(screen.queryByRole('button', { name: 'Devices' })).not.toBeInTheDocument()
   })
 
   it('switches tabs on click and updates the URL', async () => {
