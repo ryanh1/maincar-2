@@ -74,6 +74,7 @@ vi.mock('../../../dependencies/s3.js', () => ({
 }))
 
 import app from '../../app.js'
+import { resetCallCreationRateLimitForTests } from '../calls.js'
 
 const NOW = new Date('2026-08-20T12:00:00.000Z')
 const AUTH = 'Bearer fake-token'
@@ -152,6 +153,7 @@ function authAs(membership: ReturnType<typeof membershipRow> | null = membership
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetCallCreationRateLimitForTests()
   // A matched person is checked against their local calling hours. Freeze only
   // Date at a permitted instant so these route tests do not turn red after 9 PM
   // in New York while Supertest's real timers continue to run.
@@ -694,6 +696,23 @@ describe('GET /api/orgs/:orgId/calls/:id — org isolation', () => {
 // POST — happy path
 // ============================================================
 describe('POST /api/orgs/:orgId/calls', () => {
+  it('allows three calls per minute for one user, then rejects the fourth with Retry-After', async () => {
+    for (const toE164 of ['+13035550190', '+13035550191', '+13035550192']) {
+      const allowed = await request(app).post(URL_A).set('Authorization', AUTH).send({ toE164 })
+      expect(allowed.status).toBe(201)
+    }
+
+    const rejected = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ toE164: '+13035550193' })
+
+    expect(rejected.status).toBe(429)
+    expect(rejected.body).toEqual({ error: 'Too many attempts. Wait a minute and try again.' })
+    expect(rejected.headers['retry-after']).toBe('60')
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(3)
+  })
+
   it('creates a queued call and returns it with no SID yet — the browser Device dials, not this route', async () => {
     prismaMock.call.create.mockResolvedValue(callRow({ id: 'call-1', status: 'queued' }))
 

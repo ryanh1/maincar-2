@@ -3,11 +3,13 @@ import type { NextFunction, Request, Response } from 'express'
 import { logger } from '../../dependencies/logger.js'
 
 /**
- * A small fixed-window limiter for the invite-token routes.
+ * A small fixed-window limiter for public invite-token routes and authenticated
+ * call creation.
  *
  * Those two routes are the only ones a stranger can call with a guessable value
- * in the path, so they are the only ones that need this. Everything else is
- * behind `requireAuth`, where the Firebase token is the throttle.
+ * in the path, so they need an IP-based limit. Call creation uses the same
+ * implementation with a verified-user key, so reps sharing an IP do not consume
+ * one another's call budget.
  *
  * In memory, and therefore PER PROCESS: two instances behind a load balancer
  * each allow the limit. That is a deliberate trade — the alternative is a Redis
@@ -22,10 +24,26 @@ interface Bucket {
 
 const WINDOW_MS = 60_000
 
-export function rateLimit(options: { max: number; name: string }) {
+export interface RateLimitOptions {
+  /** Maximum requests each key may make during one fixed window. */
+  max: number
+  /** Route label for logs; never use an untrusted URL here. */
+  name: string
+  /**
+   * Identifies the caller to limit. Defaults to the remote IP for public routes;
+   * authenticated routes can pass a verified user id instead.
+   */
+  key?: (req: Request) => string
+}
+
+export type RateLimitMiddleware = ((req: Request, res: Response, next: NextFunction) => void) & {
+  reset: () => void
+}
+
+export function rateLimit(options: RateLimitOptions): RateLimitMiddleware {
   const buckets = new Map<string, Bucket>()
 
-  return function rateLimitMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const middleware = function rateLimitMiddleware(req: Request, res: Response, next: NextFunction): void {
     const now = Date.now()
 
     // Sweep expired buckets on the way through, so an IP that called once a year
@@ -34,7 +52,7 @@ export function rateLimit(options: { max: number; name: string }) {
       if (bucket.resetAt <= now) buckets.delete(key)
     }
 
-    const key = req.ip ?? 'unknown'
+    const key = options.key?.(req) ?? req.ip ?? 'unknown'
     const bucket = buckets.get(key)
 
     if (!bucket || bucket.resetAt <= now) {
@@ -47,10 +65,17 @@ export function rateLimit(options: { max: number; name: string }) {
       // The route name, never the path: the path carries the invite token
       // (MAI-7 → "No token appears in any log line or logged URL").
       logger.warn({ route: options.name }, 'rate limit hit')
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))))
       res.status(429).json({ error: 'Too many attempts. Wait a minute and try again.' })
       return
     }
 
     next()
   }
+
+  // Route-test processes share module state across examples. Let focused route
+  // tests reset this in-memory implementation without weakening production
+  // behavior or needing an actual Redis service in unit tests.
+  middleware.reset = () => buckets.clear()
+  return middleware
 }
