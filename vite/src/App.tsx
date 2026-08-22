@@ -15,6 +15,7 @@ import { CrmGrid } from '@/pages/CrmGrid'
 import { CreateOrg } from '@/pages/CreateOrg'
 import { Home } from '@/pages/Home'
 import { JoinOrg } from '@/pages/JoinOrg'
+import { Records } from '@/pages/Records'
 import { Settings } from '@/pages/Settings'
 import { Welcome } from '@/pages/Welcome'
 
@@ -34,7 +35,7 @@ const router = createBrowserRouter([
       { path: 'home', element: <Home /> },
       { path: 'calls', element: <Calls /> },
       { path: 'calls/:id', element: <CallDetail /> },
-      { path: 'records/:objectSlug', element: <CrmGrid /> },
+      { path: 'records/:slug', element: <Records /> },
       { path: 'lists/:listId', element: <CrmGrid /> },
       { path: 'welcome', element: <Welcome /> },
       { path: 'create-org', element: <CreateOrg /> },

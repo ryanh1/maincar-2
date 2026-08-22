@@ -95,4 +95,20 @@ export const queryKeys = {
     objects: (orgId: string) => ['crm', orgId, 'objects'] as const,
     lists: (orgId: string) => ['crm', orgId, 'lists'] as const,
   },
+  objects: {
+    all: ['objects'] as const,
+    // Keyed by org: the schema (which objects, which fields) is per-tenant.
+    list: (orgId: string) => ['objects', 'list', orgId] as const,
+    // Keyed by org and object id: a detail read carries the live attribute set,
+    // which a list read does not.
+    detail: (orgId: string, objectId: string) => ['objects', 'detail', orgId, objectId] as const,
+  },
+  records: {
+    all: ['records'] as const,
+    // Keyed by org, object, AND the list query (sort), like the call history list:
+    // rows are windowed and sorted on the SERVER, so a different sort is a
+    // different answer and must not share a cache entry.
+    list: (orgId: string, objectId: string, query?: Record<string, unknown>) =>
+      ['records', 'list', orgId, objectId, query ?? {}] as const,
+  },
 } as const
