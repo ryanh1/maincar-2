@@ -14,7 +14,8 @@ import { RecordGrid } from './RecordGrid'
 import { createViewConfig } from './viewConfig'
 
 const useRecordWindow = vi.hoisted(() => vi.fn())
-vi.mock('@/hooks/crm', () => ({ useRecordWindow }))
+const useGetActivity = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: undefined })))
+vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetActivity }))
 
 vi.mock('@/providers/useAuth', () => ({
   useAuth: () => ({ user: { timeZone: 'America/New_York' } }),
@@ -31,8 +32,25 @@ vi.mock('@glideapps/glide-data-grid', () => ({
     return <div data-testid="data-editor" />
   },
   GridCellKind: { Loading: 'loading', Text: 'text', Number: 'number', Boolean: 'boolean', Custom: 'custom' },
+  emptyGridSelection: { current: undefined, columns: { items: [] }, rows: { items: [] } },
   roundedRect: () => {},
 }))
+
+const TEST_OBJECT = {
+  id: 'obj-1',
+  slug: 'test-object',
+  name: 'Test object',
+  namePlural: 'Test objects',
+  icon: null,
+  iconColor: null,
+  storage: 'table' as const,
+  isStandard: false,
+  isFirstClass: false,
+  isHidden: false,
+  isArchived: false,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+}
 
 function attribute(overrides: Partial<AttributeDef>): AttributeDef {
   return {
@@ -87,7 +105,7 @@ describe('RecordGrid', () => {
       refetch: vi.fn(),
     })
 
-    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={ATTRIBUTES} />)
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
 
     expect(screen.getByText('Loading…')).toBeInTheDocument()
   })
@@ -104,7 +122,7 @@ describe('RecordGrid', () => {
       refetch: vi.fn(),
     })
 
-    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={ATTRIBUTES} />)
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
 
     expect(screen.getByText('Could not load these records.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
@@ -122,7 +140,7 @@ describe('RecordGrid', () => {
       refetch: vi.fn(),
     })
 
-    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={ATTRIBUTES} />)
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
 
     expect(screen.getByTestId('data-editor')).toBeInTheDocument()
     const props = dataEditorProps.current!
@@ -146,7 +164,7 @@ describe('RecordGrid', () => {
       refetch: vi.fn(),
     })
 
-    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={ATTRIBUTES} />)
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
 
     const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => unknown
     expect(getCellContent([0, 0])).toMatchObject({ data: 'Ada', readonly: false, allowOverlay: true })
@@ -165,7 +183,7 @@ describe('RecordGrid', () => {
       refetch: vi.fn(),
     })
 
-    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={ATTRIBUTES} />)
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
 
     const onCellEdited = dataEditorProps.current!.onCellEdited as (
       item: [number, number],
@@ -195,7 +213,7 @@ describe('RecordGrid', () => {
     })
 
     const phoneAttrs = [attribute({ slug: 'phone', name: 'Phone', type: 'phone', sortOrder: 0 })]
-    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={phoneAttrs} />)
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={phoneAttrs} />)
 
     const props = dataEditorProps.current!
     const validateCell = props.validateCell as (
@@ -241,7 +259,7 @@ describe('RecordGrid', () => {
         optionsJson: [{ value: 'open', label: 'Open' }],
       }),
     ]
-    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={statusAttrs} />)
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={statusAttrs} />)
 
     const getCellContent = dataEditorProps.current!.getCellContent as (
       item: [number, number],
@@ -264,7 +282,7 @@ describe('RecordGrid', () => {
       refetch: vi.fn(),
     })
 
-    renderWithProviders(<RecordGrid orgId="org-1" objectId="obj-1" attributes={ATTRIBUTES} />)
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
 
     const onVisibleRegionChanged = dataEditorProps.current!.onVisibleRegionChanged as (
       range: { x: number; y: number; width: number; height: number },
@@ -277,6 +295,90 @@ describe('RecordGrid', () => {
     // Within the prefetch margin of the end: fetch the next window.
     onVisibleRegionChanged({ x: 0, y: 60, width: 5, height: 20 })
     expect(fetchNextPage).toHaveBeenCalledTimes(1)
+  })
+
+  describe('the peek drawer (MAI-167)', () => {
+    function focusRow(row: number) {
+      const onGridSelectionChange = dataEditorProps.current!.onGridSelectionChange as (
+        selection: unknown,
+      ) => void
+      act(() => {
+        onGridSelectionChange({
+          current: { cell: [0, row], range: { x: 0, y: row, width: 1, height: 1 }, rangeStack: [] },
+          columns: { items: [] },
+          rows: { items: [] },
+        })
+      })
+    }
+
+    function press(key: string) {
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+      })
+    }
+
+    beforeEach(() => {
+      useRecordWindow.mockReturnValue({
+        rows: [
+          { id: 'r1', firstName: 'Ada', lastName: 'Lovelace' },
+          { id: 'r2', firstName: 'Grace', lastName: 'Hopper' },
+        ],
+        totalCount: 2,
+        isPending: false,
+        isError: false,
+        hasNextPage: false,
+        isFetchingNextPage: false,
+        fetchNextPage: vi.fn(),
+        refetch: vi.fn(),
+      })
+    })
+
+    it('Space does nothing with no row focused', () => {
+      renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+      press(' ')
+      expect(screen.queryByRole('heading', { name: 'Ada' })).not.toBeInTheDocument()
+    })
+
+    it('Space opens the drawer for the focused row; j/k step without a refetch', () => {
+      const fetchNextPage = vi.fn()
+      useRecordWindow.mockReturnValue({
+        rows: [
+          { id: 'r1', firstName: 'Ada', lastName: 'Lovelace' },
+          { id: 'r2', firstName: 'Grace', lastName: 'Hopper' },
+        ],
+        totalCount: 2,
+        isPending: false,
+        isError: false,
+        hasNextPage: false,
+        isFetchingNextPage: false,
+        fetchNextPage,
+        refetch: vi.fn(),
+      })
+
+      renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+
+      focusRow(0)
+      press(' ')
+      expect(screen.getByRole('heading', { name: 'Ada' })).toBeInTheDocument()
+
+      press('j')
+      expect(screen.getByRole('heading', { name: 'Grace' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Ada' })).not.toBeInTheDocument()
+
+      press('k')
+      expect(screen.getByRole('heading', { name: 'Ada' })).toBeInTheDocument()
+
+      // Stepping just re-indexes the already-loaded `rows` array — never a fetch.
+      expect(fetchNextPage).not.toHaveBeenCalled()
+    })
+
+  it('j/k do nothing while the drawer is closed', () => {
+      renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+      focusRow(0)
+      press('j')
+      expect(screen.queryByRole('heading', { name: 'Ada' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Grace' })).not.toBeInTheDocument()
+    })
   })
 
   it('updates the shared view config when a column header is clicked', () => {
@@ -296,7 +398,7 @@ describe('RecordGrid', () => {
     renderWithProviders(
       <RecordGrid
         orgId="org-1"
-        objectId="obj-1"
+        object={TEST_OBJECT}
         attributes={ATTRIBUTES}
         viewConfig={config}
         onViewConfigChange={onViewConfigChange}

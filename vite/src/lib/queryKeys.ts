@@ -115,4 +115,12 @@ export const queryKeys = {
     list: (orgId: string, objectId: string, query?: Record<string, unknown>) =>
       ['records', 'list', orgId, objectId, query ?? {}] as const,
   },
+  activity: {
+    all: ['activity'] as const,
+    // Keyed by org and the scope (companyId/personId/dealId): the feed route
+    // accepts at most one spine scope, so the pair "which record" + "which
+    // page" is the whole identity of a feed read.
+    list: (orgId: string, scope: Record<string, unknown>, page: number) =>
+      ['activity', orgId, scope, page] as const,
+  },
 } as const

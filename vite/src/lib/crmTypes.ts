@@ -127,3 +127,26 @@ export interface GetCrmListsResponse {
   page: number
   limit: number
 }
+
+// Mirrors server/src/crm/activityFeed.ts's mapActivityToApi (GET /api/orgs/:orgId/activity).
+export interface ActivityEntryApi {
+  id: string
+  sourceType: string
+  sourceId: string
+  summary: string
+  preview: string | null
+  direction: string | null
+  occurredAt: string
+  createdByUserId: string | null
+  companyId: string | null
+  personId: string | null
+  dealId: string | null
+  createdAt: string
+}
+
+export interface GetActivityResponse {
+  activity: ActivityEntryApi[]
+  page: number
+  limit: number
+  hasMore: boolean
+}

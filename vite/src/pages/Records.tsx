@@ -62,7 +62,7 @@ export function Records() {
         {!isPending && !isError && orgId && detail && (
           <RecordGrid
             orgId={orgId}
-            objectId={detail.id}
+            object={detail}
             attributes={detail.attributes}
             viewConfig={viewConfig}
             onViewConfigChange={setViewConfig}
