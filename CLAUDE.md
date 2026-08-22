@@ -81,7 +81,9 @@ issue done:
    feature branch if one exists, and delete its local branch. Then remove its
    clean, exact worktree directory and confirm `git worktree list` has no stale
    registrations. Never delete a dirty or unmerged worktree.
-6. Update the Linear issue only after the merge, push, and cleanup finish; see
+6. From a surviving checkout, run
+   `./.claude/scripts/coord/mc-closeout MAI-123 --worktree /exact/removed/issue-clone`.
+   Update Linear to Done only when it prints `LINEAR_DONE_ALLOWED`; see
    [linear-workflow.md](.claude/rules/linear-workflow.md).
 
 Do not call an issue complete after only committing, testing, or opening a PR.

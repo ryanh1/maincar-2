@@ -77,6 +77,34 @@ mc_fetch_local_main() {
   git fetch "$@" origin
 }
 
+# The Prisma client is ignored, so every checkout must generate its own copy
+# from the committed schema before TypeScript checks database code. Never hide
+# a failed generation: a stale client otherwise causes misleading later errors.
+mc_ensure_prisma_client() {
+  local worktree
+  worktree="$(mc_worktree)"
+  [ -f "$worktree/server/prisma/schema.prisma" ] || return 0
+  echo "[mc] generating the Prisma client from the committed schema"
+  npm --prefix "$worktree/server" run db:generate
+}
+
+mc_issue_key_from_text() {
+  local text="$1"
+  printf '%s\n' "$text" | grep -Eo '[[:alpha:]]+-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]'
+}
+
+# Record a delivery only after GitHub accepted main and the bare mirror refreshed.
+# mc-closeout verifies this receipt before an agent may set Linear to Done.
+mc_record_delivery() {
+  local branch="$1" main_sha="$2" upstream="$3" issue tmp
+  issue="$(mc_issue_key_from_text "$branch" || true)"
+  [ -n "$issue" ] || return 0
+  mkdir -p "$STATE/deliveries"
+  tmp="$(mktemp "$STATE/deliveries/.${issue}.XXXXXX")"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$issue" "$branch" "$main_sha" "$upstream" "$(mc_now)" > "$tmp"
+  mv "$tmp" "$STATE/deliveries/$issue.tsv"
+}
+
 # Log every coordination event so the coordinator can see history.
 mc_log() { printf '%s\t%s\t%s\t%s\n' "$(mc_now)" "$$" "$(basename "$(mc_worktree)")" "$*" >> "$COORD/log/events.tsv"; }
 

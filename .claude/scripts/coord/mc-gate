@@ -61,15 +61,12 @@ mc_log "gate acquire $(basename "$SLOT_DIR")"
 
 cd "$(mc_worktree)"
 
-# Ensure Prisma client is in sync. A rebase that pulls a schema change from another
-# session leaves a stale Prisma client, and typecheck then fails with "column does not exist"
-# errors that read like broken code. Regenerate it upfront.
-if [ -f server/scripts/ensurePrismaClient.mjs ]; then
-  if ! node server/scripts/ensurePrismaClient.mjs; then
-    echo "[mc-gate] Could not bring the Prisma client in sync — see the error above." >&2
-    mc_log "gate refused (prisma client regenerate failed)"
-    exit 3
-  fi
+# Ensure Prisma client is in sync. Generation is mandatory and a failure stops
+# the gate immediately instead of becoming a misleading typecheck failure later.
+if ! mc_ensure_prisma_client; then
+  echo "[mc-gate] Could not bring the Prisma client in sync — see the error above." >&2
+  mc_log "gate refused (prisma client regenerate failed)"
+  exit 3
 fi
 
 # Decide the scope BEFORE running anything, and ONLY for the no-argument gate.
