@@ -33,6 +33,7 @@ import recordsRouter from './routes/records.js'
 import recordingSettingsRouter from './routes/recordingSettings.js'
 import reportsRouter from './routes/reports.js'
 import savedViewsRouter from './routes/savedViews.js'
+import objectViewsRouter from './routes/objectViews.js'
 import tasksRouter from './routes/tasks.js'
 import teamRouter from './routes/team.js'
 import teamsRouter from './routes/teams.js'
@@ -134,6 +135,7 @@ app.use('/api/orgs/:orgId/account-timeline', accountTimelineRouter)
 // per request. attributes carry their objectId in the body/query rather than a
 // nested mount, matching the flat one-router-per-thing convention above.
 app.use('/api/orgs/:orgId/objects', objectsRouter)
+app.use('/api/orgs/:orgId/objects/:objectId/views', objectViewsRouter)
 app.use('/api/orgs/:orgId/attributes', attributesRouter)
 app.use('/api/orgs/:orgId/field-history', fieldHistoryRouter)
 // Rows of custom (record-backed) objects (MAI-135 T7). Every valuesJson write goes
