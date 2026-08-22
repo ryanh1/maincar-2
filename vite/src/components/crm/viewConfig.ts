@@ -222,13 +222,22 @@ export function toRecordListQuery(config: ViewConfig, attributes: AttributeDef[]
  * sort state and Team-scope ids; filter literals and local display controls
  * remain in memory so CRM values and PII never leak into a shared URL.
  */
-export function useViewConfig(attributes: AttributeDef[]): [ViewConfig, (update: (current: ViewConfig) => ViewConfig) => void] {
+export function sameViewConfig(left: ViewConfig, right: ViewConfig): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+/** A saved view establishes the durable baseline; `v` remains a temporary URL overlay. */
+export function useViewConfig(
+  attributes: AttributeDef[],
+  savedConfig?: ViewConfig,
+): [ViewConfig, (update: (current: ViewConfig) => ViewConfig) => void, () => void] {
   const [searchParams, setSearchParams] = useSearchParams()
   const baseConfig = useMemo(() => {
     const defaults = createViewConfig(attributes)
+    const saved = savedConfig ? mergeConfigWithAttributes(defaults, savedConfig) : defaults
     const shared = decodeSharedConfig(searchParams.get('v'), attributes)
-    return shared ? { ...defaults, sorts: shared.sorts, ...(shared.teamScope ? { teamScope: shared.teamScope } : {}) } : defaults
-  }, [attributes, searchParams])
+    return shared ? { ...saved, sorts: shared.sorts, ...(shared.teamScope ? { teamScope: shared.teamScope } : {}) } : saved
+  }, [attributes, savedConfig, searchParams])
 
   const [localConfig, setLocalConfig] = useState<ViewConfig | null>(null)
   // Attribute data can arrive after the route mounts. Merge it at render time so
@@ -257,5 +266,17 @@ export function useViewConfig(attributes: AttributeDef[]): [ViewConfig, (update:
     [config, setSearchParams],
   )
 
-  return [config, updateConfig]
+  const resetConfig = useCallback(() => {
+    setLocalConfig(null)
+    setSearchParams(
+      (previous) => {
+        const params = new URLSearchParams(previous)
+        params.delete('v')
+        return params
+      },
+      { replace: true },
+    )
+  }, [setSearchParams])
+
+  return [config, updateConfig, resetConfig]
 }

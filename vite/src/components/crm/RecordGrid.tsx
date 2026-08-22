@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { DataEditor, GridCellKind, emptyGridSelection } from '@glideapps/glide-data-grid'
 import type {
   DataEditorRef,
@@ -97,6 +97,7 @@ interface RecordGridProps {
   attributes: AttributeDef[]
   viewConfig?: ViewConfig
   onViewConfigChange?: (update: (current: ViewConfig) => ViewConfig) => void
+  toolbarLeading?: ReactNode
 }
 
 const HEADER_MENU_UNSUPPORTED_TYPES = new Set(['multiselect', 'record_reference', 'user_reference', 'location', 'ai'])
@@ -164,7 +165,7 @@ function wrapIndex(index: number, length: number): number {
  * records (`j`/`k`) is just moving an index into data already resident —
  * never a refetch.
  */
-export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfigChange }: RecordGridProps) {
+export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfigChange, toolbarLeading }: RecordGridProps) {
   const { user } = useAuth()
   const { activeCall, dialing } = useDialer()
   const colors = useGridColors()
@@ -943,6 +944,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     <div className="flex h-full min-h-0 flex-col border border-border bg-bg">
       {onViewConfigChange && (
         <GridViewToolbar
+          leading={toolbarLeading}
           orgId={orgId}
           attributes={columns}
           config={config}

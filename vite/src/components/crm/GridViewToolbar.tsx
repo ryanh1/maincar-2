@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { ChevronDown, Columns3Cog, PanelsTopLeft, Rows3, SlidersHorizontal, UsersRound } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -20,6 +20,7 @@ import { memberDisplayName, useGetMembers, useGetTeams } from '@/hooks/orgs'
 import type { TeamScope, ViewConfig } from './viewConfig'
 
 interface GridViewToolbarProps {
+  leading?: ReactNode
   orgId?: string
   attributes: AttributeDef[]
   config: ViewConfig
@@ -106,7 +107,7 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 }
 
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
-export function GridViewToolbar({ orgId, attributes, config, onConfigChange, teamScopeSupported = false, createLabel, onCreate, createDisabled = false, selectedColumnIds = [] }: GridViewToolbarProps) {
+export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, createLabel, onCreate, createDisabled = false, selectedColumnIds = [] }: GridViewToolbarProps) {
   const [columnGroupName, setColumnGroupName] = useState('')
   function setColumnVisible(attributeId: string, visible: boolean) {
     onConfigChange((current) => ({
@@ -143,6 +144,7 @@ export function GridViewToolbar({ orgId, attributes, config, onConfigChange, tea
 
   return (
     <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-surface px-3">
+      {leading}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm">

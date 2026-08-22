@@ -45,6 +45,10 @@ test('creates a Company from its grid after a recoverable validation error', asy
     }
     return route.fallback()
   })
+  await page.route('**/api/orgs/org-fixture/saved-views**', (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { views: [] } })
+    return route.fallback()
+  })
   await page.route('**/api/orgs/org-fixture/companies', async (route) => {
     const body = route.request().postDataJSON() as { name?: string }
     if (!body.name) return route.fulfill({ status: 422, json: { error: 'A company needs at least one of a name, a domain, or a LinkedIn URL.' } })
@@ -103,6 +107,10 @@ test('keeps an unsupported direct object URL out of the grid and list API', asyn
       },
     }),
   )
+  await page.route('**/api/orgs/org-fixture/saved-views**', (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { views: [] } })
+    return route.fallback()
+  })
 
   await page.goto('/__fixtures/records/email')
 
@@ -141,6 +149,10 @@ test('fills the selected Company grid rows down with Ctrl+D', async ({ page }) =
     updates.push({ id: route.request().url().split('/').at(-1)!, value: body.rank })
     return route.fulfill({ json: {} })
   })
+  await page.route('**/api/orgs/org-fixture/saved-views**', (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { views: [] } })
+    return route.fallback()
+  })
 
   await page.goto('/__fixtures/records/company')
   const canvas = page.getByTestId('data-grid-canvas')
@@ -161,4 +173,59 @@ test('fills the selected Company grid rows down with Ctrl+D', async ({ page }) =
     { id: 'company-3', value: 1 },
     { id: 'company-4', value: 1 },
   ])
+})
+
+test('saves the live URL sort into the synthesized default view and reloads it', async ({ page }) => {
+  const consoleErrors: string[] = []
+  const views: Array<Record<string, unknown>> = []
+  const listBodies: Array<Record<string, unknown>> = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+
+  await page.route('**/api/orgs/org-fixture/objects**', async (route) => {
+    const request = route.request()
+    const pathname = new URL(request.url()).pathname
+    if (request.method() === 'GET' && pathname.endsWith('/objects')) return route.fulfill({ json: { objects: [companyObject] } })
+    if (request.method() === 'GET' && pathname.endsWith('/objects/company')) return route.fulfill({ json: { object: { ...companyObject, attributes: [nameAttribute] } } })
+    if (request.method() === 'POST' && pathname.endsWith('/objects/company/list')) {
+      listBodies.push(request.postDataJSON() as Record<string, unknown>)
+      return route.fulfill({ json: { rows: [], nextCursor: null, totalCount: 0 } })
+    }
+    return route.fallback()
+  })
+  await page.route('**/api/orgs/org-fixture/saved-views**', async (route) => {
+    const request = route.request()
+    const pathname = new URL(request.url()).pathname
+    if (request.method() === 'GET' && pathname.endsWith('/saved-views')) return route.fulfill({ json: { views } })
+    if (request.method() === 'POST' && pathname.endsWith('/saved-views')) {
+      const body = request.postDataJSON() as { config: Record<string, unknown>; name: string }
+      const view = {
+        id: 'view-1', objectId: 'company', name: body.name, layout: 'grid', config: body.config,
+        ownerUserId: 'user-fixture', isShared: false, isDefault: false, sortOrder: 0,
+        createdAt: companyObject.createdAt, updatedAt: companyObject.updatedAt,
+      }
+      views.push(view)
+      return route.fulfill({ status: 201, json: { view } })
+    }
+    if (request.method() === 'POST' && pathname.endsWith('/saved-views/view-1/default')) {
+      views[0].isDefault = true
+      return route.fulfill({ status: 204 })
+    }
+    return route.fallback()
+  })
+
+  const liveSort = btoa(JSON.stringify({ version: 1, sorts: [{ attributeId: 'name', direction: 'asc' }] }))
+  await page.goto(`/__fixtures/records/company?v=${encodeURIComponent(liveSort)}`)
+  const canvas = page.getByTestId('data-grid-canvas')
+  await expect(canvas).toBeVisible()
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect.poll(() => views[0]?.isDefault).toBe(true)
+  expect(views[0]).toMatchObject({ config: { sorts: [{ attributeId: 'name', direction: 'asc' }] } })
+
+  await page.goto('/__fixtures/records/company')
+  await expect(canvas).toBeVisible()
+  await expect.poll(() => listBodies.at(-1)).toMatchObject({ sort: { field: 'name', direction: 'asc' } })
+  await expect(page.getByRole('combobox', { name: 'Saved view' })).toHaveText('Default view')
+  expect(consoleErrors).toEqual([])
 })
