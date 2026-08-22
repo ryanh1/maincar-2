@@ -229,6 +229,10 @@ Two components, each used where it fits. A `<ul>` of rows is never a table.
   server-side sorting, a server-side search box, useful empty/loading/error states,
   row actions in an overflow menu, destructive ones behind a confirm, and page, sort,
   and search in the URL. **Match Loadwire's tables** (`../loadwire`) at minimum.
+- **Header rows are distinct from body rows.** Every HTML table header `<tr>` uses
+  `bg-surface` with `border-b border-border`; column headings use `text-xs`
+  `font-medium text-text-muted`. Body rows keep the page background, so headers
+  remain easy to scan in both themes.
 
 ### Motion
 

@@ -134,13 +134,13 @@ export function Calls() {
             <table className="w-full">
               <caption className="sr-only">Calls placed by {org?.name}</caption>
               <thead>
-                <tr className="border-b border-border bg-muted/60">
+                <tr className="border-b border-border bg-surface">
                   {COLUMNS.map((column) => (
                     <th
                       key={column.label}
                       scope="col"
                       className={cn(
-                        'px-3 py-2 text-left text-xs font-medium text-muted-foreground',
+                        'px-3 py-2 text-left text-xs font-medium text-text-muted',
                         column.className,
                       )}
                     >

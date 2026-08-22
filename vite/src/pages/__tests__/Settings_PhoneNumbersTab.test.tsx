@@ -143,6 +143,7 @@ describe('the numbers list', () => {
     // The raw enum values never reach the screen.
     expect(screen.queryByText('active')).not.toBeInTheDocument()
     expect(screen.queryByText('searching')).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Number' }).closest('tr')).toHaveClass('bg-surface')
   })
 
   it('shows a spinner beside a row that is still provisioning', () => {

@@ -59,19 +59,19 @@ export function Settings_PhoneNumbers_OrgTable({ orgId }: { orgId: string }) {
             <caption className="sr-only">Every phone number owned by {org?.name}</caption>
             <thead>
               <tr className="border-b border-border bg-surface">
-                <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-text-muted">
                   Number
                 </th>
-                <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-text-muted">
                   Assigned to
                 </th>
-                <th scope="col" className="w-40 px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                <th scope="col" className="w-40 px-4 py-2 text-left text-xs font-medium text-text-muted">
                   Status
                 </th>
-                <th scope="col" className="w-32 px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                <th scope="col" className="w-32 px-4 py-2 text-left text-xs font-medium text-text-muted">
                   Bought
                 </th>
-                <th scope="col" className="w-36 px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                <th scope="col" className="w-36 px-4 py-2 text-left text-xs font-medium text-text-muted">
                   Primary
                 </th>
                 <th scope="col" className="w-12 px-2 py-2">
