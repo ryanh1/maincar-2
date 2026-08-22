@@ -45,6 +45,13 @@ async function createView(orgId: string, firebaseUid: string, objectId: string, 
     .send({ objectId, name, layout: 'grid', config: { columns: [] } })
 }
 
+async function createNestedView(orgId: string, firebaseUid: string, objectId: string, name: string) {
+  return request(app)
+    .post(`/api/orgs/${orgId}/objects/${objectId}/views`)
+    .set('Authorization', as(firebaseUid))
+    .send({ name, layout: 'grid', configJson: { columns: [] } })
+}
+
 describe('SavedView (integration, real Postgres, real routes)', () => {
   beforeAll(() => {
     verifyTokenMock.mockImplementation(async (idToken: string) => ({ uid: idToken }))
@@ -52,6 +59,126 @@ describe('SavedView (integration, real Postgres, real routes)', () => {
 
   afterAll(async () => {
     await prisma.$disconnect()
+  })
+
+  it('rejects an unknown configJson attribute through the nested object route', async () => {
+    const { org, admin, object } = await seedViewContext()
+
+    const response = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${object.id}/views`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({
+        name: 'Broken view',
+        layout: 'grid',
+        configJson: { columns: [{ attributeId: 'unknown-attribute', visible: true, order: 0 }] },
+      })
+
+    expect(response.status).toBe(422)
+    expect(await prisma.savedView.count({ where: { orgId: org.orgId, objectId: object.id } })).toBe(0)
+  })
+
+  it('round-trips fields, ordering, filters, grouping, density, frozen panes, widths, and layout', async () => {
+    const { org, admin, object, attribute } = await seedViewContext()
+    const configJson = {
+      columns: [{ attributeId: attribute.id, visible: true, order: 0 }],
+      sorts: [{ attributeId: attribute.id, direction: 'asc' }],
+      filterTree: { type: 'condition', attributeId: attribute.id, operator: 'contains', value: 'Ada' },
+      groupBy: [{ attributeId: attribute.id, direction: 'desc' }],
+      rowHeight: 'comfortable',
+      frozenRows: 2,
+      frozenCols: 1,
+      columnWidths: { [attribute.id]: 320 },
+    }
+    const created = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${object.id}/views`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ name: 'My working view', layout: 'kanban', configJson })
+    expect(created.status).toBe(201)
+
+    const reopened = await request(app)
+      .get(`/api/orgs/${org.orgId}/objects/${object.id}/views/${created.body.view.id}`)
+      .set('Authorization', as(admin.firebaseUid))
+    expect(reopened.status).toBe(200)
+    const { columns, ...configWithoutColumns } = configJson
+    expect(reopened.body.view).toMatchObject({ layout: 'kanban', configJson: configWithoutColumns })
+    expect(reopened.body.view.configJson.columns).toEqual(expect.arrayContaining(columns))
+  })
+
+  it('keeps exactly one nested-route default after concurrent selections', async () => {
+    const { org, admin, object } = await seedViewContext()
+    const first = await createNestedView(org.orgId, admin.firebaseUid, object.id, 'First')
+    const second = await createNestedView(org.orgId, admin.firebaseUid, object.id, 'Second')
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(201)
+
+    const results = await Promise.all([
+      request(app).post(`/api/orgs/${org.orgId}/objects/${object.id}/views/${first.body.view.id}/default`).set('Authorization', as(admin.firebaseUid)),
+      request(app).post(`/api/orgs/${org.orgId}/objects/${object.id}/views/${second.body.view.id}/default`).set('Authorization', as(admin.firebaseUid)),
+    ])
+    expect(results.map((result) => result.status)).toEqual([204, 204])
+
+    const defaults = await prisma.savedView.findMany({
+      where: { orgId: org.orgId, objectId: object.id, isShared: false, isDefault: true, deletedAt: null },
+    })
+    expect(defaults).toHaveLength(1)
+  })
+
+  it('deletes only the saved configuration and returns an undo token', async () => {
+    const { org, admin, object } = await seedViewContext()
+    const created = await createNestedView(org.orgId, admin.firebaseUid, object.id, 'Disposable')
+    expect(created.status).toBe(201)
+    const recordsBefore = await prisma.person.count({ where: { orgId: org.orgId } })
+
+    const deleted = await request(app)
+      .delete(`/api/orgs/${org.orgId}/objects/${object.id}/views/${created.body.view.id}`)
+      .set('Authorization', as(admin.firebaseUid))
+
+    expect(deleted.status).toBe(200)
+    expect(deleted.body).toEqual({ undoToken: created.body.view.id })
+    expect(await prisma.person.count({ where: { orgId: org.orgId } })).toBe(recordsBefore)
+    expect(await prisma.savedView.findFirst({ where: { id: created.body.view.id, orgId: org.orgId } })).toMatchObject({ deletedAt: expect.any(Date) })
+
+    await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${object.id}/views/undo`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send(deleted.body)
+      .expect(204)
+    expect(await prisma.savedView.findFirst({ where: { id: created.body.view.id, orgId: org.orgId } })).toMatchObject({ deletedAt: null })
+  })
+
+  it('updates, duplicates, and reorders nested saved views', async () => {
+    const { org, admin, object, attribute } = await seedViewContext()
+    const first = await createNestedView(org.orgId, admin.firebaseUid, object.id, 'First')
+    const second = await createNestedView(org.orgId, admin.firebaseUid, object.id, 'Second')
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(201)
+
+    const updated = await request(app)
+      .patch(`/api/orgs/${org.orgId}/objects/${object.id}/views/${first.body.view.id}`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({
+        name: 'Renamed',
+        configJson: { sorts: [{ attributeId: attribute.id, direction: 'desc' }] },
+      })
+    expect(updated.status).toBe(200)
+    expect(updated.body.view).toMatchObject({ name: 'Renamed', configJson: { sorts: [{ attributeId: attribute.id, direction: 'desc' }] } })
+
+    const duplicate = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${object.id}/views/${first.body.view.id}/duplicate`)
+      .set('Authorization', as(admin.firebaseUid))
+    expect(duplicate.status).toBe(201)
+    expect(duplicate.body.view).toMatchObject({ name: 'Renamed copy', isShared: false, isDefault: false })
+
+    const reordered = await request(app)
+      .put(`/api/orgs/${org.orgId}/objects/${object.id}/views/reorder`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ viewIds: [duplicate.body.view.id, second.body.view.id, first.body.view.id] })
+    expect(reordered.status).toBe(200)
+    expect(reordered.body.views.map((view: { id: string }) => view.id)).toEqual([
+      duplicate.body.view.id,
+      second.body.view.id,
+      first.body.view.id,
+    ])
   })
 
   it('keeps exactly one shared default after concurrent default selections', async () => {
