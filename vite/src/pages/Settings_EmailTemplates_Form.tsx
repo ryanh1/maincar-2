@@ -4,11 +4,13 @@ import { toast } from 'sonner'
 import { RichTextEditor, type LinkRequest } from '@/components/editor/RichTextEditor'
 import { RichTextEditorUrlDialog } from '@/components/editor/RichTextEditor_UrlDialog'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RequiredAsterisk } from '@/components/ui/RequiredAsterisk'
 import { useSaveEmailTemplate } from '@/hooks/email'
 import type { EmailTemplate, SaveEmailTemplateVariables } from '@/hooks/email'
+import type { EmailTemplateVisibility } from '@/lib/emailTypes'
 import { ApiError } from '@/lib/api'
 
 interface Props {
@@ -31,14 +33,15 @@ interface Props {
  * `initialHtml` and never re-read — the parent mounts this component fresh for
  * each template, which is the remount that editor's API asks for.
  *
- * Anyone in the org may edit any template here, including one they did not
- * write. That is the point of an org-shared template, not an oversight.
+ * The parent only opens this form for a template the viewer may manage. The
+ * server repeats that check, because a hidden action is guidance, not security.
  */
 export function Settings_EmailTemplates_Form({ orgId, template, onDone }: Props) {
   const saveTemplate = useSaveEmailTemplate()
 
   const [name, setName] = useState(template?.name ?? '')
   const [subject, setSubject] = useState(template?.subject ?? '')
+  const [visibility, setVisibility] = useState<EmailTemplateVisibility>(template?.visibility ?? 'PRIVATE')
   // The editor owns the text while it is open and hands it back on every change.
   // This copy is only ever READ on save — it never flows back into the editor.
   const [bodyHtml, setBodyHtml] = useState(template?.bodyHtml ?? '')
@@ -59,8 +62,8 @@ export function Settings_EmailTemplates_Form({ orgId, template, onDone }: Props)
     // hook's variables are a union: creating requires a name, editing takes any
     // subset, and an `id` typed `string | undefined` narrows to neither.
     const variables: SaveEmailTemplateVariables = template
-      ? { orgId, templateId: template.id, name: trimmed, subject, bodyHtml }
-      : { orgId, name: trimmed, subject, bodyHtml }
+      ? { orgId, templateId: template.id, name: trimmed, subject, bodyHtml, visibility }
+      : { orgId, name: trimmed, subject, bodyHtml, visibility }
 
     saveTemplate.mutate(variables, {
       onSuccess: () => {
@@ -100,6 +103,27 @@ export function Settings_EmailTemplates_Form({ orgId, template, onDone }: Props)
             value={subject}
             onChange={(event) => setSubject(event.target.value)}
           />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="templateSharing"
+              checked={visibility === 'ORGANIZATION'}
+              onCheckedChange={(checked) => setVisibility(checked === true ? 'ORGANIZATION' : 'PRIVATE')}
+            />
+            <Label htmlFor="templateSharing">Share with organization</Label>
+          </div>
+          <p className="text-xs text-text-muted">
+            {visibility === 'ORGANIZATION'
+              ? 'Everyone in this organization can use this template.'
+              : 'Only you can use this template.'}
+          </p>
+          {template?.visibility === 'ORGANIZATION' && visibility === 'PRIVATE' && (
+            <p className="text-xs text-text-muted">
+              Teammates lose access. Emails already written from this template stay unchanged.
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-1.5">

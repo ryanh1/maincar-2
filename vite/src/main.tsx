@@ -14,6 +14,7 @@ import { CallTranscriptFixture } from './pages/CallTranscriptFixture'
 import { RecordsFixture } from './pages/RecordsFixture'
 import { ComposerCardFixture } from './components/composer/ComposerCardFixture'
 import { Settings_EmailSignaturesFixture } from './pages/Settings_EmailSignaturesFixture'
+import { Settings_EmailTemplatesFixture } from './pages/Settings_EmailTemplatesFixture'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,6 +47,8 @@ createRoot(document.getElementById('root')!).render(
       <ComposerCardFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/email-signatures' ? (
       <Settings_EmailSignaturesFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/email-templates' ? (
+      <Settings_EmailTemplatesFixture />
     ) : (
       <QueryClientProvider client={queryClient}>
         <App />

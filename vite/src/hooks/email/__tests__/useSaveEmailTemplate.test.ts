@@ -84,6 +84,24 @@ describe('useSaveEmailTemplate', () => {
     expect(JSON.parse(jsonFetch.mock.calls[0][1].body)).toEqual({ subject: 'New subject' })
   })
 
+  it('serializes an explicit visibility on create and edit saves', async () => {
+    jsonFetch.mockResolvedValue({ template: template('tpl-1', 'Quote sent') })
+
+    const { result } = renderSaveTemplate()
+    result.current.mutate({ orgId: 'org-1', name: 'Quote sent', visibility: 'PRIVATE' })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(JSON.parse(jsonFetch.mock.calls[0][1].body)).toEqual({
+      name: 'Quote sent',
+      visibility: 'PRIVATE',
+    })
+
+    result.current.mutate({ orgId: 'org-1', templateId: 'tpl-1', visibility: 'ORGANIZATION' })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(JSON.parse(jsonFetch.mock.calls[1][1].body)).toEqual({ visibility: 'ORGANIZATION' })
+  })
+
   it('invalidates the org templates list after a save, unlike the draft hooks', async () => {
     jsonFetch.mockResolvedValue({ template: template('tpl-1', 'Quote sent') })
     const client = makeTestQueryClient()
