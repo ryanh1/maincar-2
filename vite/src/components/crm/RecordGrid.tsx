@@ -13,7 +13,7 @@ import type {
   ValidatedGridCell,
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
-import { ChevronDown, ChevronUp, CornerRightUp, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, CornerRightUp, Ellipsis, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -33,6 +33,7 @@ import type { GridFilterValue, GridMenuAnchor } from './gridFilterMenu'
 import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { RecordGridCreateRow } from './RecordGrid_CreateRow'
+import { GridRowFreezeMenu } from './GridRowFreezeMenu'
 import { formatCellValue } from './recordCellValue'
 import { ColumnGroupHeaders } from './ColumnGroupHeaders'
 import { createViewConfig, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
@@ -42,6 +43,8 @@ import { coerceCurrency, coerceNumber } from './cellCoercion'
 const LEADING_COLUMN_WIDTH = 220
 const DEFAULT_COLUMN_WIDTH = 160
 const ROW_HEIGHTS = { compact: 34, comfortable: 44, tall: 56 } as const
+const GRID_HEADER_HEIGHT = 36
+const ROW_MARKER_WIDTH = 32
 // Glide asks for the next window once the reader has scrolled within this many
 // rows of the end of what is loaded, so the fetch lands before blank rows do.
 const PREFETCH_MARGIN = 60
@@ -187,7 +190,8 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const fallbackConfig = useMemo(() => createViewConfig(attributes), [attributes])
   const config = viewConfig ?? fallbackConfig
   const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
-  const [headerMenu, setHeaderMenu] = useState<{ attribute: AttributeDef; anchor: GridMenuAnchor } | null>(null)
+  const [headerMenu, setHeaderMenu] = useState<{ attribute: AttributeDef; anchor: GridMenuAnchor; columnIndex: number } | null>(null)
+  const [rowFreezeMenu, setRowFreezeMenu] = useState<{ anchor: GridMenuAnchor; row: number } | null>(null)
 
   const configuredColumns = useMemo(() => new Map(config.columns.map((column) => [column.attributeId, column])), [config.columns])
   const orderedVisibleColumns = useMemo(() => {
@@ -528,6 +532,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
       if (!attribute || !onViewConfigChange || !headerMenuSupported(attribute)) return
       setHeaderMenu({
         attribute,
+        columnIndex,
         anchor: {
           x: bounds.x - window.scrollX,
           y: bounds.y - window.scrollY,
@@ -633,6 +638,8 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const focusedRow = gridSelection.current?.cell[1] ?? null
   const dataEditorRef = useRef<DataEditorRef>(null)
   const findInputRef = useRef<HTMLInputElement>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
+  const freezeLineDrag = useRef<{ axis: 'columns' | 'rows'; value: number } | null>(null)
 
   const getRowThemeOverride = useCallback((row: number): Partial<Theme> | undefined => {
     const record = recordAtRow(row)
@@ -879,6 +886,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   // The ⤢ hover affordance (DECISIONS D3): a small button pinned to the
   // frozen leading column, following whichever row the pointer is over.
   const [hoveredRow, setHoveredRow] = useState<{ row: number; y: number; height: number } | null>(null)
+  const gridRowCount = groupAttribute ? displayRows.length : totalCount
 
   const onMouseMove = useCallback((args: GridMouseEventArgs) => {
     if (args.kind !== 'cell') {
@@ -888,6 +896,56 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     const [, row] = args.location
     setHoveredRow({ row, y: args.bounds.y, height: args.bounds.height })
   }, [])
+
+  const frozenColumnBoundary = useMemo(
+    () => ROW_MARKER_WIDTH + gridColumns
+      .slice(0, Math.min(config.frozenCols, gridColumns.length))
+      .reduce((total, column) => total + ('width' in column && typeof column.width === 'number' ? column.width : DEFAULT_COLUMN_WIDTH), 0),
+    [config.frozenCols, gridColumns],
+  )
+  const frozenRowBoundary = GRID_HEADER_HEIGHT + config.frozenRows * ROW_HEIGHTS[config.rowHeight]
+
+  const freezeColumnsAt = useCallback((x: number) => {
+    const gridX = Math.max(0, x - ROW_MARKER_WIDTH)
+    let width = 0
+    for (let index = 0; index < gridColumns.length; index += 1) {
+      const column = gridColumns[index]
+      const nextWidth = width + ('width' in column && typeof column.width === 'number' ? column.width : DEFAULT_COLUMN_WIDTH)
+      if (gridX < nextWidth - (nextWidth - width) / 2) return index
+      width = nextWidth
+    }
+    return gridColumns.length
+  }, [gridColumns])
+
+  const freezeRowsAt = useCallback((y: number) => {
+    const count = Math.round((y - GRID_HEADER_HEIGHT) / ROW_HEIGHTS[config.rowHeight])
+    return Math.max(0, Math.min(gridRowCount, count))
+  }, [config.rowHeight, gridRowCount])
+
+  useEffect(() => {
+    function onPointerMove(event: PointerEvent) {
+      const drag = freezeLineDrag.current
+      const rect = gridRef.current?.getBoundingClientRect()
+      if (!drag || !rect || !onViewConfigChange) return
+      const value = drag.axis === 'columns'
+        ? freezeColumnsAt(event.clientX - rect.left)
+        : freezeRowsAt(event.clientY - rect.top)
+      if (value === drag.value) return
+      freezeLineDrag.current = { ...drag, value }
+      onViewConfigChange((current) => ({ ...current, [drag.axis === 'columns' ? 'frozenCols' : 'frozenRows']: value }))
+    }
+
+    function onPointerUp() {
+      freezeLineDrag.current = null
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+    }
+  }, [freezeColumnsAt, freezeRowsAt, onViewConfigChange])
 
   const onCellClicked = useCallback(([_column, row]: Item) => {
     const displayRow = displayRows[row]
@@ -908,8 +966,6 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
       .reduce((total, column) => total + ('width' in column && typeof column.width === 'number' ? column.width : 0), 0)
     setScrollOffsetX(Math.max(0, widthBeforeVisibleColumn - tx))
   }, [onVisibleRegionChanged, gridColumns, config.frozenCols])
-
-  const gridRef = useRef<HTMLDivElement>(null)
 
   if (isPending) {
     return (
@@ -938,8 +994,6 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
 
   const peekBaseRecord = peekIndex !== null ? recordAtRow(peekIndex) : null
   const peekRecord = peekBaseRecord ? { ...peekBaseRecord, ...edits.get(peekBaseRecord.id) } : null
-  const gridRowCount = groupAttribute ? displayRows.length : totalCount
-
   return (
     <div className="flex h-full min-h-0 flex-col border border-border bg-bg">
       {onViewConfigChange && (
@@ -993,7 +1047,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         verticalBorder={config.gridLines}
         onColumnMoved={config.columns.some((column) => column.group) ? undefined : onColumnMoved}
         onColumnResize={onColumnResize}
-        rowMarkers="none"
+        rowMarkers={{ kind: 'clickable-number', width: ROW_MARKER_WIDTH }}
         smoothScrollX
         smoothScrollY
         onVisibleRegionChanged={onGridVisibleRegionChanged}
@@ -1014,12 +1068,47 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
             anchor={headerMenu.anchor}
             config={config}
             onConfigChange={onViewConfigChange}
+            freezeActions={{
+              freezeLabel: 'Freeze up to this column',
+              onFreeze: () => onViewConfigChange((current) => ({ ...current, frozenCols: headerMenu.columnIndex + 1 })),
+              onUnfreeze: () => onViewConfigChange((current) => ({ ...current, frozenCols: 0 })),
+              unfreezeLabel: 'Unfreeze columns',
+            }}
             onOpenChange={(open) => {
               if (!open) setHeaderMenu(null)
             }}
             open
             values={activeHeaderMenuValues}
           />
+        )}
+
+        {onViewConfigChange && (
+          <>
+            <div
+              aria-label="Drag to freeze columns"
+              className="absolute top-9 bottom-0 z-20 w-3 -translate-x-1/2 touch-none cursor-col-resize"
+              data-testid="column-freeze-line"
+              onPointerDown={(event) => {
+                event.preventDefault()
+                freezeLineDrag.current = { axis: 'columns', value: config.frozenCols }
+              }}
+              style={{ left: frozenColumnBoundary }}
+            >
+              <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-1/2 border-l-2 border-primary" />
+            </div>
+            <div
+              aria-label="Drag to freeze rows"
+              className="absolute right-0 left-0 z-20 h-3 -translate-y-1/2 touch-none cursor-row-resize"
+              data-testid="row-freeze-line"
+              onPointerDown={(event) => {
+                event.preventDefault()
+                freezeLineDrag.current = { axis: 'rows', value: config.frozenRows }
+              }}
+              style={{ top: frozenRowBoundary }}
+            >
+              <span aria-hidden="true" className="pointer-events-none absolute top-1/2 right-0 left-0 border-t-2 border-primary" />
+            </div>
+          </>
         )}
 
         {findOpen && (
@@ -1124,7 +1213,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
               getCellContent={getCellContent}
               rows={config.frozenRows}
               freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
-              rowMarkers="none"
+              rowMarkers={{ kind: 'clickable-number', width: ROW_MARKER_WIDTH }}
               rowHeight={ROW_HEIGHTS[config.rowHeight]}
               headerHeight={0}
               scrollOffsetX={scrollOffsetX}
@@ -1136,6 +1225,38 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
               height="100%"
             />
           </div>
+        )}
+
+        {hoveredRow && (
+        <IconButton
+          type="button"
+          tooltip={`Show actions for row ${hoveredRow.row + 1}`}
+          variant="ghost"
+          className="absolute z-20 size-5 p-0"
+          style={{ top: hoveredRow.y + hoveredRow.height / 2 - 10, left: 4 }}
+          onClick={() => {
+            const bounds = gridRef.current?.getBoundingClientRect()
+            setRowFreezeMenu({
+              row: hoveredRow.row,
+              anchor: { x: bounds?.left ?? 0, y: (bounds?.top ?? 0) + hoveredRow.y, width: ROW_MARKER_WIDTH, height: hoveredRow.height },
+            })
+          }}
+        >
+          <Ellipsis className="size-4" />
+        </IconButton>
+        )}
+
+        {rowFreezeMenu && onViewConfigChange && (
+          <GridRowFreezeMenu
+            anchor={rowFreezeMenu.anchor}
+            open
+            row={rowFreezeMenu.row}
+            onFreeze={() => onViewConfigChange((current) => ({ ...current, frozenRows: rowFreezeMenu.row + 1 }))}
+            onOpenChange={(open) => {
+              if (!open) setRowFreezeMenu(null)
+            }}
+            onUnfreeze={() => onViewConfigChange((current) => ({ ...current, frozenRows: 0 }))}
+          />
         )}
 
         {hoveredRow && (
