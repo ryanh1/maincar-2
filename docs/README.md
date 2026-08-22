@@ -12,6 +12,9 @@ docs/
   decisions/
     DECISION-AUTH-LITA-LOADWIRE-VS-MAINCAR.md → Auth, tenancy, invites and roles: what we
                                                 copy from which repo, and why (MAI-9)
+    DECISION-CRM-CROSS-PROJECT-OWNERSHIP.md  → CRM service ownership and cross-project
+                                                contracts for relations, collaboration,
+                                                search, notifications, attention, and AI (MAI-289)
   LINEAR_IMPORT.md           → How to import issues into Linear
   README.md                  → This file
 ```
@@ -62,6 +65,13 @@ docs/
 - Labeling strategy
 - Dependency linking
 - Checkpoint marking
+
+### 7. **DECISION-CRM-CROSS-PROJECT-OWNERSHIP.md** (CRM ownership contract)
+- Assigns the shared relation/activity, collaboration, and notification foundations
+- Records approved deferrals for full-text search/attention automation and AI fields
+- Defines the authorization, jobs, time-zone, and dependency boundaries that CRM Views
+  & Grid must consume rather than duplicate
+- **Status: Accepted (MAI-289)**
 
 ## Phase Breakdown
 
