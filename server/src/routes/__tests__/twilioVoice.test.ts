@@ -200,6 +200,26 @@ describe('a call the browser Device originated (carries our callId)', () => {
     },
   )
 
+  it.each([
+    ['the organization disabled recording', 'recording-disabled'],
+    ['the destination needs two-party consent', 'two-party-consent-state'],
+    ['the destination state is not allowed', 'state-not-allowed'],
+    ['the destination location is unknown', 'unknown-destination-state'],
+  ])(
+    'does not start a recording for an unavailable policy decision: %s',
+    async (_reason, recordingReason) => {
+      prismaMock.call.findFirst.mockResolvedValue(
+        callRow({ recordingPlanned: false, recordingReason }),
+      )
+
+      const res = await post({ CallSid: CALL_SID, callId: 'call-1' })
+
+      expect(res.status).toBe(200)
+      expect(res.text).not.toContain('record=')
+      expect(res.text).not.toContain('recordingStatusCallback')
+    },
+  )
+
   it('looks the call up by id', async () => {
     await post({ CallSid: CALL_SID, callId: 'call-1' })
 
