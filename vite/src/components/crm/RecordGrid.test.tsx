@@ -11,6 +11,7 @@ import { act, screen } from '@testing-library/react'
 import { renderWithProviders } from '@/test/utils'
 import type { AttributeDef } from '@/lib/crmTypes'
 import { RecordGrid } from './RecordGrid'
+import { createViewConfig } from './viewConfig'
 
 const useRecordWindow = vi.hoisted(() => vi.fn())
 vi.mock('@/hooks/crm', () => ({ useRecordWindow }))
@@ -276,5 +277,36 @@ describe('RecordGrid', () => {
     // Within the prefetch margin of the end: fetch the next window.
     onVisibleRegionChanged({ x: 0, y: 60, width: 5, height: 20 })
     expect(fetchNextPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('updates the shared view config when a column header is clicked', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const onViewConfigChange = vi.fn()
+    const config = createViewConfig(ATTRIBUTES)
+
+    renderWithProviders(
+      <RecordGrid
+        orgId="org-1"
+        objectId="obj-1"
+        attributes={ATTRIBUTES}
+        viewConfig={config}
+        onViewConfigChange={onViewConfigChange}
+      />,
+    )
+
+    const onHeaderClicked = dataEditorProps.current!.onHeaderClicked as (column: number) => void
+    onHeaderClicked(0)
+
+    const update = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(update(config).sorts).toEqual([{ attributeId: 'firstName', direction: 'asc' }])
   })
 })

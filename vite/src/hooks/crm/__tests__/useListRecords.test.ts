@@ -53,6 +53,20 @@ describe('useListRecords', () => {
     )
   })
 
+  it('sends the shared view filter when one is given', async () => {
+    jsonFetch.mockResolvedValue({ rows: [], nextCursor: null, totalCount: 0 })
+
+    const filter = { type: 'condition' as const, field: 'status', operator: 'in' as const, value: ['open'] }
+    renderListRecords('org-1', 'obj-1', { filter })
+
+    await waitFor(() =>
+      expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/objects/obj-1/list', {
+        method: 'POST',
+        body: JSON.stringify({ cursor: null, filter }),
+      }),
+    )
+  })
+
   it('fetches the next window using the cursor the server returned', async () => {
     jsonFetch
       .mockResolvedValueOnce({ rows: [{ id: 'r1' }], nextCursor: 'cursor-1', totalCount: 2 })

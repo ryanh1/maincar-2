@@ -17,7 +17,9 @@ import { useAuth } from '@/providers/useAuth'
 import type { AttributeDef } from '@/lib/crmTypes'
 import { buildGridCell, coerceForType, FLAGGED_THEME } from './cellBuilder'
 import { chipCellRenderer, type ChipCellData } from './chipCell'
+import { GridViewToolbar } from './GridViewToolbar'
 import { useGridColors } from './useGridColors'
+import { createViewConfig, toRecordListQuery, type ViewConfig } from './viewConfig'
 
 const LEADING_COLUMN_WIDTH = 220
 const DEFAULT_COLUMN_WIDTH = 160
@@ -29,6 +31,8 @@ interface RecordGridProps {
   orgId: string
   objectId: string
   attributes: AttributeDef[]
+  viewConfig?: ViewConfig
+  onViewConfigChange?: (update: (current: ViewConfig) => ViewConfig) => void
 }
 
 /**
@@ -39,7 +43,7 @@ interface RecordGridProps {
  * the server is T2.2-T2.4 (MAI-170) — edits here commit to local grid state
  * only, which is what lets each type demonstrate its round-trip.
  */
-export function RecordGrid({ orgId, objectId, attributes }: RecordGridProps) {
+export function RecordGrid({ orgId, objectId, attributes, viewConfig, onViewConfigChange }: RecordGridProps) {
   const { user } = useAuth()
   const colors = useGridColors()
 
@@ -64,8 +68,11 @@ export function RecordGrid({ orgId, objectId, attributes }: RecordGridProps) {
     [columns],
   )
 
+  const fallbackConfig = useMemo(() => createViewConfig(attributes), [attributes])
+  const config = viewConfig ?? fallbackConfig
+  const listQuery = useMemo(() => toRecordListQuery(config, attributes), [config, attributes])
   const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
-    useRecordWindow(orgId, objectId)
+    useRecordWindow(orgId, objectId, listQuery)
 
   // Local-only edit state (see the class doc comment): a per-record patch of
   // slug → value, plus which cells are currently flagged (accept-but-flag,
@@ -171,6 +178,21 @@ export function RecordGrid({ orgId, objectId, attributes }: RecordGridProps) {
     [rows.length, hasNextPage, isFetchingNextPage, fetchNextPage],
   )
 
+  const onHeaderClicked = useCallback(
+    (columnIndex: number) => {
+      const attribute = columns[columnIndex]
+      if (!attribute || !onViewConfigChange) return
+
+      onViewConfigChange((current) => {
+        const active = current.sorts[0]
+        const direction =
+          active?.attributeId !== attribute.id ? 'asc' : active.direction === 'asc' ? 'desc' : undefined
+        return { ...current, sorts: direction ? [{ attributeId: attribute.id, direction }] : [] }
+      })
+    },
+    [columns, onViewConfigChange],
+  )
+
   const theme: Partial<Theme> = useMemo(
     () => ({
       accentColor: colors.accent,
@@ -214,21 +236,27 @@ export function RecordGrid({ orgId, objectId, attributes }: RecordGridProps) {
   }
 
   return (
-    <DataEditor
-      columns={gridColumns}
-      getCellContent={getCellContent}
-      onCellEdited={onCellEdited}
-      validateCell={validateCell}
-      customRenderers={[chipCellRenderer]}
-      rows={totalCount}
-      freezeColumns={1}
-      rowMarkers="none"
-      smoothScrollX
-      smoothScrollY
-      onVisibleRegionChanged={onVisibleRegionChanged}
-      theme={theme}
-      width="100%"
-      height="100%"
-    />
+    <div className="flex h-full min-h-0 flex-col border border-border bg-bg">
+      {onViewConfigChange && <GridViewToolbar attributes={columns} config={config} onConfigChange={onViewConfigChange} />}
+      <div className="min-h-0 flex-1">
+        <DataEditor
+          columns={gridColumns}
+          getCellContent={getCellContent}
+          onCellEdited={onCellEdited}
+          validateCell={validateCell}
+          customRenderers={[chipCellRenderer]}
+          rows={totalCount}
+          freezeColumns={1}
+          rowMarkers="none"
+          smoothScrollX
+          smoothScrollY
+          onVisibleRegionChanged={onVisibleRegionChanged}
+          onHeaderClicked={onHeaderClicked}
+          theme={theme}
+          width="100%"
+          height="100%"
+        />
+      </div>
+    </div>
   )
 }
