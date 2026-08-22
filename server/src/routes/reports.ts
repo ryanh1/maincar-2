@@ -40,6 +40,15 @@ const pivotDimensionSchema = z.object({ field: z.enum(['owner', 'stage', 'create
 
 const pivotValueTransformSchema = z.enum(['none', 'percentOfGrandTotal', 'percentOfColumn', 'percentOfRow', 'percentOfParent', 'runningTotal', 'rankLargestToSmallest'])
 
+// Chart controls describe the presentation of the pivot response. They never
+// alter the symbolic query shape accepted by the reporting compiler.
+const reportChartSchema = z.object({
+  type: z.enum(['bar', 'line', 'area', 'pie', 'funnel', 'heatmap', 'scatter', 'kpi']),
+  color: z.enum(['chart-1', 'chart-2', 'chart-3', 'chart-4']),
+  labels: z.boolean(),
+  yAxisMax: z.number().finite().nonnegative().optional(),
+}).strict()
+
 const dealReportConfigSchema = z.object({
   baseObject: z.literal('deal'),
   rows: z.array(pivotDimensionSchema).max(2),
@@ -53,6 +62,7 @@ const dealReportConfigSchema = z.object({
     rowKey: z.string().min(1).max(500),
     showAs: z.enum(['percentOfGrandTotal', 'percentOfParent', 'samePeriodLastYear']),
   }).strict()).max(100).optional(),
+  chart: reportChartSchema.optional(),
 }).strict()
 
 const activityGridConfigSchema = z.object({

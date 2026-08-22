@@ -67,6 +67,10 @@
   --color-status-success: var(--status-success);
   --color-status-failed: var(--status-failed);
   --color-status-muted: var(--status-muted);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
 }
 
 :root {
@@ -116,6 +120,10 @@
   --status-success: #16a34a; /* green-600 */
   --status-failed: var(--destructive);
   --status-muted: var(--muted-foreground); /* cancelled / ignored */
+  --chart-1: #4f46e5;
+  --chart-2: #0284c7;
+  --chart-3: #d97706;
+  --chart-4: #059669;
 }
 
 .dark {
@@ -159,6 +167,10 @@
   --status-success: #22c55e; /* green-500 */
   --status-failed: var(--destructive);
   --status-muted: var(--muted-foreground);
+  --chart-1: #818cf8;
+  --chart-2: #38bdf8;
+  --chart-3: #f59e0b;
+  --chart-4: #34d399;
 }
 
 @layer base {

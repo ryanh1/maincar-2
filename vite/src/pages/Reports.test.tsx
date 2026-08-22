@@ -20,6 +20,7 @@ const {
   updateConfigMutateMock,
   toastErrorMock,
   toastSuccessMock,
+  createEChartsMock,
 } = vi.hoisted(() => ({
   useAuthMock: vi.fn(),
   useGetReportsMock: vi.fn(),
@@ -36,6 +37,7 @@ const {
   updateConfigMutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
   toastSuccessMock: vi.fn(),
+  createEChartsMock: vi.fn(),
 }))
 
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
@@ -50,6 +52,9 @@ vi.mock('@/hooks/reports', () => ({
 }))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock, success: toastSuccessMock } }))
 vi.mock('@/hooks/orgs', () => ({ useGetTeams: useGetTeamsMock }))
+vi.mock('@/dependencies/echarts', () => ({
+  createECharts: () => ({ dispose: vi.fn(), getZr: () => ({ on: vi.fn() }), on: vi.fn(), resize: vi.fn(), setOption: createEChartsMock }),
+}))
 
 import { Reports } from '@/pages/Reports'
 
@@ -332,6 +337,23 @@ describe('Reports', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Add summary row under Avery Admin' }))
 
     expect(screen.getByRole('rowheader', { name: 'Avery Admin % of grand total' })).toBeInTheDocument()
+  })
+
+  it('switches a live pivot between its table and chart without changing the query', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    dragFieldToZone('Owner', 'rows')
+    dragFieldToZone('Stage', 'columns')
+    dragFieldToZone('Amount', 'values')
+    expect(screen.getByRole('table', { name: 'Deals pivot' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Chart' }))
+    expect(screen.getByLabelText('Report chart')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Table' }))
+    expect(screen.getByRole('table', { name: 'Deals pivot' })).toBeInTheDocument()
   })
 
   it('lets a keyboard user add fields to the builder', async () => {
