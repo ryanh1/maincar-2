@@ -190,6 +190,7 @@ describe('DeviceCheck', () => {
 
     expect(micMeter()).toHaveAttribute('aria-valuenow', '0')
     expect(speakerMeter()).toHaveAttribute('aria-valuenow', '0')
+    expect(screen.getByText('Listening for sound.')).toBeInTheDocument()
   })
 
   it('says it is checking while the read is in flight', () => {
@@ -296,7 +297,7 @@ describe('DeviceCheck', () => {
 
     expect(micTrigger()).toBeDisabled()
     expect(
-      screen.getByText('No microphone found. Plug one in, then choose it here.'),
+      screen.getByText('No microphone found. Connect one, then select it in your system input settings.'),
     ).toBeInTheDocument()
   })
 
@@ -367,6 +368,15 @@ describe('DeviceCheck', () => {
 
       await waitFor(() => expect(getUserMedia).toHaveBeenCalled())
       await waitFor(() => expect(micMeter()).toHaveAttribute('aria-valuenow', '100'))
+      expect(screen.getByText('Sound detected.')).toBeInTheDocument()
+    })
+
+    it('calls out low input without relying on the single lit meter bar', async () => {
+      analyserSample = 130
+      render(<DeviceCheck />)
+
+      await waitFor(() => expect(micMeter()).toHaveAttribute('aria-valuenow', '16'))
+      expect(screen.getByText('Low input detected.')).toBeInTheDocument()
     })
 
     it('re-opens the microphone when the rep picks a different one', async () => {
@@ -413,7 +423,7 @@ describe('DeviceCheck', () => {
         })
         expect(
           screen.getByText(
-            "We're not picking up any sound. Try picking another microphone above.",
+            'No sound detected. Check your system input settings or choose another microphone.',
           ),
         ).toBeInTheDocument()
 
@@ -424,7 +434,7 @@ describe('DeviceCheck', () => {
 
         expect(
           screen.queryByText(
-            "We're not picking up any sound. Try picking another microphone above.",
+            'No sound detected. Check your system input settings or choose another microphone.',
           ),
         ).not.toBeInTheDocument()
       } finally {
@@ -443,7 +453,7 @@ describe('DeviceCheck', () => {
 
         expect(
           screen.queryByText(
-            "We're not picking up any sound. Try picking another microphone above.",
+            'No sound detected. Check your system input settings or choose another microphone.',
           ),
         ).not.toBeInTheDocument()
       } finally {
@@ -457,6 +467,17 @@ describe('DeviceCheck', () => {
       render(<DeviceCheck />)
 
       await waitFor(() => expect(getUserMedia).toHaveBeenLastCalledWith({ audio: true }))
+    })
+
+    it('gives immediate system-input recovery guidance when no stream can open', async () => {
+      getUserMedia.mockRejectedValue(new Error('NotReadableError'))
+      render(<DeviceCheck />)
+
+      expect(
+        await screen.findByText(
+          'No sound detected. Check your system input settings or choose another microphone.',
+        ),
+      ).toBeInTheDocument()
     })
 
     it('is disabled with a reason when the browser has no Web Audio', () => {

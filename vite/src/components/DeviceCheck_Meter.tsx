@@ -11,6 +11,8 @@ export interface MeterProps {
   level: number
   /** Read by a screen reader in place of a percentage bar. */
   label: string
+  /** Connects the meter to nearby, non-visual input feedback. */
+  describedBy?: string
   className?: string
 }
 
@@ -23,7 +25,7 @@ export interface MeterProps {
  * an idle meter rather than missing UI. Bars animate with `scaleY` only —
  * never a `width`/`height` change — so the motion never touches layout.
  */
-export function Meter({ level, label, className }: MeterProps) {
+export function Meter({ level, label, describedBy, className }: MeterProps) {
   const clamped = Math.max(0, Math.min(1, level))
   const percent = Math.round(clamped * 100)
   const litBars = Math.round(clamped * BAR_COUNT)
@@ -32,6 +34,7 @@ export function Meter({ level, label, className }: MeterProps) {
     <div
       role="meter"
       aria-label={label}
+      aria-describedby={describedBy}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={percent}
