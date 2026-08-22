@@ -97,6 +97,32 @@ describe('GridViewToolbar', () => {
     expect(linesUpdate(config).gridLines).toBe(false)
   })
 
+  it('names a group for adjacent selected columns through the shared config', async () => {
+    const user = userEvent.setup()
+    const onConfigChange = vi.fn()
+    const owner = { ...attributes[0], id: 'owner', slug: 'owner', name: 'Owner', sortOrder: 1 }
+    const groupedAttributes = [...attributes, owner]
+    const config = createViewConfig(groupedAttributes)
+
+    renderWithProviders(
+      <GridViewToolbar
+        attributes={groupedAttributes}
+        config={config}
+        onConfigChange={onConfigChange}
+        selectedColumnIds={['status', 'owner']}
+      />,
+    )
+
+    await user.type(screen.getByRole('textbox', { name: 'Column group name' }), 'Pipeline')
+    await user.click(screen.getByRole('button', { name: 'Group columns' }))
+
+    const groupUpdate = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(groupUpdate(config).columns).toEqual([
+      { attributeId: 'status', visible: true, order: 0, group: 'Pipeline', collapsed: false },
+      { attributeId: 'owner', visible: true, order: 1, group: 'Pipeline', collapsed: false },
+    ])
+  })
+
   it('shows the Team scope control only for owner-backed grids', async () => {
     const user = userEvent.setup()
     const config = createViewConfig(attributes)

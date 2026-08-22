@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ChevronDown, Columns3Cog, PanelsTopLeft, Rows3, SlidersHorizontal, UsersRound } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -27,6 +28,7 @@ interface GridViewToolbarProps {
   createLabel?: string
   onCreate?: () => void
   createDisabled?: boolean
+  selectedColumnIds?: string[]
 }
 
 function scopeLabel(scope: TeamScope | undefined, teams: Array<{ id: string; name: string }>, members: Array<{ userId: string; firstName: string | null; lastName: string | null; email: string }>): string | null {
@@ -104,7 +106,8 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 }
 
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
-export function GridViewToolbar({ orgId, attributes, config, onConfigChange, teamScopeSupported = false, createLabel, onCreate, createDisabled = false }: GridViewToolbarProps) {
+export function GridViewToolbar({ orgId, attributes, config, onConfigChange, teamScopeSupported = false, createLabel, onCreate, createDisabled = false, selectedColumnIds = [] }: GridViewToolbarProps) {
+  const [columnGroupName, setColumnGroupName] = useState('')
   function setColumnVisible(attributeId: string, visible: boolean) {
     onConfigChange((current) => ({
       ...current,
@@ -125,6 +128,17 @@ export function GridViewToolbar({ orgId, attributes, config, onConfigChange, tea
     const value = Number(rawValue)
     if (!Number.isFinite(value)) return
     onConfigChange((current) => ({ ...current, [key]: Math.max(0, Math.floor(value)) }))
+  }
+
+  function createColumnGroup() {
+    const group = columnGroupName.trim()
+    if (!group || selectedColumnIds.length < 2) return
+    const selected = new Set(selectedColumnIds)
+    onConfigChange((current) => ({
+      ...current,
+      columns: current.columns.map((column) => selected.has(column.attributeId) ? { ...column, group, collapsed: false } : column),
+    }))
+    setColumnGroupName('')
   }
 
   return (
@@ -174,6 +188,25 @@ export function GridViewToolbar({ orgId, attributes, config, onConfigChange, tea
           </DropdownMenuSub>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {selectedColumnIds.length >= 2 && (
+        <div className="flex items-center gap-1">
+          <Input
+            aria-label="Column group name"
+            className="h-8 w-36"
+            placeholder="Group name"
+            value={columnGroupName}
+            onChange={(event) => setColumnGroupName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                createColumnGroup()
+              }
+            }}
+          />
+          <Button type="button" size="sm" disabled={!columnGroupName.trim()} onClick={createColumnGroup}>Group columns</Button>
+        </div>
+      )}
 
       {teamScopeSupported && orgId && (
         <DropdownMenu>

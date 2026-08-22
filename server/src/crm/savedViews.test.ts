@@ -40,6 +40,20 @@ describe('repairSavedViewConfig', () => {
 
     expect(config.teamScope).toEqual({ teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] })
   })
+
+  it('retains named column groups and their collapsed state in persisted view config', () => {
+    const config = repairSavedViewConfig({
+      columns: [
+        { attributeId: 'attr-name', visible: true, order: 0, group: 'Identity', collapsed: true },
+        { attributeId: 'attr-stage', visible: true, order: 1, group: 'Identity', collapsed: true },
+      ],
+    }, ATTRIBUTES)
+
+    expect(config.columns).toEqual([
+      { attributeId: 'attr-name', visible: true, order: 0, group: 'Identity', collapsed: true },
+      { attributeId: 'attr-stage', visible: true, order: 1, group: 'Identity', collapsed: true },
+    ])
+  })
 })
 
 describe('decodeUrlViewOverlay', () => {

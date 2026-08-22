@@ -34,7 +34,8 @@ import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { RecordGridCreateRow } from './RecordGrid_CreateRow'
 import { formatCellValue } from './recordCellValue'
-import { createViewConfig, toRecordListQuery, type ViewConfig } from './viewConfig'
+import { ColumnGroupHeaders } from './ColumnGroupHeaders'
+import { createViewConfig, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
 import { parseGridCommand } from './gridCommands'
 
 const LEADING_COLUMN_WIDTH = 220
@@ -174,22 +175,36 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
   const [headerMenu, setHeaderMenu] = useState<{ attribute: AttributeDef; anchor: GridMenuAnchor } | null>(null)
 
-  const visibleColumns = useMemo(() => {
-    const configured = new Map(config.columns.map((column) => [column.attributeId, column]))
+  const configuredColumns = useMemo(() => new Map(config.columns.map((column) => [column.attributeId, column])), [config.columns])
+  const orderedVisibleColumns = useMemo(() => {
     return columns
-      .filter((attribute) => configured.get(attribute.id)?.visible ?? true)
-      .sort((left, right) => (configured.get(left.id)?.order ?? left.sortOrder) - (configured.get(right.id)?.order ?? right.sortOrder))
-  }, [columns, config.columns])
+      .filter((attribute) => configuredColumns.get(attribute.id)?.visible ?? true)
+      .sort((left, right) => (configuredColumns.get(left.id)?.order ?? left.sortOrder) - (configuredColumns.get(right.id)?.order ?? right.sortOrder))
+  }, [columns, configuredColumns])
+  const visibleColumns = useMemo(() => {
+    const firstInCollapsedGroup = new Set<string>()
+    return orderedVisibleColumns.filter((attribute) => {
+      const column = configuredColumns.get(attribute.id)
+      if (!column?.group || !column.collapsed) return true
+      if (firstInCollapsedGroup.has(column.group)) return false
+      firstInCollapsedGroup.add(column.group)
+      return true
+    })
+  }, [configuredColumns, orderedVisibleColumns])
 
   const gridColumns: GridColumn[] = useMemo(
     () =>
-      visibleColumns.map((attr, index) => ({
-        id: attr.slug,
-        title: attr.name,
-        width: config.columnWidths[attr.id] ?? (index === 0 ? LEADING_COLUMN_WIDTH : DEFAULT_COLUMN_WIDTH),
-        hasMenu: headerMenuSupported(attr),
-      })),
-    [visibleColumns, config.columnWidths],
+      visibleColumns.map((attr, index) => {
+        const column = configuredColumns.get(attr.id)
+        const collapsedGroup = column?.group && column.collapsed ? column.group : undefined
+        return {
+          id: attr.slug,
+          title: collapsedGroup ? `${collapsedGroup} (${config.columns.filter((candidate) => candidate.group === collapsedGroup).length})` : attr.name,
+          width: config.columnWidths[attr.id] ?? (index === 0 ? LEADING_COLUMN_WIDTH : DEFAULT_COLUMN_WIDTH),
+          hasMenu: headerMenuSupported(attr),
+        }
+      }),
+    [visibleColumns, config.columnWidths, configuredColumns, config.columns],
   )
   const firstGridColumn = gridColumns[0]
   const leadingColumnWidth =
@@ -435,6 +450,27 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     () => headerMenu ? headerMenuValues(headerMenu.attribute, rows, user?.timeZone) : [],
     [headerMenu, rows, user?.timeZone],
   )
+
+  const selectedColumnIds = useMemo(() => {
+    const indexes = [...new Set(gridSelection.columns.items.flatMap(([start, end]) =>
+      Array.from({ length: end - start }, (_, index) => start + index),
+    ))].sort((left, right) => left - right)
+    if (indexes.length < 2 || indexes.some((index, position) => position > 0 && index !== indexes[position - 1] + 1)) return []
+    return indexes.map((index) => visibleColumns[index]?.id).filter((id): id is string => Boolean(id))
+  }, [gridSelection.columns.items, visibleColumns])
+
+  const onColumnGroupCollapsedChange = useCallback((group: string, collapsed: boolean) => {
+    if (!onViewConfigChange) return
+    onViewConfigChange((current) => ({
+      ...current,
+      columns: current.columns.map((column) => column.group === group ? { ...column, collapsed } : column),
+    }))
+  }, [onViewConfigChange])
+
+  const onColumnGroupReorder = useCallback((activeGroup: string, overGroup: string) => {
+    if (!onViewConfigChange) return
+    onViewConfigChange((current) => ({ ...current, columns: reorderColumnGroup(current.columns, activeGroup, overGroup) }))
+  }, [onViewConfigChange])
 
   const onColumnMoved = useCallback(
     (startIndex: number, endIndex: number) => {
@@ -802,6 +838,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
           createLabel={object.isGridCreateSupported ? `Create ${object.name}` : undefined}
           createDisabled={isCreating}
           onCreate={object.isGridCreateSupported ? () => { setCreateError(null); setIsCreating(true) } : undefined}
+          selectedColumnIds={selectedColumnIds}
         />
       )}
       {isCreating && (
@@ -812,6 +849,17 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
           error={createError}
           onSave={saveNewRecord}
           onCancel={() => { setCreateError(null); setIsCreating(false) }}
+        />
+      )}
+      {onViewConfigChange && (
+        <ColumnGroupHeaders
+          columns={gridColumns.map((column, index) => ({
+            width: 'width' in column && typeof column.width === 'number' ? column.width : DEFAULT_COLUMN_WIDTH,
+            group: configuredColumns.get(visibleColumns[index]?.id)?.group,
+            collapsed: configuredColumns.get(visibleColumns[index]?.id)?.collapsed,
+          }))}
+          onCollapsedChange={onColumnGroupCollapsedChange}
+          onReorder={onColumnGroupReorder}
         />
       )}
       <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => setHoveredRow(null)}>
@@ -826,7 +874,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
         rowHeight={ROW_HEIGHTS[config.rowHeight]}
         verticalBorder={config.gridLines}
-        onColumnMoved={onColumnMoved}
+        onColumnMoved={config.columns.some((column) => column.group) ? undefined : onColumnMoved}
         onColumnResize={onColumnResize}
         rowMarkers="none"
         smoothScrollX

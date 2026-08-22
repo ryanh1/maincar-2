@@ -365,6 +365,76 @@ describe('RecordGrid', () => {
     expect(resizeUpdate(config).columnWidths).toEqual({ firstName: 240, lastName: 240 })
   })
 
+  it('renders a named column group above the grid and persists its collapsed state', async () => {
+    const user = userEvent.setup()
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const config = {
+      ...createViewConfig(ATTRIBUTES),
+      columns: [
+        { attributeId: 'firstName', visible: true, order: 0, group: 'Name', collapsed: false },
+        { attributeId: 'lastName', visible: true, order: 1, group: 'Name', collapsed: false },
+      ],
+    }
+    const onViewConfigChange = vi.fn()
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={onViewConfigChange} />,
+    )
+
+    expect(screen.getByLabelText('Column groups')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Collapse Name column group' }))
+    const collapseUpdate = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(collapseUpdate(config).columns).toEqual([
+      { attributeId: 'firstName', visible: true, order: 0, group: 'Name', collapsed: true },
+      { attributeId: 'lastName', visible: true, order: 1, group: 'Name', collapsed: true },
+    ])
+  })
+
+  it('offers grouping after the grid selects adjacent columns', async () => {
+    const user = userEvent.setup()
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const config = createViewConfig(ATTRIBUTES)
+    const onViewConfigChange = vi.fn()
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={onViewConfigChange} />,
+    )
+
+    act(() => {
+      ;(dataEditorProps.current!.onGridSelectionChange as (selection: unknown) => void)({
+        current: undefined,
+        columns: { items: [[0, 2]] },
+        rows: { items: [] },
+      })
+    })
+    await user.type(screen.getByRole('textbox', { name: 'Column group name' }), 'Name')
+    await user.click(screen.getByRole('button', { name: 'Group columns' }))
+
+    const groupUpdate = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(groupUpdate(config).columns).toEqual([
+      { attributeId: 'firstName', visible: true, order: 0, group: 'Name', collapsed: false },
+      { attributeId: 'lastName', visible: true, order: 1, group: 'Name', collapsed: false },
+    ])
+  })
+
   it('keeps the frozen-row overlay horizontally synchronized with the scrolling grid', () => {
     useRecordWindow.mockReturnValue({
       rows: [

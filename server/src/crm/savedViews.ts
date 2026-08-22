@@ -12,7 +12,7 @@ export type ViewAttribute = {
 
 export type ViewLayout = 'list' | 'grid' | 'kanban'
 export type ViewSort = { attributeId: string; direction: 'asc' | 'desc' }
-export type ViewColumn = { attributeId: string; visible: boolean; order: number }
+export type ViewColumn = { attributeId: string; visible: boolean; order: number; group?: string; collapsed?: boolean }
 export type ViewFilter =
   | { type: 'condition'; attributeId: string; operator: FilterOperator; value?: unknown }
   | { type: 'group'; op: 'and' | 'or'; children: ViewFilter[] }
@@ -52,7 +52,13 @@ const filterOperators = new Set<FilterOperator>([
 
 const configShape = z.object({
   version: z.number().int().optional(),
-  columns: z.array(z.object({ attributeId: z.string().min(1), visible: z.boolean(), order: z.number().int().min(0) })).optional(),
+  columns: z.array(z.object({
+    attributeId: z.string().min(1),
+    visible: z.boolean(),
+    order: z.number().int().min(0),
+    group: z.string().trim().min(1).max(100).optional(),
+    collapsed: z.boolean().optional(),
+  })).optional(),
   sorts: z.array(z.object({ attributeId: z.string().min(1), direction: directionSchema })).optional(),
   filterTree: z.unknown().optional(),
   teamScope: z.object({

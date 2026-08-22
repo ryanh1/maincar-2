@@ -29,13 +29,21 @@ export type TeamScope = {
   leadUserIds?: string[]
 }
 
+/** A display column stored with a view. Group state is repeated per member so it survives view persistence. */
+export type ViewColumn = {
+  attributeId: string
+  visible: boolean
+  order: number
+  group?: string
+  collapsed?: boolean
+}
+
 /**
- * The live counterpart of SavedView.configJson. Saved views have not landed
- * yet (MAI-176), so this state belongs to the current route and is ready to be
- * persisted unchanged when that slice adds the server contract.
+ * The live counterpart of SavedView.configJson. This route keeps the current
+ * view state locally and uses the same shape the saved-view contract persists.
  */
 export type ViewConfig = {
-  columns: Array<{ attributeId: string; visible: boolean; order: number }>
+  columns: ViewColumn[]
   sorts: ViewSort[]
   filterTree?: ViewFilterNode
   teamScope?: TeamScope
@@ -94,6 +102,31 @@ export function createViewConfig(attributes: AttributeDef[]): ViewConfig {
       .sort((left, right) => left.sortOrder - right.sortOrder)
       .map((attribute, index) => ({ attributeId: attribute.id, visible: true, order: index })),
   }
+}
+
+/** Reorder whole groups so their member columns always remain adjacent. */
+export function reorderColumnGroup(columns: ViewColumn[], activeGroup: string, overGroup: string): ViewColumn[] {
+  if (activeGroup === overGroup) return columns
+
+  const units: Array<{ id: string; columns: ViewColumn[] }> = []
+  const unitsById = new Map<string, { id: string; columns: ViewColumn[] }>()
+  for (const column of columns.slice().sort((left, right) => left.order - right.order)) {
+    const id = column.group ? `group:${column.group}` : `column:${column.attributeId}`
+    const unit = unitsById.get(id) ?? { id, columns: [] }
+    if (!unitsById.has(id)) {
+      unitsById.set(id, unit)
+      units.push(unit)
+    }
+    unit.columns.push(column)
+  }
+
+  const activeIndex = units.findIndex((unit) => unit.id === `group:${activeGroup}`)
+  const overIndex = units.findIndex((unit) => unit.id === `group:${overGroup}`)
+  if (activeIndex < 0 || overIndex < 0) return columns
+
+  const [active] = units.splice(activeIndex, 1)
+  units.splice(overIndex, 0, active)
+  return units.flatMap((unit) => unit.columns).map((column, order) => ({ ...column, order }))
 }
 
 function isViewSort(value: unknown, knownIds: Set<string>): value is ViewSort {
