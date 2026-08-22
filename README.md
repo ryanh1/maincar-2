@@ -20,8 +20,10 @@ npm run db:migrate
 npm run dev
 ```
 
-`npm run dev` starts everything in one terminal: Docker, the API, the Vite dev
-server, and the Firebase emulators.
+`npm run dev` starts everything in one terminal: Firebase first, then Docker,
+the API, and the Vite dev server. It waits until Firebase Auth can answer a
+request before starting the API and web processes, so a cold emulator cannot
+turn startup into transient authentication failures.
 
 ## Local ports
 
@@ -82,10 +84,9 @@ emulator and does three things the bare command does not:
 - **Saves the accounts to `firebase/data` every 60 seconds** while it runs, and
   once more on the way out. A `kill -9` costs you at most the last minute.
   Override the interval with `FIREBASE_AUTOSAVE_SECONDS`.
-- **Frees every port `firebase.json` pins** before starting. The emulators are
-  separate processes, so a hard kill can leave any one of them holding its port —
-  and the next start dies on "port taken" for an emulator you were not thinking
-  about. It also saves the accounts off a stale emulator before stopping it.
+- **Refuses to take over an occupied emulator port.** A port can belong to a
+  different worktree, so the launcher prints the owning PID and leaves it alone
+  instead of killing a process it did not start.
 - **Skips `--import` when there is nothing to import**, so a fresh clone starts
   instead of failing with "Could not find import directory".
 
