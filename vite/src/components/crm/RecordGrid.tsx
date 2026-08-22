@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DataEditor, GridCellKind, emptyGridSelection } from '@glideapps/glide-data-grid'
 import type {
+  DataEditorRef,
   EditableGridCell,
   GridCell,
   GridColumn,
@@ -12,9 +13,12 @@ import type {
   ValidatedGridCell,
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
-import { CornerRightUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, CornerRightUp, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { IconButton } from '@/components/ui/icon-button'
+import { Input } from '@/components/ui/input'
 import { useRecordWindow } from '@/hooks/crm'
 import { useAuth } from '@/providers/useAuth'
 import type { AttributeDef, ObjectDef } from '@/lib/crmTypes'
@@ -23,6 +27,7 @@ import { chipCellRenderer, type ChipCellData } from './chipCell'
 import { GridViewToolbar } from './GridViewToolbar'
 import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
+import { formatCellValue } from './recordCellValue'
 import { createViewConfig, toRecordListQuery, type ViewConfig } from './viewConfig'
 
 const LEADING_COLUMN_WIDTH = 220
@@ -30,6 +35,39 @@ const DEFAULT_COLUMN_WIDTH = 160
 // Glide asks for the next window once the reader has scrolled within this many
 // rows of the end of what is loaded, so the fetch lands before blank rows do.
 const PREFETCH_MARGIN = 60
+
+interface FindMatch {
+  col: number
+  row: number
+  record: Record<string, unknown> & { id: string }
+  attribute: AttributeDef
+  display: string
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function createMatcher(query: string, matchCase: boolean, wholeCell: boolean, useRegex: boolean) {
+  if (!query) return null
+
+  try {
+    const expression = useRegex
+      ? new RegExp(wholeCell ? `^(?:${query})$` : query, matchCase ? '' : 'i')
+      : new RegExp(wholeCell ? `^${escapeRegExp(query)}$` : escapeRegExp(query), matchCase ? '' : 'i')
+    return (value: string) => expression.test(value)
+  } catch {
+    return null
+  }
+}
+
+function replaceMatch(value: string, query: string, replacement: string, matchCase: boolean, wholeCell: boolean, useRegex: boolean) {
+  if (wholeCell) return replacement
+  const expression = useRegex
+    ? new RegExp(query, matchCase ? 'g' : 'gi')
+    : new RegExp(escapeRegExp(query), matchCase ? 'g' : 'gi')
+  return value.replace(expression, replacement)
+}
 
 interface RecordGridProps {
   orgId: string
@@ -100,6 +138,13 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   // never silently dropped — issue MAI-169).
   const [edits, setEdits] = useState<Map<string, Record<string, unknown>>>(new Map())
   const [flaggedCells, setFlaggedCells] = useState<Set<string>>(new Set())
+  const [findOpen, setFindOpen] = useState(false)
+  const [replaceOpen, setReplaceOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [replaceQuery, setReplaceQuery] = useState('')
+  const [matchCase, setMatchCase] = useState(false)
+  const [wholeCell, setWholeCell] = useState(false)
+  const [useRegex, setUseRegex] = useState(false)
 
   const cellValue = useCallback(
     (record: Record<string, unknown> & { id: string }, attr: AttributeDef): unknown => {
@@ -235,17 +280,107 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
 
   const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
   const focusedRow = gridSelection.current?.cell[1] ?? null
+  const dataEditorRef = useRef<DataEditorRef>(null)
+  const findInputRef = useRef<HTMLInputElement>(null)
+
+  const focusCell = useCallback((col: number, row: number) => {
+    setGridSelection({
+      current: { cell: [col, row], range: { x: col, y: row, width: 1, height: 1 }, rangeStack: [] },
+      columns: emptyGridSelection.columns,
+      rows: emptyGridSelection.rows,
+    })
+  }, [])
 
   const [peekIndex, setPeekIndex] = useState<number | null>(null)
   const peekOpen = peekIndex !== null
 
   const focusRow = useCallback((row: number) => {
-    setGridSelection({
-      current: { cell: [0, row], range: { x: 0, y: row, width: 1, height: 1 }, rangeStack: [] },
-      columns: emptyGridSelection.columns,
-      rows: emptyGridSelection.rows,
+    focusCell(0, row)
+  }, [focusCell])
+
+  const matcher = useMemo(
+    () => createMatcher(findQuery, matchCase, wholeCell, useRegex),
+    [findQuery, matchCase, wholeCell, useRegex],
+  )
+  const matches = useMemo<FindMatch[]>(() => {
+    if (!matcher) return []
+    return rows.flatMap((record, row) =>
+      columns.flatMap((attribute, col) => {
+        const display = formatCellValue(cellValue(record, attribute), attribute.type, user?.timeZone)
+        return matcher(display) ? [{ col, row, record, attribute, display }] : []
+      }),
+    )
+  }, [rows, columns, cellValue, matcher, user?.timeZone])
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0)
+  const currentMatchIndex = matches.length === 0 ? 0 : Math.min(activeMatchIndex, matches.length - 1)
+  const finderSelection: GridSelection | null =
+    matches.length === 0
+      ? null
+      : {
+          current: {
+            cell: [matches[currentMatchIndex].col, matches[currentMatchIndex].row],
+            range: { x: matches[currentMatchIndex].col, y: matches[currentMatchIndex].row, width: 1, height: 1 },
+            rangeStack: [],
+          },
+          columns: emptyGridSelection.columns,
+          rows: emptyGridSelection.rows,
+        }
+
+  const selectMatch = useCallback(
+    (index: number) => {
+      if (matches.length === 0) return
+      const nextIndex = ((index % matches.length) + matches.length) % matches.length
+      setActiveMatchIndex(nextIndex)
+    },
+    [matches],
+  )
+
+  useEffect(() => {
+    const match = matches[currentMatchIndex]
+    if (!match) return
+    dataEditorRef.current?.scrollTo(match.col, match.row, 'both', 0, 0, {
+      hAlign: 'center',
+      vAlign: 'center',
+      behavior: 'smooth',
     })
+  }, [matches, currentMatchIndex])
+
+  useEffect(() => {
+    if (findOpen) findInputRef.current?.focus()
+  }, [findOpen, replaceOpen])
+
+  useEffect(() => {
+    function onFindShortcut(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey)) return
+      if (event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        event.stopPropagation()
+        setFindOpen(true)
+        setReplaceOpen(false)
+      }
+      if (event.key.toLowerCase() === 'h') {
+        event.preventDefault()
+        event.stopPropagation()
+        setFindOpen(true)
+        setReplaceOpen(true)
+      }
+    }
+
+    document.addEventListener('keydown', onFindShortcut, true)
+    return () => document.removeEventListener('keydown', onFindShortcut, true)
   }, [])
+
+  const replaceAll = useCallback(() => {
+    if (!matcher || matches.length === 0) return
+    setEdits((previous) => {
+      const next = new Map(previous)
+      for (const match of matches) {
+        const value = replaceMatch(match.display, findQuery, replaceQuery, matchCase, wholeCell, useRegex)
+        next.set(match.record.id, { ...next.get(match.record.id), [match.attribute.slug]: value })
+      }
+      return next
+    })
+  }, [matcher, matches, findQuery, replaceQuery, matchCase, wholeCell, useRegex])
 
   const openPeek = useCallback(
     (row: number) => {
@@ -354,6 +489,7 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
       {onViewConfigChange && <GridViewToolbar attributes={columns} config={config} onConfigChange={onViewConfigChange} />}
       <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => setHoveredRow(null)}>
         <DataEditor
+        ref={dataEditorRef}
         columns={gridColumns}
         getCellContent={getCellContent}
         onCellEdited={onCellEdited}
@@ -366,13 +502,101 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
         smoothScrollY
         onVisibleRegionChanged={onVisibleRegionChanged}
         onHeaderClicked={onHeaderClicked}
-        gridSelection={gridSelection}
+        gridSelection={finderSelection ?? gridSelection}
         onGridSelectionChange={setGridSelection}
         onMouseMove={onMouseMove}
         theme={theme}
         width="100%"
         height="100%"
         />
+
+        {findOpen && (
+          <div className="absolute top-2 right-2 z-20 flex w-80 flex-col gap-2 rounded-md border border-border bg-bg p-2 shadow-md">
+            <div className="flex items-center gap-2">
+              <Input
+                ref={findInputRef}
+                type="search"
+                aria-label="Find in grid"
+                placeholder="Find"
+                value={findQuery}
+                onChange={(event) => setFindQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    selectMatch(currentMatchIndex + (event.shiftKey ? -1 : 1))
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    setFindOpen(false)
+                    setReplaceOpen(false)
+                  }
+                }}
+                className="h-8 text-sm"
+              />
+              <span aria-live="polite" className="shrink-0 text-xs tabular-nums text-text-muted">
+                {findQuery ? `${matches.length === 0 ? 0 : currentMatchIndex + 1} of ${matches.length}` : '0 of 0'}
+              </span>
+              <IconButton
+                type="button"
+                tooltip="Go to the previous match"
+                variant="ghost"
+                onClick={() => selectMatch(currentMatchIndex - 1)}
+                disabled={matches.length === 0}
+              >
+                <ChevronUp className="size-4" />
+              </IconButton>
+              <IconButton
+                type="button"
+                tooltip="Go to the next match"
+                variant="ghost"
+                onClick={() => selectMatch(currentMatchIndex + 1)}
+                disabled={matches.length === 0}
+              >
+                <ChevronDown className="size-4" />
+              </IconButton>
+              <IconButton
+                type="button"
+                tooltip="Close the grid finder"
+                variant="ghost"
+                onClick={() => {
+                  setFindOpen(false)
+                  setReplaceOpen(false)
+                }}
+              >
+                <X className="size-4" />
+              </IconButton>
+            </div>
+
+            {replaceOpen && (
+              <>
+                <Input
+                  aria-label="Replace with"
+                  placeholder="Replace with"
+                  value={replaceQuery}
+                  onChange={(event) => setReplaceQuery(event.target.value)}
+                  className="h-8 text-sm"
+                />
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <label className="flex items-center gap-1 text-xs text-text-muted">
+                    <Checkbox checked={matchCase} onCheckedChange={(checked) => setMatchCase(checked === true)} />
+                    Match case
+                  </label>
+                  <label className="flex items-center gap-1 text-xs text-text-muted">
+                    <Checkbox checked={wholeCell} onCheckedChange={(checked) => setWholeCell(checked === true)} />
+                    Whole cell
+                  </label>
+                  <label className="flex items-center gap-1 text-xs text-text-muted">
+                    <Checkbox checked={useRegex} onCheckedChange={(checked) => setUseRegex(checked === true)} />
+                    Use regular expression
+                  </label>
+                </div>
+                <Button type="button" size="sm" onClick={replaceAll} disabled={matches.length === 0}>
+                  Replace all
+                </Button>
+              </>
+            )}
+          </div>
+        )}
 
         {hoveredRow && (
         <button
