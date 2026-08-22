@@ -438,6 +438,76 @@ export function buildInboundUnavailableTwiml(): string {
   return response.toString()
 }
 
+// --- Inbound voicemail (Twilio → us) ---------------------------------------
+
+/**
+ * The path Twilio POSTs to once an inbound voicemail `<Record>` finishes. Wired
+ * in as the `<Record>`'s `recordingStatusCallback` (see `buildVoicemailTwiml`
+ * below) — the same async, fire-and-forget shape `OUTBOUND_RECORDING_STATUS_
+ * WEBHOOK_PATH` uses for a bridged call's recording, and for the same reason: the
+ * caller has already hung up by the time this fires, so nothing needs to wait on
+ * it. Its handler (routes/twilioVoice.ts → POST /voice/voicemail-recording) is
+ * where the Voicemail row's `recordingUrl` actually gets set.
+ */
+export const INBOUND_VOICEMAIL_RECORDING_WEBHOOK_PATH = '/api/twilio/voice/voicemail-recording'
+
+/** Said to a caller when the org has not uploaded a personal greeting. */
+const DEFAULT_VOICEMAIL_GREETING =
+  "We can't take your call right now. Please leave a message after the tone."
+
+/** Said just before Twilio hangs up, once the recording has stopped. */
+const VOICEMAIL_THANKS_MESSAGE = 'Thank you for your message. Goodbye.'
+
+/** How long a caller may talk before Twilio cuts the recording off, in seconds. */
+const VOICEMAIL_MAX_LENGTH_SECONDS = 120
+
+/** What to greet an inbound caller with, and record their voicemail. */
+export interface VoicemailRequest {
+  /**
+   * A presigned URL Twilio can fetch the org's personal greeting audio from, or
+   * null when the org has none — in which case the default greeting is spoken
+   * instead. Signed by the route (dependencies/s3.ts → getRecordingDownloadUrl),
+   * never built here: this module talks to Twilio, not S3.
+   */
+  greetingAudioUrl: string | null
+}
+
+/**
+ * TwiML that greets an inbound caller and records their voicemail:
+ * `<Response><Play or Say greeting/><Record .../><Say>thanks</Say><Hangup/></Response>`.
+ *
+ * `<Record>` carries no `action` — omitting it means Twilio does NOT re-fetch
+ * TwiML mid-call; it simply continues to the next verb in THIS response once the
+ * recording stops (silence, the caller hanging up, or `maxLength`). The thank-you
+ * `<Say>` and `<Hangup>` after it are that next verb, so the caller hears a clean
+ * close rather than dead air. `recordingStatusCallback` is the async, separate
+ * notification (INBOUND_VOICEMAIL_RECORDING_WEBHOOK_PATH) that delivers the
+ * RecordingSid once storage-side; scoped to `completed` only; an `in-progress`
+ * delivery has no media yet and the recording-status handler would have nothing
+ * to fetch.
+ */
+export function buildVoicemailTwiml(request: VoicemailRequest): string {
+  if (!PUBLIC_BASE_URL) throw new WebhookBaseUrlMissingError()
+
+  const response = new twilio.twiml.VoiceResponse()
+  if (request.greetingAudioUrl) {
+    response.play(request.greetingAudioUrl)
+  } else {
+    response.say(DEFAULT_VOICEMAIL_GREETING)
+  }
+  response.record({
+    maxLength: VOICEMAIL_MAX_LENGTH_SECONDS,
+    playBeep: true,
+    trim: 'trim-silence',
+    recordingStatusCallback: `${PUBLIC_BASE_URL}${INBOUND_VOICEMAIL_RECORDING_WEBHOOK_PATH}`,
+    recordingStatusCallbackMethod: 'POST',
+    recordingStatusCallbackEvent: ['completed'],
+  })
+  response.say(VOICEMAIL_THANKS_MESSAGE)
+  response.hangup()
+  return response.toString()
+}
+
 /** What Twilio echoed back when it accepted the hang-up. */
 export interface HungUpCall {
   /** The `CA…` SID of the call that was ended. */
