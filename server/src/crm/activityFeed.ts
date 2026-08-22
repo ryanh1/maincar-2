@@ -638,6 +638,112 @@ export function activityFromMeeting(
   }
 }
 
+// --- Timeline lifecycle sources ---------------------------------------------
+
+/** The one transition a task row currently represents in the account timeline. */
+export type TaskTimelineTransition = 'created' | 'completed' | 'reopened'
+
+/** The at-most-one spine link a timeline row can carry for each account lane. */
+export interface TimelineSpineLinks {
+  companyId?: string | null
+  personId?: string | null
+  dealId?: string | null
+}
+
+/**
+ * Projects the current lifecycle transition of a task into its one idempotent
+ * timeline row. A task has one source id, so retries refresh this row rather than
+ * append duplicate create/complete/reopen events. Due dates are intentionally
+ * absent: they schedule work but do not mean the work happened.
+ */
+export function activityFromTask(
+  task: {
+    id: string
+    orgId: string
+    title: string
+    doneAt: Date | null
+    createdAt: Date
+    updatedAt: Date
+  },
+  transition: TaskTimelineTransition,
+  links: TimelineSpineLinks = {},
+  actorUserId: string | null = null,
+): NewActivityEntry {
+  const lifecycle = {
+    created: { label: 'created', occurredAt: task.createdAt },
+    completed: { label: 'completed', occurredAt: task.doneAt ?? task.updatedAt },
+    reopened: { label: 'reopened', occurredAt: task.updatedAt },
+  }[transition]
+  const title = `Task ${lifecycle.label}: ${condense(task.title, SUMMARY_MAX_LENGTH - 16) || 'Untitled task'}`
+
+  return {
+    orgId: task.orgId,
+    sourceType: 'task',
+    sourceId: task.id,
+    summary: title,
+    direction: null,
+    occurredAt: lifecycle.occurredAt,
+    createdByUserId: actorUserId,
+    companyId: links.companyId ?? null,
+    personId: links.personId ?? null,
+    dealId: links.dealId ?? null,
+    timeline: {
+      version: TIMELINE_EVENT_VERSION,
+      title,
+      subtype: transition,
+      intensity: 1,
+      display: {},
+    },
+  }
+}
+
+/** The durable source vocabulary for creation markers. */
+export type CreatedTimelineRecordKind = 'person' | 'company' | 'deal' | 'custom'
+
+/**
+ * Projects creation of one CRM record. The deal marker deliberately says
+ * `deal_created`, not `stage_moved`: assigning a deal its initial stage is not a
+ * movement through the pipeline.
+ */
+export function activityFromRecordCreated(
+  record: { id: string; orgId: string; createdAt: Date },
+  args: {
+    kind: CreatedTimelineRecordKind
+    name: string
+    links?: TimelineSpineLinks
+    actorUserId?: string | null
+  },
+): NewActivityEntry {
+  const name = condense(args.name, SUMMARY_MAX_LENGTH - 20) || `Untitled ${args.kind}`
+  const label = `${args.kind[0].toUpperCase()}${args.kind.slice(1)}`
+  const display = {
+    ...(args.kind === 'person' ? { personName: name } : {}),
+    ...(args.kind === 'company' ? { companyName: name } : {}),
+    ...(args.kind === 'deal' ? { dealName: name } : {}),
+  }
+
+  return {
+    orgId: record.orgId,
+    sourceType: args.kind === 'custom' ? 'custom' : 'record_created',
+    sourceId: record.id,
+    summary: `${label} created: ${name}`,
+    direction: null,
+    occurredAt: record.createdAt,
+    createdByUserId: args.actorUserId ?? null,
+    companyId: args.links?.companyId ?? null,
+    personId: args.links?.personId ?? null,
+    dealId: args.links?.dealId ?? null,
+    timeline: {
+      version: TIMELINE_EVENT_VERSION,
+      title: `${label} created: ${name}`,
+      subtype: 'created',
+      intensity: 1,
+      display,
+      ...(args.kind === 'deal' ? { marker: { type: 'deal_created' as const } } : {}),
+    },
+  }
+}
+
 /**
  * The feed row for a note (MAI-141 T13).
  *

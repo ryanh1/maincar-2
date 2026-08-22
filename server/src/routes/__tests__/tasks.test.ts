@@ -29,6 +29,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
       delete: vi.fn(),
     },
     recordLink: { findMany: vi.fn(), deleteMany: vi.fn(), createMany: vi.fn() },
+    activityEntry: { upsert: vi.fn() },
     $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
@@ -97,6 +98,7 @@ beforeEach(() => {
   prismaMock.recordLink.findMany.mockResolvedValue([])
   prismaMock.recordLink.deleteMany.mockResolvedValue({ count: 0 })
   prismaMock.recordLink.createMany.mockResolvedValue({ count: 0 })
+  prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'activity-1' })
 })
 
 // ============================================================
@@ -124,6 +126,23 @@ describe('POST /api/orgs/:orgId/tasks', () => {
     expect(data.priority).toBe('med')
     expect(data.commitment).toBe('soft')
     expect(data.origin).toBe('manual')
+  })
+
+  it('projects task creation as one low-weight timeline row attached to its account links', async () => {
+    await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ title: 'Follow up', links: [{ object: 'company', id: 'co-1' }] })
+
+    const activity = prismaMock.activityEntry.upsert.mock.calls[0][0].create
+    expect(activity).toMatchObject({
+      orgId: ORG_A,
+      sourceType: 'task',
+      sourceId: 'task-new',
+      companyId: 'co-1',
+      timelineSubtype: 'created',
+      timelineIntensity: 1,
+    })
   })
 
   it('attaches the task through RecordLink — both halves of the T7 seam', async () => {
@@ -253,11 +272,9 @@ describe('POST /api/orgs/:orgId/tasks', () => {
     expect(prismaMock.task.create).not.toHaveBeenCalled()
   })
 
-  it('writes NO activity feed row — a task has not happened yet', async () => {
+  it('writes the one timeline row for a task that has no attachments', async () => {
     await request(app).post(URL_A).set('Authorization', AUTH).send({ title: 'Call Jane back' })
-    // The mock has no activityEntry at all: if the route reached for one it would
-    // throw, and this would not be a 201.
-    expect(prismaMock).not.toHaveProperty('activityEntry')
+    expect(prismaMock.activityEntry.upsert).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -385,6 +402,17 @@ describe('PATCH /api/orgs/:orgId/tasks/:id', () => {
     const data = prismaMock.task.updateMany.mock.calls[0][0].data
     expect(data.isDone).toBe(true)
     expect(data.doneAt).toBeInstanceOf(Date)
+    expect(prismaMock.activityEntry.upsert.mock.calls[0][0].create.timelineSubtype).toBe('completed')
+  })
+
+  it('does not treat a due-date edit as task completion', async () => {
+    const res = await request(app)
+      .patch(`${URL_A}/task-1`)
+      .set('Authorization', AUTH)
+      .send({ dueAt: '2026-09-01T12:00:00.000Z' })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.activityEntry.upsert).not.toHaveBeenCalled()
   })
 
   it('clears doneAt when a task is re-opened', async () => {
@@ -395,6 +423,7 @@ describe('PATCH /api/orgs/:orgId/tasks/:id', () => {
     const data = prismaMock.task.updateMany.mock.calls[0][0].data
     expect(data.isDone).toBe(false)
     expect(data.doneAt).toBeNull()
+    expect(prismaMock.activityEntry.upsert.mock.calls[0][0].create.timelineSubtype).toBe('reopened')
   })
 
   it('does not move doneAt when an already-done task is re-ticked', async () => {

@@ -55,6 +55,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => {
     objectDef: { findFirst: vi.fn() },
     attributeDef: { findMany: vi.fn() },
     fieldHistory: { createMany: vi.fn() },
+    activityEntry: { upsert: vi.fn() },
   }
   return {
     prismaMock: {
@@ -229,6 +230,7 @@ beforeEach(() => {
   prismaMock.personEmail.upsert.mockResolvedValue(emailRow())
   prismaMock.personEmail.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.personEmail.deleteMany.mockResolvedValue({ count: 1 })
+  prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'activity-1' })
   // Field history (MAI-136). No seeded ObjectDef by default, so the shape check
   // finds no definitions and the history rows are written unvalidated.
   prismaMock.objectDef.findFirst.mockResolvedValue(null)

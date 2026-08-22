@@ -28,6 +28,8 @@ import { logger } from '../../dependencies/logger.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { activityFromRecordCreated, recordActivityInTx } from '../crm/activityFeed.js'
+import { rollUpSpineLinks } from '../crm/taskNote.js'
 import {
   validateRecordValues,
   type ValidatorAttribute,
@@ -237,7 +239,7 @@ router.post(
     // --- Verify the object is a custom (record-backed) object in this org ---
     const object = await prisma.objectDef.findFirst({
       where: { id: objectId, orgId, deletedAt: null },
-      select: { id: true, slug: true, storage: true },
+      select: { id: true, slug: true, name: true, storage: true, timelineEventsEnabled: true },
     })
     if (!object) {
       return void res.status(422).json({ error: 'The object was not found in this org.' })
@@ -272,6 +274,21 @@ router.post(
         data: { orgId, objectId, valuesJson: result.values as Prisma.InputJsonValue },
       })
       await syncRecordLinks(tx, orgId, record.id, attributes, result.values, refTargets)
+      if (object.timelineEventsEnabled) {
+        const links = await tx.recordLink.findMany({
+          where: { orgId, fromObject: 'record', fromId: record.id },
+          select: { toObject: true, toId: true },
+        })
+        await recordActivityInTx(
+          tx,
+          activityFromRecordCreated(record, {
+            kind: 'custom',
+            name: object.name,
+            links: rollUpSpineLinks(links.map((link) => ({ object: link.toObject, id: link.toId }))),
+            actorUserId: userId,
+          }),
+        )
+      }
       return record
     })
 

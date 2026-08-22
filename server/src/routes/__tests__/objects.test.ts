@@ -85,6 +85,7 @@ function objectRow(overrides: Record<string, unknown> = {}) {
     storage: 'record',
     isStandard: false,
     isFirstClass: true,
+    timelineEventsEnabled: false,
     isHidden: false,
     isArchived: false,
     deletedAt: null,
@@ -128,6 +129,19 @@ describe('POST /api/orgs/:orgId/objects', () => {
     expect(data.storage).toBe('record')
     expect(data.isStandard).toBe(false)
     expect(data.orgId).toBe(ORG_A)
+  })
+
+  it('stores the custom-object timeline opt-in explicitly, defaulting it off', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send({ slug: 'invoice', name: 'Invoice', namePlural: 'Invoices' })
+    expect(prismaMock.objectDef.create.mock.calls[0][0].data.timelineEventsEnabled).toBe(false)
+
+    prismaMock.objectDef.findFirst
+      .mockResolvedValueOnce(objectRow())
+      .mockResolvedValueOnce(objectRow({ timelineEventsEnabled: true }))
+    const res = await request(app).patch(`${URL_A}/obj-1`).set('Authorization', AUTH).send({ timelineEventsEnabled: true })
+    expect(res.status).toBe(200)
+    expect(prismaMock.objectDef.updateMany.mock.calls[0][0].data.timelineEventsEnabled).toBe(true)
+    expect(res.body.object.timelineEventsEnabled).toBe(true)
   })
 
   it('writes the org from the path, never the body', async () => {
