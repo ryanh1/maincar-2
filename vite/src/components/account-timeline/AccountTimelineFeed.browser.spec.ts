@@ -38,6 +38,33 @@ test('changes the one shared timeline query when an activity filter changes', as
   expect(consoleErrors).toEqual([])
 })
 
+test('narrows the shared feed to mine and keeps that selection while loading another page', async ({ page }) => {
+  const timelineRequests: string[] = []
+  const olderEvent = { ...EVENT, id: 'event-older', title: 'Created follow-up task', occurredAt: '2026-08-21T18:00:00.000Z' }
+  await page.route('**/api/orgs/org-fixture/account-timeline**', async (route) => {
+    const url = route.request().url()
+    timelineRequests.push(url)
+    const query = new URL(url).searchParams
+    await route.fulfill({ json: {
+      events: query.get('cursor') ? [olderEvent] : [EVENT],
+      nextCursor: query.get('mine') === 'true' && !query.get('cursor') ? 'mine-cursor' : null,
+      range: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', isDefault: true },
+    } })
+  })
+
+  await page.goto('/__fixtures/account-timeline')
+  await expect(page.getByText('Grace Hopper')).toBeVisible()
+  await page.getByRole('button', { name: 'Mine' }).click()
+  await expect.poll(() => timelineRequests.filter((url) => new URL(url).searchParams.get('mine') === 'true')).toHaveLength(1)
+  await expect(page.getByRole('button', { name: 'Mine' })).toHaveAttribute('aria-pressed', 'true')
+
+  await page.getByRole('button', { name: 'Load more' }).click()
+  await expect.poll(() => timelineRequests.filter((url) => new URL(url).searchParams.get('cursor') === 'mine-cursor')).toHaveLength(1)
+  const nextPageRequest = timelineRequests.find((url) => new URL(url).searchParams.get('cursor') === 'mine-cursor')!
+  expect(new URL(nextPageRequest).searchParams.get('mine')).toBe('true')
+  await expect(page.getByText('Created follow-up task')).toBeVisible()
+})
+
 test('opens the selected event in the right-side detail panel without leaving the filtered timeline', async ({ page }) => {
   await page.route('**/api/orgs/org-fixture/account-timeline**', async (route) => {
     if (route.request().url().includes('/event-fixture?')) {

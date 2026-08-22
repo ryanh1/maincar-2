@@ -12,6 +12,7 @@ function buildDetailQuery(root: AccountTimelineRoot, params: AccountTimelinePara
   if (params.direction) search.set('direction', params.direction)
   if (params.personId) search.set('personId', params.personId)
   if (params.dealId) search.set('dealId', params.dealId)
+  if (params.mine) search.set('mine', 'true')
   return search.toString()
 }
 

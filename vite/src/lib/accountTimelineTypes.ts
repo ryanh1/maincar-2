@@ -24,6 +24,7 @@ export interface AccountTimelineParams {
   direction?: AccountTimelineDirection
   personId?: string
   dealId?: string
+  mine?: boolean
 }
 
 export interface AccountTimelineEventDisplay {

@@ -53,6 +53,10 @@ const accountTimelineQuerySchema = z.object({
   ),
   personId: z.preprocess(blankToUndefined, z.string().trim().min(1).optional()),
   dealId: z.preprocess(blankToUndefined, z.string().trim().min(1).optional()),
+  mine: z.preprocess(
+    blankToUndefined,
+    z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
+  ),
   cursor: z.preprocess(blankToUndefined, z.string().trim().min(1).optional()),
 })
 
@@ -200,6 +204,7 @@ router.get(
   wrapRoute('GET /api/orgs/:orgId/account-timeline', async (req, res) => {
     const authReq = req as unknown as AuthenticatedRequest
     const orgId = String(req.params.orgId)
+    const userId = authReq.user!.id
 
     // --- Verify ownership ---
     const membership = await requireMembership(authReq, res, orgId)
@@ -210,7 +215,7 @@ router.get(
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
-    const { rootType, rootId, occurredFrom, occurredTo, limit, sourceType, direction, personId, dealId, cursor } = parsed.data
+    const { rootType, rootId, occurredFrom, occurredTo, limit, sourceType, direction, personId, dealId, mine, cursor } = parsed.data
 
     if ((occurredFrom === undefined) !== (occurredTo === undefined)) {
       return void res.status(400).json({ error: 'occurredFrom and occurredTo must be supplied together.' })
@@ -246,6 +251,7 @@ router.get(
     const rootWhere: Prisma.ActivityEntryWhereInput = {
       orgId,
       ...(rootType === 'company' ? { companyId: rootId } : { dealId: rootId }),
+      ...(mine ? { createdByUserId: userId } : {}),
     }
 
     // A caller that chooses a range gets it verbatim. Without one, a small scalar
@@ -289,6 +295,7 @@ router.get(
       ...(rootType === 'company' && dealId ? { dealId } : {}),
       ...(sourceType ? { sourceType } : {}),
       ...(direction ? { direction } : {}),
+      ...(mine ? { createdByUserId: userId } : {}),
       occurredAt: { gte: range.from, lt: range.to },
       ...(decodedCursor
         ? {
@@ -333,6 +340,7 @@ router.get(
     const authReq = req as unknown as AuthenticatedRequest
     const orgId = String(req.params.orgId)
     const eventId = String(req.params.eventId)
+    const userId = authReq.user!.id
 
     // --- Verify ownership ---
     const membership = await requireMembership(authReq, res, orgId)
@@ -341,7 +349,7 @@ router.get(
     // --- Parse & validate params ---
     const parsed = accountTimelineQuerySchema.safeParse(req.query ?? {})
     if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
-    const { rootType, rootId, occurredFrom, occurredTo, sourceType, direction, personId, dealId } = parsed.data
+    const { rootType, rootId, occurredFrom, occurredTo, sourceType, direction, personId, dealId, mine } = parsed.data
     if ((occurredFrom === undefined) !== (occurredTo === undefined)) {
       return void res.status(400).json({ error: 'occurredFrom and occurredTo must be supplied together.' })
     }
@@ -368,6 +376,7 @@ router.get(
         ...(rootType === 'company' && dealId ? { dealId } : {}),
         ...(sourceType ? { sourceType } : {}),
         ...(direction ? { direction } : {}),
+        ...(mine ? { createdByUserId: userId } : {}),
         ...(occurredFrom && occurredTo ? { occurredAt: { gte: occurredFrom, lt: occurredTo } } : {}),
       }
     const entry = await prisma.activityEntry.findFirst({ where: scopedWhere })

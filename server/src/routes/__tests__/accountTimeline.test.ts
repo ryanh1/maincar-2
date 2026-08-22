@@ -140,6 +140,23 @@ describe('GET /api/orgs/:orgId/account-timeline — explicit account range', () 
     })
   })
 
+  it('narrows a timeline to the verified caller when mine=true', async () => {
+    const res = await request(app)
+      .get(`${URL_A}?rootType=company&rootId=co-1&occurredFrom=2026-08-01&occurredTo=2026-09-01&mine=true`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(findManyArgs().where).toEqual({
+      orgId: ORG_A,
+      companyId: 'co-1',
+      createdByUserId: USER_A,
+      occurredAt: {
+        gte: new Date('2026-08-01T00:00:00.000Z'),
+        lt: new Date('2026-09-01T00:00:00.000Z'),
+      },
+    })
+  })
+
   it('normalizes a legacy missing display snapshot to a render-safe object', async () => {
     prismaMock.activityEntry.findMany.mockResolvedValue([eventRow({ timelineDisplay: null })])
 
@@ -293,12 +310,12 @@ describe('GET /api/orgs/:orgId/account-timeline/:eventId — typed detail', () =
     })
 
     const res = await request(app)
-      .get(`${URL_A}/event-1?rootType=company&rootId=co-1`)
+      .get(`${URL_A}/event-1?rootType=company&rootId=co-1&mine=true`)
       .set('Authorization', AUTH)
 
     expect(res.status).toBe(200)
     expect(prismaMock.activityEntry.findFirst).toHaveBeenCalledWith({
-      where: { id: 'event-1', orgId: ORG_A, companyId: 'co-1' },
+      where: { id: 'event-1', orgId: ORG_A, companyId: 'co-1', createdByUserId: USER_A },
     })
     expect(prismaMock.call.findFirst).toHaveBeenCalledWith({ where: { id: 'call-1', orgId: ORG_A } })
     expect(res.body.detail).toMatchObject({ type: 'call', id: 'call-1', transcript: 'Discussed the proposal.' })
