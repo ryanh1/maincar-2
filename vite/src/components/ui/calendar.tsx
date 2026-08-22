@@ -6,10 +6,11 @@ import { cn } from '@/lib/utils'
 
 function Calendar({ className, classNames, showOutsideDays = true, ...props }: React.ComponentProps<typeof DayPicker>) {
   const defaults = getDefaultClassNames()
+
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
-      className={cn('bg-bg p-3', className)}
+      className={cn('bg-background p-3', className)}
       classNames={{
         root: cn('w-fit', defaults.root),
         months: cn('flex flex-col gap-4', defaults.months),
@@ -21,14 +22,14 @@ function Calendar({ className, classNames, showOutsideDays = true, ...props }: R
         button_next: cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), defaults.button_next),
         month_grid: cn('w-full border-collapse', defaults.month_grid),
         weekdays: cn('flex', defaults.weekdays),
-        weekday: cn('w-8 text-center text-xs font-medium text-text-muted', defaults.weekday),
+        weekday: cn('w-8 text-center text-xs font-medium text-muted-foreground', defaults.weekday),
         week: cn('mt-1 flex w-full', defaults.week),
         day: cn('size-8 p-0 text-center', defaults.day),
         day_button: cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'w-8 font-normal', defaults.day_button),
         selected: cn('bg-primary text-primary-foreground', defaults.selected),
-        today: cn('bg-surface-2 text-text', defaults.today),
-        outside: cn('text-text-muted', defaults.outside),
-        disabled: cn('text-text-muted opacity-50', defaults.disabled),
+        today: cn('bg-accent text-accent-foreground', defaults.today),
+        outside: cn('text-muted-foreground', defaults.outside),
+        disabled: cn('text-muted-foreground opacity-50', defaults.disabled),
         ...classNames,
       }}
       {...props}
