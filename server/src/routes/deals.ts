@@ -164,6 +164,7 @@ const dealBodySchema = z.object({
   lostReason: optionalText,
   ownerUserId: z.preprocess(blankToUndefined, z.string().optional()),
   customJson: z.record(z.string(), z.unknown()).optional(),
+  customValues: z.record(z.string(), z.unknown()).optional(),
 })
 
 const roleInputSchema = z.object({
@@ -451,6 +452,14 @@ router.patch(
       data.closeDate = body.closeDate ? new Date(body.closeDate) : null
     }
     if (body.customJson !== undefined) data.customJson = body.customJson
+    if (body.customValues !== undefined) {
+      const custom = { ...((existing.customJson ?? {}) as Record<string, unknown>) }
+      for (const [key, value] of Object.entries(body.customValues)) {
+        if (value === null || value === '') delete custom[key]
+        else custom[key] = value
+      }
+      data.customJson = custom
+    }
 
     // --- Execute query ---
     const result = await prisma.deal.updateMany({ where: { id, orgId, deletedAt: null }, data })

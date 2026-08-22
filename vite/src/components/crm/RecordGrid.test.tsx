@@ -15,8 +15,10 @@ import { createViewConfig } from './viewConfig'
 
 const useRecordWindow = vi.hoisted(() => vi.fn())
 const useGetActivity = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: undefined })))
+const mutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
+const useUpdateRecordValue = vi.hoisted(() => vi.fn(() => ({ mutateAsync })))
 const dataEditorScrollTo = vi.hoisted(() => vi.fn())
-vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetActivity }))
+vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetActivity, useUpdateRecordValue }))
 
 vi.mock('@/providers/useAuth', () => ({
   useAuth: () => ({ user: { timeZone: 'America/New_York' } }),
@@ -99,6 +101,8 @@ const ATTRIBUTES: AttributeDef[] = [
 
 beforeEach(() => {
   useRecordWindow.mockReset()
+  mutateAsync.mockReset()
+  mutateAsync.mockResolvedValue(undefined)
   dataEditorProps.current = null
   dataEditorScrollTo.mockReset()
   dataEditorProps.frozenRows = null
@@ -567,6 +571,35 @@ describe('RecordGrid', () => {
     expect(screen.getByText('1 of 2')).toBeInTheDocument()
   })
 
+  it('persists a typed edit and rolls it back when the write rejects', async () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada' }], totalCount: 1, isPending: false, isError: false,
+      hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    mutateAsync.mockRejectedValueOnce(new Error('forced'))
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={[attribute({ slug: 'firstName' })]} />)
+    const onCellEdited = dataEditorProps.current!.onCellEdited as (item: [number, number], cell: Record<string, unknown>) => void
+    act(() => onCellEdited([0, 0], { kind: 'text', data: 'Grace' }))
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ recordId: 'r1', value: 'Grace' }))
+    await act(async () => { await Promise.resolve() })
+    const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => Record<string, unknown>
+    expect(getCellContent([0, 0])).toMatchObject({ data: 'Ada' })
+  })
+
+  it('persists undo through the same mutation path', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada' }], totalCount: 1, isPending: false, isError: false,
+      hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={[attribute({ slug: 'firstName' })]} />)
+    const onCellEdited = dataEditorProps.current!.onCellEdited as (item: [number, number], cell: Record<string, unknown>) => void
+    act(() => onCellEdited([0, 0], { kind: 'text', data: 'Grace' }))
+    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true })))
+    const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => Record<string, unknown>
+    expect(getCellContent([0, 0])).toMatchObject({ data: 'Ada' })
+    expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ value: 'Ada' }))
+  })
+
   describe('the peek drawer (MAI-167)', () => {
     function focusRow(row: number) {
       const onGridSelectionChange = dataEditorProps.current!.onGridSelectionChange as (
@@ -640,6 +673,17 @@ describe('RecordGrid', () => {
 
       // Stepping just re-indexes the already-loaded `rows` array — never a fetch.
       expect(fetchNextPage).not.toHaveBeenCalled()
+    })
+
+    it('edits a drawer field inline through the grid persistence path', () => {
+      renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+      focusRow(0)
+      press(' ')
+      fireEvent.click(screen.getByRole('button', { name: 'Lovelace' }))
+      const input = screen.getByRole('textbox')
+      fireEvent.change(input, { target: { value: 'Byron' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ value: 'Byron', recordId: 'r1' }))
     })
 
   it('j/k do nothing while the drawer is closed', () => {
