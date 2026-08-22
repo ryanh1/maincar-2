@@ -2,17 +2,22 @@ import { Prisma } from '../generated/prisma/client.js'
 
 import { ACTIVITY_EVENT_COUNT_FIELD_REGISTRY, DEAL_FIELD_REGISTRY } from './fieldRegistry.js'
 
-export type DealPivotDimension = 'owner' | 'stage'
+export type DealPivotDimension = 'owner' | 'stage' | 'createdAt'
 
 export interface DealPivotReportConfig {
   baseObject: 'deal'
   rows: Array<{ field: DealPivotDimension }>
   columns: Array<{ field: DealPivotDimension }>
-  values: [{ field: 'amountMinor'; aggregation: 'sum' }]
+  values: [{ field: 'amountMinor'; aggregation: 'sum'; showAs?: PivotValueTransform }]
   timeZone: ReportTimeZone
   timeBucket?: { field: 'createdAt'; grain: 'day' }
   filters?: { ownerTeam: OwnerTeamScope }
+  compareTo?: PeriodComparison
+  summaryRows?: Array<{ rowKey: string; showAs: 'percentOfGrandTotal' | 'percentOfParent' | 'samePeriodLastYear' }>
 }
+
+export type PivotValueTransform = 'none' | 'percentOfGrandTotal' | 'percentOfColumn' | 'percentOfRow' | 'percentOfParent' | 'runningTotal' | 'rankLargestToSmallest'
+export type PeriodComparison = 'previousPeriod' | 'samePeriodLastYear'
 
 export interface ActivityEventCountsGridReportConfig {
   baseObject: 'activity'
@@ -288,10 +293,18 @@ function compileDealStageAmountReport(
     throw new InvalidReportConfigError('Add up to two unique Owner or Stage groups and one Amount value.')
   }
 
-  const dimensions = [...config.rows, ...config.columns].map(({ field }) => DEAL_FIELD_REGISTRY.dimensions[field])
-  if (new Set(dimensions.map((dimension) => dimension.field)).size !== dimensions.length) {
+  const selectedDimensions = [...config.rows, ...config.columns]
+  if (new Set(selectedDimensions.map((dimension) => dimension.field)).size !== selectedDimensions.length) {
     throw new InvalidReportConfigError('A field can appear in only one pivot zone.')
   }
+
+  const usesCreatedDate = selectedDimensions.some((dimension) => dimension.field === 'createdAt')
+  if (usesCreatedDate && !config.timeBucket) {
+    throw new InvalidReportConfigError('Created date needs a day bucket before it can be used in a pivot.')
+  }
+  const dimensions = selectedDimensions
+    .filter((dimension): dimension is { field: 'owner' | 'stage' } => dimension.field !== 'createdAt')
+    .map(({ field }) => DEAL_FIELD_REGISTRY.dimensions[field])
 
   const timeZone = resolveReportTimeZone(config.timeZone, context)
   if (config.timeBucket && (config.timeBucket.field !== 'createdAt' || config.timeBucket.grain !== 'day')) {
@@ -311,7 +324,7 @@ function compileDealStageAmountReport(
       // resolved IANA zone before truncating. A single AT TIME ZONE would treat
       // the stored UTC wall clock as local and mis-bucket DST-boundary records.
       `SELECT date_trunc('day', "deal"."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE `,
-      `)::date::text AS "createdDay", ${select}, ${measure.select}
+      `)::date::text AS "createdDay"${select ? `, ${select}` : ''}, ${measure.select}
 FROM "${DEAL_FIELD_REGISTRY.table}" AS "deal"
 ${joins}
 WHERE "deal"."orgId" = `,
@@ -319,8 +332,8 @@ WHERE "deal"."orgId" = `,
   AND "deal"."deletedAt" IS NULL
 `,
       `
-GROUP BY 1, ${groupBy}
-ORDER BY "createdDay" ASC, ${orderBy}`,
+GROUP BY 1${groupBy ? `, ${groupBy}` : ''}
+ORDER BY "createdDay" ASC${orderBy ? `, ${orderBy}` : ''}`,
     ], timeZone, orgId, ownerTeamPredicate)
   }
 

@@ -4,16 +4,21 @@ export interface OwnerTeamScope {
   leadUserIds?: string[]
 }
 
-export type DealPivotDimension = 'owner' | 'stage'
+export type DealPivotDimension = 'owner' | 'stage' | 'createdAt'
+export type PivotValueTransform = 'none' | 'percentOfGrandTotal' | 'percentOfColumn' | 'percentOfRow' | 'percentOfParent' | 'runningTotal' | 'rankLargestToSmallest'
+export type PeriodComparison = 'previousPeriod' | 'samePeriodLastYear'
 
 /** The interactive Deals pivot shape. */
 export interface ReportConfig {
   baseObject: 'deal'
   rows: Array<{ field: DealPivotDimension }>
   columns: Array<{ field: DealPivotDimension }>
-  values: Array<{ field: 'amountMinor'; aggregation: 'sum' }>
+  values: Array<{ field: 'amountMinor'; aggregation: 'sum'; showAs?: PivotValueTransform }>
   timeZone: { mode: 'viewer' }
+  timeBucket?: { field: 'createdAt'; grain: 'day' }
   filters?: { ownerTeam: OwnerTeamScope }
+  compareTo?: PeriodComparison
+  summaryRows?: Array<{ rowKey: string; showAs: 'percentOfGrandTotal' | 'percentOfParent' | 'samePeriodLastYear' }>
 }
 
 /** A saved report returned by the reports lifecycle API. */
@@ -44,6 +49,7 @@ export interface RunReportResponse {
       ownerName?: string
       stageId?: string
       stageName?: string
+      createdDay?: string
       amountMinor: string
     }>
   }

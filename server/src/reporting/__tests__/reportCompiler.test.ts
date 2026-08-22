@@ -73,6 +73,20 @@ describe('compileReport', () => {
     expect(query.values).toEqual(['America/New_York', 'org-a'])
   })
 
+  it('uses a selected Created date column as the local day bucket for period comparisons', () => {
+    const query = compileReport({
+      baseObject: 'deal',
+      rows: [{ field: 'stage' }],
+      columns: [{ field: 'createdAt' }],
+      values: [{ field: 'amountMinor', aggregation: 'sum' }],
+      timeZone: { mode: 'viewer' },
+      timeBucket: { field: 'createdAt', grain: 'day' },
+    }, 'org-a', { viewerTimeZone: 'America/New_York' })
+
+    expect(query.sql).toContain('AS "createdDay"')
+    expect(query.sql).toContain('GROUP BY 1, "stage"."id", "stage"."name"')
+  })
+
   it('requires a resolved zone instead of falling back to the server zone', () => {
     expect(() => compileReport(DAY_BUCKETED_REPORT, 'org-a', {}))
       .toThrow('A viewer time zone is required for this report.')
