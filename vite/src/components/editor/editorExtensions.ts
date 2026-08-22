@@ -181,7 +181,10 @@ export function buildEditorExtensions({ placeholder }: EditorExtensionsOptions):
       // which emit no HTML at all.
     }),
     StorableLink.configure({
-      protocols: ['mailto'],
+      // Linkify already has native support for `mailto`. Registering it as a
+      // custom scheme for every editor mount is both redundant and unsafe once
+      // Linkify has tokenized text: it warns that custom schemes must be
+      // registered before initialization.
       defaultProtocol: EDITOR_DEFAULT_PROTOCOL,
       HTMLAttributes: EDITOR_LINK_ATTRIBUTES,
       // Clicking inside the editor puts the caret down. It does not navigate

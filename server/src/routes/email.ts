@@ -431,6 +431,9 @@ router.post(
       const sent = await sendDraftEmail(orgId, userId, draft)
 
       // --- Return response ---
+      if ('accepted' in sent) {
+        return void res.json({ message: null, accepted: true })
+      }
       res.json({
         message: {
           id: sent.id,
@@ -438,6 +441,7 @@ router.post(
           threadId: sent.threadId,
           sentAt: sent.sentAt.toISOString(),
         },
+        accepted: true,
       })
     } catch (err) {
       if (err instanceof NoMailboxError || err instanceof MailboxNotFoundError) {

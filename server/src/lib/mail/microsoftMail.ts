@@ -43,7 +43,7 @@ import type {
   MailAddress,
   MailProvider,
   OutboundEmail,
-  SentEmail,
+  SendEmailResult,
 } from './MailProvider.js'
 
 /** The mailbox fields microsoftMail needs — a subset of the `MailAccount` row. */
@@ -384,9 +384,13 @@ export function microsoftMail(
   return {
     provider: 'microsoft',
 
-    async sendEmail(input: OutboundEmail): Promise<SentEmail> {
+    async sendEmail(input: OutboundEmail): Promise<SendEmailResult> {
       const message = buildGraphMessage(input, { email: account.emailAddress })
       const rawResp = await guard(() => client().then((c) => c.sendMail(message, true)))
+      // Graph's documented success response is 202 Accepted with no body. It has
+      // accepted the request but has not given us a message id or sent timestamp
+      // to record; mailbox sync will add the authoritative Email row later.
+      if (rawResp == null) return { kind: 'accepted' }
       const sent = parseOrThrow(GraphSendResponseSchema, rawResp, 'a send receipt')
       return {
         providerMsgId: sent.id,

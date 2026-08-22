@@ -4,7 +4,12 @@ import userEvent from '@testing-library/user-event'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { RichTextEditor, type LinkRequest } from './RichTextEditor'
-import { EDITOR_ALLOWED_TAGS, hasAllowedScheme, isStorableHref } from './editorExtensions'
+import {
+  buildEditorExtensions,
+  EDITOR_ALLOWED_TAGS,
+  hasAllowedScheme,
+  isStorableHref,
+} from './editorExtensions'
 import { normalizeLinkUrl } from './linkUrl'
 import { sanitizeStoredHtml } from './sanitizeStoredHtml'
 
@@ -52,6 +57,14 @@ function lastHtml(onChange: ReturnType<typeof vi.fn>): string {
 }
 
 describe('RichTextEditor', () => {
+  it('uses Linkify’s built-in mailto support instead of registering it as custom', () => {
+    const link = buildEditorExtensions({ placeholder: 'Write a message' }).find(
+      (extension) => extension.name === 'link',
+    )
+
+    expect(link?.options.protocols).not.toContain('mailto')
+  })
+
   it('seeds from initialHtml and shows the toolbar', () => {
     render(<RichTextEditor label="Message" initialHtml="<p>Hello there</p>" />)
 

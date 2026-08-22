@@ -702,6 +702,16 @@ describe('POST /api/email/orgs/:orgId/drafts/:draftId/send', () => {
       threadId: 'gmail-thread-1',
       sentAt: sentAt.toISOString(),
     })
+    expect(res.body.accepted).toBe(true)
+  })
+
+  it('succeeds without a message receipt when Graph accepts a send with 202', async () => {
+    sendDraftEmailMock.mockResolvedValue({ accepted: true })
+
+    const res = await request(app).post(SEND_A).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ message: null, accepted: true })
   })
 
   it('reads the draft it already owns rather than taking a payload', async () => {

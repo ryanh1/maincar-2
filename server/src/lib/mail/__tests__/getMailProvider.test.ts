@@ -102,6 +102,8 @@ describe('getMailProvider — the switch on provider', () => {
     expect(provider.provider).toBe('google')
 
     const sent = await provider.sendEmail(OUTBOUND)
+    expect('kind' in sent).toBe(false)
+    if ('kind' in sent) throw new Error('Expected Gmail to return a send receipt.')
     expect(sent.providerMsgId).toBe('gmail-msg-1')
     expect(sent.threadId).toBe('gmail-thread-1')
     // sentAt is the provider's own instant, read back from internalDate — not a local now().
@@ -115,6 +117,8 @@ describe('getMailProvider — the switch on provider', () => {
     expect(provider.provider).toBe('microsoft')
 
     const sent = await provider.sendEmail(OUTBOUND)
+    expect('kind' in sent).toBe(false)
+    if ('kind' in sent) throw new Error('Expected this Graph fixture to return a send receipt.')
     expect(sent.providerMsgId).toBe('graph-msg-1')
     expect(sent.threadId).toBe('graph-conv-1')
     expect(sent.sentAt.getTime()).toBe(new Date(GRAPH_SENT_DATE).getTime())

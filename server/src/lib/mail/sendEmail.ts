@@ -39,12 +39,12 @@ export class BadRecipientError extends Error {
 }
 
 /** The receipt handed back to the route: what changed, and what to tell the rep. */
-export interface SentDraft {
+export type SentDraft = {
   id: string
   providerMsgId: string
   threadId: string | null
   sentAt: Date
-}
+} | { accepted: true }
 
 function toMailAddress(address: string): MailAddress {
   return { email: address }
@@ -120,6 +120,15 @@ export async function sendDraftEmail(
     subject,
     bodyHtml,
   })
+
+  // Microsoft Graph acknowledges a send with 202 and no receipt. The draft is
+  // safe to remove because the provider accepted it, but there is no truthful
+  // provider id or timestamp to write into Email. The mailbox sync supplies that
+  // authoritative record once Graph exposes it.
+  if ('kind' in sent) {
+    await prisma.emailDraft.deleteMany({ where: { id: draft.id, orgId, userId } })
+    return { accepted: true }
+  }
 
   // --- Record, then delete ---
   // Record first, delete second: a crash between them leaves a sent email with

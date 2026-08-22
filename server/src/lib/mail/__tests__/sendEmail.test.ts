@@ -154,6 +154,20 @@ describe('sendDraftEmail — deliverability validation', () => {
 })
 
 describe('sendDraftEmail — success', () => {
+  it('deletes a draft accepted by Graph without fabricating an Email record', async () => {
+    getMailProviderMock.mockResolvedValue({
+      provider: 'microsoft',
+      sendEmail: vi.fn().mockResolvedValue({ kind: 'accepted' }),
+    })
+
+    await expect(sendDraftEmail(ORG_ID, USER_ID, draft())).resolves.toEqual({ accepted: true })
+
+    expect(prismaMock.email.create).not.toHaveBeenCalled()
+    expect(prismaMock.emailDraft.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'draft-1', orgId: ORG_ID, userId: USER_ID },
+    })
+  })
+
   it('creates exactly one Email row with its participants, then deletes the draft', async () => {
     const sendEmail = stubProvider()
 

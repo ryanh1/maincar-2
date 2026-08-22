@@ -175,9 +175,8 @@ function makeFakeClient(scenario: MailProviderScenario): GraphClient {
         })
       }
       const receipt = scenario.sendReceipt
-      // Graph's real sendMail returns 202 with no body; the composed transport that
-      // backs the seam surfaces the created message, so `sentAt` is the provider's own
-      // send instant read back here — never one computed locally.
+      // This fixture exercises the optional receipt branch. Production Graph
+      // `sendMail` returns a body-less 202, covered by the regression test below.
       return {
         id: receipt?.providerMsgId ?? 'sent-msg',
         conversationId: receipt?.threadId ?? 'sent-thread',
@@ -230,6 +229,24 @@ mailProviderContract('microsoft', makeProvider)
 // --- Per-implementation tests (SPEC-int-seam.md § Testing strategy) ---------
 
 describe('microsoftMail — Graph specifics', () => {
+  it('accepts Graph’s body-less sendMail response without inventing a receipt', async () => {
+    const client: GraphClient = {
+      ...makeFakeClient({}),
+      async sendMail() {
+        return null
+      },
+    }
+    const provider = microsoftMail({ connectionId: 'conn-1', emailAddress: MAILBOX }, async () => client)
+
+    await expect(
+      provider.sendEmail({
+        to: [{ email: 'to@example.com' }],
+        subject: 'Accepted by Graph',
+        bodyHtml: '<p>Hi</p>',
+      }),
+    ).resolves.toEqual({ kind: 'accepted' })
+  })
+
   it("sendEmail posts a Graph message with bcc in bccRecipients and HTML body, never a visible bcc header", async () => {
     let captured: Record<string, unknown> = {}
     const client: GraphClient = {
