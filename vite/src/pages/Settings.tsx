@@ -5,6 +5,7 @@ import {
   FileSignature,
   Phone,
   Radio,
+  ListChecks,
   Plug,
   User as UserIcon,
   Users,
@@ -25,6 +26,7 @@ import { Settings_EmailSignaturesTab } from './Settings_EmailSignaturesTab'
 import { Settings_IntegrationsTab } from './Settings_IntegrationsTab'
 import { Settings_CallRecordingsTab } from './Settings_CallRecordingsTab'
 import { Settings_VoicemailGreetingTab } from './Settings_VoicemailGreetingTab'
+import { Settings_DispositionsTab } from './Settings_DispositionsTab'
 
 type TabId =
   | 'profile'
@@ -32,6 +34,7 @@ type TabId =
   | 'members'
   | 'numbers'
   | 'call-recordings'
+  | 'dispositions'
   | 'voicemail-greeting'
   | 'email-templates'
   | 'signatures'
@@ -53,6 +56,7 @@ const TABS: TabDef[] = [
   { id: 'members', label: 'Members', icon: Users, needsOrg: true, adminOnly: true },
   { id: 'numbers', label: 'Phone numbers', icon: Phone, needsOrg: true },
   { id: 'call-recordings', label: 'Call recordings', icon: Radio, needsOrg: true },
+  { id: 'dispositions', label: 'Call dispositions', icon: ListChecks, needsOrg: true },
   { id: 'voicemail-greeting', label: 'Voicemail greeting', icon: Radio, needsOrg: true, adminOnly: true },
   // Not adminOnly: a template belongs to the ORG and any member may write, edit,
   // or delete any of them (SPEC-composer-templates.md § 2).
@@ -69,6 +73,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
   members: Settings_MembersTab,
   numbers: Settings_PhoneNumbersTab,
   'call-recordings': Settings_CallRecordingsTab,
+  dispositions: Settings_DispositionsTab,
   'voicemail-greeting': Settings_VoicemailGreetingTab,
   'email-templates': Settings_EmailTemplatesTab,
   signatures: Settings_EmailSignaturesTab,

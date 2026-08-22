@@ -19,6 +19,7 @@ import { seedOrg, seedOrgInTx } from '../seedOrg.js'
 import {
   CURRENT_SEED_VERSION,
   DEFAULT_PIPELINE,
+  STANDARD_DISPOSITIONS,
   STANDARD_OBJECTS,
 } from '../standardObjects.js'
 
@@ -85,6 +86,11 @@ describe('seedOrg (integration, real Postgres)', () => {
     const stages = await prisma.pipelineStage.findMany({ where: { orgId, pipelineId: pipelines[0].id } })
     expect(stages).toHaveLength(DEFAULT_PIPELINE.stages.length)
     expect(stages.find((s) => s.outcome === 'won')?.winProbability).toBe(100)
+
+    const dispositions = await prisma.dispositionDef.findMany({ where: { orgId }, orderBy: { sortOrder: 'asc' } })
+    expect(dispositions).toHaveLength(STANDARD_DISPOSITIONS.length)
+    expect(dispositions.map((disposition) => disposition.value)).toEqual(STANDARD_DISPOSITIONS.map((disposition) => disposition.value))
+    expect(dispositions.every((disposition) => disposition.isStandard)).toBe(true)
 
     // seedVersion is stamped.
     const org = await prisma.org.findUniqueOrThrow({ where: { id: orgId } })

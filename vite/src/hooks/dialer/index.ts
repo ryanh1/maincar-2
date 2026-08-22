@@ -5,6 +5,7 @@ export { useGetCallDetail } from './useGetCallDetail'
 export { useGetVoiceToken } from './useGetVoiceToken'
 export { isAdoptableInFlightCallError, useCreateCall } from './useCreateCall'
 export { useEndCall } from './useEndCall'
+export { useLogCallDisposition } from './useLogCallDisposition'
 
 // What each mutation is called with. These are hook shapes, not API shapes, so
 // they live beside the hook rather than in lib/callTypes.ts — that file mirrors
