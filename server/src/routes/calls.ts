@@ -17,10 +17,12 @@ import { Router } from 'express'
 import { z } from 'zod'
 
 import prisma from '../db.js'
+import { CALL_CREATION_RATE_LIMIT } from '../config.js'
 import { logger } from '../../dependencies/logger.js'
 import { hangUpCall, mintVoiceAccessToken } from '../../dependencies/twilio.js'
 import { getRecordingDownloadUrl, RECORDING_URL_TTL_SECONDS } from '../../dependencies/s3.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
+import { rateLimit } from '../middleware/rateLimit.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { crmLinksFromTarget, resolveDialTarget } from '../lib/callMatch.js'
@@ -406,6 +408,22 @@ class DialRefused extends Error {
 
 router.use(requireAuth)
 
+// This limit is deliberately per verified user, rather than per IP: office
+// networks and mobile carriers can put many representatives behind one address,
+// while a user switching networks must not reset their call-creation budget.
+// The in-memory limiter is per server process; deploying multiple API instances
+// should replace it with a shared rate-limit store.
+const callCreationRateLimit = rateLimit({
+  max: CALL_CREATION_RATE_LIMIT,
+  name: 'POST /api/orgs/:orgId/calls',
+  key: (req) => (req as unknown as AuthenticatedRequest).user?.id ?? 'unknown',
+})
+
+/** Clears the in-memory limiter between route-test examples. */
+export function resetCallCreationRateLimitForTests(): void {
+  callCreationRateLimit.reset()
+}
+
 // ============================================================
 // GET /api/orgs/:orgId/calls/voice-token — a browser Voice SDK access token
 // ============================================================
@@ -571,6 +589,7 @@ router.get(
 // can never disagree.
 router.post(
   '/',
+  callCreationRateLimit,
   wrapRoute('POST /api/orgs/:orgId/calls', async (req, res) => {
     const authReq = req as unknown as AuthenticatedRequest
     const orgId = String(req.params.orgId)

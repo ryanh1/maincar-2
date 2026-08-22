@@ -150,3 +150,20 @@ export const TWILIO_TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID ?? ''
 // call time when the key is missing, so a missing credential fails the one job
 // that needed it rather than the server.
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? ''
+
+// --- Outbound calling ---
+// A user can queue three browser-originated calls per minute by default. This is
+// configurable for an environment that needs a different operational ceiling,
+// but invalid values fail closed at startup rather than silently disabling it.
+function optionalPositiveInteger(name: string, defaultValue: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return defaultValue
+
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer; got ${JSON.stringify(raw)}.`)
+  }
+  return value
+}
+
+export const CALL_CREATION_RATE_LIMIT = optionalPositiveInteger('CALL_CREATION_RATE_LIMIT', 3)

@@ -15,10 +15,11 @@ import { rateLimit } from '../rateLimit.js'
 
 function call(middleware: ReturnType<typeof rateLimit>, ip = '10.0.0.1') {
   const json = vi.fn()
-  const res = { status: vi.fn().mockReturnThis(), json } as unknown as Response
+  const setHeader = vi.fn()
+  const res = { status: vi.fn().mockReturnThis(), json, setHeader } as unknown as Response
   const next = vi.fn() as unknown as NextFunction
   middleware({ ip } as Request, res, next)
-  return { res, next, json }
+  return { res, next, json, setHeader }
 }
 
 describe('rateLimit', () => {
@@ -35,11 +36,12 @@ describe('rateLimit', () => {
     const middleware = rateLimit({ max: 3, name: 'test' })
     for (let i = 0; i < 3; i++) call(middleware)
 
-    const { res, next, json } = call(middleware)
+    const { res, next, json, setHeader } = call(middleware)
 
     expect(next).not.toHaveBeenCalled()
     expect(res.status).toHaveBeenCalledWith(429)
     expect(json).toHaveBeenCalledWith({ error: 'Too many attempts. Wait a minute and try again.' })
+    expect(setHeader).toHaveBeenCalledWith('Retry-After', '60')
   })
 
   // One noisy scanner must not lock everyone else out.
@@ -67,5 +69,23 @@ describe('rateLimit', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('can rate limit by a verified-user key instead of a shared IP', () => {
+    const middleware = rateLimit({
+      max: 1,
+      name: 'test',
+      key: (req) => (req as Request & { userId: string }).userId,
+    })
+    const requestFor = (userId: string) => ({ ip: '10.0.0.1', userId } as unknown as Request)
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn(), setHeader: vi.fn() } as unknown as Response
+    const next = vi.fn() as unknown as NextFunction
+
+    middleware(requestFor('user-a'), res, next)
+    middleware(requestFor('user-a'), res, next)
+    middleware(requestFor('user-b'), res, next)
+
+    expect(next).toHaveBeenCalledTimes(2)
+    expect(res.status).toHaveBeenCalledTimes(1)
   })
 })
