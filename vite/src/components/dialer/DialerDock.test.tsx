@@ -51,7 +51,7 @@ function setDialer(overrides: Partial<DialerContextValue> = {}): DialerContextVa
 }
 
 function titleBar(): HTMLElement {
-  return screen.getByRole('button', { name: /dialer/i })
+  return screen.getByRole('button', { name: /start call|dialer/i })
 }
 
 beforeEach(() => {
@@ -59,7 +59,7 @@ beforeEach(() => {
 })
 
 describe('DialerDock', () => {
-  it('renders a region docked bottom-right, at z-100, with rounded top corners', () => {
+  it('renders a region docked bottom-right, at z-100', () => {
     setDialer()
     render(<DialerDock />)
 
@@ -68,7 +68,27 @@ describe('DialerDock', () => {
     expect(region.className).toContain('bottom-0')
     expect(region.className).toContain('right-6')
     expect(region.className).toContain('z-[100]')
+  })
+
+  it('expanded keeps the floating card look: rounded top corners, a border, a shadow', () => {
+    setDialer({ view: 'expanded' })
+    render(<DialerDock />)
+
+    const region = screen.getByRole('region', { name: 'Dialer' })
     expect(region.className).toContain('rounded-t-md')
+    expect(region.className).toContain('shadow-md')
+    expect(region.className).toContain('w-80')
+  })
+
+  it('collapsed is a flat segment: no top border, no rounded corners, sized to its content', () => {
+    setDialer({ view: 'collapsed' })
+    render(<DialerDock />)
+
+    const region = screen.getByRole('region', { name: 'Dialer' })
+    expect(region.className).not.toMatch(/rounded-t/)
+    expect(region.className).not.toContain('border-t')
+    expect(region.className).toContain('border-x')
+    expect(region.className).not.toContain('w-80')
   })
 
   it('collapsed shows only the title bar, no body', () => {
@@ -78,6 +98,31 @@ describe('DialerDock', () => {
     expect(titleBar()).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByTestId('keypad')).not.toBeInTheDocument()
     expect(screen.queryByTestId('in-call')).not.toBeInTheDocument()
+  })
+
+  it('collapsed and idle reads "Start call", with no chevron', () => {
+    setDialer({ view: 'collapsed', phase: 'idle' })
+    render(<DialerDock />)
+
+    const button = screen.getByRole('button', { name: 'Start call' })
+    expect(button.querySelector('svg.lucide-chevron-down')).not.toBeInTheDocument()
+    expect(button.querySelector('svg.lucide-chevron-up')).not.toBeInTheDocument()
+  })
+
+  it('collapsed mid-call reads "Dialer", not "Start call" — there is nothing left to start', () => {
+    setDialer({ view: 'collapsed', phase: 'in-progress', elapsedSeconds: 5 })
+    render(<DialerDock />)
+
+    expect(screen.getByRole('button', { name: /^Dialer/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Start call/ })).not.toBeInTheDocument()
+  })
+
+  it('expanded still shows the collapsing chevron', () => {
+    setDialer({ view: 'expanded', phase: 'idle' })
+    render(<DialerDock />)
+
+    const button = screen.getByRole('button', { name: /Dialer/ })
+    expect(button.querySelector('svg.lucide-chevron-down')).toBeInTheDocument()
   })
 
   it('clicking the title bar toggles the view', () => {
