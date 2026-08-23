@@ -91,7 +91,6 @@ async function persistMessage(
     orgId: account.orgId,
     participants: participants.map((participant) => ({ address: participant.email })),
     occurredAt: message.sentAt,
-    internalDomains: account.emailAddress.split('@')[1] ? [account.emailAddress.split('@')[1]!] : [],
     direction: message.isOutbound ? 'outbound' : 'inbound',
   })
   await attachEmailMatchInTx(tx, email, match)
