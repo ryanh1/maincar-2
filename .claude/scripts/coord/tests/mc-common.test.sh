@@ -5,10 +5,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 
-# A full gate can saturate this machine on its own. Keep the safe default
-# serial, even though callers can deliberately opt into more workers.
-if ! grep -Fx 'MAX="${MC_MAX_JOBS:-1}"' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null; then
-  echo 'mc-gate default concurrency must be one' >&2
+# Two six-worker delivery gates fit inside the measured twelve-worker default,
+# which reserves six of eighteen M5 Pro workers for the system and other tools.
+if ! grep -Fx 'DEFAULT_DELIVERY_LIMIT=2' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
+   ! grep -Fx 'DEFAULT_GLOBAL_WORKER_BUDGET=12' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
+   ! grep -Fx 'DEFAULT_RESERVED_SYSTEM_WORKERS=6' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null; then
+  echo 'mc-gate default worker budget is not bounded for two delivery gates' >&2
   exit 1
 fi
 
@@ -34,6 +36,12 @@ env_for_test=(
   MC_MAIN_CHECKOUT="$SANDBOX/primary"
   MC_LOCAL_MAIN_REPO="$SANDBOX/state/local-main.git"
 )
+
+# A process can die after mkdir succeeds but before it records its PID. The
+# shared lock helper must recover that empty directory instead of timing out.
+mkdir -p "$SANDBOX/state/state/locks/empty-owner.lock"
+sleep 1
+env "${env_for_test[@]}" bash -c 'source "$1/.claude/scripts/coord/mc-common.sh"; mc_lock_acquire "$MC_STATE_HOME/state/locks/empty-owner.lock" 2; mc_lock_release "$MC_STATE_HOME/state/locks/empty-owner.lock"' _ "$ROOT"
 
 (
   cd "$SANDBOX/primary"

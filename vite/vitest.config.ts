@@ -23,5 +23,8 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     restoreMocks: true,
     css: false,
+    // Delivery gates set this to four, so two concurrent gates consume at most
+    // eight Vitest workers while preserving headroom for the rest of the stack.
+    maxWorkers: Number(process.env.VITEST_MAX_WORKERS ?? 4),
   },
 })

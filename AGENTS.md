@@ -58,9 +58,12 @@ Then use the coordination scripts in [`.claude/scripts/coord/`](.claude/scripts/
 
 - `eval "$(./.claude/scripts/coord/mc-slot --env)"` — stable ports for this worktree; no
   collisions with other sessions' dev servers.
-- `./.claude/scripts/coord/mc-gate` — run the test gate through a shared queue instead of
-  calling `npm run verify` directly. It still runs everything `verify` runs — it is
-  a queue, not a shortcut.
+- `./.claude/scripts/coord/mc-gate --focused -- npm --prefix vite exec vitest run path/to/file.test.tsx`
+  — run one named development test through the bounded focused lane. Arbitrary
+  commands and broad suites cannot claim this lane.
+- `./.claude/scripts/coord/mc-gate --delivery` — run the full delivery gate through
+  the shared scheduler instead of calling `npm run verify` directly. It runs the
+  same checks, caps framework workers, and is the only manual full-suite command.
 - `./.claude/scripts/coord/mc-merge --gate -m "MAI-123: ..."` — rebase from the
   local mirror, run the full gate, merge, and push under one lock, so two
   sessions can't push over each other. It automatically repairs a legacy clone's
@@ -73,8 +76,9 @@ Then use the coordination scripts in [`.claude/scripts/coord/`](.claude/scripts/
 For every implementation branch, finish the whole sequence before reporting the
 issue done:
 
-1. Run focused tests while implementing, then run the full queued gate with
-   `MC_GATE_FULL=1 ./.claude/scripts/coord/mc-gate` **before** committing.
+1. Run a named focused test while implementing, then run
+   `./.claude/scripts/coord/mc-gate --delivery` **before** committing. Focused
+   checks never satisfy the pre-commit or delivery requirement.
 2. Commit only the feature's own files, using explicit pathspecs.
 3. Run `./.claude/scripts/coord/mc-merge --gate -m "MAI-123: ..."`. This is the
    only permitted route to `main`: it rebases under the merge lock, reruns the
@@ -102,10 +106,14 @@ never reset, stash, revert, commit, or "clean up" another session's work.
 **Green tests are the gate.** Run this at the repo root, and read the output, before every `git commit` and every `git push`:
 
 ```bash
-npm run verify
+./.claude/scripts/coord/mc-gate --delivery
 ```
 
-That is `typecheck`, `lint`, `test`, and `test:integration`. **The integration suite is part of the gate, not an extra** — `npm test` does not include it, and it holds the only tests that prove the concurrency guardrails. It needs Postgres, so run `npm run docker:up` first.
+That schedules `typecheck`, `lint`, `test`, and `test:integration` with at most
+two delivery gates and a 12-worker framework budget, reserving six workers for
+the system. **The integration suite is part of the gate, not an extra** — `npm
+test` does not include it, and it holds the only tests that prove the concurrency
+guardrails. It needs Postgres, so run `npm run docker:up` first.
 
 - **Red blocks the commit.** Fix it, or stop and report exactly what is broken. Never commit or push over it.
 - **Another session's red is not your red.** The `pre-commit` hook already tells them apart, so you do not need `--no-verify` for a file you did not write. See [committing.md](.claude/rules/committing.md).
