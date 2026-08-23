@@ -278,6 +278,55 @@ describe('List + ListEntry (integration, real Postgres, real routes)', () => {
     expect(rows.map((row) => row.position)).toEqual([0, 1, 2, 3, 4])
   })
 
+  it('moves one entry between sparse neighbors without rewriting the rest', async () => {
+    const { org, admin } = await seedOrgWithPerson()
+    const people = await Promise.all(
+      ['Avery', 'Blake', 'Casey'].map((firstName) =>
+        prisma.person.create({ data: { orgId: org.orgId, firstName, lastName: 'List' } }),
+      ),
+    )
+    const list = await request(app)
+      .post(`/api/orgs/${org.orgId}/lists`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ name: 'Sparse people', objectSlug: 'person' })
+    expect(list.status).toBe(201)
+
+    const entries = await Promise.all(
+      people.map((person) =>
+        request(app)
+          .post(`/api/orgs/${org.orgId}/lists/${list.body.list.id}/entries`)
+          .set('Authorization', as(admin.firebaseUid))
+          .send({ targetId: person.id }),
+      ),
+    )
+    const entryIds = entries.map((entry) => entry.body.entry.id)
+    await prisma.listEntry.updateMany({
+      where: { orgId: org.orgId, listId: list.body.list.id },
+      data: { position: 0 },
+    })
+    await prisma.listEntry.updateMany({
+      where: { orgId: org.orgId, listId: list.body.list.id, id: entryIds[1] },
+      data: { position: 1_024 },
+    })
+    await prisma.listEntry.updateMany({
+      where: { orgId: org.orgId, listId: list.body.list.id, id: entryIds[2] },
+      data: { position: 2_048 },
+    })
+
+    const moved = await request(app)
+      .patch(`/api/orgs/${org.orgId}/lists/${list.body.list.id}/entries/reorder`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ entryId: entryIds[2], beforeEntryId: entryIds[0], afterEntryId: entryIds[1] })
+
+    expect(moved.status).toBe(204)
+    const rows = await prisma.listEntry.findMany({
+      where: { orgId: org.orgId, listId: list.body.list.id },
+      orderBy: { position: 'asc' },
+    })
+    expect(rows.map((row) => row.id)).toEqual([entryIds[0], entryIds[2], entryIds[1]])
+    expect(rows.map((row) => row.position)).toEqual([0, 512, 1_024])
+  })
+
   // ============================================================
   // Trash and org isolation
   // ============================================================

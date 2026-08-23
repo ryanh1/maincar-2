@@ -74,10 +74,19 @@ function ListGridRoute({ listId }: { listId: string }) {
     })
   }
 
-  async function saveOrder(entryIds: string[]) {
+  async function saveOrder(entryIds: string[], movedEntryId?: string) {
     if (!orgId) return
+    if (!movedEntryId) return
+    const movedIndex = entryIds.indexOf(movedEntryId)
+    if (movedIndex < 0) return
     try {
-      await reorderListEntries.mutateAsync({ orgId, listId, entryIds })
+      await reorderListEntries.mutateAsync({
+        orgId,
+        listId,
+        entryId: movedEntryId,
+        beforeEntryId: entryIds[movedIndex - 1] ?? null,
+        afterEntryId: entryIds[movedIndex + 1] ?? null,
+      })
     } catch (error) {
       toast.error(error instanceof Error && error.message ? error.message : 'Could not save the list order. Try again.')
       throw error

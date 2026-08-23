@@ -683,9 +683,19 @@ const updateEntryBodySchema = z.object({
   position: z.number().int().nullish(),
 })
 
-const reorderEntriesBodySchema = z.object({
+const fullReorderEntriesBodySchema = z.object({
   entryIds: z.array(z.string().trim().min(1)).min(1),
 })
+
+const sparseReorderEntryBodySchema = z.object({
+  entryId: z.string().trim().min(1),
+  beforeEntryId: z.string().trim().min(1).nullable().optional(),
+  afterEntryId: z.string().trim().min(1).nullable().optional(),
+})
+
+const reorderEntriesBodySchema = z.union([fullReorderEntriesBodySchema, sparseReorderEntryBodySchema])
+
+const LIST_POSITION_STEP = 1_024
 
 const REORDER_ENTRY_NOT_FOUND = 'REORDER_ENTRY_NOT_FOUND'
 
@@ -714,6 +724,86 @@ router.patch(
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
+    if ('entryId' in parsed.data) {
+      const { entryId, beforeEntryId = null, afterEntryId = null } = parsed.data
+      if (entryId === beforeEntryId || entryId === afterEntryId || beforeEntryId === afterEntryId) {
+        return void res.status(400).json({ error: 'The moved entry and its neighbors must be different.' })
+      }
+
+      // A sparse move changes one row when the neighboring ranks have room. If
+      // they do not, the transaction rebalances the list into a sparse sequence
+      // and then applies the move. Locking the list first keeps two dialers from
+      // choosing the same midpoint concurrently.
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT "id" FROM "ListEntry"
+            WHERE "orgId" = ${orgId} AND "listId" = ${listId}
+            FOR UPDATE
+          `
+          const entries = await tx.listEntry.findMany({
+            where: { orgId, listId },
+            select: { id: true, position: true },
+            orderBy: [{ position: { sort: 'asc', nulls: 'last' } }, { createdAt: 'asc' }, { id: 'asc' }],
+          })
+          const byId = new Map(entries.map((entry) => [entry.id, entry]))
+          const moved = byId.get(entryId)
+          const before = beforeEntryId ? byId.get(beforeEntryId) : undefined
+          const after = afterEntryId ? byId.get(afterEntryId) : undefined
+          if (!moved || (beforeEntryId && !before) || (afterEntryId && !after)) {
+            throw new Error(REORDER_ENTRY_NOT_FOUND)
+          }
+
+          const beforePosition = before?.position ?? null
+          const afterPosition = after?.position ?? null
+          let nextPosition: number | null = null
+          if (beforePosition !== null && afterPosition !== null && afterPosition - beforePosition > 1) {
+            nextPosition = beforePosition + Math.floor((afterPosition - beforePosition) / 2)
+          } else if (beforePosition !== null && afterEntryId === null) {
+            nextPosition = beforePosition + LIST_POSITION_STEP
+          } else if (afterPosition !== null && beforeEntryId === null) {
+            nextPosition = afterPosition - LIST_POSITION_STEP
+          }
+
+          if (nextPosition !== null) {
+            const result = await tx.listEntry.updateMany({
+              where: { id: entryId, orgId, listId },
+              data: { position: nextPosition },
+            })
+            if (result.count === 0) throw new Error(REORDER_ENTRY_NOT_FOUND)
+            return
+          }
+
+          const orderedIds = entries.filter((entry) => entry.id !== entryId).map((entry) => entry.id)
+          const insertAt = afterEntryId
+            ? orderedIds.indexOf(afterEntryId)
+            : beforeEntryId
+              ? orderedIds.indexOf(beforeEntryId) + 1
+              : orderedIds.length
+          if (insertAt < 0 || (beforeEntryId && orderedIds.indexOf(beforeEntryId) < 0)) {
+            throw new Error(REORDER_ENTRY_NOT_FOUND)
+          }
+          orderedIds.splice(insertAt, 0, entryId)
+
+          for (const [position, id] of orderedIds.entries()) {
+            const result = await tx.listEntry.updateMany({
+              where: { id, orgId, listId },
+              data: { position: position * LIST_POSITION_STEP },
+            })
+            if (result.count === 0) throw new Error(REORDER_ENTRY_NOT_FOUND)
+          }
+        })
+      } catch (error) {
+        if (error instanceof Error && error.message === REORDER_ENTRY_NOT_FOUND) {
+          return void res.status(404).json({ error: 'Entry not found' })
+        }
+        throw error
+      }
+
+      logger.info({ orgId, userId, listId, entryId }, 'moved one list entry')
+      return void res.status(204).end()
+    }
+
     const entryIds = parsed.data.entryIds
     if (new Set(entryIds).size !== entryIds.length) {
       return void res.status(400).json({ error: 'Each entry may appear only once.' })
