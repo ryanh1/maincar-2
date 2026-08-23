@@ -1,185 +1,94 @@
 #!/usr/bin/env bash
-# Merges YOUR branch into main, one session at a time.
+# Delivers YOUR already-verified branch to main, one short critical section at a
+# time. Full tests belong to mc-gate --delivery, outside this global merge lock.
 #
-# Why: multiple sessions each doing fetch -> rebase -> merge -> push at once means
-# main moves between your last rebase and your push. This takes a global lock,
-# re-checks that main has not moved since you rebased, and only then merges.
-# If main did move it stops and tells you to rebase and re-run the gates.
-#
-#   mc-merge                      # merge the current branch, default message
-#   mc-merge -m "MAI-123: ..."    # descriptive merge subject
-#   mc-merge --gate               # take the lock FIRST, then rebase, gate, and merge
-#   mc-merge --check              # is main where I rebased onto? (no lock, no changes)
-#
-# NOTE: mc-merge does NOT run the gates. It only proves main has not moved since
-# you rebased, and serialises the merge. Run `mc-gate` yourself first.
+#   mc-merge -m "MAI-123: descriptive merge subject"
+#   mc-merge --gate -m "MAI-123: ..."  # accepted for old callers; does not test
+#   mc-merge --check                   # is the current receipt mergeable?
 set -euo pipefail
 source "$(dirname "$0")/mc-common.sh"
 
 MSG=""
-GATE=0
+LEGACY_GATE=0
 while :; do
   case "${1:-}" in
     -m) MSG="${2:-}"; shift 2 ;;
-    --gate) GATE=1; shift ;;
+    --gate) LEGACY_GATE=1; shift ;;
     *) break ;;
   esac
 done
 
-WT="$(mc_worktree)"; BR="$(mc_branch)"
+WT="$(mc_worktree)"
+BR="$(mc_branch)"
 cd "$WT"
 mc_assert_ticket_checkout || exit 2
 [ "$BR" = "main" ] && { echo "mc-merge: you are on main. Run this from your ticket branch." >&2; exit 2; }
 if [ -n "$(git status --porcelain)" ]; then
-  echo "mc-merge: working tree is dirty. Commit or stash first." >&2; git status --short >&2; exit 2
+  echo "mc-merge: working tree is dirty. Commit or stash first." >&2
+  git status --short >&2
+  exit 2
+fi
+if [ "$LEGACY_GATE" = 1 ]; then
+  echo "[mc-merge] --gate is retained for compatibility; it no longer runs tests under the merge lock." >&2
 fi
 
 UPSTREAM="$(mc_canonical_upstream_url)" || exit 1
 mc_fetch_local_main --quiet
-BASE="$(git merge-base HEAD origin/main)"
+HEAD="$(git rev-parse HEAD)"
 TIP="$(git rev-parse origin/main)"
+BASE="$(git merge-base HEAD origin/main)"
 
-if [ "${1:-}" = "--check" ]; then
-  if [ "$BASE" = "$TIP" ]; then echo "up to date with origin/main ($(git rev-parse --short "$TIP"))"; exit 0; fi
-  echo "origin/main has moved. You are $(git rev-list --count "$BASE..$TIP") commit(s) behind."
-  git --no-pager log --oneline "$BASE..$TIP" | head -20
+if [ "$BASE" != "$TIP" ]; then
+  echo "mc-merge: branch is $(git rev-list --count "$BASE..$TIP") commit(s) behind origin/main." >&2
+  echo "  Run: git rebase origin/main && ./.claude/scripts/coord/mc-gate --delivery" >&2
   exit 1
 fi
 
-if [ "$GATE" = 1 ]; then
-  # --gate exists because a branch cannot win the race without it. The gates take
-  # minutes; main lands commits faster than that; so rebase -> gate -> merge loses
-  # every time and the session loops forever. Taking the lock FIRST makes the whole
-  # critical section serial: nothing can move main while this rebases and gates,
-  # so the green run is still green at merge.
-  #
-  # It does NOT weaken the check. The gates still run, after the rebase, on the exact
-  # tree being merged. It only stops main moving underneath them.
-
-  # PREFLIGHT, before taking the lock. Holding a machine-wide lock for four minutes and
-  # then failing on a missing file blocks everyone for nothing.
-  if [ ! -r "$WT/.env" ]; then
-    echo "mc-merge --gate: $WT/.env is missing, and the test harness needs it." >&2
-    echo "  It is git-ignored, so a fresh worktree does not have one. Copy it:" >&2
-    echo "    cp '/Users/ryanhollander/Documents/Coding/My Projects/maincar-2/.env' '$WT/.env'" >&2
-    echo "  Refusing now rather than after holding the merge lock through the gates." >&2
-    exit 1
-  fi
-  if [ ! -d "$WT/node_modules" ] || [ ! -d "$WT/server/node_modules" ] || [ ! -d "$WT/vite/node_modules" ]; then
-    echo "mc-merge --gate: dependencies are not installed in this worktree." >&2
-    echo "    npm install && npm --prefix server install && npm --prefix vite install" >&2
-    echo "  Refusing now rather than after holding the merge lock." >&2
-    exit 1
-  fi
-
-  LOCK="$STATE/locks/merge.lock"
-  echo "[mc-merge --gate] waiting for the merge lock BEFORE rebasing, so main cannot move under the gates..."
-  mc_lock_acquire "$LOCK" 3600 || { echo "mc-merge: merge lock busy for an hour. Tell the coordinator." >&2; exit 1; }
-  trap 'mc_lock_release "$LOCK"' EXIT
-  echo "[mc-merge --gate] lock held. Nothing else can merge until this finishes or fails."
-  mc_log "merge --gate start $BR"
-
-  mc_fetch_local_main --quiet
-  PRE_REBASE_HEAD="$(git rev-parse HEAD)"
-  echo "[mc-merge --gate] rebasing onto $(git rev-parse --short origin/main)"
-  if ! git rebase origin/main; then
-    echo >&2
-    echo "REBASE CONFLICT. Resolve it, then run mc-merge --gate again." >&2
-    echo "The lock is released, so other sessions are not blocked while you fix it." >&2
-    git rebase --abort 2>/dev/null || true
-    exit 1
-  fi
-
-  # The rebase can pull package manifests or locks into this worktree after its
-  # local gate has passed. Synchronize just those roots before any generated
-  # client or verification command reads the stale dependency tree.
-  rebased_dependency_roots="$(mc_changed_dependency_roots "$WT" "$PRE_REBASE_HEAD" HEAD)"
-  if [ -n "$rebased_dependency_roots" ]; then
-    echo "[mc-merge --gate] synchronizing dependencies introduced by the rebase: $(tr '\n' ' ' <<< "$rebased_dependency_roots")"
-    if ! printf '%s\n' "$rebased_dependency_roots" | mc_sync_dependencies "$WT"; then
-      echo "[mc-merge --gate] Could not synchronize dependencies after rebase. Not merging." >&2
-      exit 3
-    fi
-  fi
-
-  # A rebase can pull a schema change into a checkout with an ignored stale
-  # client. Generate it here and fail loudly if that cannot happen.
-  if ! mc_ensure_prisma_client; then
-    echo "[mc-merge --gate] Could not generate the Prisma client. Not merging." >&2
-    exit 3
-  fi
-
-  echo "[mc-merge --gate] running the gates on the rebased tree"
-  if ! npm run verify; then
-    echo >&2
-    echo "GATES FAILED on the rebased tree. Not merging." >&2
-    exit 1
-  fi
-  echo "[mc-merge --gate] gates green. Merging."
-
-  TMP="$(mktemp -d "${TMPDIR:-/tmp}/mc-merge-XXXXXX")"; rm -rf "$TMP"
-  git worktree add --detach "$TMP" origin/main --quiet
-  cleanup_gate() { git worktree remove --force "$TMP" 2>/dev/null || true; mc_lock_release "$LOCK"; }
-  trap cleanup_gate EXIT
-  [ -z "$MSG" ] && MSG="Merge $BR into main"
-  printf '%s\n\nCo-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>\n' "$MSG" > "$TMP/../mc-merge-msg.txt"
-  git -C "$TMP" merge --no-ff "$BR" -F "$TMP/../mc-merge-msg.txt"
-  git -C "$TMP" push "$UPSTREAM" HEAD:main
-  mc_sync_local_main
-  mc_refresh_primary_checkout
-  git fetch --quiet origin
-  mc_record_delivery "$BR" "$(git -C "$LOCAL_MAIN_REPO" rev-parse main)" "$UPSTREAM"
-  echo "[mc-merge --gate] merged and pushed. $BR is on main."
-  mc_log "merge --gate done $BR"
+if [ "${1:-}" = "--check" ]; then
+  mc_require_delivery_receipt "$HEAD" "$TIP" "$BR"
+  echo "delivery receipt is current for $(git rev-parse --short "$HEAD") on $(git rev-parse --short "$TIP")"
   exit 0
 fi
 
-if [ "$BASE" != "$TIP" ]; then
-  echo "STOP: origin/main moved $(git rev-list --count "$BASE..$TIP") commit(s) since you branched/rebased." >&2
-  git --no-pager log --oneline "$BASE..$TIP" | head -20 >&2
-  echo >&2
-  echo "Do this, then run mc-merge again:" >&2
-  echo "  git rebase origin/main && mc-gate" >&2
+mc_require_delivery_receipt "$HEAD" "$TIP" "$BR" || exit 1
+
+LOCK="$STATE/locks/merge.lock"
+echo "[mc-merge] delivery receipt is current; waiting for the short merge lock..."
+mc_lock_acquire "$LOCK" 1800 || { echo "mc-merge: merge lock busy for 30 min. Tell the coordinator." >&2; exit 1; }
+TMP=""
+cleanup() {
+  [ -n "$TMP" ] && git worktree remove --force "$TMP" 2>/dev/null || true
+  mc_lock_release "$LOCK"
+}
+trap cleanup EXIT
+echo "[mc-merge] lock held. Rechecking the delivery receipt before merging $BR."
+mc_log "merge start $BR"
+
+# The lock closes the time-of-check/time-of-use gap. It is intentionally the
+# only point at which a waiting merge can invalidate another ticket's receipt.
+mc_fetch_local_main --quiet
+CURRENT_HEAD="$(git rev-parse HEAD)"
+CURRENT_TIP="$(git rev-parse origin/main)"
+if ! mc_require_delivery_receipt "$CURRENT_HEAD" "$CURRENT_TIP" "$BR"; then
+  echo "  main changed while you waited; rebase and rerun the delivery gate outside the lock." >&2
+  mc_log "merge aborted $BR (delivery receipt stale after lock)"
   exit 1
 fi
 
-LOCK="$STATE/locks/merge.lock"
-echo "[mc-merge] waiting for the merge lock..."
-mc_lock_acquire "$LOCK" 1800 || { echo "mc-merge: merge lock busy for 30 min. Tell the coordinator." >&2; exit 1; }
-trap 'mc_lock_release "$LOCK"' EXIT
-echo "[mc-merge] lock held. Merging $BR."
-mc_log "merge start $BR"
-
-# Someone may have pushed while we waited for the lock.
-MSG_FIRST_LINE="$(printf '%s' "${MSG:-your message}" | head -1)"
-mc_fetch_local_main --quiet
-if [ "$(git rev-parse origin/main)" != "$TIP" ]; then
-  # This refusal is correct but it is a TRAP without the next four lines. The time
-  # you spend waiting for the lock is time other sessions spend merging, so at this
-  # merge rate main has almost always moved by the time you hold it. Rebase, re-gate
-  # and try again and you lose the same race, indefinitely.
-  echo "STOP: main moved while you waited for the lock." >&2
-  echo >&2
-  echo "  Do NOT just rebase and run this again -- you will lose the same race." >&2
-  echo "  The lock WAIT is inside the race, so a fast retry loses as reliably as a slow one." >&2
-  echo >&2
-  echo "  Use --gate instead. It takes the lock FIRST, then rebases, gates and merges," >&2
-  echo "  so main cannot move underneath you:" >&2
-  echo >&2
-  echo "      mc-merge --gate -m \"$MSG_FIRST_LINE\"" >&2
-  echo >&2
-  mc_log "merge aborted $BR (main moved during wait; pointed at --gate)"; exit 1
-fi
-
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/mc-merge-XXXXXX")"; rm -rf "$TMP"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/mc-merge-XXXXXX")"
+rm -rf "$TMP"
 git worktree add --detach "$TMP" origin/main --quiet
-cleanup() { git worktree remove --force "$TMP" 2>/dev/null || true; mc_lock_release "$LOCK"; }
-trap cleanup EXIT
-
 [ -z "$MSG" ] && MSG="Merge $BR into main"
 printf '%s\n\nCo-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>\n' "$MSG" > "$TMP/../mc-merge-msg.txt"
 git -C "$TMP" merge --no-ff "$BR" -F "$TMP/../mc-merge-msg.txt"
 git -C "$TMP" push "$UPSTREAM" HEAD:main
+git worktree remove --force "$TMP" 2>/dev/null || true
+TMP=""
+mc_lock_release "$LOCK"
+trap - EXIT
+
+# The push is durable; mirror refresh and primary-checkout hygiene should not
+# prevent another already-verified ticket from entering the next short merge.
 mc_sync_local_main
 mc_refresh_primary_checkout
 git fetch --quiet origin

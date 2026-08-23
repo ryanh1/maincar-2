@@ -37,6 +37,20 @@ env_for_test=(
   MC_LOCAL_MAIN_REPO="$SANDBOX/state/local-main.git"
 )
 
+# The real delivery gate writes this receipt after a green full suite. These
+# mirror tests exercise merge mechanics with no application test runtime, so
+# record the same immutable head/base/branch evidence directly.
+record_delivery_gate() {
+  local checkout="$1"
+  (
+    cd "$checkout"
+    env "${env_for_test[@]}" bash -c '
+      source "$1/.claude/scripts/coord/mc-common.sh"
+      mc_record_delivery_gate "$(git rev-parse HEAD)" "$(git rev-parse origin/main)" "$(mc_branch)"
+    ' _ "$ROOT"
+  )
+}
+
 # A process can die after mkdir succeeds but before it records its PID. The
 # shared lock helper must recover that empty directory instead of timing out.
 mkdir -p "$SANDBOX/state/state/locks/empty-owner.lock"
@@ -70,6 +84,7 @@ git -C "$SANDBOX/issue-worktree" config user.name 'Coordination test'
 git -C "$SANDBOX/issue-worktree" config user.email 'coordination-test@example.test'
 git -C "$SANDBOX/issue-worktree" checkout -b issue-change --quiet
 git -C "$SANDBOX/issue-worktree" commit --allow-empty -m 'Issue change' --quiet
+record_delivery_gate "$SANDBOX/issue-worktree"
 
 (
   cd "$SANDBOX/issue-worktree"
@@ -122,6 +137,7 @@ touch "$SANDBOX/issue-primary-refresh/delivered-change"
 git -C "$SANDBOX/issue-primary-refresh" add delivered-change
 git -C "$SANDBOX/issue-primary-refresh" rm tracked-placeholder --quiet
 git -C "$SANDBOX/issue-primary-refresh" commit -m 'Refresh primary checkout' --quiet
+record_delivery_gate "$SANDBOX/issue-primary-refresh"
 (
   cd "$SANDBOX/issue-primary-refresh"
   env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Refresh primary checkout'
@@ -150,6 +166,7 @@ git -C "$SANDBOX/issue-untracked-collision" checkout -b issue-untracked-collisio
 printf '%s\n' 'delivered source' > "$SANDBOX/issue-untracked-collision/untracked-collision"
 git -C "$SANDBOX/issue-untracked-collision" add untracked-collision
 git -C "$SANDBOX/issue-untracked-collision" commit -m 'Deliver colliding path' --quiet
+record_delivery_gate "$SANDBOX/issue-untracked-collision"
 primary_before_collision_delivery="$(git -C "$SANDBOX/primary" rev-parse HEAD)"
 (
   cd "$SANDBOX/issue-untracked-collision"
@@ -193,6 +210,7 @@ mkdir -p "$SANDBOX/issue-dependency-refresh/vite"
 printf '{"lockfileVersion": 3}\n' > "$SANDBOX/issue-dependency-refresh/vite/package-lock.json"
 git -C "$SANDBOX/issue-dependency-refresh" add vite/package-lock.json
 git -C "$SANDBOX/issue-dependency-refresh" commit -m 'Change frontend dependency lockfile' --quiet
+record_delivery_gate "$SANDBOX/issue-dependency-refresh"
 (
   cd "$SANDBOX/issue-dependency-refresh"
   env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver dependency lockfile change'
@@ -222,9 +240,9 @@ if ! grep -Fx -- "--prefix $primary_real/vite ci" "$SANDBOX/npm.log" >/dev/null;
   exit 1
 fi
 
-# A ticket's lockfile can become stale between its local gate and the locked
-# rebase in mc-merge --gate. The merge gate must synchronize dependencies pulled
-# in by that rebase before it runs verification.
+# A receipt is bound to both the ticket head and the main tip. Once another
+# ticket advances main, mc-merge must reject the stale receipt rather than
+# rebasing or running verification while it owns the merge lock.
 git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-rebase-dependency" --quiet
 git -C "$SANDBOX/issue-rebase-dependency" config user.name 'Coordination test'
 git -C "$SANDBOX/issue-rebase-dependency" config user.email 'coordination-test@example.test'
@@ -241,27 +259,27 @@ mkdir -p "$SANDBOX/main-add-firebase-dependency/firebase"
 printf '{"lockfileVersion": 3}\n' > "$SANDBOX/main-add-firebase-dependency/firebase/package-lock.json"
 git -C "$SANDBOX/main-add-firebase-dependency" add firebase/package-lock.json
 git -C "$SANDBOX/main-add-firebase-dependency" commit -m 'Add Firebase dependency lockfile' --quiet
+record_delivery_gate "$SANDBOX/main-add-firebase-dependency"
 (
   cd "$SANDBOX/main-add-firebase-dependency"
   env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver Firebase dependency lockfile'
 )
 
-touch "$SANDBOX/issue-rebase-dependency/.env"
-printf '.env\n' >> "$SANDBOX/issue-rebase-dependency/.git/info/exclude"
-mkdir -p "$SANDBOX/issue-rebase-dependency/node_modules" \
-  "$SANDBOX/issue-rebase-dependency/server/node_modules" \
-  "$SANDBOX/issue-rebase-dependency/vite/node_modules"
-: > "$SANDBOX/rebase-npm.log"
-rebase_worktree="$(cd "$SANDBOX/issue-rebase-dependency" && pwd -P)"
-(
+record_delivery_gate "$SANDBOX/issue-rebase-dependency"
+if (
   cd "$SANDBOX/issue-rebase-dependency"
-  MC_NPM_LOG="$SANDBOX/rebase-npm.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" \
-    "$ROOT/.claude/scripts/coord/mc-merge" --gate -m 'Merge ticket after Firebase dependency update'
-)
-if ! grep -Fx -- "--prefix $rebase_worktree/firebase ci" "$SANDBOX/rebase-npm.log" >/dev/null; then
-  echo 'mc-merge --gate did not synchronize dependencies introduced by its rebase' >&2
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" --gate -m 'Reject stale ticket receipt'
+); then
+  echo 'mc-merge accepted a receipt from before main advanced' >&2
   exit 1
 fi
+git -C "$SANDBOX/issue-rebase-dependency" fetch origin --quiet
+git -C "$SANDBOX/issue-rebase-dependency" rebase origin/main --quiet
+record_delivery_gate "$SANDBOX/issue-rebase-dependency"
+(
+  cd "$SANDBOX/issue-rebase-dependency"
+  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Merge ticket after fresh delivery gate'
+)
 
 # Schema migrations are the database equivalent of a dependency lockfile: code
 # cannot safely run until they are applied. Automatic refresh must therefore
@@ -276,6 +294,7 @@ mkdir -p "$SANDBOX/issue-migration-refresh/server/prisma/migrations/202608220900
 printf '%s\n' '-- test migration' > "$SANDBOX/issue-migration-refresh/server/prisma/migrations/20260822090000_test_primary_refresh/migration.sql"
 git -C "$SANDBOX/issue-migration-refresh" add server/prisma/migrations
 git -C "$SANDBOX/issue-migration-refresh" commit -m 'Add a schema migration' --quiet
+record_delivery_gate "$SANDBOX/issue-migration-refresh"
 (
   cd "$SANDBOX/issue-migration-refresh"
   env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver schema migration'
@@ -320,6 +339,7 @@ git -C "$SANDBOX/mai-999-closeout" config user.name 'Coordination test'
 git -C "$SANDBOX/mai-999-closeout" config user.email 'coordination-test@example.test'
 git -C "$SANDBOX/mai-999-closeout" checkout -b mai-999-closeout --quiet
 git -C "$SANDBOX/mai-999-closeout" commit --allow-empty -m 'MAI-999: Closeout test' --quiet
+record_delivery_gate "$SANDBOX/mai-999-closeout"
 (
   cd "$SANDBOX/mai-999-closeout"
   env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'MAI-999: Merge closeout test'

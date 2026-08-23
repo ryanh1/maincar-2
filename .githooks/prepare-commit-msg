@@ -34,7 +34,7 @@ case "$verdict" in
     exit 0
     ;;
   degraded:*)
-    trailer="Verified-by: pre-commit hook — tests green; ${verdict#degraded: } red on
+    trailer="Verified-by: pre-commit hook — static checks green; ${verdict#degraded: } red on
   another session's files, not on any file in this commit."
     ;;
   *)

@@ -13,9 +13,24 @@ mkdir -p "$SANDBOX/primary"
 cat > "$SANDBOX/bin/npm" <<'EOF'
 #!/usr/bin/env bash
 printf '%s|VITEST_MAX_WORKERS=%s|PLAYWRIGHT_WORKERS=%s\n' "$*" "${VITEST_MAX_WORKERS:-}" "${PLAYWRIGHT_WORKERS:-}" >> "$MC_FAKE_NPM_LOG"
-sleep 1
+sleep 2
 EOF
 chmod +x "$SANDBOX/bin/npm"
+
+# Delivery receipts deliberately require a committed ticket checkout. Keep the
+# scheduler test isolated from this test file's own uncommitted RED/GREEN edits.
+git init --bare "$SANDBOX/upstream.git" --quiet
+git init "$SANDBOX/ticket" --quiet
+git -C "$SANDBOX/ticket" config user.name 'Gate test'
+git -C "$SANDBOX/ticket" config user.email 'gate-test@example.test'
+git -C "$SANDBOX/ticket" checkout -b main --quiet
+touch "$SANDBOX/ticket/fixture"
+git -C "$SANDBOX/ticket" add fixture
+git -C "$SANDBOX/ticket" commit -m 'Initial main' --quiet
+git -C "$SANDBOX/ticket" remote add origin "$SANDBOX/upstream.git"
+git -C "$SANDBOX/ticket" push -u origin main --quiet
+git -C "$SANDBOX/ticket" checkout -b gate-receipt-test --quiet
+git -C "$SANDBOX/ticket" commit --allow-empty -m 'Gate receipt fixture' --quiet
 
 gate_env=(
   MC_STATE_HOME="$SANDBOX/state"
@@ -25,7 +40,7 @@ gate_env=(
 )
 
 run_gate() {
-  env "${gate_env[@]}" "$GATE" "$@"
+  (cd "$SANDBOX/ticket" && env "${gate_env[@]}" "$GATE" "$@")
 }
 
 if run_gate --focused -- npm run verify >"$SANDBOX/broad.out" 2>&1; then
@@ -89,22 +104,41 @@ for run in 1 2 3; do
   grep -F 'VITEST_MAX_WORKERS=4|PLAYWRIGHT_WORKERS=2' "$SANDBOX/npm.log" >/dev/null
 done
 
-if env "${gate_env[@]}" MC_GATE_OVERRIDE=1 MC_GATE_MACHINE_WORKERS=24 MC_GATE_GLOBAL_WORKER_BUDGET=16 MC_GATE_VITEST_WORKERS=8 MC_GATE_PLAYWRIGHT_WORKERS=1 "$GATE" --delivery >"$SANDBOX/over-budget.out" 2>&1; then
+# A successful delivery gate must leave evidence of the exact branch head and
+# main base it exercised. mc-merge will later re-check this pair under its
+# short lock instead of running another full suite there.
+run_gate --delivery >"$SANDBOX/receipt.out"
+receipt="$SANDBOX/state/state/delivery-gates/$(git -C "$SANDBOX/ticket" rev-parse HEAD).tsv"
+if [ ! -f "$receipt" ]; then
+  echo 'delivery gate did not write its verification receipt' >&2
+  exit 1
+fi
+if ! grep -F "$(git -C "$SANDBOX/ticket" rev-parse origin/main)" "$receipt" >/dev/null; then
+  echo 'delivery receipt did not record the tested main base' >&2
+  exit 1
+fi
+
+if (cd "$SANDBOX/ticket" && env "${gate_env[@]}" MC_GATE_OVERRIDE=1 MC_GATE_MACHINE_WORKERS=24 MC_GATE_GLOBAL_WORKER_BUDGET=16 MC_GATE_VITEST_WORKERS=8 MC_GATE_PLAYWRIGHT_WORKERS=1 "$GATE" --delivery >"$SANDBOX/over-budget.out" 2>&1); then
   echo 'delivery override exceeded the global worker budget' >&2
   exit 1
 fi
 grep -F 'exceeds global worker budget' "$SANDBOX/over-budget.out" >/dev/null
 
-env "${gate_env[@]}" MC_GATE_OVERRIDE=1 MC_GATE_DELIVERY_LIMIT=1 "$GATE" --delivery >"$SANDBOX/override.out" 2>&1
+(cd "$SANDBOX/ticket" && env "${gate_env[@]}" MC_GATE_OVERRIDE=1 MC_GATE_DELIVERY_LIMIT=1 "$GATE" --delivery >"$SANDBOX/override.out" 2>&1)
 grep -F 'WARNING: manual scheduler override is active' "$SANDBOX/override.out" >/dev/null
 
-if ! grep -F 'if ! npm run verify; then' "$ROOT/.claude/scripts/coord/mc-merge" >/dev/null; then
-  echo 'mc-merge --gate must verify the rebased tree directly' >&2
+if ! grep -F 'mc_require_delivery_receipt' "$ROOT/.claude/scripts/coord/mc-merge" >/dev/null; then
+  echo 'mc-merge does not require an exact delivery receipt' >&2
   exit 1
 fi
 
-if grep -F '"$COORD_SCRIPTS_DIR/mc-gate" --delivery' "$ROOT/.claude/scripts/coord/mc-merge" >/dev/null; then
-  echo 'mc-merge --gate must not enter the shared delivery scheduler' >&2
+if grep -F 'npm run verify' "$ROOT/.claude/scripts/coord/mc-merge" >/dev/null; then
+  echo 'mc-merge must not run a full suite while it holds the merge lock' >&2
+  exit 1
+fi
+
+if grep -F 'mc_lock_acquire "$LOCK" 3600' "$ROOT/.claude/scripts/coord/mc-merge" >/dev/null; then
+  echo 'mc-merge retained the long gate-and-merge lock path' >&2
   exit 1
 fi
 

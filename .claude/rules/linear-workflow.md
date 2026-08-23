@@ -46,9 +46,11 @@ Use this skill whenever you're working on an existing Linear issue.
 
 Use `mc-gate --focused -- npm --prefix <server|vite> exec vitest run path/to/file.test.ts`
 only for one named test during development. The command is intentionally strict:
-broad or arbitrary commands cannot claim the focused lane. Before committing,
-use `mc-gate --delivery`; `mc-merge --gate` invokes that same delivery class
-after its locked rebase. Focused checks never satisfy pre-commit or delivery.
+broad or arbitrary commands cannot claim the focused lane. After committing,
+sync and rebase `origin/main`, then use `mc-gate --delivery`; its successful
+receipt identifies the exact branch head and main base. `mc-merge` only rechecks
+that receipt under a short lock and never invokes a delivery suite. Focused
+checks never satisfy pre-commit or delivery.
 
 ## Branch Naming
 
