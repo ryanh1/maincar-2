@@ -13,6 +13,7 @@ const {
   useGetObjectMock,
   useGetObjectsMock,
   useGetViewsMock,
+  useReorderViewsMock,
   useRestoreViewMock,
   useSaveViewMock,
   useSetDefaultViewMock,
@@ -23,6 +24,7 @@ const {
   useGetObjectMock: vi.fn(),
   useGetObjectsMock: vi.fn(),
   useGetViewsMock: vi.fn(),
+  useReorderViewsMock: vi.fn(),
   useRestoreViewMock: vi.fn(),
   useSaveViewMock: vi.fn(),
   useSetDefaultViewMock: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock('@/hooks/crm', () => ({
 
 vi.mock('@/hooks/savedViews', () => ({
   useGetViews: useGetViewsMock,
+  useReorderViews: useReorderViewsMock,
   useDeleteView: useDeleteViewMock,
   useDuplicateView: useDuplicateViewMock,
   useRestoreView: useRestoreViewMock,
@@ -104,6 +107,7 @@ describe('Records', () => {
     useDuplicateViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
     useDeleteViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
     useRestoreViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
+    useReorderViewsMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
     useSetDefaultViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
   })
 

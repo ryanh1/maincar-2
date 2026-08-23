@@ -142,6 +142,42 @@ describe('Records_SavedViewControls', () => {
     expect(onSetDefault).toHaveBeenCalledOnce()
   })
 
+  it('supports keyboard selection and returns focus to the actions button when a rename is cancelled', async () => {
+    const user = userEvent.setup()
+    const onSelectView = vi.fn()
+
+    renderWithProviders(
+      <Records_SavedViewControls
+        views={[personalView, sharedView]}
+        selectedViewId="personal"
+        hasUnsavedChanges={false}
+        isSaving={false}
+        onSelectView={onSelectView}
+        onSave={vi.fn()}
+        onReset={vi.fn()}
+        onRename={vi.fn()}
+        onDuplicate={vi.fn()}
+        onDelete={vi.fn()}
+        onRestore={vi.fn()}
+        onVisibilityChange={vi.fn()}
+        onSetDefault={vi.fn()}
+        onReorder={vi.fn()}
+      />,
+    )
+
+    const switcher = screen.getByRole('combobox', { name: 'Saved view' })
+    switcher.focus()
+    await user.keyboard('{ArrowDown}{ArrowDown}{Enter}')
+    expect(onSelectView).toHaveBeenCalledWith('shared')
+
+    const actions = screen.getByRole('button', { name: 'Show actions for My view view' })
+    actions.focus()
+    await user.keyboard('{Enter}{Enter}')
+    expect(screen.getByRole('textbox', { name: 'Saved view name' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('button', { name: 'Show actions for My view view' })).toHaveFocus()
+  })
+
   it('requires confirmation before deleting a Shared view and blocks deleting the default', async () => {
     const user = userEvent.setup()
     const onDelete = vi.fn()
