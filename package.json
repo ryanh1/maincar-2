@@ -24,7 +24,7 @@
     "test:server": "npm --prefix server run test",
     "test:web": "npm --prefix vite run test",
     "test:integration": "npm --prefix server run test:integration",
-    "verify": "npm run db:check && npm run typecheck && npm run lint && npm test && npm run test:integration",
+    "verify": "npm run db:check && npm run schema:dump -- --check && npm run typecheck && npm run lint && npm test && npm run test:integration",
     "hooks:install": "git config core.hooksPath .githooks",
     "db:generate": "npm --prefix server run db:generate",
     "db:migrate": "npm --prefix server run db:migrate",
