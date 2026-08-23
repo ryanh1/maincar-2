@@ -10,6 +10,7 @@ import { AuthProvider } from '@/providers/AuthProvider'
 import { SignIn } from '@/pages/auth/SignIn'
 import { SignUp } from '@/pages/auth/SignUp'
 import { Calls } from '@/pages/Calls'
+import { CalendarWorkspace } from '@/pages/CalendarWorkspace'
 import { CallDetail } from '@/pages/CallDetail'
 import { CrmGrid } from '@/pages/CrmGrid'
 import { CreateOrg } from '@/pages/CreateOrg'
@@ -38,6 +39,7 @@ const router = createBrowserRouter([
       { index: true, element: <Navigate to="/home" replace /> },
       { path: 'home', element: <Home /> },
       { path: 'calls', element: <Calls /> },
+      { path: 'calendar', element: <CalendarWorkspace /> },
       { path: 'calls/:id', element: <CallDetail /> },
       { path: 'voicemails/:id', element: <VoicemailDetail /> },
       { path: 'voicemails', element: <Voicemails /> },
