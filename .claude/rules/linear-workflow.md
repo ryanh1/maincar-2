@@ -42,19 +42,19 @@ The `linear-execute-issue` skill is your workflow for taking an issue from Linea
 
 Use this skill whenever you're working on an existing Linear issue.
 
-## Focused checks and delivery trains
+## Focused checks and simple delivery
 
 Use `mc-gate --focused -- npm --prefix <server|vite> exec vitest run path/to/file.test.ts`
 for one named Vitest file during development. Broad commands and Playwright
 cannot claim this lane.
 
-After committing, enqueue the exact head with an explicit risk, coverage note,
-and relevant focused tests, then run the train. Compatible ready changes are
-tested together on the newest mirrored `main`; high-risk work travels alone.
-The train receipt identifies the tested combined head, shared-main base, tests,
-coverage, risk, and members. The final merge slot rechecks the base and pushes
-that already-tested tree. Never call `mc-merge`, manufacture a per-session
-receipt, or run a full suite while holding the merge slot.
+After committing, use `mc-gate --check` with the exact relevant test files.
+Then use `mc-deliver enqueue --test <kind:path>` and `mc-deliver run`. One run
+handles one issue. It merges the issue onto newest `main` in a temporary clone,
+runs TypeScript, lint, and those exact tests, then pushes the checked result.
+There are no risk levels, combined groups, retries, or browser checks. Never
+call `mc-train`, `mc-merge`, a raw `git push`, `npm test`, or `npm run verify`
+as a substitute.
 
 ## Branch Naming
 

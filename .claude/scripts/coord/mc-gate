@@ -1,225 +1,222 @@
 #!/usr/bin/env bash
-# Runs one bounded development test or the risk-specific verification plan for
-# an already-built delivery train. Delivery trains never reserve or run
-# Playwright; every admitted slot represents the Vitest workers it can start.
+# Shares a small number of check slots across every issue clone. A focused
+# check gets one Vitest worker; static, final, and delivery checks get two.
 set -euo pipefail
 source "$(dirname "$0")/mc-common.sh"
 mc_assert_ticket_checkout || exit 2
 
-if [ "${1:-}" = "--classify" ]; then
-  cd "$(mc_worktree)"
-  if files="$(mc_changed_files)" && [ -n "$files" ]; then
-    echo "risk: $(printf '%s\n' "$files" | mc_risk_for_files)"
-    echo "scope: $(printf '%s\n' "$files" | mc_scope_for_files)"
-  else
-    files=""
-    echo "risk: high"
-    echo "scope: full"
-  fi
-  echo "changed files (vs merge-base with origin/main, plus working tree):"
-  if [ -n "$files" ]; then printf '%s\n' "$files" | sed 's/^/  /'
-  else echo "  (none / could not determine — defaulting to high/full)"; fi
-  exit 0
-fi
-
 CLASS=""
-RISK=""
-SCOPE=""
-COVERAGE=""
-# Bash 3.2 treats an empty array as unbound under `set -u`. Keep one empty
-# sentinel and skip it in both validation and execution.
+PRIORITY=1
+VITEST_WORKERS=1
+FOCUSED_WORKSPACE=""
+FOCUSED_PATH=""
 TESTS=("")
-if [ "${1:-}" = "--focused" ]; then
-  CLASS="focused"
-  shift
-  if [ "${1:-}" != "--" ]; then
-    echo "[mc-gate] focused checks require '--' before the approved test command." >&2
-    exit 2
-  fi
-  shift
-  if [ "$#" -ne 7 ] || [ "$1" != "npm" ] || [ "$2" != "--prefix" ] || { [ "$3" != "server" ] && [ "$3" != "vite" ]; } || [ "$4" != "exec" ] || [ "$5" != "vitest" ] || [ "$6" != "run" ] || [[ "$7" != *.test.* && "$7" != *.spec.* ]] || [[ "$7" = /* || "$7" = *..* ]]; then
-    echo "[mc-gate] focused checks must name one Vitest file with: npm --prefix <server|vite> exec vitest run <file>." >&2
-    exit 2
-  fi
-elif [ "${1:-}" = "--train" ]; then
-  CLASS="train"
-  shift
+
+valid_test_spec() {
+  local spec="$1" kind path
+  case "$spec" in *,*|*$'\t'*|*$'\n'*|*$'\r'*|*$'\037'*) return 1 ;; esac
+  kind="${spec%%:*}"
+  path="${spec#*:}"
+  [ "$path" != "$spec" ] || return 1
+  [[ "$path" != /* && "$path" != *..* ]] || return 1
+  case "$kind" in
+    server|vite) [[ "$path" = *.test.* || "$path" = *.spec.* ]] ;;
+    integration) [[ "$path" = *.integration.test.* ]] ;;
+    shell) [[ "$path" = *.sh ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+parse_named_tests() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --risk) RISK="${2:-}"; shift 2 ;;
-      --scope) SCOPE="${2:-}"; shift 2 ;;
-      --coverage) COVERAGE="${2:-}"; shift 2 ;;
-      --test) TESTS+=("${2:-}"); shift 2 ;;
-      *) echo "[mc-gate] unknown train option: $1" >&2; exit 2 ;;
+      --test)
+        valid_test_spec "${2:-}" || {
+          echo '[mc-gate] tests must use server:path.test.*, vite:path.test.*, integration:path.integration.test.*, or shell:path.sh.' >&2
+          exit 2
+        }
+        TESTS+=("$2")
+        shift 2
+        ;;
+      *) echo "[mc-gate] unknown $CLASS option: $1" >&2; exit 2 ;;
     esac
   done
-  case "$RISK" in low|normal|high) ;; *) echo "[mc-gate] train risk must be low, normal, or high." >&2; exit 2 ;; esac
-  case "$SCOPE" in docs|server|web|full) ;; *) echo "[mc-gate] train scope must be docs, server, web, or full." >&2; exit 2 ;; esac
-  [ -n "$COVERAGE" ] || { echo "[mc-gate] train coverage is required." >&2; exit 2; }
-  if [ "$RISK" = "normal" ] && [ "$SCOPE" = "full" ]; then
-    echo "[mc-gate] a change spanning server and web is high risk, not normal." >&2
-    exit 2
-  fi
-  for test_spec in "${TESTS[@]}"; do
-    [ -n "$test_spec" ] || continue
-    workspace="${test_spec%%:*}"
-    test_path="${test_spec#*:}"
-    if { [ "$workspace" != "server" ] && [ "$workspace" != "vite" ]; } || [ "$test_path" = "$test_spec" ] || [[ "$test_path" = /* || "$test_path" = *..* ]] || [[ "$test_path" != *.test.* && "$test_path" != *.spec.* ]]; then
-      echo "[mc-gate] train tests must use server:path.test.* or vite:path.test.*." >&2
+}
+
+case "${1:-}" in
+  --focused)
+    CLASS=focused
+    PRIORITY=1
+    VITEST_WORKERS=1
+    shift
+    if [ "${1:-}" != -- ]; then
+      echo "[mc-gate] focused checks require '--' before the approved test command." >&2
       exit 2
     fi
-  done
-elif [ "${1:-}" = "--delivery" ]; then
-  echo "[mc-gate] per-session delivery validation moved to mc-train; enqueue the committed change instead." >&2
-  exit 2
-else
-  echo "[mc-gate] choose --focused or --train explicitly (or use --classify)." >&2
-  exit 2
-fi
-
-is_positive_integer() { case "$1" in ''|*[!0-9]*|0) return 1 ;; *) return 0 ;; esac; }
-is_nonnegative_integer() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
-
-DEFAULT_MACHINE_WORKERS=18
-DEFAULT_RESERVED_SYSTEM_WORKERS=6
-DEFAULT_JOB_LIMIT=4
-DEFAULT_VITEST_WORKERS=3
-
-override=0
-[ "${MC_GATE_OVERRIDE:-}" = "1" ] && override=1
-for setting in MC_GATE_MACHINE_WORKERS MC_GATE_RESERVED_SYSTEM_WORKERS MC_GATE_JOB_LIMIT MC_GATE_VITEST_WORKERS; do
-  if [ -n "${!setting:-}" ] && [ "$override" -ne 1 ]; then
-    echo "[mc-gate] $setting requires MC_GATE_OVERRIDE=1; defaults protect the shared M5 Pro budget." >&2
+    shift
+    if [ "$#" -ne 7 ] || [ "$1" != npm ] || [ "$2" != --prefix ] || { [ "$3" != server ] && [ "$3" != vite ]; } || [ "$4" != exec ] || [ "$5" != vitest ] || [ "$6" != run ] || [[ "$7" != *.test.* && "$7" != *.spec.* ]] || [[ "$7" = /* || "$7" = *..* ]]; then
+      echo '[mc-gate] focused checks must name one Vitest file with: npm --prefix <server|vite> exec vitest run <file>.' >&2
+      exit 2
+    fi
+    FOCUSED_WORKSPACE="$3"
+    FOCUSED_PATH="$7"
+    ;;
+  --static)
+    CLASS=static
+    PRIORITY=2
+    VITEST_WORKERS=2
+    shift
+    [ "$#" -eq 0 ] || { echo '[mc-gate] static checks do not accept options.' >&2; exit 2; }
+    ;;
+  --check)
+    CLASS=check
+    PRIORITY=2
+    VITEST_WORKERS=2
+    shift
+    parse_named_tests "$@"
+    ;;
+  --delivery)
+    CLASS=delivery
+    PRIORITY=3
+    VITEST_WORKERS=2
+    shift
+    parse_named_tests "$@"
+    ;;
+  *)
+    echo '[mc-gate] choose --focused, --static, --check, or --delivery.' >&2
     exit 2
-  fi
-done
+    ;;
+esac
 
-MACHINE_WORKERS="${MC_GATE_MACHINE_WORKERS:-$DEFAULT_MACHINE_WORKERS}"
-RESERVED_SYSTEM_WORKERS="${MC_GATE_RESERVED_SYSTEM_WORKERS:-$DEFAULT_RESERVED_SYSTEM_WORKERS}"
-JOB_LIMIT="${MC_GATE_JOB_LIMIT:-$DEFAULT_JOB_LIMIT}"
-TRAIN_VITEST_WORKERS="${MC_GATE_VITEST_WORKERS:-$DEFAULT_VITEST_WORKERS}"
-if ! is_positive_integer "$MACHINE_WORKERS" || ! is_nonnegative_integer "$RESERVED_SYSTEM_WORKERS" || ! is_positive_integer "$JOB_LIMIT" || ! is_positive_integer "$TRAIN_VITEST_WORKERS"; then
-  echo "[mc-gate] scheduler settings must be positive integers (reserve may be zero)." >&2
-  exit 2
-fi
-AVAILABLE_WORKERS=$((MACHINE_WORKERS - RESERVED_SYSTEM_WORKERS))
-if [ "$AVAILABLE_WORKERS" -lt 1 ] || [ $((JOB_LIMIT * TRAIN_VITEST_WORKERS)) -gt "$AVAILABLE_WORKERS" ]; then
-  echo "[mc-gate] $JOB_LIMIT jobs × $TRAIN_VITEST_WORKERS real Vitest workers exceeds available worker capacity $AVAILABLE_WORKERS." >&2
-  exit 2
-fi
-
-if [ "$CLASS" = "focused" ]; then
-  VITEST_WORKERS=1
-else
-  VITEST_WORKERS="$TRAIN_VITEST_WORKERS"
-fi
-if [ "$override" -eq 1 ]; then
-  echo "[mc-gate] WARNING: manual scheduler override is active; this can reduce headroom or change queue capacity." >&2
-fi
-
+JOB_LIMIT=3
 SEM="$STATE/locks/gate"
 mkdir -p "$SEM"
-reap_slots_and_measure() {
-  ACTIVE_JOBS=0
-  ACTIVE_WORKERS=0
-  local d owner workers
-  for d in "$SEM"/slot-*; do
-    [ -d "$d" ] || continue
-    owner="$(cat "$d/pid" 2>/dev/null || echo "")"
-    if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then
-      rm -rf "$d"
-      continue
-    fi
-    workers="$(cat "$d/workers" 2>/dev/null || echo "")"
-    if ! is_positive_integer "$workers"; then workers="$AVAILABLE_WORKERS"; fi
-    ACTIVE_JOBS=$((ACTIVE_JOBS + 1))
-    ACTIVE_WORKERS=$((ACTIVE_WORKERS + workers))
+WAIT_DIR="$SEM/wait-$PRIORITY-$(date +%s)-$$"
+SLOT_DIR=""
+mkdir "$WAIT_DIR"
+printf '%s\n' "$$" > "$WAIT_DIR/pid"
+
+cleanup() {
+  [ -z "$SLOT_DIR" ] || rm -rf "$SLOT_DIR"
+  rm -rf "$WAIT_DIR"
+}
+trap cleanup EXIT
+
+reap_dead() {
+  local dir owner
+  for dir in "$SEM"/slot-* "$SEM"/wait-*; do
+    [ -d "$dir" ] || continue
+    owner="$(cat "$dir/pid" 2>/dev/null || true)"
+    if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then rm -rf "$dir"; fi
+  done
+}
+
+active_jobs() {
+  local count=0 dir
+  for dir in "$SEM"/slot-*; do [ -d "$dir" ] && count=$((count + 1)); done
+  printf '%s\n' "$count"
+}
+
+first_waiter() {
+  local priority dir
+  for priority in 3 2 1; do
+    dir="$(find "$SEM" -maxdepth 1 -type d -name "wait-$priority-*" -print 2>/dev/null | sort | head -1)"
+    if [ -n "$dir" ]; then printf '%s\n' "$dir"; return; fi
   done
 }
 
 acquire() {
-  local waited=0 timeout=3600
-  while :; do
+  local waited=0 first count
+  while [ "$waited" -lt 3600 ]; do
     if mc_lock_acquire "$SEM/admission.lock" 15; then
-      reap_slots_and_measure
-      if [ "$ACTIVE_JOBS" -lt "$JOB_LIMIT" ] && [ $((ACTIVE_WORKERS + VITEST_WORKERS)) -le "$AVAILABLE_WORKERS" ]; then
+      reap_dead
+      first="$(first_waiter)"
+      count="$(active_jobs)"
+      if [ "$first" = "$WAIT_DIR" ] && [ "$count" -lt "$JOB_LIMIT" ]; then
         SLOT_DIR="$SEM/slot-$$"
         mkdir "$SLOT_DIR"
         printf '%s\n' "$$" > "$SLOT_DIR/pid"
         printf '%s\n' "$CLASS" > "$SLOT_DIR/class"
         printf '%s\n' "$VITEST_WORKERS" > "$SLOT_DIR/workers"
+        rm -rf "$WAIT_DIR"
         mc_lock_release "$SEM/admission.lock"
         return 0
       fi
       mc_lock_release "$SEM/admission.lock"
     fi
-    if [ "$waited" -eq 0 ]; then echo "[mc-gate] $CLASS lane is at capacity — queued (limit $JOB_LIMIT, available workers $AVAILABLE_WORKERS)."; fi
-    [ "$waited" -ge "$timeout" ] && { echo "[mc-gate] waited an hour, giving up" >&2; return 1; }
+    if [ "$waited" -eq 0 ]; then echo "[mc-gate] $CLASS lane is at capacity — queued (limit $JOB_LIMIT)."; fi
     sleep 1
     waited=$((waited + 1))
   done
+  return 1
 }
 
-SLOT_DIR=""
-acquire || { echo "[mc-gate] could not get a runner slot." >&2; exit 1; }
-trap '[ -n "$SLOT_DIR" ] && rm -rf "$SLOT_DIR"' EXIT
-echo "[mc-gate] running (class $CLASS, slot $(basename "$SLOT_DIR"), limit $JOB_LIMIT, vitest=$VITEST_WORKERS, available workers=$AVAILABLE_WORKERS)"
+acquire || { echo '[mc-gate] waited an hour for a check slot.' >&2; exit 1; }
+echo "[mc-gate] running (class $CLASS, slot $(basename "$SLOT_DIR"), limit $JOB_LIMIT, vitest=$VITEST_WORKERS)"
 mc_log "gate acquire $(basename "$SLOT_DIR") class=$CLASS workers=$VITEST_WORKERS"
 cd "$(mc_worktree)"
 
 if ! mc_ensure_prisma_client; then
-  echo "[mc-gate] Could not bring the Prisma client in sync — see the error above." >&2
-  mc_log "gate refused (prisma client regenerate failed)"
+  echo '[mc-gate] Could not bring the Prisma client in sync.' >&2
+  mc_log 'gate refused (prisma client regenerate failed)'
   exit 3
 fi
 
-record_test() {
-  [ -z "${MC_GATE_TEST_LOG:-}" ] || printf '%s\t%s\t%s\n' "$RISK" "$COVERAGE" "$*" >> "$MC_GATE_TEST_LOG"
+record_check() {
+  [ -z "${MC_GATE_TEST_LOG:-}" ] || printf '%s\t%s\n' "$CLASS" "$*" >> "$MC_GATE_TEST_LOG"
 }
+
 run_check() {
-  record_test "$*"
+  record_check "$*"
   VITEST_MAX_WORKERS="$VITEST_WORKERS" "$@"
 }
+
 run_workspace_vitest() {
-  local workspace="$1" test_path="$2"
-  record_test "npm --prefix $workspace exec vitest run $test_path"
-  (
-    cd "$workspace"
-    VITEST_MAX_WORKERS="$VITEST_WORKERS" npm exec vitest run "$test_path"
-  )
+  local workspace="$1" path="$2"
+  record_check "npm --prefix $workspace exec vitest run $path"
+  (cd "$workspace" && VITEST_MAX_WORKERS="$VITEST_WORKERS" npm exec vitest run "$path")
 }
-run_train_plan() {
-  local test_spec workspace test_path
-  if [ "$RISK" = "high" ]; then
-    run_check npm run verify
-    return
-  fi
+
+run_named_test() {
+  local spec="$1" kind path
+  kind="${spec%%:*}"
+  path="${spec#*:}"
+  case "$kind" in
+    server|vite) run_workspace_vitest "$kind" "$path" ;;
+    integration)
+      record_check "npm --prefix server exec vitest run --config vitest.integration.config.ts $path"
+      (cd server && VITEST_MAX_WORKERS="$VITEST_WORKERS" npm exec vitest run --config vitest.integration.config.ts "$path")
+      ;;
+    shell)
+      record_check "bash $path"
+      bash "$path"
+      ;;
+  esac
+}
+
+run_static() {
   run_check npm run typecheck
   run_check npm run lint
-  for test_spec in "${TESTS[@]}"; do
-    [ -n "$test_spec" ] || continue
-    workspace="${test_spec%%:*}"
-    test_path="${test_spec#*:}"
-    run_workspace_vitest "$workspace" "$test_path"
-  done
-  if [ "$RISK" = "normal" ]; then
-    case "$SCOPE" in
-      server) run_check npm run test:server ;;
-      web) run_check npm run test:web ;;
-      docs) ;;
-    esac
-  fi
 }
 
 set +e
-if [ "$CLASS" = "focused" ]; then
-  run_workspace_vitest "$3" "$7"
+if [ "$CLASS" = focused ]; then
+  run_workspace_vitest "$FOCUSED_WORKSPACE" "$FOCUSED_PATH"
   rc=$?
 else
-  run_train_plan
+  run_static
   rc=$?
+  if [ "$rc" -eq 0 ] && [ "$CLASS" != static ]; then
+    for spec in "${TESTS[@]}"; do
+      [ -n "$spec" ] || continue
+      run_named_test "$spec" || { rc=$?; break; }
+    done
+  fi
 fi
 set -e
+
 mc_log "gate release rc=$rc"
-[ "$rc" -ne 0 ] && echo "[mc-gate] FAILED rc=$rc — isolate the named test before changing the risk plan." >&2
+if [ "$rc" -ne 0 ]; then
+  echo "[mc-gate] FAILED rc=$rc — fix this issue and run the same named check again." >&2
+fi
 exit "$rc"

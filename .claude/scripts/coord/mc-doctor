@@ -6,14 +6,14 @@ health=0
 
 echo "=== load (check if >8 — higher means tests will fail at random) ==="; uptime
 echo; echo "=== gate runners busy ==="; ls "$STATE/locks/gate" 2>/dev/null | wc -l | tr -d ' '
-echo; echo "=== delivery train ==="
-ready_count="$(find "$STATE/train/ready" -maxdepth 1 -name '*.tsv' -type f 2>/dev/null | wc -l | tr -d ' ')"
-failed_count="$(find "$STATE/train/failed" -name failure.txt -type f 2>/dev/null | wc -l | tr -d ' ')"
-echo "ready: $ready_count   failed groups: $failed_count"
-if [ -d "$STATE/locks/train-conductor.lock" ]; then
-  echo "conductor: HELD by pid $(cat "$STATE/locks/train-conductor.lock/pid" 2>/dev/null)"
+echo; echo "=== one-issue delivery ==="
+ready_count="$(find "$STATE/deliver/ready" -maxdepth 1 -name '*.tsv' -type f 2>/dev/null | wc -l | tr -d ' ')"
+failed_count="$(find "$STATE/deliver/failed" -name '*.txt' -type f 2>/dev/null | wc -l | tr -d ' ')"
+echo "ready issues: $ready_count   failed issues: $failed_count"
+if [ -d "$STATE/locks/deliver-conductor.lock" ]; then
+  echo "delivery: HELD by pid $(cat "$STATE/locks/deliver-conductor.lock/pid" 2>/dev/null)"
 else
-  echo "conductor: free"
+  echo "delivery: free"
 fi
 echo; echo "=== merge lock ==="
 [ -d "$STATE/locks/merge.lock" ] && echo "HELD by pid $(cat "$STATE/locks/merge.lock/pid" 2>/dev/null)" || echo free
@@ -94,7 +94,7 @@ if [ -d "$ticket_root" ]; then
     if [ "$ticket_origin" = "$LOCAL_MAIN_REPO" ]; then
       echo "  ok: $d"
     else
-      echo "  LEGACY ORIGIN: $d → $ticket_origin (expected $LOCAL_MAIN_REPO; mc-train enqueue will migrate it)"
+      echo "  WRONG ORIGIN: $d → $ticket_origin (expected $LOCAL_MAIN_REPO; create new issue clones from the mirror)"
     fi
   done < <(find "$ticket_root" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)
 fi

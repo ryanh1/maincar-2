@@ -5,12 +5,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 
-# Four three-worker jobs fit inside the measured twelve-worker capacity. There
-# is no Playwright reservation because the train never invokes Playwright.
-if ! grep -Fx 'DEFAULT_JOB_LIMIT=4' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
-   ! grep -Fx 'DEFAULT_VITEST_WORKERS=3' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
-   grep -F 'DEFAULT_PLAYWRIGHT' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null; then
-  echo 'mc-gate defaults do not preserve four real non-browser jobs' >&2
+# Three two-worker jobs use no more than six Vitest workers. Focused tests use
+# one worker, and the gate never invokes Playwright.
+if ! grep -Fx 'JOB_LIMIT=3' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
+   ! grep -F 'VITEST_WORKERS=2' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
+   ! grep -F 'VITEST_WORKERS=1' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
+   grep -F 'playwright' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null; then
+  echo 'mc-gate does not preserve the three-job, six-worker ceiling' >&2
   exit 1
 fi
 
@@ -35,25 +36,7 @@ env_for_test=(
 )
 LEGACY_MERGE="$ROOT/.claude/scripts/coord/tests/fixtures/mc-merge-legacy"
 
-classify() {
-  local function_name="$1" files="$2"
-  printf '%s\n' "$files" | env "${env_for_test[@]}" bash -c 'source "$1/.claude/scripts/coord/mc-common.sh"; "$2"' _ "$ROOT" "$function_name"
-}
-
-test "$(classify mc_risk_for_files 'docs/delivery.md')" = low
-test "$(classify mc_scope_for_files 'docs/delivery.md')" = docs
-test "$(classify mc_risk_for_files 'server/src/routes/companies.ts')" = normal
-test "$(classify mc_scope_for_files 'server/src/routes/companies.ts')" = server
-test "$(classify mc_risk_for_files 'vite/src/pages/Companies.tsx')" = normal
-test "$(classify mc_scope_for_files 'vite/src/pages/Companies.tsx')" = web
-test "$(classify mc_risk_for_files 'server/src/routes/auth.ts')" = high
-test "$(classify mc_risk_for_files $'server/src/routes/companies.ts\nvite/src/pages/Companies.tsx')" = high
-test "$(classify mc_scope_for_files $'server/src/routes/companies.ts\nvite/src/pages/Companies.tsx')" = full
-test "$(classify mc_risk_for_files 'package-lock.json')" = high
-test "$(classify mc_risk_for_files 'AGENTS.md')" = high
-test "$(classify mc_risk_for_files '.claude/rules/testing.md')" = high
-
-# The real delivery gate writes this receipt after a green full suite. These
+# The real delivery gate writes this record after its named checks. These
 # mirror tests exercise merge mechanics with no application test runtime, so
 # record the same immutable head/base/branch evidence directly.
 record_delivery_gate() {

@@ -22,7 +22,7 @@
     "test": "npm --prefix server run test && npm --prefix vite run test && npm run test:dev-startup && npm run test:hooks && npm run test:coord",
     "test:dev-startup": "bash scripts/__tests__/dev-startup.test.sh",
     "test:hooks": "bash scripts/__tests__/pre-commit.test.sh",
-    "test:coord": "bash .claude/scripts/coord/tests/mc-common.test.sh && bash .claude/scripts/coord/tests/mc-gate.test.sh && bash .claude/scripts/coord/tests/mc-train.test.sh",
+    "test:coord": "bash .claude/scripts/coord/tests/mc-common.test.sh && bash .claude/scripts/coord/tests/mc-gate.test.sh && bash .claude/scripts/coord/tests/mc-deliver.test.sh && bash scripts/__tests__/pre-commit.test.sh",
     "test:watch": "concurrently -n server,web -c green,cyan \"npm --prefix server run test:watch\" \"npm --prefix vite run test:watch\"",
     "test:server": "npm --prefix server run test",
     "test:web": "npm --prefix vite run test",

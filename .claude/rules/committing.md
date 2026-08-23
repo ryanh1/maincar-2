@@ -4,17 +4,15 @@ The short version lives in [AGENTS.md](../../AGENTS.md). This file holds the mec
 
 ## Fast commit hook
 
-`.githooks/pre-commit` runs attributable server/client typecheck and lint checks. It never starts unit tests, integration tests, Docker, or a delivery gate. Install it once per clone:
+`.githooks/pre-commit` runs TypeScript and lint through the shared three-job check gate. It never starts unit tests, integration tests, Docker, or browser tests. Install it once per clone:
 
 ```bash
 npm run hooks:install
 ```
 
-The hook is a quick backstop, not delivery proof. Unit and integration work belongs to the post-commit train, where compatible committed heads are tested together once.
+The hook is a quick backstop, not delivery proof. It waits when three other check jobs are already running. Any TypeScript or lint failure blocks the commit because every issue has an independent clone; another session cannot change files in this clone.
 
-If a static failure names a file in this commit, the hook blocks. A failure only in another session's file is recorded as degraded and does not force `--no-verify`. An unattributable failure counts as this commit's failure.
-
-`.githooks/prepare-commit-msg` appends a `Verified-by:` trailer only when static checks were degraded or bypassed. No trailer means the fast static hook passed; it never means the change was delivered.
+`.githooks/prepare-commit-msg` appends a `Verified-by:` trailer only when the hook was bypassed. No trailer means the static hook passed; it never means the change was delivered.
 
 `git commit --no-verify` is for a genuine emergency. If used, say why in the commit body and user report, and name what did run.
 
@@ -26,27 +24,26 @@ Run one named Vitest file through the bounded lane while implementing:
 ./.claude/scripts/coord/mc-gate --focused -- npm --prefix server exec vitest run src/routes/__tests__/companies.test.ts
 ```
 
-Focused tests provide development feedback. They do not create per-session delivery receipts and cannot authorize a push.
-
-## Train delivery proof
-
-After committing, inspect the classifier and declare the honest risk:
+Focused tests provide development feedback. Run a final check with the exact relevant files before delivery when appropriate:
 
 ```bash
-./.claude/scripts/coord/mc-gate --classify
-./.claude/scripts/coord/mc-train enqueue --risk normal \
-  --coverage "company route behavior" \
+./.claude/scripts/coord/mc-gate --check \
   --test server:src/routes/__tests__/companies.test.ts
-./.claude/scripts/coord/mc-train run
 ```
 
-The train builds compatible ready heads on the newest mirrored `main`, runs one combined risk plan, records the shared-main base and tested head, and pushes that exact tree through the short merge slot. A main advance is checked only in the final slot; no full suite runs there.
+## One-issue delivery
 
-- **Low**: typecheck, lint, declared focused tests.
-- **Normal**: low checks plus the relevant server or web suite.
-- **High**: full `npm run verify`, including integration, and travels alone.
+After committing, enqueue the exact commit and name the tests that cover it:
 
-A combined failure triggers isolated single-entry checks and then pair checks when needed. Independent failures and semantic interactions are recorded; no member of the failing subset is delivered.
+```bash
+./.claude/scripts/coord/mc-deliver enqueue \
+  --test server:src/routes/__tests__/companies.test.ts
+./.claude/scripts/coord/mc-deliver run
+```
+
+One `run` handles the oldest ready issue only. It copies newest `main` into a temporary clone, merges that issue with `git merge --no-ff`, runs TypeScript, lint, and only the named tests, and pushes the exact checked result. It never runs a browser or a whole server/web/integration suite.
+
+If the merge or a check fails, the issue is removed from the ready queue and returned to its agent. There are no automatic retries, solo reruns, pair tests, risk levels, or combined batches. The next queued issue may proceed.
 
 ## Commit scope
 

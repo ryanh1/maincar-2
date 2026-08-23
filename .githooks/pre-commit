@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
 #
-# Fast static-check backstop. Risk-based unit and integration verification runs
-# once on the combined tree through `mc-train`. See
-# .claude/rules/committing.md for the full delivery workflow.
-#
-# Emergency bypass is `git commit --no-verify`. You do not need it for another
-# session's red — this hook already handles that. If you use it anyway, the
-# prepare-commit-msg hook stamps the commit message so the bypass is on the
-# record rather than in someone's memory.
+# Static checks share the same three-job gate as development and delivery.
+# This keeps many issue clones from overwhelming one computer.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -19,59 +13,6 @@ if [ "$(pwd -P)" = "$(cd "$primary_checkout" && pwd -P)" ]; then
   echo ""
   exit 1
 fi
-# shellcheck source=lib/verify.sh
-. .githooks/lib/verify.sh
-
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
-: > "$STATUS_FILE"
-
-blocked=0
-foreign=()
-
-fail() {
-  echo ""
-  echo "  ✗ COMMIT BLOCKED — $1"
-  echo ""
-  exit 1
-}
-
-# --- Attributable checks: typecheck and lint -----------------------------------
-# Each names a file, so a failure can be traced to whoever wrote it.
-attributable() {
-  local label="$1" prefix="$2"; shift 2
-  echo "pre-commit: ${label}…"
-  if "$@" > "$TMP/out" 2>&1; then return 0; fi
-
-  failing_files "$prefix" "$TMP/out" > "$TMP/files"
-
-  if red_is_ours "$TMP/files"; then
-    echo ""
-    sed 's/^/    /' "$TMP/out" | tail -30
-    fail "$label failed on a file in this commit."
-  fi
-
-  foreign+=("$label")
-  echo "  ⚠ $label is red, but not on any file in this commit:"
-  sed 's/^/      /' "$TMP/files"
-  echo "    Another session is mid-work. Letting the commit through, and"
-  echo "    stamping the commit message to say $label did not pass."
-}
-
-attributable "server typecheck" server npm --prefix server run typecheck --silent
-attributable "vite typecheck"   vite   npm --prefix vite   run typecheck --silent
-attributable "server lint"      server npm --prefix server run lint      --silent
-attributable "vite lint"        vite   npm --prefix vite   run lint      --silent
-
-# --- Record the verdict for prepare-commit-msg ---------------------------------
-if [ ${#foreign[@]} -gt 0 ]; then
-  # Comma-space separated. `IFS` only takes its first character for array
-  # expansion, so build the list explicitly rather than getting "a,b".
-  joined="$(printf '%s, ' "${foreign[@]}")"
-  printf 'degraded: %s\n' "${joined%, }" > "$STATUS_FILE"
-  echo "pre-commit: static checks green; ${#foreign[@]} check(s) red on other sessions' files."
-else
-  echo "green" > "$STATUS_FILE"
-  echo "pre-commit: all green."
-fi
-exit $blocked
+./.claude/scripts/coord/mc-gate --static
+printf 'green\n' > "$(git rev-parse --git-dir)/VERIFY_STATUS"
+echo 'pre-commit: TypeScript and lint checks passed.'
