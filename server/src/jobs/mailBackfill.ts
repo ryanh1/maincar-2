@@ -1,6 +1,7 @@
 import prisma from '../db.js'
 import { attachEmailMatchInTx, attachMeetingMatchInTx, resolveParticipantsToCrm } from '../lib/crmMatch.js'
 import { getMailProvider } from '../lib/mail/getMailProvider.js'
+import { holdUnmatchedEmailInTx } from './mailRematch.js'
 import { JOB_MAIL_BACKFILL, sendJob, workJob } from './queue.js'
 
 export interface MailBackfillPayload { mailAccountId: string }
@@ -68,15 +69,44 @@ export async function mailBackfillJob({ mailAccountId }: MailBackfillPayload): P
 
   await prisma.$transaction(async (tx) => {
     for (const message of page.messages) {
+      const direction: 'inbound' | 'outbound' = message.isOutbound ? 'outbound' : 'inbound'
+      const participants = [
+        { role: 'from', name: message.from.name ?? null, address: message.from.email },
+        ...message.to.map((participant) => ({ role: 'to', name: participant.name ?? null, address: participant.email })),
+        ...message.cc.map((participant) => ({ role: 'cc', name: participant.name ?? null, address: participant.email })),
+      ]
       const match = await resolveParticipantsToCrm(tx, {
         orgId: account.orgId,
-        participants: [message.from, ...message.to, ...message.cc].map((participant) => ({
-          address: participant.email,
-        })),
+        participants: participants.map(({ address }) => ({ address })),
         occurredAt: message.sentAt,
-        direction: message.isOutbound ? 'outbound' : 'inbound',
+        direction,
       })
-      if (!hasCrmMatch(match)) continue
+      if (!hasCrmMatch(match)) {
+        if (!match.excluded) {
+          await holdUnmatchedEmailInTx(tx, {
+            orgId: account.orgId,
+            sourceKey: `${mailAccountId}:${message.providerMsgId}`,
+            occurredAt: message.sentAt,
+            email: {
+              mailAccountId,
+              direction,
+              subject: message.subject,
+              bodyHtml: message.bodyHtml,
+              bodyText: message.bodyText,
+              snippet: message.bodyText?.slice(0, 240) ?? null,
+              internetMessageId: `<${mailAccountId}.${message.providerMsgId}@maincar.backfill>`,
+              conversationId: message.threadId,
+              provider: emailProvider(provider.provider),
+              providerMessageId: message.providerMsgId,
+              providerThreadId: message.threadId,
+              sentAt: message.sentAt,
+              receivedAt: message.isOutbound ? null : message.sentAt,
+            },
+            participants,
+          })
+        }
+        continue
+      }
 
       const existing = await tx.email.findFirst({
         where: { orgId: account.orgId, mailAccountId, providerMessageId: message.providerMsgId },
@@ -88,7 +118,7 @@ export async function mailBackfillJob({ mailAccountId }: MailBackfillPayload): P
         data: {
           orgId: account.orgId,
           mailAccountId,
-          direction: message.isOutbound ? 'outbound' : 'inbound',
+          direction,
           subject: message.subject,
           bodyHtml: message.bodyHtml,
           bodyText: message.bodyText,
@@ -101,11 +131,7 @@ export async function mailBackfillJob({ mailAccountId }: MailBackfillPayload): P
           sentAt: message.sentAt,
           receivedAt: message.isOutbound ? null : message.sentAt,
           participants: {
-            create: [
-              { orgId: account.orgId, role: 'from', name: message.from.name ?? null, address: message.from.email },
-              ...message.to.map((participant) => ({ orgId: account.orgId, role: 'to', name: participant.name ?? null, address: participant.email })),
-              ...message.cc.map((participant) => ({ orgId: account.orgId, role: 'cc', name: participant.name ?? null, address: participant.email })),
-            ],
+            create: participants.map((participant) => ({ orgId: account.orgId, ...participant })),
           },
         },
       })
