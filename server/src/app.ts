@@ -51,6 +51,7 @@ import twilioVoiceRouter from './routes/twilioVoice.js'
 import voicemailDropsRouter from './routes/voicemailDrops.js'
 import voicemailGreetingRouter from './routes/voicemailGreeting.js'
 import voicemailsRouter from './routes/voicemails.js'
+import webPushSubscriptionsRouter from './routes/webPushSubscriptions.js'
 
 // The app is assembled here and started in index.ts. Keeping them apart is what
 // lets supertest import the app without binding a port.
@@ -86,6 +87,7 @@ app.use('/api', invitationsRouter)
 app.use('/api/auth', authRouter)
 app.use('/api/call-alert-settings', callAlertSettingsRouter)
 app.use('/api/notification-preferences', notificationPreferencesRouter)
+app.use('/api/web-push', webPushSubscriptionsRouter)
 app.use('/api/team', teamRouter)
 app.use('/api/keyboard-bindings', keyboardBindingsRouter)
 

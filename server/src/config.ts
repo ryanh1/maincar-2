@@ -42,6 +42,13 @@ export const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$
 // at boot so local/unit environments do not pretend they can receive push traffic.
 export const GOOGLE_PUBSUB_TOPIC = process.env.GOOGLE_PUBSUB_TOPIC ?? ''
 
+// --- Web Push ---
+// Keys stay optional at boot so local/unit environments can exercise every other
+// route. The delivery adapter fails closed when a push-specific path needs them.
+export const WEB_PUSH_VAPID_SUBJECT = process.env.WEB_PUSH_VAPID_SUBJECT ?? ''
+export const WEB_PUSH_VAPID_PUBLIC_KEY = process.env.WEB_PUSH_VAPID_PUBLIC_KEY ?? ''
+export const WEB_PUSH_VAPID_PRIVATE_KEY = process.env.WEB_PUSH_VAPID_PRIVATE_KEY ?? ''
+
 // --- Database ---
 export const DATABASE_URL = required('DATABASE_URL')
 // The direct (non-pooled) URL migrations use. Optional locally, where there is no

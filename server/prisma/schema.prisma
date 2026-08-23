@@ -262,6 +262,7 @@ model User {
   // Per-user capture opt-out rows (MAI-436, doc 5 §5.2f). Cascade on delete: a
   // removed user's opt-out row is meaningless without the user.
   mailCaptureOptOuts MailCaptureOptOut[]
+  webPushSubscriptions WebPushSubscription[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -307,6 +308,42 @@ model NotificationPreference {
 
   @@unique([userId, eventKind, channel])
   @@index([userId])
+}
+
+// One browser Push API endpoint, bound permanently to the rep who explicitly
+// registered it. Endpoint keys are opaque push-service credentials, never sent
+// back to the browser after registration.
+model WebPushSubscription {
+  id       String @id @default(cuid())
+  userId   String
+  endpoint String @unique
+  p256dh   String
+  auth     String
+
+  user       User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries WebPushDelivery[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// One durable delivery claim per browser subscription and source event. The
+// unique key makes Twilio's at-least-once callbacks safe to retry.
+model WebPushDelivery {
+  id             String @id @default(cuid())
+  subscriptionId String
+  eventKey       String
+  deliveredAt    DateTime?
+
+  subscription WebPushSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([subscriptionId, eventKey])
+  @@index([eventKey])
 }
 
 // A user-owned override for a keyboard action. Actions and their default keys
