@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { DataEditor, GridCellKind, emptyGridSelection } from '@glideapps/glide-data-grid'
 import type {
   DataEditorRef,
+  DataEditorProps,
   DrawCellCallback,
   EditableGridCell,
   GridCell,
@@ -45,6 +46,8 @@ import { CellPaintMenu } from './CellPaintMenu'
 import { ConditionalFormatPanel } from './ConditionalFormatPanel'
 import { CellExpandOverlay } from './CellExpandOverlay'
 import { CellCopyMenu } from './CellCopyMenu'
+import { GridAutocompleteOverlay } from './GridAutocompleteOverlay'
+import { supportsGridAutocomplete } from './gridAutocomplete'
 import { formatCellValue } from './recordCellValue'
 import { ColumnGroupHeaders } from './ColumnGroupHeaders'
 import { createKanbanConfig, createViewConfig, reorderColumnGroup, resolveHeaderColor, stepZoom, toRecordListQuery, type ViewConfig } from './viewConfig'
@@ -234,6 +237,12 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
   const [paintMenu, setPaintMenu] = useState<{ anchor: GridMenuAnchor; recordId: string; attribute: AttributeDef } | null>(null)
   const [formatPanel, setFormatPanel] = useState<{ anchor: GridMenuAnchor; attributeId: string | null } | null>(null)
   const [copyMenu, setCopyMenu] = useState<{ anchor: GridMenuAnchor; rawValue: string; displayValue: string } | null>(null)
+  const [autocomplete, setAutocomplete] = useState<{
+    anchor: GridMenuAnchor
+    attribute: AttributeDef
+    record: RecordRow
+    trigger: '@' | '/'
+  } | null>(null)
 
   const configuredColumns = useMemo(() => new Map(config.columns.map((column) => [column.attributeId, column])), [config.columns])
   const orderedVisibleColumns = useMemo(() => {
@@ -657,6 +666,31 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     },
     [recordAtRow, visibleColumns, cellValue, commitValue],
   )
+
+  const onGridKeyDown = useCallback((event: Parameters<NonNullable<DataEditorProps['onKeyDown']>>[0]) => {
+    if (event.key !== '@' && event.key !== '/') return
+    if (event.altKey || event.ctrlKey || event.metaKey || !event.location || !event.bounds) return
+
+    const [column, row] = event.location
+    const record = recordAtRow(row)
+    const attribute = visibleColumns[column]
+    if (!record || !attribute || attribute.isReadOnly || !supportsGridAutocomplete(attribute.type, event.key)) return
+
+    event.cancel()
+    event.preventDefault()
+    event.stopPropagation()
+    setAutocomplete({
+      record,
+      attribute,
+      trigger: event.key,
+      anchor: {
+        x: event.bounds.x,
+        y: event.bounds.y,
+        width: event.bounds.width,
+        height: event.bounds.height,
+      },
+    })
+  }, [recordAtRow, visibleColumns])
 
   const onVisibleRegionChanged = useCallback(
     (range: Rectangle) => {
@@ -1385,6 +1419,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         onHeaderMenuClick={onHeaderMenuClick}
         onCellClicked={onCellClicked}
         onCellContextMenu={onCellContextMenu}
+        onKeyDown={onGridKeyDown}
         gridSelection={finderSelection ?? gridSelection}
         onGridSelectionChange={(nextSelection) => {
           setGridSelection(nextSelection)
@@ -1403,6 +1438,23 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           timeZone={user?.timeZone}
           onShowFullHistory={setHistoryTarget}
         />
+        {autocomplete && (
+          <GridAutocompleteOverlay
+            anchor={autocomplete.anchor}
+            attribute={autocomplete.attribute}
+            orgId={orgId}
+            trigger={autocomplete.trigger}
+            onCommit={(value) => {
+              commitValue(autocomplete.record, autocomplete.attribute, value)
+              setAutocomplete(null)
+              dataEditorRef.current?.focus()
+            }}
+            onClose={() => {
+              setAutocomplete(null)
+              dataEditorRef.current?.focus()
+            }}
+          />
+        )}
         {historyTarget && (
           <FieldHistoryPopover
             key={`${historyTarget.recordId}:${historyTarget.attribute.id}`}
