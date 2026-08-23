@@ -69,6 +69,11 @@ export const queryKeys = {
   },
   recordingPolicy: (orgId: string) => ['recordingPolicy', orgId] as const,
   dispositions: (orgId: string) => ['dispositions', orgId] as const,
+  nextSteps: {
+    all: (orgId: string) => ['nextSteps', orgId] as const,
+    types: (orgId: string) => ['nextSteps', orgId, 'types'] as const,
+    rules: (orgId: string) => ['nextSteps', orgId, 'rules'] as const,
+  },
   voicemails: {
     all: ['voicemails'] as const,
     list: (orgId: string, query?: Record<string, unknown>) =>

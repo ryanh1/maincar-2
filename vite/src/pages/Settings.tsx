@@ -30,6 +30,7 @@ import { Settings_CallRecordingsTab } from './Settings_CallRecordingsTab'
 import { Settings_VoicemailGreetingTab } from './Settings_VoicemailGreetingTab'
 import { Settings_DispositionsTab } from './Settings_DispositionsTab'
 import { Settings_TeamsTab } from './Settings_TeamsTab'
+import { Settings_NextStepsTab } from './Settings_NextStepsTab'
 
 type TabId = SettingsSection
 
@@ -51,6 +52,7 @@ const TABS: TabDef[] = [
   { id: 'numbers', label: 'Phone numbers', icon: Phone, needsOrg: true },
   { id: 'call-recordings', label: 'Call recordings', icon: Radio, needsOrg: true },
   { id: 'dispositions', label: 'Call dispositions', icon: ListChecks, needsOrg: true },
+  { id: 'next-steps', label: 'Next steps', icon: ListChecks, needsOrg: true, adminOnly: true },
   { id: 'voicemail-greeting', label: 'Voicemail greeting', icon: Radio, needsOrg: true, adminOnly: true },
   // Not adminOnly: a template belongs to the ORG and any member may write, edit,
   // or delete any of them (SPEC-composer-templates.md § 2).
@@ -68,6 +70,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
   numbers: Settings_PhoneNumbersTab,
   'call-recordings': Settings_CallRecordingsTab,
   dispositions: Settings_DispositionsTab,
+  'next-steps': Settings_NextStepsTab,
   'voicemail-greeting': Settings_VoicemailGreetingTab,
   'email-templates': Settings_EmailTemplatesTab,
   signatures: Settings_EmailSignaturesTab,

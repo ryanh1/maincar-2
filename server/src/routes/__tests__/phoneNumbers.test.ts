@@ -3,8 +3,10 @@
 // The org-isolation block at the bottom proves that a caller from Org A cannot
 // read Org B's numbers, that an unauthenticated caller is rejected, and that the
 // tenant key really is in the where clause rather than only in the path.
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import request from 'supertest'
+import type { Server } from 'node:http'
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import supertest from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
@@ -78,6 +80,33 @@ vi.mock('../../jobs/releaseNumber.js', () => ({
 }))
 
 import app from '../../app.js'
+
+// Supertest starts and stops a loopback server for every `request(app)` call.
+// This file makes hundreds of requests, so under two concurrent delivery gates
+// that port churn can occasionally hand the HTTP parser a partial response.
+// Keep one explicitly-owned server for this serial suite instead, and close it
+// once its final assertion has completed.
+let server: Server
+
+beforeAll(
+  () =>
+    new Promise<void>((resolve, reject) => {
+      server = app.listen(0, '127.0.0.1')
+      server.once('listening', resolve)
+      server.once('error', reject)
+    }),
+)
+
+afterAll(
+  () =>
+    new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    }),
+)
+
+// Preserve the familiar `request(app)` call sites while pointing each request
+// at the one server owned by this test file.
+const request = (_app: typeof app) => supertest(server)
 
 const NOW = new Date('2026-08-20T12:00:00.000Z')
 const AUTH = 'Bearer fake-token'

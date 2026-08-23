@@ -13,8 +13,10 @@
 //     blank the half-written body
 //   - another member's draft, and another org's draft, are a 404 and never a
 //     403 — a 403 confirms the id names a real row
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import request from 'supertest'
+import type { Server } from 'node:http'
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import supertest from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
@@ -83,6 +85,29 @@ vi.mock('../../lib/mail/sendEmail.js', () => ({
 import app from '../../app.js'
 import { MAX_OPEN_DRAFTS, DRAFT_LIST_LIMIT } from '../email.js'
 import { MailApiError, MailAuthError, MailboxNotFoundError, RateLimitedError } from '../../lib/mail/mailErrors.js'
+
+// Supertest otherwise starts and stops a loopback server for every request.
+// Keep this serial route suite on one explicit server so concurrent delivery
+// gates cannot churn ephemeral listeners while its mocks are being exercised.
+let server: Server
+
+beforeAll(
+  () =>
+    new Promise<void>((resolve, reject) => {
+      server = app.listen(0, '127.0.0.1')
+      server.once('listening', resolve)
+      server.once('error', reject)
+    }),
+)
+
+afterAll(
+  () =>
+    new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    }),
+)
+
+const request = (_app: typeof app) => supertest(server)
 
 const NOW = new Date('2026-08-20T12:00:00.000Z')
 const AUTH = 'Bearer fake-token'

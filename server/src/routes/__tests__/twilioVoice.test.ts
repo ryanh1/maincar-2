@@ -11,8 +11,10 @@
 // verifyTwilioSignature is mocked (so no real signature has to be minted), but
 // buildBridgeTwiml/buildEmptyTwiml are kept REAL via importActual, so the
 // assertions run against the actual TwiML the SDK produces.
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import request from 'supertest'
+import type { Server } from 'node:http'
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import supertest from 'supertest'
 
 const {
   prismaMock,
@@ -74,6 +76,29 @@ vi.mock('../../../dependencies/twilio.js', async (importActual) => {
 })
 
 import app from '../../app.js'
+
+// Supertest starts and stops a loopback server for every `request(app)` call.
+// Keep this busy, serial webhook suite on one explicitly-owned server so
+// concurrent delivery gates do not churn ephemeral listeners mid-suite.
+let server: Server
+
+beforeAll(
+  () =>
+    new Promise<void>((resolve, reject) => {
+      server = app.listen(0, '127.0.0.1')
+      server.once('listening', resolve)
+      server.once('error', reject)
+    }),
+)
+
+afterAll(
+  () =>
+    new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    }),
+)
+
+const request = (_app: typeof app) => supertest(server)
 
 const URL = '/api/twilio/voice'
 const SIG = 'fake-twilio-signature'

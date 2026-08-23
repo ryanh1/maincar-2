@@ -61,6 +61,7 @@ describe('Settings', () => {
       'Phone numbers',
       'Call recordings',
       'Call dispositions',
+      'Next steps',
       'Voicemail greeting',
       'Email templates',
       'Signatures',
