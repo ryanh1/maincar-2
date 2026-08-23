@@ -1,5 +1,6 @@
 import {
   Building2,
+  Bell,
   Database,
   FileSignature,
   FileText,
@@ -40,6 +41,7 @@ export const SETTINGS_TABS: SettingsTabDefinition[] = [
   { id: 'integrations', label: 'Integrations', icon: Plug, needsOrg: true },
   { id: 'data-model', label: 'Data model', icon: Database, needsOrg: true, adminOnly: true },
   { id: 'keyboard', label: 'Keyboard', icon: Keyboard },
+  { id: 'alerts', label: 'Call alerts', icon: Bell },
 ]
 
 export function visibleSettingsTabs({ hasOrg, isAdmin }: { hasOrg: boolean; isAdmin: boolean }) {

@@ -14,6 +14,11 @@ const { useGetVoiceTokenMock } = vi.hoisted(() => ({
 }))
 vi.mock('@/hooks/dialer/useGetVoiceToken', () => ({ useGetVoiceToken: useGetVoiceTokenMock }))
 
+const { useGetCallAlertSettingsMock } = vi.hoisted(() => ({
+  useGetCallAlertSettingsMock: vi.fn(() => ({ data: undefined as unknown })),
+}))
+vi.mock('@/hooks/callAlertSettings', () => ({ useGetCallAlertSettings: useGetCallAlertSettingsMock }))
+
 // The server-status poll (MAI-190). Mocked at the module boundary the same way
 // useGetVoiceToken is above: DialerProvider is rendered with no QueryClient in
 // this file, so the real hook (a real useQuery) would throw.
@@ -22,8 +27,8 @@ const { useGetCallDetailMock } = vi.hoisted(() => ({
 }))
 vi.mock('@/hooks/dialer/useGetCallDetail', () => ({ useGetCallDetail: useGetCallDetailMock }))
 
-const { toastErrorMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn() }))
-vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
+const { toastErrorMock, toastWarningMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn(), toastWarningMock: vi.fn() }))
+vi.mock('sonner', () => ({ toast: { error: toastErrorMock, warning: toastWarningMock } }))
 
 const { deviceCtorMock, deviceConnectMock, deviceOnMock, deviceRegisterMock, deviceUpdateTokenMock, deviceDestroyMock } =
   vi.hoisted(() => ({
@@ -62,6 +67,7 @@ describe('DialerProvider', () => {
     useAuthMock.mockReturnValue({ org: null })
     useGetVoiceTokenMock.mockReturnValue({ data: undefined, refetch: vi.fn() })
     useGetCallDetailMock.mockReturnValue({ data: undefined })
+    useGetCallAlertSettingsMock.mockReturnValue({ data: undefined })
     deviceCtorMock.mockClear()
     deviceConnectMock.mockReset()
     deviceOnMock.mockClear()
@@ -69,6 +75,7 @@ describe('DialerProvider', () => {
     deviceUpdateTokenMock.mockClear()
     deviceDestroyMock.mockClear()
     toastErrorMock.mockReset()
+    toastWarningMock.mockReset()
   })
 
   it('starts collapsed and idle, on the keypad, with a stopped timer', () => {

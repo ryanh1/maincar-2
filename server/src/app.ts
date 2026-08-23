@@ -10,6 +10,7 @@ import authRouter from './routes/auth.js'
 import callsRouter from './routes/calls.js'
 import calendarWorkspaceRouter from './routes/calendarWorkspace.js'
 import callCommentsRouter from './routes/callComments.js'
+import callAlertSettingsRouter from './routes/callAlertSettings.js'
 import companiesRouter from './routes/companies.js'
 import dealsRouter from './routes/deals.js'
 import detailLayoutsRouter from './routes/detailLayouts.js'
@@ -80,6 +81,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api', invitationsRouter)
 
 app.use('/api/auth', authRouter)
+app.use('/api/call-alert-settings', callAlertSettingsRouter)
 app.use('/api/team', teamRouter)
 app.use('/api/keyboard-bindings', keyboardBindingsRouter)
 

@@ -5,6 +5,9 @@ import { Device, type TwilioVoiceCall } from '@/dependencies/twilioVoice'
 import { useAuth } from '@/providers/useAuth'
 import { useGetCallDetail } from '@/hooks/dialer/useGetCallDetail'
 import { useGetVoiceToken } from '@/hooks/dialer/useGetVoiceToken'
+import { useGetCallAlertSettings } from '@/hooks/callAlertSettings'
+import { deliverForegroundCallAlert } from '@/lib/callAlertDelivery'
+import { callAlertDefaults, type CallAlertEvent } from '@/lib/callAlertSettings'
 import type { CallStatus } from '@/lib/callTypes'
 import { callOutcomeMessage } from '@/lib/callOutcomeMessage'
 import {
@@ -80,7 +83,8 @@ function readStoredActiveCall(orgId: string): StoredActiveCall | null {
  * that CONSUME this state through `useDialer()`.
  */
 export function DialerProvider({ children }: { children: ReactNode }) {
-  const { org } = useAuth()
+  const { org, user } = useAuth()
+  const alertSettingsQuery = useGetCallAlertSettings()
   const [view, setView] = useState<DialerView>('collapsed')
   const [prefilledNumber, setPrefilledNumber] = useState<string | undefined>()
   const [phase, setPhase] = useState<CallPhase>('idle')
@@ -120,6 +124,24 @@ export function DialerProvider({ children }: { children: ReactNode }) {
   const answeredRef = useRef(false)
   const serverStartedAtRef = useRef<string | null>(null)
   const restoredOrgRef = useRef<string | null>(null)
+  const foregroundAlertStopRef = useRef<(() => void) | null>(null)
+
+  const stopForegroundAlert = useCallback(() => {
+    foregroundAlertStopRef.current?.()
+    foregroundAlertStopRef.current = null
+  }, [])
+
+  const deliverAlert = useCallback((event: CallAlertEvent, title: string, body: string) => {
+    stopForegroundAlert()
+    foregroundAlertStopRef.current = deliverForegroundCallAlert({
+      event,
+      title,
+      body,
+      settings: alertSettingsQuery.data?.callAlertSettings ?? callAlertDefaults,
+      timeZone: user?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+      popover: (popoverTitle, options) => toast.warning(popoverTitle, options),
+    })
+  }, [alertSettingsQuery.data, stopForegroundAlert, user?.timeZone])
 
   const expandDialer = useCallback((number?: string) => {
     setPrefilledNumber(number)
@@ -213,6 +235,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const reset = useCallback(() => {
+    stopForegroundAlert()
     setPhase('idle')
     setDialing(false)
     setElapsedSeconds(0)
@@ -222,7 +245,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     setActiveCall(null)
     callRef.current = null
     setCanControlAudio(false)
-  }, [])
+  }, [stopForegroundAlert])
 
   const clearIncomingCall = useCallback((call: TwilioVoiceCall) => {
     if (callRef.current !== call) return
@@ -236,8 +259,9 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     // Drop the pending marker before accepting so a double-click cannot issue a
     // second accept. callRef keeps the Call available for its accept event.
     incomingCallRef.current = null
+    stopForegroundAlert()
     call.accept()
-  }, [])
+  }, [stopForegroundAlert])
 
   const rejectIncomingCall = useCallback(() => {
     const call = incomingCallRef.current
@@ -258,6 +282,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
 
     incomingCallRef.current = call
     callRef.current = call
+    deliverAlert('incoming', 'Incoming call', call.parameters.From ?? 'A caller needs you.')
     startCall({
       orgId: org.id,
       callId,
@@ -271,11 +296,15 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       setCanControlAudio(true)
       connectCall()
     })
-    call.on('cancel', () => clearIncomingCall(call))
+    call.on('cancel', () => {
+      clearIncomingCall(call)
+      deliverAlert('missed', 'Missed call', call.parameters.From ?? 'A caller hung up.')
+    })
     call.on('reject', () => clearIncomingCall(call))
     call.on('disconnect', () => {
       if (incomingCallRef.current === call) {
         clearIncomingCall(call)
+        deliverAlert('missed', 'Missed call', call.parameters.From ?? 'A caller hung up.')
       } else if (callRef.current === call) {
         finishCall()
       }
@@ -287,7 +316,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
         finishCall('dropped')
       }
     })
-  }, [clearIncomingCall, connectCall, finishCall, org, startCall])
+  }, [clearIncomingCall, connectCall, deliverAlert, finishCall, org, startCall])
 
   // A same-tab refresh loses React state but not sessionStorage. Restore only a
   // live call from the active organization, then let the normal detail poll
@@ -419,10 +448,11 @@ export function DialerProvider({ children }: { children: ReactNode }) {
   // Torn down on unmount only — the Device outlives any one call.
   useEffect(
     () => () => {
+      stopForegroundAlert()
       deviceRef.current?.destroy()
       deviceRef.current = null
     },
-    [],
+    [stopForegroundAlert],
   )
 
   // Places one call through the Device and wires that call's OWN lifecycle onto
