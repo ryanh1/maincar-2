@@ -40,6 +40,8 @@ export const JOB_TRANSCODE_GREETING = 'transcode-greeting'
 
 export const JOB_TRANSCODE_VOICEMAIL_DROP = 'transcode-voicemail-drop'
 
+export const JOB_MAIL_SYNC = 'mail-sync'
+
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
   JOB_RELEASE_NUMBER,
@@ -52,6 +54,7 @@ export const JOB_NAMES = [
   JOB_TRANSCRIBE_VOICEMAIL_DROP,
   JOB_TRANSCODE_GREETING,
   JOB_TRANSCODE_VOICEMAIL_DROP,
+  JOB_MAIL_SYNC,
 ] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
@@ -63,7 +66,7 @@ export type JobName = (typeof JOB_NAMES)[number]
  * them. They are set here so a queue behaves the same no matter which caller
  * enqueued the job.
  */
-const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }> = {
+const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number; policy?: 'singleton' }> = {
   // One retry, thirty seconds later. See jobs/provisionNumber.ts for why this
   // queue must not retry more than that: the work it does spends money.
   [JOB_PROVISION_NUMBER]: { retryLimit: 1, retryDelay: 30 },
@@ -98,6 +101,10 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number }
   // One retry, thirty seconds later. The source WebM remains in private storage
   // until a successful conversion settles the drop to its stable MP3 key.
   [JOB_TRANSCODE_VOICEMAIL_DROP]: { retryLimit: 1, retryDelay: 30 },
+  // The recurring dispatcher and each account's keyed delivery share this queue.
+  // `singletonKey = mailAccountId` prevents a slow provider page for one mailbox
+  // overlapping its next five-minute run, without serialising other accounts.
+  [JOB_MAIL_SYNC]: { retryLimit: 3, retryDelay: 60, policy: 'singleton' },
 }
 
 let boss: PgBoss | null = null

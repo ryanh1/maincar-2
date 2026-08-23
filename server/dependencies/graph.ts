@@ -69,8 +69,10 @@ async function run<T>(op: () => Promise<T>): Promise<T> {
  */
 export interface GraphClient {
   readonly provider: 'microsoft'
-  /** A page of inbox messages, or the next page when `deltaLink` is supplied. */
-  listMessages(opts?: { deltaLink?: string }): Promise<unknown>
+  /** Folder inventory for per-folder mailbox delta sync. */
+  listMailFolders?(): Promise<unknown>
+  /** A page of one folder's messages, or the next page when `deltaLink` is supplied. */
+  listMessages(opts?: { deltaLink?: string; folderId?: string }): Promise<unknown>
   /** One full message by id. */
   getMessage(id: string): Promise<unknown>
   /** Send a message. `saveToSentItems` defaults to true, matching Graph's own default. */
@@ -145,9 +147,13 @@ export function graphClient(accessToken: string): GraphCalendarClient {
   return {
     provider: 'microsoft',
 
+    listMailFolders() {
+      return run(() => client.api('/me/mailFolders').get())
+    },
+
     listMessages(opts = {}) {
-      // Follow an existing cursor if given; otherwise open a fresh inbox delta.
-      const resource = opts.deltaLink ?? '/me/mailFolders/inbox/messages/delta'
+      // Follow an existing cursor if given; otherwise open a fresh folder delta.
+      const resource = opts.deltaLink ?? `/me/mailFolders/${encodeURIComponent(opts.folderId ?? 'inbox')}/messages/delta`
       return run(() => client.api(resource).get())
     },
 

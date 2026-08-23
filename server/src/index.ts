@@ -13,6 +13,7 @@ import { registerTranscribeVoicemailWorker } from './jobs/transcribeVoicemail.js
 import { registerTranscribeVoicemailDropWorker } from './jobs/transcribeVoicemailDrop.js'
 import { registerTranscodeGreetingWorker } from './jobs/transcodeGreeting.js'
 import { registerTranscodeVoicemailDropWorker } from './jobs/transcodeVoicemailDrop.js'
+import { registerMailSyncWorker, scheduleMailSync } from './jobs/mailSync.js'
 import { startQueue, stopQueue } from './jobs/queue.js'
 import { registerOAuthTokenRefresher } from './lib/mail/oauthProviders.js'
 
@@ -58,6 +59,8 @@ async function startWorkers(): Promise<void> {
   await registerTranscribeVoicemailDropWorker()
   await registerTranscodeGreetingWorker()
   await registerTranscodeVoicemailDropWorker()
+  await registerMailSyncWorker()
+  await scheduleMailSync()
   logger.info(
     {
       workers: [
@@ -71,6 +74,7 @@ async function startWorkers(): Promise<void> {
         'transcribe-voicemail-drop',
         'transcode-greeting',
         'transcode-voicemail-drop',
+        'mail-sync',
       ],
     },
     'job queue workers started',

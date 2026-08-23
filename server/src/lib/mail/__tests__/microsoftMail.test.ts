@@ -294,16 +294,43 @@ describe('microsoftMail — Graph specifics', () => {
     ]
     const provider = makeProvider({ messages: seeded })
 
-    // One message, no next page → the cursor is Graph's deltaLink.
+    // One message, no next page → the cursor carries the folder's deltaLink.
     const first = await provider.listMessagesSince(null, 10)
     expect(first.messages).toHaveLength(1)
-    expect(first.nextCursor).toBe(MESSAGES_DELTA_DONE)
+    expect(first.nextCursor).toBeTruthy()
 
     // Replaying that deltaLink returns an empty page (nothing changed) and does NOT
     // throw — the delta path is wired end to end.
     const second = await provider.listMessagesSince(first.nextCursor, 10)
     expect(second.messages).toEqual([])
-    expect(second.nextCursor).toBe(MESSAGES_DELTA_DONE)
+    expect(second.nextCursor).toBeTruthy()
+  })
+
+  it('starts and checkpoints a distinct delta stream for every Graph mail folder', async () => {
+    const calls: Array<{ deltaLink?: string; folderId?: string }> = []
+    const client: GraphClient = {
+      ...makeFakeClient({}),
+      async listMailFolders() {
+        return { value: [{ id: 'inbox' }, { id: 'sentitems' }] }
+      },
+      async listMessages(opts = {}) {
+        calls.push(opts)
+        return {
+          value: [],
+          '@odata.deltaLink': `https://graph.example/me/mailFolders/${opts.folderId}/messages/delta?$deltatoken=done`,
+        }
+      },
+    }
+    const provider = microsoftMail({ connectionId: 'conn-1', emailAddress: MAILBOX }, async () => client)
+
+    const page = await provider.listMessagesSince(null, 10)
+
+    expect(calls).toEqual([{ folderId: 'inbox' }, { folderId: 'sentitems' }])
+    const folders = JSON.parse(page.nextCursor!).folders
+    expect(folders).toEqual({
+      inbox: expect.stringContaining('/inbox/messages/delta'),
+      sentitems: expect.stringContaining('/sentitems/messages/delta'),
+    })
   })
 
   it('an invalidated Graph delta token throws CursorExpiredError', async () => {
