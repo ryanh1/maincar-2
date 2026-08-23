@@ -108,10 +108,20 @@ describe('transcribeCallRecording', () => {
     })
   })
 
-  it('rejects a successful but malformed response rather than returning unusable rows', async () => {
-    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ results: { channels: [], utterances: [] } }) })
+  it('returns an empty completed transcript when a successful recording has no spoken utterances', async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({
+      results: { channels: [{ alternatives: [] }], utterances: [] },
+    }) })
 
-    await expect(transcribeCallRecording(AUDIO, 'audio/mpeg')).rejects.toThrow('malformed')
+    await expect(transcribeCallRecording(AUDIO, 'audio/mpeg')).resolves.toEqual({ plainText: '', segments: [] })
+  })
+
+  it('rejects an empty-utterance response whose channel data is malformed', async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({
+      results: { channels: [null], utterances: [] },
+    }) })
+
+    await expect(transcribeCallRecording(AUDIO, 'audio/mpeg')).rejects.toThrow('malformed results.channels[0]')
   })
 
   it('returns a status-bearing error when Deepgram rejects the request', async () => {

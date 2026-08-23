@@ -119,13 +119,20 @@ export async function transcribeCallRecording(
   if (!Array.isArray(results.channels) || results.channels.length === 0) {
     throw new Error('Deepgram transcription returned malformed results.channels')
   }
+  const channels = results.channels.map((value, index) => asRecord(value, `results.channels[${index}]`))
+  // A completed recording can have no detectable speech. Deepgram still returns
+  // a successful result in that case, but no channel language or utterance data
+  // exists to normalize. It is an honest completed empty transcript, not a
+  // malformed provider response that should consume the retry budget.
+  if (Array.isArray(results.utterances) && results.utterances.length === 0) {
+    return { plainText: '', segments: [] }
+  }
 
-  const languages = results.channels.map((value, index) => {
-    const channel = asRecord(value, `results.channels[${index}]`)
+  const languages = channels.map((channel, index) => {
     return string(channel.detected_language, `results.channels[${index}].detected_language`)
   })
 
-  if (!Array.isArray(results.utterances) || results.utterances.length === 0) {
+  if (!Array.isArray(results.utterances)) {
     throw new Error('Deepgram transcription returned malformed results.utterances')
   }
 
