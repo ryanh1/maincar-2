@@ -61,6 +61,7 @@ describe('Records_SavedViewControls', () => {
     await user.click(screen.getByRole('option', { name: 'Team pipeline' }))
     expect(onSelectView).toHaveBeenCalledWith('shared')
 
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Reset' }))
     expect(onReset).toHaveBeenCalledOnce()
   })
@@ -140,6 +141,31 @@ describe('Records_SavedViewControls', () => {
     await user.click(screen.getByRole('button', { name: 'Show actions for My view view' }))
     await user.click(screen.getByRole('menuitem', { name: 'Set as default' }))
     expect(onSetDefault).toHaveBeenCalledOnce()
+  })
+
+  it('hides the unsaved-changes controls when the live config matches the saved view', () => {
+    renderWithProviders(
+      <Records_SavedViewControls
+        views={[personalView]}
+        selectedViewId="personal"
+        hasUnsavedChanges={false}
+        isSaving={false}
+        onSelectView={vi.fn()}
+        onSave={vi.fn()}
+        onReset={vi.fn()}
+        onRename={vi.fn()}
+        onDuplicate={vi.fn()}
+        onDelete={vi.fn()}
+        onRestore={vi.fn()}
+        onVisibilityChange={vi.fn()}
+        onSetDefault={vi.fn()}
+        onReorder={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByRole('status', { name: 'Unsaved changes' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument()
   })
 
   it('supports keyboard selection and returns focus to the actions button when a rename is cancelled', async () => {

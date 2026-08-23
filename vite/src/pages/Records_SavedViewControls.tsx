@@ -80,6 +80,7 @@ export function Records_SavedViewControls({
 
       {hasUnsavedChanges && (
         <>
+          <span role="status" className="text-xs text-text-muted">Unsaved changes</span>
           {selectedView?.isShared ? (
             <AlertDialog>
               <AlertDialogTrigger asChild>
