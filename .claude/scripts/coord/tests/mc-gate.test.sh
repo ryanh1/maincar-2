@@ -97,6 +97,17 @@ wait "$legacy_gate_pid"
 # Three repetitions of five competing train gates prove the default admits four
 # real non-browser jobs at once and queues the fifth. No capacity is reserved
 # for Playwright because the delivery train never runs it.
+wait_for_running_gate() {
+  local output="$1" attempt
+  for attempt in $(seq 1 30); do
+    if grep -F 'class train, slot' "$output" >/dev/null 2>&1; then return 0; fi
+    sleep 0.1
+  done
+  echo "train gate did not acquire a slot before the queue assertion:" >&2
+  sed 's/^/  /' "$output" >&2
+  return 1
+}
+
 for run in 1 2 3; do
   : > "$SANDBOX/npm.log"
   run_gate --train --risk low --scope docs --coverage 'coordination docs' >"$SANDBOX/train-${run}-one.out" 2>&1 &
@@ -107,7 +118,9 @@ for run in 1 2 3; do
   third=$!
   run_gate --train --risk low --scope docs --coverage 'coordination docs' >"$SANDBOX/train-${run}-four.out" 2>&1 &
   fourth=$!
-  sleep 1
+  for name in one two three four; do
+    wait_for_running_gate "$SANDBOX/train-${run}-${name}.out"
+  done
   run_gate --train --risk low --scope docs --coverage 'coordination docs' >"$SANDBOX/train-${run}-five.out" 2>&1 &
   fifth=$!
   for job in one:$first two:$second three:$third four:$fourth five:$fifth; do
