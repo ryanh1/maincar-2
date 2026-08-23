@@ -46,4 +46,23 @@ describe('call web-push job', () => {
     await deliverCallWebPush({ userId: 'user-1', event: 'missed', eventKey: 'call:call-1:missed' })
     expect(sendWebPushMock).not.toHaveBeenCalled()
   })
+
+  it('releases a failed delivery claim so the queued job can retry', async () => {
+    const failure = new Error('push service unavailable')
+    sendWebPushMock.mockRejectedValue(failure)
+
+    await expect(deliverCallWebPush({ userId: 'user-1', event: 'incoming', eventKey: 'call:call-1:incoming' })).rejects.toThrow(failure)
+
+    expect(prismaMock.webPushDelivery.deleteMany).toHaveBeenCalledWith({
+      where: { subscriptionId: 'sub-1', eventKey: 'call:call-1:incoming' },
+    })
+  })
+
+  it('removes a subscription the push service reports as expired', async () => {
+    sendWebPushMock.mockRejectedValue({ statusCode: 410 })
+
+    await expect(deliverCallWebPush({ userId: 'user-1', event: 'incoming', eventKey: 'call:call-1:incoming' })).rejects.toMatchObject({ statusCode: 410 })
+
+    expect(prismaMock.webPushSubscription.deleteMany).toHaveBeenCalledWith({ where: { id: 'sub-1' } })
+  })
 })

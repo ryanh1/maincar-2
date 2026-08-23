@@ -157,6 +157,7 @@ beforeEach(() => {
   prismaMock.call.upsert.mockResolvedValue(callRow({ direction: 'inbound', status: 'ringing' }))
   prismaMock.call.updateMany.mockResolvedValue({ count: 1 })
   queueUploadRecordingMock.mockResolvedValue('upload_job_1')
+  queueCallWebPushMock.mockResolvedValue(undefined)
   // No recognized number and no voicemail by default; the inbound-voicemail
   // tests override these to prove the recognized-number path.
   prismaMock.phoneNumber.findFirst.mockResolvedValue(null)

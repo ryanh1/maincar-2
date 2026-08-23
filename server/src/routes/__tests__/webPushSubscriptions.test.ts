@@ -65,6 +65,18 @@ describe('web push subscriptions', () => {
     expect(prismaMock.webPushSubscription.update).not.toHaveBeenCalled()
   })
 
+  it('renews an existing subscription owned by the authenticated rep', async () => {
+    prismaMock.webPushSubscription.findUnique.mockResolvedValue({ endpoint: subscription.endpoint, userId: 'user-a' })
+
+    const response = await request(app).put('/api/web-push/subscriptions').set('Authorization', AUTH).send({ subscription })
+
+    expect(response.status).toBe(200)
+    expect(prismaMock.webPushSubscription.update).toHaveBeenCalledWith({
+      where: { endpoint: subscription.endpoint },
+      data: { p256dh: 'p256dh-key', auth: 'auth-key' },
+    })
+  })
+
   it('revokes only the authenticated rep’s subscription', async () => {
     const response = await request(app).delete('/api/web-push/subscriptions').set('Authorization', AUTH).send({ endpoint: subscription.endpoint })
 

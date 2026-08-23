@@ -167,7 +167,9 @@ async function handleInboundCall(
       { route: 'POST /api/twilio/voice', requestId: req.id, orgId: call.orgId, callId: call.id },
       'inbound call ringing assigned browser Device',
     )
-    void queueCallWebPush({ userId: call.userId, event: 'incoming', eventKey: `call:${call.id}:incoming` })
+    void queueCallWebPush({ userId: call.userId, event: 'incoming', eventKey: `call:${call.id}:incoming` }).catch((error) => {
+      logger.error({ orgId: call.orgId, callId: call.id, error }, 'could not queue incoming call web push')
+    })
 
     res.status(200).type('text/xml').send(
       buildInboundDeliveryTwiml({
@@ -227,7 +229,11 @@ async function respondWithInboundVoicemail(
   })
 
   const assigned = await prisma.phoneNumber.findFirst({ where: { e164: inbound.toE164, status: 'active' }, select: { assignedUserId: true } })
-  if (assigned?.assignedUserId) void queueCallWebPush({ userId: assigned.assignedUserId, event: 'voicemail', eventKey: `voicemail:${inbound.callSid}` })
+  if (assigned?.assignedUserId) {
+    void queueCallWebPush({ userId: assigned.assignedUserId, event: 'voicemail', eventKey: `voicemail:${inbound.callSid}` }).catch((error) => {
+      logger.error({ orgId: inbound.orgId, callSid: inbound.callSid, error }, 'could not queue voicemail web push')
+    })
+  }
 
   logger.info(
     { route: 'POST /api/twilio/voice', requestId: req.id, orgId: inbound.orgId, callSid: inbound.callSid },
@@ -365,7 +371,11 @@ router.post(
         ...(Number.isFinite(durationS) ? { durationS } : {}),
       },
     })
-    if (status !== 'completed') void queueCallWebPush({ userId: call.userId, event: 'missed', eventKey: `call:${call.id}:missed` })
+    if (status !== 'completed') {
+      void queueCallWebPush({ userId: call.userId, event: 'missed', eventKey: `call:${call.id}:missed` }).catch((error) => {
+        logger.error({ orgId: call.orgId, callId: call.id, error }, 'could not queue missed call web push')
+      })
+    }
 
     // --- Return the next TwiML ---
     if (status === 'completed') {

@@ -47,13 +47,14 @@ export function Settings_AlertsTab() {
     try {
       if (channel === 'browserNotification') {
         if (checked) await enableCallWebPush()
-        else await revokeCallWebPush()
+        else if (!EVENTS.some(({ id }) => id !== event && settings[id].browserNotification)) await revokeCallWebPush()
       } else if (checked && typeof Notification !== 'undefined' && shouldRequestNotificationPermission(next[event], Notification.permission)) {
         const permission = await Notification.requestPermission()
         if (permission !== 'granted') toast.error('Browser notifications are blocked. Change the browser permission to enable them.')
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not enable background browser alerts. Try again.')
+      return
     }
     void save(next)
   }
