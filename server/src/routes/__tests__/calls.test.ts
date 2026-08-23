@@ -457,6 +457,7 @@ describe('GET /api/orgs/:orgId/calls/:id', () => {
       'endedAt',
       'fromE164',
       'id',
+      'nextSteps',
       'noteText',
       'recordingEnabled',
       'recordingPlanned',
@@ -474,6 +475,7 @@ describe('GET /api/orgs/:orgId/calls/:id', () => {
     expect(res.body.call.transcript).toBe('Hello, this is the transcript.')
     expect(res.body.call.transcriptStatus).toBe('done')
     expect(res.body.call.durationS).toBe(73)
+    expect(res.body.call.nextSteps).toEqual([])
   })
 
   it('returns one review read model with CRM context, a signed audio source, timed transcript data, and speakers', async () => {

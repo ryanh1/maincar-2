@@ -1,7 +1,7 @@
 # Maincar schema
 
 > AUTO-GENERATED — DO NOT EDIT BY HAND.
-> Generated at: 2026-08-23T00:54:22.022Z
+> Generated at: 2026-08-23T01:08:27.205Z
 > Dynamic-object source: seeded standard-object definitions.
 > Journey: [4.S4 — Generate a Prisma-style schema markdown](../journeys/4-crm-data-and-views.md#journey-4s4--generate-a-prisma-style-schema-markdown-for-every-object-internal-engineering-tool).
 
@@ -171,6 +171,9 @@ model Org {
   phoneNumbers             PhoneNumber[]
   calls                    Call[]
   dispositions             DispositionDef[]
+  nextStepTypes            NextStepType[]
+  callNextSteps            CallNextStep[]
+  dispositionNextStepRules DispositionNextStepRule[]
   transcripts              Transcript[]
   transcriptSegments       TranscriptSegment[]
   callSpeakers             CallSpeaker[]
@@ -392,6 +395,7 @@ model Call {
   dispositionId            String?
   disposition              DispositionDef?
   noteText                 String?
+  nextSteps                CallNextStep[]
   finalTranscript          Transcript?
   speakers                 CallSpeaker[]
   comments                 CallComment[]
@@ -432,6 +436,72 @@ model DispositionDef {
   sortOrder                Int // default: "0"
   isArchived               Boolean // default: "false"
   calls                    Call[]
+  suggestedNextStepRules   DispositionNextStepRule[]
+  createdAt                DateTime // default: "now()"
+  updatedAt                DateTime // updatedAt
+}
+```
+
+### NextStepType
+
+Storage kind: **real Prisma table**.
+
+```prisma
+model NextStepType {
+  id                       String // id; default: "cuid()"
+  orgId                    String
+  org                      Org
+  value                    String
+  label                    String
+  color                    String // default: "\"option-1\""
+  icon                     String?
+  isPinned                 Boolean // default: "false"
+  pinOrder                 Int?
+  sortOrder                Int // default: "0"
+  isOverflow               Boolean // default: "false"
+  requiresDateTime         Boolean // default: "false"
+  createsTask              Boolean // default: "false"
+  isArchived               Boolean // default: "false"
+  callNextSteps            CallNextStep[]
+  dispositionRules         DispositionNextStepRule[]
+  createdAt                DateTime // default: "now()"
+  updatedAt                DateTime // updatedAt
+}
+```
+
+### DispositionNextStepRule
+
+Storage kind: **real Prisma table**.
+
+```prisma
+model DispositionNextStepRule {
+  id                       String // id; default: "cuid()"
+  orgId                    String
+  org                      Org
+  dispositionId            String
+  disposition              DispositionDef
+  nextStepTypeId           String
+  nextStepType             NextStepType
+  createdAt                DateTime // default: "now()"
+  updatedAt                DateTime // updatedAt
+}
+```
+
+### CallNextStep
+
+Storage kind: **real Prisma table**.
+
+```prisma
+model CallNextStep {
+  id                       String // id; default: "cuid()"
+  orgId                    String
+  org                      Org
+  callId                   String
+  call                     Call
+  nextStepTypeId           String
+  nextStepType             NextStepType
+  scheduledAt              DateTime?
+  sortOrder                Int // default: "0"
   createdAt                DateTime // default: "now()"
   updatedAt                DateTime // updatedAt
 }

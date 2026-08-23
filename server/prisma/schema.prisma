@@ -51,6 +51,9 @@ model Org {
   phoneNumbers       PhoneNumber[]
   calls              Call[]
   dispositions       DispositionDef[]
+  nextStepTypes      NextStepType[]
+  callNextSteps      CallNextStep[]
+  dispositionNextStepRules DispositionNextStepRule[]
   transcripts        Transcript[]
   transcriptSegments TranscriptSegment[]
   callSpeakers       CallSpeaker[]
@@ -456,6 +459,7 @@ model Call {
   dispositionId String?
   disposition   DispositionDef? @relation(fields: [dispositionId], references: [id], onDelete: SetNull)
   noteText      String?
+  nextSteps     CallNextStep[]
 
   // The canonical final pass. The legacy flat `transcript` stays temporarily so
   // existing readers remain compatible while consumers move to timed segments.
@@ -534,6 +538,7 @@ model DispositionDef {
   isArchived Boolean @default(false)
 
   calls Call[]
+  suggestedNextStepRules DispositionNextStepRule[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -541,6 +546,83 @@ model DispositionDef {
   @@unique([orgId, value])
   @@index([orgId, isArchived, sortOrder])
   @@index([orgId, isArchived, isPinned, pinOrder])
+}
+
+// An organization-configured action a rep can select after logging a call. The
+// stable `value` is safe for integrations; the presentation fields stay editable.
+model NextStepType {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  value String
+  label String
+  // One of option-1 through option-8. This is a semantic token, not a raw color.
+  color String @default("option-1")
+  icon  String?
+  isPinned Boolean @default(false)
+  pinOrder Int?
+  sortOrder Int @default(0)
+  // Whether this type belongs in the row's overflow menu rather than its pinned set.
+  isOverflow Boolean @default(false)
+  // If true, a selected instance requires a scheduled instant.
+  requiresDateTime Boolean @default(false)
+  // If true, the later Save & Next workflow creates a linked Task for this step.
+  createsTask Boolean @default(false)
+  isArchived Boolean @default(false)
+
+  callNextSteps CallNextStep[]
+  dispositionRules DispositionNextStepRule[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, value])
+  @@index([orgId, isArchived, isPinned, pinOrder])
+  @@index([orgId, isArchived, sortOrder])
+}
+
+// One active disposition can suggest one active next-step type. Archiving a type
+// removes its rule instead of leaving a configuration that cannot be selected.
+model DispositionNextStepRule {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  dispositionId String
+  disposition   DispositionDef @relation(fields: [dispositionId], references: [id], onDelete: Cascade)
+  nextStepTypeId String
+  nextStepType   NextStepType @relation(fields: [nextStepTypeId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, dispositionId])
+  @@index([orgId, nextStepTypeId])
+}
+
+// A selected next step is separate from Call.dispositionId: a call has exactly
+// one outcome but may retain zero or more planned follow-ups.
+model CallNextStep {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  callId String
+  call   Call   @relation(fields: [callId], references: [id], onDelete: Cascade)
+  nextStepTypeId String
+  nextStepType   NextStepType @relation(fields: [nextStepTypeId], references: [id], onDelete: Restrict)
+  scheduledAt DateTime?
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([callId, nextStepTypeId])
+  @@index([orgId, callId, sortOrder])
+  @@index([orgId, nextStepTypeId])
 }
 
 // One canonical final pass for a call. Provider-owned text and timing live below

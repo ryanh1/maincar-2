@@ -98,7 +98,24 @@ type CallDisposition = {
   category: string
 }
 
-type CallWithDisposition = Call & { disposition?: CallDisposition | null }
+type CallNextStepType = {
+  id: string
+  value: string
+  label: string
+  color: string
+  icon: string | null
+  requiresDateTime: boolean
+  createsTask: boolean
+}
+
+type CallNextStepWithType = {
+  id: string
+  scheduledAt: Date | null
+  sortOrder: number
+  nextStepType: CallNextStepType
+}
+
+type CallWithDisposition = Call & { disposition?: CallDisposition | null; nextSteps?: CallNextStepWithType[] }
 
 function mapDispositionToApi(disposition: CallDisposition | null | undefined) {
   return disposition
@@ -111,6 +128,23 @@ function mapDispositionToApi(disposition: CallDisposition | null | undefined) {
         category: disposition.category,
       }
     : null
+}
+
+function mapCallNextStepToApi(nextStep: CallNextStepWithType) {
+  return {
+    id: nextStep.id,
+    scheduledAt: nextStep.scheduledAt ? nextStep.scheduledAt.toISOString() : null,
+    sortOrder: nextStep.sortOrder,
+    nextStepType: {
+      id: nextStep.nextStepType.id,
+      value: nextStep.nextStepType.value,
+      label: nextStep.nextStepType.label,
+      color: nextStep.nextStepType.color,
+      icon: nextStep.nextStepType.icon,
+      requiresDateTime: nextStep.nextStepType.requiresDateTime,
+      createsTask: nextStep.nextStepType.createsTask,
+    },
+  }
 }
 
 function mapCallToDetailApi(call: CallWithDisposition, recordingUrl: string | null) {
@@ -128,6 +162,7 @@ function mapCallToDetailApi(call: CallWithDisposition, recordingUrl: string | nu
     transcriptStatus: call.transcriptStatus,
     transcript: call.transcript,
     disposition: mapDispositionToApi(call.disposition),
+    nextSteps: (call.nextSteps ?? []).map(mapCallNextStepToApi),
     noteText: call.noteText,
     twilioCallSid: call.twilioCallSid,
     durationS: call.durationS,
@@ -281,6 +316,15 @@ function mapCallReviewApi(call: CallReviewRecord, source: SignedAudioSource | nu
 
 const callReviewInclude = {
   disposition: { select: { id: true, value: true, label: true, color: true, icon: true, category: true } },
+  nextSteps: {
+    select: {
+      id: true,
+      scheduledAt: true,
+      sortOrder: true,
+      nextStepType: { select: { id: true, value: true, label: true, color: true, icon: true, requiresDateTime: true, createsTask: true } },
+    },
+    orderBy: { sortOrder: 'asc' },
+  },
   person: { select: { id: true, firstName: true, lastName: true, preferredFirstName: true, title: true } },
   company: { select: { id: true, name: true } },
   deal: { select: { id: true, name: true, status: true } },
