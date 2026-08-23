@@ -62,6 +62,14 @@ const AUTH = 'Bearer fake-token'
 const ORG_A = 'org-a'
 const URL_A = `/api/mailboxes/orgs/${ORG_A}`
 const SECRET = 'SECRET-REFRESH-TOKEN'
+const GOOGLE_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+  'https://www.googleapis.com/auth/calendar.freebusy',
+  'https://www.googleapis.com/auth/userinfo.email',
+]
 
 function userRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -111,6 +119,7 @@ function boxRow(overrides: Record<string, unknown> = {}) {
       statusDetail: null,
       errorCode: null,
       lastValidatedAt: NOW,
+      scopes: GOOGLE_SCOPES,
     },
     // Not in the select in production; here to prove serializeMailbox never leaks it.
     refreshToken: SECRET,
@@ -179,6 +188,28 @@ describe('GET /api/mailboxes/orgs/:orgId', () => {
 
     expect(res.body.mailboxes[0].status).toBe('error')
     expect(res.body.mailboxes[0].statusDetail).toBe('Access was revoked; reconnect the mailbox.')
+  })
+
+  it('shows the reconnect-required state for a primary connected before Calendar scopes were added', async () => {
+    prismaMock.mailAccount.findMany.mockResolvedValue([
+      boxRow({
+        connection: {
+          status: 'connected',
+          statusDetail: null,
+          errorCode: null,
+          lastValidatedAt: NOW,
+          scopes: GOOGLE_SCOPES.filter((scope) => !scope.includes('calendar.calendarlist') && !scope.includes('calendar.freebusy')),
+        },
+      }),
+    ])
+
+    const res = await request(app).get(URL_A).set('Authorization', AUTH)
+
+    expect(res.body.mailboxes[0]).toMatchObject({
+      status: 'limited',
+      errorCode: 'partial_access',
+      statusDetail: 'Maincar cannot see your calendar list or see your availability.',
+    })
   })
 
   it('returns an empty list, not a 404, when the rep has no mailbox', async () => {

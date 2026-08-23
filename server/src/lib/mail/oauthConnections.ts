@@ -162,6 +162,30 @@ export interface SerializedConnection {
   updatedAt: Date
 }
 
+/** The non-secret columns needed to determine whether a stored grant is usable now. */
+export interface ConnectionHealthRow {
+  provider: string
+  scopes: string[]
+  status: string
+  errorCode: string | null
+  statusDetail: string | null
+}
+
+/**
+ * Apply the current required-scope policy to a stored connection without hiding a
+ * harder provider failure. This makes a newly-required permission visible as a
+ * reconnect-required state for older grants as soon as the Integration Hub reads it.
+ */
+export function currentConnectionHealth(row: ConnectionHealthRow): Pick<SerializedConnection, 'status' | 'errorCode' | 'statusDetail'> {
+  if (row.status === 'error') {
+    return { status: row.status, errorCode: row.errorCode, statusDetail: row.statusDetail }
+  }
+  if (row.provider !== 'google' && row.provider !== 'microsoft') {
+    return { status: row.status, errorCode: row.errorCode, statusDetail: row.statusDetail }
+  }
+  return evaluateGrant(row.provider, row.scopes)
+}
+
 // A connection row as it reaches serializeConnection: the safe fields, plus the
 // token fields marked optional so a FULL row (tokens and all) is still assignable —
 // which is exactly what the leak test passes in to prove the tokens are dropped.
@@ -178,15 +202,16 @@ type SerializableConnectionRow = SerializedConnection & {
  * appears here by accident.
  */
 export function serializeConnection(row: SerializableConnectionRow): SerializedConnection {
+  const health = currentConnectionHealth(row)
   return {
     id: row.id,
     provider: row.provider,
     providerAccountId: row.providerAccountId,
     emailAddress: row.emailAddress,
     scopes: row.scopes,
-    status: row.status,
-    errorCode: row.errorCode ?? null,
-    statusDetail: row.statusDetail ?? null,
+    status: health.status,
+    errorCode: health.errorCode,
+    statusDetail: health.statusDetail,
     lastValidatedAt: row.lastValidatedAt ?? null,
     lastRefreshAt: row.lastRefreshAt ?? null,
     expiresAt: row.expiresAt ?? null,

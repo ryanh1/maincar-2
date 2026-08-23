@@ -15,12 +15,69 @@
 import prisma from '../../db.js'
 import { Prisma } from '../../generated/prisma/client.js'
 import type { MailAccount, PrismaClient } from '../../generated/prisma/client.js'
+import { evaluateGrant, type Provider } from '../oauthScopes.js'
 
 // The client defaults to the process singleton. It is injectable ONLY so the
 // integration suite can hand in a client aimed at its isolated schema
 // (src/test/integration/testPrisma.ts); nothing in the app passes it.
 type Db = Pick<PrismaClient, '$transaction'>
+type PrimaryMailboxDb = Pick<PrismaClient, 'mailAccount'>
 export type MailAccountsDb = Db
+
+const HEALTHY_PRIMARY_MAILBOX_SELECT = {
+  id: true,
+  orgId: true,
+  userId: true,
+  connectionId: true,
+  provider: true,
+  emailAddress: true,
+  connection: {
+    select: { status: true, errorCode: true, statusDetail: true, scopes: true },
+  },
+} satisfies Prisma.MailAccountSelect
+
+/** The minimal, token-free account a Calendar provider receives from the Integration Hub. */
+export type HealthyPrimaryMailbox = Omit<
+  Prisma.MailAccountGetPayload<{ select: typeof HEALTHY_PRIMARY_MAILBOX_SELECT }>,
+  'connection'
+>
+
+/**
+ * Calendar is optional, so a rep without a usable primary sender needs a recovery
+ * path rather than an implicit fallback to an arbitrary connected account.
+ */
+export class NoHealthyPrimaryMailboxError extends Error {
+  constructor(message = 'Connect a healthy primary mailbox in Settings → Integrations to use Calendar.') {
+    super(message)
+    this.name = 'NoHealthyPrimaryMailboxError'
+  }
+}
+
+/**
+ * Resolve Calendar's account when Calendar is actually requested. The lookup is
+ * intentionally not cached: changing the Integration Hub primary changes the next
+ * Calendar request's source without moving data or mutating a saved selection.
+ */
+export async function getHealthyPrimaryMailbox(
+  orgId: string,
+  userId: string,
+  db: PrimaryMailboxDb = prisma,
+): Promise<HealthyPrimaryMailbox> {
+  const mailbox = await db.mailAccount.findFirst({
+    where: { orgId, userId, isPrimary: true },
+    select: HEALTHY_PRIMARY_MAILBOX_SELECT,
+  })
+  if (
+    !mailbox ||
+    (mailbox.provider !== 'google' && mailbox.provider !== 'microsoft') ||
+    mailbox.connection.status !== 'connected' ||
+    evaluateGrant(mailbox.provider as Provider, mailbox.connection.scopes).status !== 'connected'
+  ) {
+    throw new NoHealthyPrimaryMailboxError()
+  }
+  const { connection: _connection, ...account } = mailbox
+  return account
+}
 
 /**
  * The fields a completed consent hands to the mailbox layer. It is a subset of an

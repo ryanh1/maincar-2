@@ -28,7 +28,7 @@ import prisma from '../db.js'
 import { Prisma } from '../generated/prisma/client.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { setPrimaryMailbox } from '../lib/mail/mailAccounts.js'
-import { disconnectConnection } from '../lib/mail/oauthConnections.js'
+import { currentConnectionHealth, disconnectConnection } from '../lib/mail/oauthConnections.js'
 import { isProvider } from '../lib/mail/oauthProviders.js'
 import { requireMembership } from '../lib/membership.js'
 import { providerShortName } from '../lib/oauthScopes.js'
@@ -80,7 +80,7 @@ const MAILBOX_PUBLIC_SELECT = {
   connectionId: true,
   createdAt: true,
   connection: {
-    select: { status: true, statusDetail: true, errorCode: true, lastValidatedAt: true },
+    select: { status: true, statusDetail: true, errorCode: true, lastValidatedAt: true, scopes: true },
   },
 } satisfies Prisma.MailAccountSelect
 
@@ -92,6 +92,9 @@ type MailboxRow = Prisma.MailAccountGetPayload<{ select: typeof MAILBOX_PUBLIC_S
  * connection's, so a mailbox row shows the same trouble the connection card does.
  */
 function serializeMailbox(row: MailboxRow): Mailbox {
+  const health = row.connection
+    ? currentConnectionHealth({ provider: row.provider, ...row.connection })
+    : { status: 'error', errorCode: null, statusDetail: '' }
   return {
     id: row.id,
     provider: isProvider(row.provider) ? row.provider : 'google',
@@ -99,9 +102,9 @@ function serializeMailbox(row: MailboxRow): Mailbox {
     emailAddress: row.emailAddress,
     displayName: row.displayName ?? null,
     isPrimary: row.isPrimary,
-    status: (row.connection?.status ?? 'error') as Mailbox['status'],
-    statusDetail: row.connection?.statusDetail ?? '',
-    errorCode: row.connection?.errorCode ?? null,
+    status: health.status as Mailbox['status'],
+    statusDetail: health.statusDetail ?? '',
+    errorCode: health.errorCode,
     lastValidatedAt: row.connection?.lastValidatedAt?.toISOString() ?? null,
     connectionId: row.connectionId,
     connectedAt: row.createdAt.toISOString(),
