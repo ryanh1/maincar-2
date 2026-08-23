@@ -201,8 +201,10 @@ export function setWorkspaceUrlState(params: URLSearchParams, state: WorkspaceUr
   // a later safe navigation.
   void params
   const next = new URLSearchParams()
+  const viewState = params.get('v')
   const encoded = encodeWorkspaceUrlState(state)
   if (encoded === encodeWorkspaceUrlState({})) next.delete(STATE_PARAM)
   else next.set(STATE_PARAM, encoded)
+  if (viewState) next.set('v', viewState)
   return next
 }

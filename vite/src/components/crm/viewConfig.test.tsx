@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 
 import type { AttributeDef } from '@/lib/crmTypes'
 import { createViewConfig, reorderColumnGroup, toRecordListQuery, useViewConfig } from './viewConfig'
-import { encodeWorkspaceUrlState } from '@/lib/workspaceUrlState'
+import { encodeViewState } from './viewStateCodec'
 
 const attributes = [
   { id: 'first-name', slug: 'firstName', name: 'First name' },
@@ -132,21 +132,30 @@ describe('viewConfig', () => {
 
     expect(result.current.config.sorts).toEqual([{ attributeId: 'first-name', direction: 'asc' }])
     expect(result.current.config.filterTree).toMatchObject({ attributeId: 'status', value: ['open'] })
-    expect(result.current.search).toContain('ws=')
+    expect(result.current.search).toContain('v=')
     expect(result.current.search).not.toContain('open')
   })
 
-  it('restores a Team scope from the shared URL config', () => {
-    const encoded = encodeWorkspaceUrlState({
-      viewConfig: { teamScope: { teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] } },
+  it('applies a valid URL overlay after the saved-view baseline', () => {
+    const encoded = encodeViewState({
+      ...createViewConfig(attributes),
+      sorts: [{ attributeId: 'first-name', direction: 'asc' }],
     })
-    const teamScopeWrapper = ({ children }: { children: ReactNode }) => (
-      <MemoryRouter initialEntries={[`/records/person?ws=${encoded}`]}>{children}</MemoryRouter>
+    const overlayWrapper = ({ children }: { children: ReactNode }) => (
+      <MemoryRouter initialEntries={[`/records/person?v=${encoded}`]}>{children}</MemoryRouter>
     )
 
-    const { result } = renderHook(() => useViewConfig(attributes), { wrapper: teamScopeWrapper })
+    const { result } = renderHook(
+      () => useViewConfig(attributes, {
+        ...createViewConfig(attributes),
+        sorts: [{ attributeId: 'status', direction: 'desc' }],
+        teamScope: { teamIds: ['team-revenue'] },
+      }),
+      { wrapper: overlayWrapper },
+    )
 
-    expect(result.current[0].teamScope).toEqual({ teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] })
+    expect(result.current[0].sorts).toEqual([{ attributeId: 'first-name', direction: 'asc' }])
+    expect(result.current[0].teamScope).toEqual({ teamIds: ['team-revenue'] })
   })
 
   it('keeps change-highlight settings local instead of serializing them', () => {
@@ -168,9 +177,8 @@ describe('viewConfig', () => {
     })
 
     expect(result.current.config.changeHighlight).toEqual({ mode: 'on', days: 30, onlyChangedRows: true })
-    expect(result.current.search).toContain('ws=')
+    expect(result.current.search).toContain('v=')
     expect(result.current.search).not.toContain('changeHighlight')
-    expect(result.current.search).not.toContain('v=')
   })
 
   it('keeps display-only grid controls live in the route config', () => {
