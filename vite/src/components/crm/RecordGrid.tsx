@@ -195,6 +195,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
 
   const fallbackConfig = useMemo(() => createViewConfig(attributes), [attributes])
   const config = viewConfig ?? fallbackConfig
+  const sortActive = config.sorts.length > 0
   const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
   const [headerMenu, setHeaderMenu] = useState<{ attribute: AttributeDef; anchor: GridMenuAnchor; columnIndex: number } | null>(null)
   const [rowFreezeMenu, setRowFreezeMenu] = useState<{ anchor: GridMenuAnchor; row: number } | null>(null)
@@ -613,9 +614,9 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   }, [onViewConfigChange])
 
   const onColumnGroupReorder = useCallback((activeGroup: string, overGroup: string) => {
-    if (!onViewConfigChange) return
+    if (!onViewConfigChange || sortActive) return
     onViewConfigChange((current) => ({ ...current, columns: reorderColumnGroup(current.columns, activeGroup, overGroup) }))
-  }, [onViewConfigChange])
+  }, [onViewConfigChange, sortActive])
 
   const onColumnMoved = useCallback(
     (startIndex: number, endIndex: number) => {
@@ -1174,6 +1175,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
           }))}
           onCollapsedChange={onColumnGroupCollapsedChange}
           onReorder={onColumnGroupReorder}
+          reorderDisabled={sortActive}
         />
       )}
       <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => { setHoveredRow(null); setExpandedCell(null); setChangeHighlightHover(null) }}>
@@ -1191,7 +1193,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
         freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
         rowHeight={ROW_HEIGHTS[config.rowHeight]}
         verticalBorder={config.gridLines}
-        onColumnMoved={config.columns.some((column) => column.group) ? undefined : onColumnMoved}
+        onColumnMoved={sortActive || config.columns.some((column) => column.group) ? undefined : onColumnMoved}
         onColumnResize={onColumnResize}
         rowMarkers={{ kind: 'clickable-number', width: ROW_MARKER_WIDTH }}
         smoothScrollX

@@ -137,7 +137,8 @@ export interface SortSpec {
 
 export interface ListQuery {
   filter?: FilterNode | null
-  sort?: SortSpec | null
+  /** A single sort remains supported for existing callers; new callers send priority-ordered specs. */
+  sort?: SortSpec | SortSpec[] | null
   teamScope?: TeamScope
   cursor?: string | null
   limit?: number
@@ -346,11 +347,11 @@ function clampLimit(limit: number | undefined): number {
 }
 
 interface DecodedCursor {
-  v: unknown
+  values: unknown[]
   id: string
 }
 
-function decodeCursor(cursor: string): DecodedCursor {
+function decodeCursor(cursor: string, sortCount: number): DecodedCursor {
   let parsed: unknown
   try {
     parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
@@ -360,37 +361,54 @@ function decodeCursor(cursor: string): DecodedCursor {
   if (
     typeof parsed !== 'object' ||
     parsed === null ||
-    typeof (parsed as { id?: unknown }).id !== 'string' ||
-    !('v' in (parsed as object))
+    typeof (parsed as { id?: unknown }).id !== 'string'
   ) {
     throw new ListQueryError('Invalid cursor.')
   }
-  return parsed as DecodedCursor
+  const source = parsed as { id: string; v?: unknown; values?: unknown }
+  // v is the MAI-163 single-sort cursor shape. Keep it readable so an existing
+  // one-level view can finish paging while the list endpoint grows sort[].
+  const values = Array.isArray(source.values) ? source.values : 'v' in source ? [source.v] : null
+  if (!values || values.length !== sortCount) throw new ListQueryError('Invalid cursor.')
+  return { values, id: source.id }
 }
 
-function encodeCursor(v: unknown, id: string): string {
-  return Buffer.from(JSON.stringify({ v, id }), 'utf8').toString('base64url')
+function encodeCursor(values: unknown[], id: string): string {
+  return Buffer.from(JSON.stringify({ values, id }), 'utf8').toString('base64url')
 }
 
-// Builds the keyset predicate for "sorts strictly after this cursor row", given
-// ORDER BY <sortField> <direction> NULLS LAST, "id" ASC. NULLS LAST puts every null
-// row after every non-null row regardless of direction, so the predicate branches
-// on whether the cursor itself sits in the null tail.
-function cursorPredicate(sortField: CompiledField, direction: 'asc' | 'desc', decoded: DecodedCursor): Prisma.Sql {
-  const col = sortField.sqlIdent
-  if (decoded.v === null) {
-    return Prisma.sql`(${col} IS NULL AND "id" > ${decoded.id})`
+// Builds the lexicographic keyset predicate for "sorts strictly after this
+// cursor row". Each level compares only after all earlier levels tie. NULLS
+// LAST means a non-null cursor can advance into a null tail, while a null cursor
+// can only advance through later priorities (or the id tiebreaker).
+function cursorPredicate(sortFields: CompiledField[], sortSpecs: SortSpec[], decoded: DecodedCursor): Prisma.Sql {
+  const equalParts: Prisma.Sql[] = []
+  const afterParts: Prisma.Sql[] = []
+
+  for (let index = 0; index < sortFields.length; index += 1) {
+    const field = sortFields[index]
+    const value = decoded.values[index]
+    const prefix = equalParts.length ? Prisma.sql`${Prisma.join(equalParts, ' AND ')} AND ` : Prisma.empty
+
+    if (value !== null) {
+      const coerced = coerceScalar(field.valueKind, value)
+      const cmp = sortSpecs[index].direction === 'asc' ? Prisma.sql`>` : Prisma.sql`<`
+      afterParts.push(Prisma.sql`(${prefix}(${field.sqlIdent} ${cmp} ${coerced} OR ${field.sqlIdent} IS NULL))`)
+      equalParts.push(Prisma.sql`${field.sqlIdent} IS NOT DISTINCT FROM ${coerced}`)
+    } else {
+      equalParts.push(Prisma.sql`${field.sqlIdent} IS NULL`)
+    }
   }
-  const val = coerceScalar(sortField.valueKind, decoded.v)
-  const cmp = direction === 'asc' ? Prisma.sql`>` : Prisma.sql`<`
-  return Prisma.sql`((${col} ${cmp} ${val}) OR (${col} = ${val} AND "id" > ${decoded.id}) OR (${col} IS NULL))`
+
+  afterParts.push(Prisma.sql`(${Prisma.join(equalParts, ' AND ')} AND "id" > ${decoded.id})`)
+  return Prisma.sql`(${Prisma.join(afterParts, ' OR ')})`
 }
 
 function buildSelectList(
   mode: 'table' | 'record',
   attributes: AttributeDef[],
   jsonColumnName: 'customJson' | 'valuesJson',
-  sortField: CompiledField,
+  sortFields: CompiledField[],
 ): Prisma.Sql {
   const cols: Prisma.Sql[] = [Prisma.raw('"id"'), Prisma.raw('"createdAt"'), Prisma.raw('"updatedAt"')]
   if (mode === 'table') {
@@ -401,7 +419,9 @@ function buildSelectList(
     }
   }
   cols.push(Prisma.raw(`"${jsonColumnName}"`))
-  cols.push(Prisma.sql`${sortField.sqlIdent} AS "__sortKey"`)
+  for (const [index, sortField] of sortFields.entries()) {
+    cols.push(Prisma.sql`${sortField.sqlIdent} AS ${Prisma.raw(`"__sortKey${index}"`)}`)
+  }
   return Prisma.join(cols, ', ')
 }
 
@@ -451,9 +471,20 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
   const attrsBySlug = new Map(attributes.map((a) => [a.slug, a]))
   const ctx: FieldContext = { attrsBySlug, jsonColumnName }
 
-  const sortSpec = query.sort ?? DEFAULT_SORT
-  const sortField = resolveField(ctx, sortSpec.field)
-  if (!sortField) throw new ListQueryError(`Unknown or unsortable field: "${sortSpec.field}".`)
+  const sortSpecs = query.sort === undefined || query.sort === null
+    ? [DEFAULT_SORT]
+    : Array.isArray(query.sort)
+      ? query.sort
+      : [query.sort]
+  if (sortSpecs.length === 0) throw new ListQueryError('At least one sort is required.')
+  const seenSortFields = new Set<string>()
+  const sortFields = sortSpecs.map((sortSpec) => {
+    if (seenSortFields.has(sortSpec.field)) throw new ListQueryError(`Sort field "${sortSpec.field}" appears more than once.`)
+    seenSortFields.add(sortSpec.field)
+    const sortField = resolveField(ctx, sortSpec.field)
+    if (!sortField) throw new ListQueryError(`Unknown or unsortable field: "${sortSpec.field}".`)
+    return sortField
+  })
 
   const limit = clampLimit(query.limit)
 
@@ -480,19 +511,22 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
   const countWhereSql = Prisma.join(whereParts, ' AND ')
 
   if (query.cursor) {
-    whereParts.push(cursorPredicate(sortField, sortSpec.direction, decodeCursor(query.cursor)))
+    whereParts.push(cursorPredicate(sortFields, sortSpecs, decodeCursor(query.cursor, sortSpecs.length)))
   }
   const rowsWhereSql = Prisma.join(whereParts, ' AND ')
 
-  const orderDir = sortSpec.direction === 'desc' ? Prisma.sql`DESC` : Prisma.sql`ASC`
-  const selectCols = buildSelectList(mode, attributes, jsonColumnName, sortField)
+  const orderBy = Prisma.join(sortFields.map((sortField, index) => {
+    const direction = sortSpecs[index].direction === 'desc' ? Prisma.sql`DESC` : Prisma.sql`ASC`
+    return Prisma.sql`${sortField.sqlIdent} ${direction} NULLS LAST`
+  }), ', ')
+  const selectCols = buildSelectList(mode, attributes, jsonColumnName, sortFields)
   const fromTable = Prisma.raw(`"${tableName}"`)
 
   const rowsQuery = Prisma.sql`
     SELECT ${selectCols}
     FROM ${fromTable}
     WHERE ${rowsWhereSql}
-    ORDER BY ${sortField.sqlIdent} ${orderDir} NULLS LAST, "id" ASC
+    ORDER BY ${orderBy}, "id" ASC
     LIMIT ${limit + 1}
   `
   const countQuery = Prisma.sql`
@@ -509,7 +543,9 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
   const hasMore = rawRows.length > limit
   const pageRows = hasMore ? rawRows.slice(0, limit) : rawRows
   const lastRow = pageRows[pageRows.length - 1]
-  const nextCursor = hasMore && lastRow ? encodeCursor(lastRow.__sortKey, String(lastRow.id)) : null
+  const nextCursor = hasMore && lastRow
+    ? encodeCursor(sortFields.map((_, index) => lastRow[`__sortKey${index}`]), String(lastRow.id))
+    : null
 
   return {
     rows: pageRows.map((row) => mapRow(mode, attributes, jsonColumnName, row)),

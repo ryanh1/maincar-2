@@ -31,7 +31,7 @@ describe('viewConfig', () => {
     )
 
     expect(query).toEqual({
-      sort: { field: 'firstName', direction: 'asc' },
+      sort: [{ field: 'firstName', direction: 'asc' }],
       filter: {
         type: 'condition',
         field: 'status',

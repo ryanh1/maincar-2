@@ -19,6 +19,7 @@ import type { AttributeDef } from '@/lib/crmTypes'
 import { memberDisplayName, useGetMembers, useGetTeams } from '@/hooks/orgs'
 import type { TeamScope, ViewConfig } from './viewConfig'
 import { GridFilterBuilder } from './GridFilterBuilder'
+import { GridSortPopover } from './GridSortPopover'
 
 interface GridViewToolbarProps {
   leading?: ReactNode
@@ -259,6 +260,9 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
       )}
 
       {teamScopeSupported && orgId && config.teamScope && <TeamScopeChip orgId={orgId} config={config} />}
+
+      <GridSortPopover attributes={attributes} config={config} onConfigChange={onConfigChange} />
+      {config.sorts.length > 0 && <span className="text-xs text-text-muted">Clear sort to reorder by hand.</span>}
 
       <GridFilterBuilder attributes={attributes} config={config} onConfigChange={onConfigChange} />
 

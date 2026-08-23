@@ -6,7 +6,7 @@ import type { ListRecordsResponse, RecordSort } from '@/lib/crmTypes'
 import type { RecordListFilter } from '@/components/crm/viewConfig'
 
 export interface UseListRecordsParams {
-  sort?: RecordSort
+  sort?: RecordSort[]
   filter?: RecordListFilter
 }
 

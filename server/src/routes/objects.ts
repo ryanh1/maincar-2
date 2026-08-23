@@ -119,8 +119,9 @@ function blankToNull(value: unknown): unknown {
   return trimmed === '' ? null : trimmed
 }
 
-// The body for POST /:id/list (MAI-163). A recursive filter tree, one sort key,
-// an opaque cursor, and a chunk size — see recordList.ts for the compiler.
+// The body for POST /:id/list (MAI-163, MAI-326). A recursive filter tree,
+// priority-ordered sort keys, an opaque cursor, and a chunk size — see
+// recordList.ts for the compiler.
 const filterConditionSchema = z.object({
   type: z.literal('condition'),
   field: z.string().min(1),
@@ -158,9 +159,11 @@ const teamScopeSchema = z.object({
 }).strict().refine((scope) => (scope.teamIds?.length ?? 0) + (scope.leadUserIds?.length ?? 0) > 0, {
   message: 'Choose at least one team or team lead.',
 })
+const sortSpecSchema = z.object({ field: z.string().min(1), direction: z.enum(['asc', 'desc']) })
 const listBodySchema = z.object({
   filter: filterNodeSchema.nullish(),
-  sort: z.object({ field: z.string().min(1), direction: z.enum(['asc', 'desc']) }).nullish(),
+  // Accept the MAI-163 shape while callers move to MAI-326's ordered sort array.
+  sort: z.union([sortSpecSchema, z.array(sortSpecSchema).min(1)]).nullish(),
   teamScope: teamScopeSchema.optional(),
   cursor: z.string().nullish(),
   limit: z.number().int().positive().optional(),

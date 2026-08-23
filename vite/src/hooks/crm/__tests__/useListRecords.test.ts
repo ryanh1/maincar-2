@@ -42,7 +42,7 @@ describe('useListRecords', () => {
   it('sends the sort spec when one is given', async () => {
     jsonFetch.mockResolvedValue({ rows: [], nextCursor: null, totalCount: 0 })
 
-    const sort = { field: 'lastName', direction: 'asc' as const }
+    const sort = [{ field: 'lastName', direction: 'asc' as const }]
     renderListRecords('org-1', 'obj-1', { sort })
 
     await waitFor(() =>

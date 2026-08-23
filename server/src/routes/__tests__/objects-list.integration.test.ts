@@ -192,6 +192,49 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
     expect(badOperator.status).toBe(400)
   })
 
+  it('orders by every sort level and keeps the next cursor stable across a page boundary', async () => {
+    const { orgId, adminFirebaseUid } = await seedOrgWithAdmin(prisma)
+    const objectId = await seedWidgetObject(orgId)
+
+    const rows = Array.from({ length: 51 }, (_, index) => ({
+      orgId,
+      objectId,
+      valuesJson: {
+        name: `Widget ${String(index).padStart(2, '0')}`,
+        rank: index < 2 ? 1 : index === 50 ? null : 2,
+        status: index === 0 ? 'done' : 'active',
+      } as unknown as Prisma.InputJsonValue,
+    }))
+    await prisma.record.createMany({ data: rows })
+
+    const sort = [
+      { field: 'rank', direction: 'asc' },
+      { field: 'status', direction: 'asc' },
+    ]
+    const firstPage = await request(app)
+      .post(`/api/orgs/${orgId}/objects/${objectId}/list`)
+      .set('Authorization', as(adminFirebaseUid))
+      .send({ sort, limit: 50 })
+
+    expect(firstPage.status).toBe(200)
+    expect(firstPage.body.rows).toHaveLength(50)
+    expect(firstPage.body.rows.slice(0, 2).map((row: { rank: number; status: string }) => [row.rank, row.status])).toEqual([
+      [1, 'active'],
+      [1, 'done'],
+    ])
+    expect(firstPage.body.nextCursor).toBeTruthy()
+
+    const secondPage = await request(app)
+      .post(`/api/orgs/${orgId}/objects/${objectId}/list`)
+      .set('Authorization', as(adminFirebaseUid))
+      .send({ sort, cursor: firstPage.body.nextCursor, limit: 50 })
+
+    expect(secondPage.status).toBe(200)
+    expect(secondPage.body.rows).toHaveLength(1)
+    expect(secondPage.body.rows[0]).toMatchObject({ rank: null, status: 'active', name: 'Widget 50' })
+    expect(secondPage.body.nextCursor).toBeNull()
+  })
+
   it('works over a "table"-storage standard object (Person: typed columns + customJson)', async () => {
     const { orgId, adminFirebaseUid } = await seedOrgWithAdmin(prisma, { seed: true })
     const personObject = await prisma.objectDef.findFirstOrThrow({ where: { orgId, slug: 'person' } })

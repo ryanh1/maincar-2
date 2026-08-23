@@ -380,6 +380,19 @@ describe('RecordGrid', () => {
     expect(dataEditorProps.frozenRows).toMatchObject({ rows: 2, freezeColumns: 1, headerHeight: 0, scrollOffsetX: 0 })
   })
 
+  it('disables manual column reordering while a view sort is active', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }], totalCount: 1,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    const config = { ...createViewConfig(ATTRIBUTES), sorts: [{ attributeId: 'firstName', direction: 'asc' as const }] }
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={vi.fn()} />)
+
+    expect(dataEditorProps.current!.onColumnMoved).toBeUndefined()
+    expect(screen.getByText('Clear sort to reorder by hand.')).toBeInTheDocument()
+  })
+
   it('writes draggable freeze boundaries and header menu actions through the shared config', async () => {
     const user = userEvent.setup()
     useRecordWindow.mockReturnValue({
