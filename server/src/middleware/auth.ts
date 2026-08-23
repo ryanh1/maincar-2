@@ -26,6 +26,8 @@ export interface AuthUser {
   timeZone: string | null
   /** Private foreground call-alert preferences, read only by the owner's route. */
   callAlertSettings: unknown
+  /** Private notification timing preferences, read only by the owner's route. */
+  notificationDeliverySettings: unknown
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -218,6 +220,7 @@ export async function requireAuth(
     enabled: user.enabled,
     timeZone: user.timeZone,
     callAlertSettings: user.callAlertSettings,
+    notificationDeliverySettings: user.notificationDeliverySettings,
   }
 
   next()

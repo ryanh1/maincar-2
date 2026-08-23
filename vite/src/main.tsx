@@ -24,6 +24,7 @@ import { MentionEditorFixture } from './components/editor/MentionEditorFixture'
 import { Settings_DispositionsFixture } from './pages/Settings_DispositionsFixture'
 import { Settings_NextStepsFixture } from './pages/Settings_NextStepsFixture'
 import { Settings_AlertsFixture } from './pages/Settings_AlertsFixture'
+import { Settings_NotificationsFixture } from './pages/Settings_NotificationsFixture'
 import { registerCallPushServiceWorker } from './lib/webPush'
 
 void registerCallPushServiceWorker()
@@ -79,6 +80,8 @@ createRoot(document.getElementById('root')!).render(
       <Settings_NextStepsFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/call-alerts' ? (
       <Settings_AlertsFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/notification-settings' ? (
+      <Settings_NotificationsFixture />
     ) : (
       <QueryClientProvider client={queryClient}>
         <App />
