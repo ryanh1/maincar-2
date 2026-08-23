@@ -8,6 +8,7 @@ import activityRouter from './routes/activity.js'
 import accountTimelineRouter from './routes/accountTimeline.js'
 import authRouter from './routes/auth.js'
 import callsRouter from './routes/calls.js'
+import calendarWorkspaceRouter from './routes/calendarWorkspace.js'
 import callCommentsRouter from './routes/callComments.js'
 import companiesRouter from './routes/companies.js'
 import dealsRouter from './routes/deals.js'
@@ -120,6 +121,10 @@ app.use('/api/orgs/:orgId/messages', messagesRouter)
 // are two separate fields all the way out to the client — a room is not a video
 // link (spec §6).
 app.use('/api/orgs/:orgId/meetings', meetingsRouter)
+
+// The working calendar is a private per-rep projection, distinct from the
+// organization-wide CRM Meeting activity history above.
+app.use('/api/calendar/orgs/:orgId', calendarWorkspaceRouter)
 
 // The denormalized account feed (MAI-140 T12) — "everything that happened here",
 // newest first, in ONE indexed query with no joins and no union across the four
