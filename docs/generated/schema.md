@@ -1,7 +1,7 @@
 # Maincar schema
 
 > AUTO-GENERATED — DO NOT EDIT BY HAND.
-> Generated at: 2026-08-22T23:29:21.913Z
+> Generated at: 2026-08-23T00:54:22.022Z
 > Dynamic-object source: seeded standard-object definitions.
 > Journey: [4.S4 — Generate a Prisma-style schema markdown](../journeys/4-crm-data-and-views.md#journey-4s4--generate-a-prisma-style-schema-markdown-for-every-object-internal-engineering-tool).
 
@@ -427,6 +427,8 @@ model DispositionDef {
   icon                     String?
   category                 String // default: "\"not_connected\""
   isStandard               Boolean // default: "false"
+  isPinned                 Boolean // default: "false"
+  pinOrder                 Int?
   sortOrder                Int // default: "0"
   isArchived               Boolean // default: "false"
   calls                    Call[]
@@ -1579,6 +1581,8 @@ model List {
   description              String?
   icon                     String?
   ownerUserId              String?
+  isShared                 Boolean // default: "false"
+  sortOrder                Int // default: "0"
   isArchived               Boolean // default: "false"
   deletedAt                DateTime?
   entries                  ListEntry[]
