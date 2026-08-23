@@ -5,12 +5,13 @@ import { getMailProvider } from '../lib/mail/getMailProvider.js'
 import { CursorExpiredError, RateLimitedError } from '../lib/mail/mailErrors.js'
 import type { CalendarEvent, InboundMessage, MailProvider } from '../lib/mail/MailProvider.js'
 import { holdUnmatchedEmailInTx } from './mailRematch.js'
+import { DEFAULT_CAPTURE_SETTINGS, type CaptureSettings } from '../lib/captureExclusions.js'
 import { JOB_MAIL_SYNC, scheduleJob, sendJob, workJob } from './queue.js'
 
 const PAGE_SIZE = 100
 export const MAIL_SYNC_CRON = '*/5 * * * *'
 
-type Db = Pick<PrismaClient, '$transaction' | 'mailAccount' | 'membership'>
+type Db = Pick<PrismaClient, '$transaction' | 'mailAccount' | 'membership' | 'captureSettings' | 'mailCaptureOptOut'>
 type Tx = Prisma.TransactionClient
 
 export type MailSyncResult = { skipped: boolean; emails: number; meetings: number; recovered: boolean }
@@ -33,6 +34,31 @@ function messageParticipants(message: InboundMessage) {
   ].filter((participant) => participant.email.trim())
 }
 
+function captureSettings(settings: {
+  internalDomains: string[]
+  allowDomains: string[]
+  excludeDomains: string[]
+  excludeAddresses: string[]
+  excludeRoleAddresses: boolean
+  dropBulkInbound: boolean
+  bulkInboundMax: number
+  subjectExcludes: string[]
+  logActivityTypes: string
+} | null): CaptureSettings {
+  if (!settings) return DEFAULT_CAPTURE_SETTINGS
+  return {
+    internalDomains: settings.internalDomains,
+    allowDomains: settings.allowDomains,
+    excludeDomains: settings.excludeDomains,
+    excludeAddresses: settings.excludeAddresses,
+    excludeRoleAddresses: settings.excludeRoleAddresses,
+    dropBulkInbound: settings.dropBulkInbound,
+    bulkInboundMax: settings.bulkInboundMax,
+    subjectExcludes: settings.subjectExcludes,
+    logActivityTypes: settings.logActivityTypes as CaptureSettings['logActivityTypes'],
+  }
+}
+
 async function readPage<T>(
   cursor: string | null,
   read: (cursor: string | null) => Promise<T>,
@@ -47,15 +73,33 @@ async function readPage<T>(
 
 async function persistMessage(
   tx: Tx,
-  account: { id: string; orgId: string; provider: string; emailAddress: string },
+  account: { id: string; orgId: string; provider: string },
   provider: MailProvider,
   message: InboundMessage,
+  settings: CaptureSettings,
+  optedOut: boolean,
 ) {
+  const participants = messageParticipants(message)
+  const match = await resolveParticipantsToCrm(tx, {
+    orgId: account.orgId,
+    participants: participants.map((participant) => ({ address: participant.email })),
+    occurredAt: message.sentAt,
+    direction: message.isOutbound ? 'outbound' : 'inbound',
+    captureSettings: settings,
+    subject: message.subject,
+    activityType: 'email',
+    optedOut,
+  })
+  if (match.excluded) return
+
   const existing = await tx.email.findFirst({
     where: { orgId: account.orgId, mailAccountId: account.id, providerMessageId: message.providerMsgId },
-    select: { id: true },
+    select: { id: true, deletedAt: true },
   })
   const direction: 'inbound' | 'outbound' = message.isOutbound ? 'outbound' : 'inbound'
+  // A provider replay after an exclusion was removed must not resurrect a source
+  // that was deliberately purged; its unique provider identity stays reserved.
+  if (existing?.deletedAt) return
   const data = {
     direction,
     subject: message.subject,
@@ -69,17 +113,10 @@ async function persistMessage(
     sentAt: message.isOutbound ? message.sentAt : null,
     receivedAt: message.isOutbound ? null : message.sentAt,
   }
-  const participants = messageParticipants(message)
-  const match = await resolveParticipantsToCrm(tx, {
-    orgId: account.orgId,
-    participants: participants.map((participant) => ({ address: participant.email })),
-    occurredAt: message.sentAt,
-    direction,
-  })
   // The first capture of a zero-match message belongs in MAI-439's hold, not in
   // the CRM Email table. Existing rows predate this guard and stay available for
   // the 30-day rematch pass to attach without destructive rewrites.
-  if (!existing && !match.excluded && match.personIds.length === 0 && match.companyIds.length === 0 && !match.dealId) {
+  if (!existing && match.personIds.length === 0 && match.companyIds.length === 0 && !match.dealId) {
     await holdUnmatchedEmailInTx(tx, {
       orgId: account.orgId,
       sourceKey: `${account.id}:${message.providerMsgId}`,
@@ -93,8 +130,6 @@ async function persistMessage(
     })
     return
   }
-  if (match.excluded) return
-
   const email = existing
     ? await (async () => {
         await tx.email.updateMany({ where: { id: existing.id, orgId: account.orgId }, data })
@@ -122,13 +157,28 @@ async function persistEvent(
   account: { orgId: string },
   provider: MailProvider,
   event: CalendarEvent,
+  settings: CaptureSettings,
+  optedOut: boolean,
 ) {
   const providerValue = providerName(provider.provider)
+  const attendees = event.attendees.filter((attendee) => attendee.email.trim())
+  const participants = [...attendees.map((attendee) => ({ address: attendee.email })), ...(event.organizer ? [{ address: event.organizer.email, isOrganizer: true }] : [])]
+  const match = await resolveParticipantsToCrm(tx, {
+    orgId: account.orgId,
+    participants,
+    occurredAt: event.startsAt,
+    captureSettings: settings,
+    subject: event.title,
+    activityType: 'meeting',
+    optedOut,
+  })
+  if (match.excluded) return
+
   const existing = await tx.meeting.findFirst({
     where: { orgId: account.orgId, provider: providerValue, providerEventId: event.providerEventId },
-    select: { id: true },
+    select: { id: true, deletedAt: true },
   })
-  const attendees = event.attendees.filter((attendee) => attendee.email.trim())
+  if (existing?.deletedAt) return
   const data = {
     title: event.title ?? '(Untitled event)',
     description: event.description,
@@ -158,8 +208,6 @@ async function persistEvent(
           attendees: { create: attendees.map((attendee) => ({ orgId: account.orgId, email: attendee.email, name: attendee.name ?? null })) },
         },
       })
-  const participants = [...attendees.map((attendee) => ({ address: attendee.email })), ...(event.organizer ? [{ address: event.organizer.email, isOrganizer: true }] : [])]
-  const match = await resolveParticipantsToCrm(tx, { orgId: account.orgId, participants, occurredAt: event.startsAt })
   await attachMeetingMatchInTx(tx, meeting, match)
 }
 
@@ -167,18 +215,24 @@ async function persistEvent(
 export async function syncMailAccount(mailAccountId: string, db: Db = prisma): Promise<MailSyncResult> {
   const account = await db.mailAccount.findFirst({
     where: { id: mailAccountId },
-    select: { id: true, orgId: true, userId: true, provider: true, emailAddress: true, mailSyncCursor: true, calendarSyncCursor: true, user: { select: { enabled: true } } },
+    select: { id: true, orgId: true, userId: true, provider: true, mailSyncCursor: true, calendarSyncCursor: true, user: { select: { enabled: true } } },
   })
   if (!account || !account.user.enabled) return { skipped: true, emails: 0, meetings: 0, recovered: false }
   const membership = await db.membership.findFirst({ where: { orgId: account.orgId, userId: account.userId, isActive: true }, select: { id: true } })
   if (!membership) return { skipped: true, emails: 0, meetings: 0, recovered: false }
 
+  const [settings, optOut] = await Promise.all([
+    db.captureSettings.findUnique({ where: { orgId: account.orgId } }),
+    db.mailCaptureOptOut.findUnique({ where: { orgId_userId: { orgId: account.orgId, userId: account.userId } }, select: { id: true } }),
+  ])
+  const policy = captureSettings(settings)
+
   const provider = await getMailProvider(account.id, account.orgId)
   const messages = await readPage(account.mailSyncCursor, (cursor) => provider.listMessagesSince(cursor, PAGE_SIZE))
   const events = await readPage(account.calendarSyncCursor, (cursor) => provider.listEventsSince(cursor, PAGE_SIZE))
   await db.$transaction(async (tx) => {
-    for (const message of messages.page.messages) await persistMessage(tx, account, provider, message)
-    for (const event of events.page.events) await persistEvent(tx, account, provider, event)
+    for (const message of messages.page.messages) await persistMessage(tx, account, provider, message, policy, optOut !== null)
+    for (const event of events.page.events) await persistEvent(tx, account, provider, event, policy, optOut !== null)
     await tx.mailAccount.updateMany({
       where: { id: account.id, orgId: account.orgId, userId: account.userId },
       data: { mailSyncCursor: messages.page.nextCursor, calendarSyncCursor: events.page.nextCursor, lastSyncedAt: new Date() },

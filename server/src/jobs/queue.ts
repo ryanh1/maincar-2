@@ -44,6 +44,8 @@ export const JOB_MAIL_SYNC = 'mail-sync'
 export const JOB_MAIL_BACKFILL = 'mail-backfill'
 export const JOB_MAIL_REMATCH = 'mail-rematch'
 
+export const JOB_CAPTURE_PURGE = 'capture-purge'
+
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
   JOB_RELEASE_NUMBER,
@@ -59,6 +61,7 @@ export const JOB_NAMES = [
   JOB_MAIL_SYNC,
   JOB_MAIL_BACKFILL,
   JOB_MAIL_REMATCH,
+  JOB_CAPTURE_PURGE,
 ] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
@@ -115,6 +118,9 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number; 
   // Capture history is idempotent and attaches transactionally, so three retries
   // are safe for a transient database failure during a create-triggered rematch.
   [JOB_MAIL_REMATCH]: { retryLimit: 3, retryDelay: 30 },
+  // Each settings-version job uses its rule id as the singleton key. A retry is
+  // safe because the purge handler compare-and-sets each source's deletedAt.
+  [JOB_CAPTURE_PURGE]: { retryLimit: 3, retryDelay: 60, policy: 'singleton' },
 }
 
 let boss: PgBoss | null = null

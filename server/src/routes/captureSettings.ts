@@ -6,6 +6,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { DEFAULT_CAPTURE_SETTINGS } from '../lib/captureExclusions.js'
+import { JOB_CAPTURE_PURGE, sendJob } from '../jobs/queue.js'
 
 const router = Router({ mergeParams: true })
 
@@ -44,6 +45,8 @@ const settingsSchema = z
 
 const optOutSchema = z.object({ optedOut: z.boolean() }).strict()
 
+type SettingsInput = z.infer<typeof settingsSchema>
+
 function mapSettings(settings: {
   internalDomains: string[]
   allowDomains: string[]
@@ -55,7 +58,7 @@ function mapSettings(settings: {
   subjectExcludes: string[]
   logActivityTypes: string
   backfillMonths: number
-}) {
+}): SettingsInput {
   return {
     internalDomains: settings.internalDomains,
     allowDomains: settings.allowDomains,
@@ -65,9 +68,28 @@ function mapSettings(settings: {
     dropBulkInbound: settings.dropBulkInbound,
     bulkInboundMax: settings.bulkInboundMax,
     subjectExcludes: settings.subjectExcludes,
-    logActivityTypes: settings.logActivityTypes,
-    backfillMonths: settings.backfillMonths,
+    logActivityTypes: settings.logActivityTypes as SettingsInput['logActivityTypes'],
+    backfillMonths: settings.backfillMonths as SettingsInput['backfillMonths'],
   }
+}
+
+function hasAddedExclusion(previous: SettingsInput, next: SettingsInput): boolean {
+  const addsListValue = (key: 'internalDomains' | 'allowDomains' | 'excludeDomains' | 'excludeAddresses' | 'subjectExcludes') =>
+    next[key].some((value) => !previous[key].includes(value))
+  if (
+    addsListValue('internalDomains') ||
+    addsListValue('allowDomains') ||
+    addsListValue('excludeDomains') ||
+    addsListValue('excludeAddresses') ||
+    addsListValue('subjectExcludes')
+  ) return true
+  if (!previous.excludeRoleAddresses && next.excludeRoleAddresses) return true
+  if (!previous.dropBulkInbound && next.dropBulkInbound) return true
+  if (previous.dropBulkInbound && next.dropBulkInbound && next.bulkInboundMax < previous.bulkInboundMax) return true
+
+  const activityTypes = (value: SettingsInput['logActivityTypes']) =>
+    value === 'both' ? ['email', 'meetings'] : [value]
+  return activityTypes(previous.logActivityTypes).some((value) => !activityTypes(next.logActivityTypes).includes(value))
 }
 
 router.use(requireAuth)
@@ -109,14 +131,28 @@ router.patch(
     if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
 
     // --- Execute query ---
+    const existing = await prisma.captureSettings.findUnique({ where: { orgId } })
+    const previous: SettingsInput = existing
+      ? mapSettings(existing)
+      : { ...DEFAULT_CAPTURE_SETTINGS, backfillMonths: 12 }
     const settings = await prisma.captureSettings.upsert({
       where: { orgId },
       create: { orgId, ...parsed.data },
       update: parsed.data,
     })
 
+    const purgeQueued = hasAddedExclusion(previous, parsed.data)
+    if (purgeQueued) {
+      const ruleId = `${settings.id}:${settings.updatedAt.toISOString()}`
+      await sendJob(
+        JOB_CAPTURE_PURGE,
+        { orgId, actorId: authReq.user!.id, ruleId, settings: parsed.data },
+        { singletonKey: ruleId, retryLimit: 3 },
+      )
+    }
+
     // --- Return response ---
-    return void res.json({ captureSettings: mapSettings(settings) })
+    return void res.json({ captureSettings: mapSettings(settings), purgeQueued })
   }),
 )
 

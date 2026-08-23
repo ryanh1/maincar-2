@@ -55,6 +55,7 @@ function emailRow(overrides: Partial<Email> = {}): Email {
     syncCursor: 'history-99',
     sentAt: SENT,
     receivedAt: null,
+    deletedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,

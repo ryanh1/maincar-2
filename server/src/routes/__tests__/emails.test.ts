@@ -250,7 +250,7 @@ describe('GET /api/orgs/:orgId/emails/:id', () => {
   it('looks the row up by id AND orgId together', async () => {
     const res = await request(app).get(`${URL_A}/em-1`).set('Authorization', AUTH)
     expect(res.status).toBe(200)
-    expect(prismaMock.email.findFirst.mock.calls[0][0].where).toEqual({ id: 'em-1', orgId: ORG_A })
+    expect(prismaMock.email.findFirst.mock.calls[0][0].where).toEqual({ id: 'em-1', orgId: ORG_A, deletedAt: null })
   })
 
   it("404s a real id that belongs to another org, the same as one that doesn't exist", async () => {

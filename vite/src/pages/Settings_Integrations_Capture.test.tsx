@@ -74,6 +74,8 @@ describe('Settings_Integrations_Capture', () => {
     await screen.findByText('ourco.com')
 
     await userEvent.click(screen.getByRole('button', { name: 'Save capture settings' }))
+    expect(screen.getByText(/Removing an exclusion resumes capture going forward/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() =>
       expect(jsonFetch).toHaveBeenCalledWith(URL, expect.objectContaining({ method: 'PATCH' })),

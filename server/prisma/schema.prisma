@@ -173,6 +173,7 @@ model Org {
   // org, plus the per-user opt-out rows that let a rep exclude their own mailbox.
   captureSettings    CaptureSettings?
   mailCaptureOptOuts  MailCaptureOptOut[]
+  auditLogs          AuditLog[]
 }
 
 model User {
@@ -2288,6 +2289,10 @@ model Email {
 
   sentAt     DateTime?
   receivedAt DateTime?
+  // A capture exclusion removes this message from every customer-facing read
+  // without destroying the immutable provider identity that prevents a later
+  // poll (or an un-exclusion) from recreating it.
+  deletedAt DateTime?
 
   participants EmailParticipant[]
   attachments  EmailAttachment[]
@@ -2311,6 +2316,7 @@ model Email {
   @@index([orgId, dealId, sentAt])
   // "Show me the rest of this thread."
   @@index([orgId, conversationId])
+  @@index([orgId, deletedAt])
 }
 
 // One address on an email. THE ADDRESS IS ALWAYS KEPT RAW, and personId is
@@ -2666,6 +2672,9 @@ model Meeting {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  // Capture exclusions hide a synced event without letting a later calendar
+  // poll resurrect the same provider event.
+  deletedAt DateTime?
 
   // IDEMPOTENT RE-SYNC — the acceptance criterion. Re-reading the same calendar
   // event hits this key and updates instead of inserting a second copy.
@@ -2688,6 +2697,7 @@ model Meeting {
   // "Is this the same event we already have from the other provider?" — the
   // cross-provider dedupe path.
   @@index([orgId, iCalUid])
+  @@index([orgId, deletedAt])
 }
 
 // One invitee on a meeting. THE EMAIL IS ALWAYS KEPT RAW, and personId is
@@ -3278,4 +3288,26 @@ model MailCaptureOptOut {
 
   @@unique([orgId, userId])
   @@index([orgId])
+}
+
+// One append-only row per grouped administrative data operation. MAI-440 uses
+// this for each capture-purge rule version; other data-ops journeys can use the
+// same compact, queryable audit contract without inventing another log table.
+model AuditLog {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  actorId    String // a user id, or "system" for a service-owned operation
+  action     String
+  objectType String
+  objectId   String
+  diffJson   Json?
+  batchId    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, batchId])
+  @@index([orgId, createdAt])
 }
