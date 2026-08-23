@@ -53,6 +53,7 @@ import voicemailDropsRouter from './routes/voicemailDrops.js'
 import voicemailGreetingRouter from './routes/voicemailGreeting.js'
 import voicemailsRouter from './routes/voicemails.js'
 import webPushSubscriptionsRouter from './routes/webPushSubscriptions.js'
+import undoEntriesRouter from './routes/undoEntries.js'
 
 // The app is assembled here and started in index.ts. Keeping them apart is what
 // lets supertest import the app without binding a port.
@@ -183,6 +184,10 @@ app.use('/api/orgs/:orgId/detail-layouts', detailLayoutsRouter)
 // is the list of things that HAPPENED, and a task is a thing that has not.
 app.use('/api/orgs/:orgId/tasks', tasksRouter)
 app.use('/api/orgs/:orgId/notes', notesRouter)
+
+// Browser undo is an in-memory per-user, per-session stack. This small mirror
+// makes the current session recoverable after a reload and is cleared on sign-out.
+app.use('/api/orgs/:orgId/undo-entries', undoEntriesRouter)
 
 // In-app recipient notification lifecycle (MAI-236). The event object is shared,
 // while this endpoint exposes only the requesting recipient's private state.
