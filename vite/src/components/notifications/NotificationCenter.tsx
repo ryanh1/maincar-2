@@ -16,13 +16,22 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { BulkActions, NotificationLoading, NotificationRow } from '@/components/notifications/NotificationCenter_Row'
 import { useGetNotifications, useUpdateNotifications } from '@/hooks/notifications'
 import { ApiError } from '@/lib/api'
-import type { NotificationAction, NotificationReadFilter, NotificationView } from '@/lib/notificationTypes'
+import type {
+  NotificationAction,
+  NotificationEventType,
+  NotificationObjectFilter,
+  NotificationReadFilter,
+  NotificationView,
+} from '@/lib/notificationTypes'
 import { useAuth } from '@/providers/useAuth'
 
 const PAGE_SIZE = 25
 
-const viewLabels: Record<NotificationView, string> = {
+type NotificationTab = NotificationView | 'unread'
+
+const viewLabels: Record<NotificationTab, string> = {
   inbox: 'Inbox',
+  unread: 'Unread',
   archived: 'Archived',
   snoozed: 'Snoozed',
 }
@@ -33,15 +42,37 @@ const readLabels: Record<NotificationReadFilter, string> = {
   read: 'Read',
 }
 
+const typeLabels: Record<NotificationEventType, string> = {
+  all: 'All types',
+  mentioned: 'Mention',
+  assigned: 'Assignment',
+  commented: 'Comment or reply',
+  status_changed: 'Status change',
+}
+
+const objectLabels: Record<NotificationObjectFilter, string> = {
+  all: 'All objects',
+  person: 'People',
+  company: 'Companies',
+  deal: 'Deals',
+  task: 'Tasks',
+  call: 'Calls',
+  note: 'Notes',
+}
+
 /** The app-shell bell and recipient-scoped notification drawer. */
 export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
   const { org, user } = useAuth()
   const [open, setOpen] = useState(false)
-  const [view, setView] = useState<NotificationView>('inbox')
+  const [view, setView] = useState<NotificationTab>('inbox')
   const [read, setRead] = useState<NotificationReadFilter>('all')
+  const [type, setType] = useState<NotificationEventType>('all')
+  const [objectType, setObjectType] = useState<NotificationObjectFilter>('all')
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const unread = useGetNotifications(org?.id, { read: 'unread', limit: 1 })
-  const inbox = useGetNotifications(org?.id, { view, read, limit: PAGE_SIZE })
+  const notificationView = view === 'unread' ? 'inbox' : view
+  const notificationRead = view === 'unread' ? 'unread' : read
+  const inbox = useGetNotifications(org?.id, { view: notificationView, read: notificationRead, type, objectType, limit: PAGE_SIZE })
   const update = useUpdateNotifications()
   const unreadCount = unread.data?.total ?? 0
   const notifications = inbox.data?.notifications ?? []
@@ -50,8 +81,9 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
 
   const inboxLabel = unreadCount === 0 ? 'Inbox' : `Inbox. ${unreadCount} unread.`
 
-  function changeView(next: NotificationView): void {
+  function changeView(next: NotificationTab): void {
     setView(next)
+    setRead(next === 'unread' ? 'unread' : 'all')
     setSelectedIds([])
   }
 
@@ -110,9 +142,9 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
           </SheetHeader>
 
           <div className="flex min-h-0 flex-1 flex-col">
-            <Tabs value={view} onValueChange={(next) => changeView(next as NotificationView)} className="gap-0">
+            <Tabs value={view} onValueChange={(next) => changeView(next as NotificationTab)} className="gap-0">
               <TabsList variant="line" aria-label="Notification views" className="w-full justify-start border-b border-border px-4">
-                {(Object.keys(viewLabels) as NotificationView[]).map((value) => (
+                {(Object.keys(viewLabels) as NotificationTab[]).map((value) => (
                   <TabsTrigger key={value} value={value} className="h-8 flex-none px-3">
                     {viewLabels[value]}
                   </TabsTrigger>
@@ -120,8 +152,8 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
               </TabsList>
             </Tabs>
 
-            <div className="flex items-center justify-between gap-3 border-b border-border bg-surface px-4 py-2">
-              <Select value={read} onValueChange={(value) => { setRead(value as NotificationReadFilter); setSelectedIds([]) }}>
+            <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface px-4 py-2">
+              <Select value={notificationRead} disabled={view === 'unread'} onValueChange={(value) => { setRead(value as NotificationReadFilter); setSelectedIds([]) }}>
                 <SelectTrigger size="sm" aria-label="Filter notifications by read state">
                   <SelectValue />
                 </SelectTrigger>
@@ -131,11 +163,23 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs tabular-nums text-text-muted">{inbox.data?.total ?? 0} total</p>
+              <Select value={type} onValueChange={(value) => { setType(value as NotificationEventType); setSelectedIds([]) }}>
+                <SelectTrigger size="sm" aria-label="Filter notifications by type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(typeLabels) as NotificationEventType[]).map((value) => <SelectItem key={value} value={value}>{typeLabels[value]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={objectType} onValueChange={(value) => { setObjectType(value as NotificationObjectFilter); setSelectedIds([]) }}>
+                <SelectTrigger size="sm" aria-label="Filter notifications by object"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(objectLabels) as NotificationObjectFilter[]).map((value) => <SelectItem key={value} value={value}>{objectLabels[value]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <p className="ml-auto text-xs tabular-nums text-text-muted">{inbox.data?.total ?? 0} total</p>
             </div>
 
             {selectedIds.length > 0 && (
-              <BulkActions count={selectedIds.length} view={view} pending={update.isPending} onAction={(action) => runAction(action, selectedIds, true)} />
+              <BulkActions count={selectedIds.length} view={notificationView} pending={update.isPending} onAction={(action) => runAction(action, selectedIds, true)} />
             )}
 
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -160,7 +204,7 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
                     <NotificationRow
                       key={notification.id}
                       notification={notification}
-                      view={view}
+                      view={notificationView}
                       selected={selected.has(notification.id)}
                       timeZone={user?.timeZone}
                       pending={update.isPending}
@@ -178,7 +222,7 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
   )
 }
 
-function EmptyNotifications({ view }: { view: NotificationView }) {
+function EmptyNotifications({ view }: { view: NotificationTab }) {
   const message = view === 'inbox' ? 'No notifications need your attention.' : `No ${viewLabels[view].toLowerCase()} notifications.`
   return <p className="p-6 text-center text-base">{message}</p>
 }

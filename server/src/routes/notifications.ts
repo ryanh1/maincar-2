@@ -23,6 +23,8 @@ const MAX_BULK_ACTIONS = 100
 const listQuerySchema = z.object({
   view: z.enum(['inbox', 'archived', 'snoozed']).default('inbox'),
   read: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
+  type: z.enum(['mentioned', 'assigned', 'commented', 'status_changed']).optional(),
+  objectType: z.string().trim().min(1).max(80).optional(),
   page: z.coerce.number().int().min(1, 'page starts at 1.').default(1),
   limit: z.coerce
     .number()
@@ -139,7 +141,7 @@ router.get(
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
-    const { view, read, page, limit } = parsed.data
+    const { view, read, type, objectType, page, limit } = parsed.data
     const now = new Date()
 
     // --- Build filters ---
@@ -147,11 +149,14 @@ router.get(
       orgId,
       recipientUserId: authReq.user!.id,
       ...(read === undefined ? {} : { readAt: read ? { not: null } : null }),
+      ...(type || objectType
+        ? { notificationObject: { ...(type ? { verb: type } : {}), ...(objectType ? { objectType } : {}) } }
+        : {}),
       ...(view === 'archived'
         ? { archivedAt: { not: null } }
         : view === 'snoozed'
           ? { archivedAt: null, snoozedUntil: { gt: now } }
-          : { archivedAt: null, OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }] }),
+          : { archivedAt: null }),
     }
 
     // --- Execute query ---
