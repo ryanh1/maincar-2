@@ -96,4 +96,36 @@ describe('NotificationObject fan-out (integration, real Postgres)', () => {
     expect(result.rejectedRecipientUserIds).toEqual([inactive.userId])
     expect(await prisma.notification.count({ where: { orgId: org.orgId } })).toBe(0)
   })
+
+  it('folds a bulk status change into one durable noisy bundle', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const teammate = await seedMember(prisma, org.orgId)
+    const baseEvent = {
+      orgId: org.orgId,
+      actorUserId: org.adminUserId,
+      verb: 'status_change',
+      batchKey: 'bulk-stage-change:run-1:won',
+      recipientUserIds: [teammate.userId],
+    }
+
+    const first = await fanOutNotification(prisma, {
+      ...baseEvent,
+      eventKey: 'bulk-stage-change:run-1:deal-1',
+      object: { type: 'deal', id: 'deal-1', sourceSnapshot: { title: '1 deal moved to Won' } },
+    })
+    const second = await fanOutNotification(prisma, {
+      ...baseEvent,
+      eventKey: 'bulk-stage-change:run-1:deal-2',
+      object: { type: 'deal', id: 'deal-2', sourceSnapshot: { title: '1 deal moved to Won' } },
+    })
+
+    const rows = await prisma.notification.findMany({ where: { orgId: org.orgId } })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      recipientUserId: teammate.userId,
+      batchKey: `${teammate.userId}:status_change:bulk-stage-change:run-1:won`,
+      objectIds: expect.arrayContaining([first.notificationObjectId, second.notificationObjectId]),
+      deliveryMode: 'batched',
+    })
+  })
 })

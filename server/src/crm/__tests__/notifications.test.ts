@@ -10,6 +10,14 @@ function fakeClient(opts: {
   actorIsMember?: boolean
   activeRecipientIds?: string[]
   objectId?: string
+  existingBundle?: {
+    id: string
+    notificationObjectId: string
+    objectIds: string[]
+    deliveryMode: string
+    notificationObject?: { verb: string }
+  } | null
+  noisyBundleCount?: number
 } = {}) {
   const findMany = vi.fn(async () => {
     const memberIds = [
@@ -20,10 +28,15 @@ function fakeClient(opts: {
   })
   const upsert = vi.fn(async () => ({ id: opts.objectId ?? 'notification-object-1' }))
   const createMany = vi.fn(async () => ({ count: 2 }))
+  const findFirst = vi.fn(async () => opts.existingBundle ?? null)
+  const updateMany = vi.fn(async () => ({ count: 1 }))
+  const count = vi.fn(async () => opts.noisyBundleCount ?? 0)
+  const executeRaw = vi.fn(async () => undefined)
   const tx = {
     membership: { findMany },
     notificationObject: { upsert },
-    notification: { createMany },
+    notification: { createMany, findFirst, updateMany, count },
+    $executeRaw: executeRaw,
   }
   const transaction = vi.fn(async (callback: (transactionClient: typeof tx) => unknown) =>
     callback(tx),
@@ -34,6 +47,10 @@ function fakeClient(opts: {
     findMany,
     upsert,
     createMany,
+    findFirst,
+    updateMany,
+    count,
+    executeRaw,
   }
 }
 
@@ -91,6 +108,9 @@ describe('fanOutNotification', () => {
           orgId: 'org-1',
           notificationObjectId: 'notification-object-1',
           recipientUserId: 'recipient-1',
+          batchKey: 'recipient-1:mentioned:call_comment:comment-1',
+          objectIds: ['notification-object-1'],
+          deliveryMode: 'immediate',
           readAt: null,
           archivedAt: null,
           snoozedUntil: null,
@@ -99,6 +119,9 @@ describe('fanOutNotification', () => {
           orgId: 'org-1',
           notificationObjectId: 'notification-object-1',
           recipientUserId: 'recipient-2',
+          batchKey: 'recipient-2:mentioned:call_comment:comment-1',
+          objectIds: ['notification-object-1'],
+          deliveryMode: 'immediate',
           readAt: null,
           archivedAt: null,
           snoozedUntil: null,
@@ -159,5 +182,108 @@ describe('fanOutNotification', () => {
         object: { ...event.object, sourceSnapshot: { title: '<script>alert(1)</script>' } },
       }),
     ).rejects.toThrow('source snapshot')
+  })
+
+  it('folds a noisy bulk event into its active recipient bundle', async () => {
+    const { client, findFirst, updateMany, createMany, executeRaw } = fakeClient({
+      objectId: 'notification-object-50',
+      existingBundle: {
+        id: 'bundle-1',
+        notificationObjectId: 'notification-object-1',
+        objectIds: ['notification-object-1'],
+        deliveryMode: 'batched',
+      },
+    })
+
+    await fanOutNotification(client, {
+      ...event,
+      eventKey: 'bulk-stage-change:run-1:deal-50',
+      verb: 'status_change',
+      batchKey: 'bulk-stage-change:run-1:won',
+      object: { ...event.object, type: 'deal', id: 'deal-50' },
+      recipientUserIds: ['recipient-1'],
+    })
+
+    expect(executeRaw).toHaveBeenCalledOnce()
+    expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        orgId: 'org-1',
+        recipientUserId: 'recipient-1',
+        batchKey: 'recipient-1:status_change:bulk-stage-change:run-1:won',
+      }),
+    }))
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 'bundle-1', orgId: 'org-1' }),
+      data: expect.objectContaining({ objectIds: { push: 'notification-object-50' } }),
+    }))
+    expect(createMany).not.toHaveBeenCalled()
+  })
+
+  it('forces a fresh noisy bundle into digest delivery once the recipient reaches the storm cap', async () => {
+    const { client, count, createMany } = fakeClient({ noisyBundleCount: 20 })
+
+    await fanOutNotification(client, {
+      ...event,
+      eventKey: 'comment:storm-21',
+      verb: 'comment',
+      batchKey: 'comment-thread:call-1',
+      recipientUserIds: ['recipient-1'],
+    })
+
+    expect(count).toHaveBeenCalledOnce()
+    expect(createMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: [expect.objectContaining({
+        batchKey: 'recipient-1:comment:comment-thread:call-1',
+        objectIds: ['notification-object-1'],
+        deliveryMode: 'digest',
+      })],
+    }))
+  })
+
+  it('upgrades a same-action mention bundle to its higher-priority assignment', async () => {
+    const { client, findFirst, updateMany } = fakeClient({
+      objectId: 'assignment-object',
+      existingBundle: {
+        id: 'action-bundle',
+        notificationObjectId: 'mention-object',
+        objectIds: ['mention-object'],
+        deliveryMode: 'immediate',
+        notificationObject: { verb: 'mention' },
+      },
+    })
+
+    await fanOutNotification(client, {
+      ...event,
+      eventKey: 'task:task-1:assignment:v1',
+      dedupeKey: 'task-action-1',
+      verb: 'assignment',
+      object: { ...event.object, type: 'task', id: 'task-1' },
+      recipientUserIds: ['recipient-1'],
+    })
+
+    expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        batchKey: { in: ['recipient-1:mention:task-action-1', 'recipient-1:assignment:task-action-1'] },
+      }),
+    }))
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 'action-bundle', orgId: 'org-1' }),
+      data: expect.objectContaining({
+        notificationObjectId: 'assignment-object',
+        batchKey: 'recipient-1:assignment:task-action-1',
+        objectIds: { push: 'assignment-object' },
+      }),
+    }))
+  })
+
+  it('requires an explicit server-derived group key for noisy events', async () => {
+    const { client } = fakeClient()
+
+    await expect(fanOutNotification(client, {
+      ...event,
+      eventKey: 'comment:thread-1',
+      verb: 'comment',
+      recipientUserIds: ['recipient-1'],
+    })).rejects.toThrow('batchKey is required for noisy notification events.')
   })
 })

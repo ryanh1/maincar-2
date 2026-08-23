@@ -3071,6 +3071,18 @@ model Notification {
   recipientUserId String
   recipient       User   @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
 
+  // The recipient-scoped grouping identity used by the write-time bundler. New
+  // rows always provide this as recipient + verb + object/action key; the empty
+  // default lets the generated migration retain pre-bundling inbox history.
+  batchKey String @default("")
+  // The durable event objects folded into this inbox item. notificationObjectId
+  // remains the representative object used by the current inbox reader until
+  // MAI-443 teaches it to render every object in a bundle.
+  objectIds String[] @default([])
+  // immediate, batched, digest. Channel workers consume this delivery policy;
+  // the in-app lifecycle remains on the same recipient-owned row.
+  deliveryMode String @default("immediate")
+
   // Recipient-owned lifecycle state. Null means unread, active, or not snoozed.
   readAt       DateTime?
   archivedAt   DateTime?
@@ -3085,6 +3097,8 @@ model Notification {
   // newest-first pagination.
   @@index([orgId, recipientUserId, archivedAt, snoozedUntil, createdAt])
   @@index([orgId, recipientUserId, readAt])
+  @@index([orgId, recipientUserId, batchKey, createdAt])
+  @@index([orgId, recipientUserId, deliveryMode, createdAt])
 }
 
 // -----------------------------------------------------------------------------
