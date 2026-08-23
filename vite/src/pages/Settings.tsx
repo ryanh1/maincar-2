@@ -23,6 +23,7 @@ import { Settings_NextStepsTab } from './Settings_NextStepsTab'
 import { Settings_DataModelTab } from './Settings_DataModelTab'
 import { Settings_KeyboardTab } from './Settings_KeyboardTab'
 import { Settings_AlertsTab } from './Settings_AlertsTab'
+import { Settings_NotificationsTab } from './Settings_NotificationsTab'
 
 type TabId = SettingsSection
 
@@ -41,6 +42,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
 integrations: Settings_IntegrationsTab,
   teams: Settings_TeamsTab,
   'data-model': Settings_DataModelTab,
+  notifications: Settings_NotificationsTab,
   keyboard: Settings_KeyboardTab,
   alerts: Settings_AlertsTab,
 }

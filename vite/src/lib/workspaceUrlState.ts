@@ -18,6 +18,7 @@ export const SETTINGS_SECTIONS = [
   'signatures',
   'integrations',
   'data-model',
+  'notifications',
   'keyboard',
   'alerts',
 ] as const

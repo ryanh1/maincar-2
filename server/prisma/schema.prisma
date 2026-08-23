@@ -254,6 +254,11 @@ model User {
   notificationObjectsAuthored NotificationObject[] @relation("NotificationActor")
   notificationsReceived       Notification[]       @relation("NotificationRecipient")
 
+  // Delivery choices are personal rather than organization-scoped. Each row
+  // records one event-kind × channel choice so later channel workers can read
+  // only the destination they are responsible for (MAI-448).
+  notificationPreferences NotificationPreference[]
+
   // Per-user capture opt-out rows (MAI-436, doc 5 §5.2f). Cascade on delete: a
   // removed user's opt-out row is meaningless without the user.
   mailCaptureOptOuts MailCaptureOptOut[]
@@ -283,6 +288,25 @@ model InboundForwarding {
 
   @@unique([orgId, userId])
   @@index([orgId, userId, enabled])
+}
+
+// Per-user notification delivery choice. eventKind: mention | assignment |
+// comment | status_change | team_broadcast. channel: in_app | email | push |
+// slack. The inbox is the durable master record and is always enabled in the API.
+model NotificationPreference {
+  id        String  @id @default(cuid())
+  userId    String
+  eventKind String
+  channel   String
+  enabled   Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, eventKind, channel])
+  @@index([userId])
 }
 
 // A user-owned override for a keyboard action. Actions and their default keys

@@ -41,6 +41,7 @@ export const SETTINGS_TABS: SettingsTabDefinition[] = [
   { id: 'signatures', label: 'Signatures', icon: FileSignature, needsOrg: true },
   { id: 'integrations', label: 'Integrations', icon: Plug, needsOrg: true },
   { id: 'data-model', label: 'Data model', icon: Database, needsOrg: true, adminOnly: true },
+  { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'keyboard', label: 'Keyboard', icon: Keyboard },
   { id: 'alerts', label: 'Call alerts', icon: Bell },
 ]

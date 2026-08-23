@@ -31,6 +31,7 @@ import membersRouter from './routes/members.js'
 import messagesRouter from './routes/messages.js'
 import notesRouter from './routes/notes.js'
 import notificationsRouter from './routes/notifications.js'
+import notificationPreferencesRouter from './routes/notificationPreferences.js'
 import objectsRouter from './routes/objects.js'
 import peopleRouter from './routes/people.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
@@ -84,6 +85,7 @@ app.use('/api', invitationsRouter)
 
 app.use('/api/auth', authRouter)
 app.use('/api/call-alert-settings', callAlertSettingsRouter)
+app.use('/api/notification-preferences', notificationPreferencesRouter)
 app.use('/api/team', teamRouter)
 app.use('/api/keyboard-bindings', keyboardBindingsRouter)
 
