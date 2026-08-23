@@ -60,6 +60,7 @@ describe('Settings', () => {
       'Teams',
       'Phone numbers',
       'Call recordings',
+      'Inbound calls',
       'Call dispositions',
       'Next steps',
       'Voicemail greeting',
@@ -67,7 +68,9 @@ describe('Settings', () => {
       'Signatures',
       'Integrations',
       'Data model',
+      'Notifications',
       'Keyboard',
+      'Call alerts',
     ])
     expect(screen.queryByRole('link', { name: 'Devices' })).not.toBeInTheDocument()
   })

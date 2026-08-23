@@ -10,6 +10,7 @@ import type { EmailTemplateListQuery } from './emailTypes'
  */
 export const queryKeys = {
   callAlertSettings: ['callAlertSettings'] as const,
+  notificationPreferences: ['notificationPreferences'] as const,
   keyboardBindings: ['keyboardBindings'] as const,
   auth: {
     all: ['auth'] as const,
