@@ -257,6 +257,23 @@ describe('SavedView (integration, real Postgres, real routes)', () => {
     expect(stored.objectId).toBe(object.id)
   })
 
+  it('returns 404 when a non-member guesses a shared view URL', async () => {
+    const { org, admin, object } = await seedViewContext()
+    const outsiderOrg = await seedOrgWithAdmin(prisma)
+    const outsider = await prisma.user.findUniqueOrThrow({ where: { id: outsiderOrg.adminUserId } })
+    const created = await createView(org.orgId, admin.firebaseUid, object.id, 'Shared prospects')
+    await request(app)
+      .patch(`/api/orgs/${org.orgId}/saved-views/${created.body.view.id}`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ isShared: true })
+      .expect(200)
+
+    await request(app)
+      .get(`/api/orgs/${org.orgId}/saved-views/${created.body.view.id}`)
+      .set('Authorization', as(outsider.firebaseUid))
+      .expect(404)
+  })
+
   it('persists a complete saved-view switcher order atomically', async () => {
     const { org, admin, object } = await seedViewContext()
     const first = await createView(org.orgId, admin.firebaseUid, object.id, 'First')

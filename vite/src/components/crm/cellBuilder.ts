@@ -86,7 +86,7 @@ function fieldEditorCell(attr: AttributeDef, value: unknown, opts: BuildGridCell
   return {
     kind: GridCellKind.Custom,
     data,
-    copyData: formatCellValue(value, attr.type, opts.timeZone, opts.currencyCode, attr.slug === 'amountMinor'),
+    copyData: formatCellValue(value, attr.type, opts.timeZone, opts.currencyCode, attr.slug === 'amountMinor', attr.formatJson),
     allowOverlay: !attr.isReadOnly,
     readonly: attr.isReadOnly,
   }
@@ -153,7 +153,7 @@ export function buildGridCell(attr: AttributeDef, value: unknown, opts: BuildGri
       return textCell(String(value ?? ''), { readOnly: true, wrap: opts.wrap })
 
     default: {
-      const display = opts.flagged ? String(value ?? '') : formatCellValue(value, attr.type, opts.timeZone)
+      const display = opts.flagged ? String(value ?? '') : formatCellValue(value, attr.type, opts.timeZone, undefined, false, attr.formatJson)
       return textCell(display, { readOnly: attr.isReadOnly, flagged: opts.flagged, wrap: opts.wrap })
     }
   }

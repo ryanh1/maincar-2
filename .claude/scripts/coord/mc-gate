@@ -184,8 +184,8 @@ run_named_test() {
   case "$kind" in
     server|vite) run_workspace_vitest "$kind" "$path" ;;
     integration)
-      record_check "npm --prefix server exec vitest run --config vitest.integration.config.ts $path"
-      (cd server && VITEST_MAX_WORKERS="$VITEST_WORKERS" npm exec vitest run --config vitest.integration.config.ts "$path")
+      record_check "npm --prefix server exec -- vitest run --config vitest.integration.config.ts $path"
+      (cd server && VITEST_MAX_WORKERS="$VITEST_WORKERS" npm exec -- vitest run --config vitest.integration.config.ts "$path")
       ;;
     shell)
       record_check "bash $path"

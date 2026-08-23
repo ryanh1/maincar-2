@@ -63,6 +63,9 @@ model Org {
   emailTemplates     EmailTemplate[]
   oauthConnections   OAuthConnection[]
   mailAccounts       MailAccount[]
+  calendarSources    CalendarSource[]
+  calendarEvents     CalendarEvent[]
+  calendarAttendees  CalendarEventAttendee[]
 
   // CRM spine (MAI-129 T1, MAI-130 T2). Back-relations so a deleted org cascades
   // its CRM rows away — the same onDelete: Cascade the dialer models already use.
@@ -205,6 +208,9 @@ model User {
   emailSignatures     EmailSignature[]
   oauthConnections    OAuthConnection[]
   mailAccounts        MailAccount[]
+  calendarSources     CalendarSource[]
+  calendarEvents      CalendarEvent[]
+  calendarAttendees   CalendarEventAttendee[]
   reportsOwned        Report[] @relation("ReportOwner")
   reportsDeleted      Report[] @relation("ReportDeletedBy")
 
@@ -1083,7 +1089,10 @@ model OAuthConnection {
   lastValidatedAt DateTime?
   lastRefreshAt   DateTime?
 
-  mailAccount MailAccount?
+  mailAccount       MailAccount?
+  calendarSources   CalendarSource[]
+  calendarEvents    CalendarEvent[]
+  calendarAttendees CalendarEventAttendee[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1132,6 +1141,125 @@ model MailAccount {
   // One mailbox per address per org. Re-connecting updates rather than duplicates.
   @@unique([orgId, emailAddress])
   @@index([orgId, userId])
+}
+
+// -----------------------------------------------------------------------------
+// Calendar workspace projection (MAI-420).
+//
+// Google and Microsoft remain authoritative. These rows are Maincar's durable,
+// tenant-scoped projection of each connected account's selected calendar data;
+// CRM Meeting history is deliberately not reused as the calendar source of truth.
+// -----------------------------------------------------------------------------
+
+model CalendarSource {
+  id String @id @default(cuid())
+
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  connection   OAuthConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  connectionId String
+
+  // google | microsoft. Duplicated from the connection so calendar workspace
+  // reads remain one projection query, never a token-bearing connection lookup.
+  provider String
+  providerCalendarId String
+  name String
+  description String?
+  timeZone String?
+  // owner | writer | reader | free-busy-reader
+  accessRole String
+  // Provider-owned fact: each connected account can expose one primary calendar.
+  isPrimary Boolean @default(false)
+  // User-owned preference. Primary calendars are included even when this is false;
+  // this flag means the user explicitly included a secondary calendar.
+  isSelected Boolean @default(false)
+
+  // Opaque continuation / delta cursor. Maincar stores and replays it unchanged.
+  syncCursor String?
+  lastSyncedAt DateTime?
+
+  events CalendarEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([connectionId, providerCalendarId])
+  @@index([orgId, userId, connectionId])
+  @@index([orgId, userId, isPrimary, isSelected])
+}
+
+model CalendarEvent {
+  id String @id @default(cuid())
+
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  connection   OAuthConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  connectionId String
+  source   CalendarSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  sourceId String
+
+  providerEventId String
+  // Opaque provider version (Google etag / Graph changeKey) for conditional writes.
+  providerVersion String?
+  iCalUid String?
+  title String?
+  description String?
+  location String?
+  webLink String?
+  // timed | all-day. All-day dates are UTC-midnight instants and carry no zone.
+  kind String
+  startsAt DateTime
+  endsAt DateTime
+  timeZone String?
+  // confirmed | tentative | cancelled. A cancellation/deletion remains a durable
+  // tombstone so downstream consumers do not mistake it for a missing sync row.
+  status String @default("confirmed")
+  cancelledAt DateTime?
+  // none | series
+  recurrenceKind String @default("none")
+  providerSeriesId String?
+  recurrenceRule String?
+  originalStartAt DateTime?
+  originalStartDate String?
+
+  attendees CalendarEventAttendee[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sourceId, providerEventId])
+  @@index([orgId, userId, connectionId])
+  @@index([orgId, userId, startsAt])
+}
+
+model CalendarEventAttendee {
+  id String @id @default(cuid())
+
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  connection   OAuthConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  connectionId String
+  event CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId String
+
+  email String
+  name String?
+  isOptional Boolean @default(false)
+  isResource Boolean @default(false)
+  // needs-action | accepted | declined | tentative
+  response String @default("needs-action")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([eventId, email])
+  @@index([orgId, userId, connectionId])
 }
 
 // -----------------------------------------------------------------------------

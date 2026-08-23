@@ -106,20 +106,23 @@ mc_log "migrate create $STAMP $NAME"
 # against that, and drop it. No drift to report, and no reset is proposed.
 # ---------------------------------------------------------------------------
 
-SHARED_ENV="/Users/ryanhollander/Documents/Coding/My Projects/maincar-2/.env"
 ELEVATED="${MC_MIGRATE_URL:-}"
+URL_SOURCE="MC_MIGRATE_URL"
 if [ -z "$ELEVATED" ]; then
-  for envfile in "$WT/.env" "$SHARED_ENV"; do
-    [ -r "$envfile" ] || continue
-    ELEVATED="$(grep -E '^MIGRATE_DATABASE_URL=' "$envfile" | head -1 | cut -d= -f2-)"
-    [ -n "$ELEVATED" ] && { echo "[mc-migrate] credentials from $envfile"; break; }
-  done
+  ENV_FILE="$WT/.env"
+  if [ -r "$ENV_FILE" ]; then
+    for variable in MIGRATE_DATABASE_URL DATABASE_URL; do
+      ELEVATED="$(grep -E "^${variable}=" "$ENV_FILE" | head -1 | cut -d= -f2- || true)"
+      [ -n "$ELEVATED" ] && { URL_SOURCE="$variable from $ENV_FILE"; break; }
+    done
+  fi
 fi
 [ -z "$ELEVATED" ] && {
-  echo "mc-migrate: no MIGRATE_DATABASE_URL found in $WT/.env or $SHARED_ENV." >&2
-  echo "            Set MC_MIGRATE_URL, or copy .env into your worktree." >&2
+  echo "mc-migrate: no MC_MIGRATE_URL, MIGRATE_DATABASE_URL, or DATABASE_URL found in $WT/.env." >&2
+  echo "            Create the clone with mc-clone, or add DATABASE_URL to this clone's .env." >&2
   exit 1
 }
+echo "[mc-migrate] credentials from $URL_SOURCE"
 
 PROBE="maincar2_authoring_$$"
 # Swap only the database name; keep host, credentials and query string.

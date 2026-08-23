@@ -35,6 +35,34 @@ export interface AttributeOption {
   isArchived?: boolean
 }
 
+// The shape of one `AttributeDef.formatJson` entry (MAI-365). Display-only: the
+// stored value stays canonical; this only changes how a cell renders it.
+export interface FieldFormat {
+  // number/currency/rating — Intl.NumberFormat options.
+  number?: {
+    style?: 'decimal' | 'currency' | 'percent'
+    currency?: string
+    minimumFractionDigits?: number
+    maximumFractionDigits?: number
+  }
+  // date/timestamp — an Intl.DateTimeFormat preset.
+  date?: {
+    preset?: 'short' | 'medium' | 'long' | 'full'
+  }
+  // text — a literal mask (e.g. "(###) ###-####").
+  mask?: string
+}
+
+// The shape of one `AttributeDef.validationJson` entry (MAI-365). Enforced by
+// server/src/crm/valuesValidator.ts; `strict` hard-blocks, otherwise accept-but-flag.
+export interface FieldValidation {
+  min?: number
+  max?: number
+  pattern?: string
+  message?: string
+  strict?: boolean
+}
+
 export interface AttributeDef {
   id: string
   objectId: string

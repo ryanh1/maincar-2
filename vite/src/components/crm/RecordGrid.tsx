@@ -40,11 +40,13 @@ import { RecordGridCreateRow } from './RecordGrid_CreateRow'
 import { GridRowFreezeMenu } from './GridRowFreezeMenu'
 import { CellPaintMenu } from './CellPaintMenu'
 import { CellExpandOverlay } from './CellExpandOverlay'
+import { CellCopyMenu } from './CellCopyMenu'
 import { formatCellValue } from './recordCellValue'
 import { ColumnGroupHeaders } from './ColumnGroupHeaders'
-import { createViewConfig, defaultKanbanGroupBy, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
+import { createKanbanConfig, createViewConfig, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
 import { parseGridCommand } from './gridCommands'
 import { coerceCurrency, coerceNumber } from './cellCoercion'
+import { formatEntry } from '@/lib/dialPad'
 import { KanbanBoard } from './KanbanBoard'
 import { ChangeHighlightOverlay, FieldHistoryPopover, type ChangeHighlightTarget } from './ChangeHighlightOverlay'
 import { drawChangeDots } from './changeHighlightCanvas'
@@ -218,6 +220,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
   const [rowFreezeMenu, setRowFreezeMenu] = useState<{ anchor: GridMenuAnchor; row: number } | null>(null)
   const [expandedCell, setExpandedCell] = useState<{ column: number; row: number; anchor: GridMenuAnchor; value: string } | null>(null)
   const [paintMenu, setPaintMenu] = useState<{ anchor: GridMenuAnchor; recordId: string; attribute: AttributeDef } | null>(null)
+  const [copyMenu, setCopyMenu] = useState<{ anchor: GridMenuAnchor; rawValue: string; displayValue: string } | null>(null)
 
   const configuredColumns = useMemo(() => new Map(config.columns.map((column) => [column.attributeId, column])), [config.columns])
   const orderedVisibleColumns = useMemo(() => {
@@ -313,6 +316,9 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const groupAttribute = config.groupBy[0] ? columns.find((attribute) => attribute.id === config.groupBy[0]?.attributeId) : undefined
+  const kanbanGroupAttribute = config.kanban
+    ? columns.find((attribute) => attribute.id === config.kanban?.groupAttributeId)
+    : undefined
   const displayRows = useMemo<DisplayRow[]>(() => {
     if (!groupAttribute) return visibleRows.map((record) => ({ kind: 'record', record }))
 
@@ -502,9 +508,9 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     [edits, visibleRows],
   )
   const moveKanbanRecord = useCallback((record: RecordRow, value: string | null) => {
-    if (!groupAttribute || groupAttribute.isReadOnly) return
-    commitValue(record, groupAttribute, value)
-  }, [commitValue, groupAttribute])
+    if (!kanbanGroupAttribute || kanbanGroupAttribute.isReadOnly) return
+    commitValue(record, kanbanGroupAttribute, value)
+  }, [commitValue, kanbanGroupAttribute])
 
   // Glide renders the fill handle but delegates the values to us. This keeps
   // fills on the same typed coercion and optimistic persistence path as edits,
@@ -1134,23 +1140,32 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     })
   }, [displayRows, visibleColumns, configuredColumns, cellValue, user?.timeZone])
 
-  const onCellContextMenu = useCallback(([_column, row]: Item, event: { bounds: Rectangle; preventDefault: () => void }) => {
-    const displayRow = displayRows[row]
-    const attribute = visibleColumns[_column]
-    if (!displayRow || displayRow.kind !== 'record' || !attribute || !viewId) return
-    if (!isStoredScalarCell(attribute)) return
-    event.preventDefault()
-    setPaintMenu({
-      recordId: displayRow.record.id,
-      attribute,
-      anchor: {
+// Right-click on a phone cell offers Copy raw (E.164) vs Copy formatted (MAI-365);
+  // on any other stored scalar cell it offers manual paint (MAI-354).
+  const onCellContextMenu = useCallback(
+    ([col, row]: Item, event: { bounds: Rectangle; preventDefault: () => void }) => {
+      const displayRow = displayRows[row]
+      const attribute = visibleColumns[col]
+      if (!displayRow || displayRow.kind !== 'record' || !attribute) return
+      const anchor = {
         x: event.bounds.x - window.scrollX,
         y: event.bounds.y - window.scrollY,
         width: event.bounds.width,
         height: event.bounds.height,
-      },
-    })
-  }, [displayRows, visibleColumns, viewId])
+      }
+      if (attribute.type === 'phone') {
+        const raw = cellValue(displayRow.record, attribute)
+        if (typeof raw !== 'string' || raw === '') return
+        event.preventDefault()
+        setCopyMenu({ anchor, rawValue: raw, displayValue: formatEntry(raw) })
+        return
+      }
+      if (!viewId || !isStoredScalarCell(attribute)) return
+      event.preventDefault()
+      setPaintMenu({ recordId: displayRow.record.id, attribute, anchor })
+    },
+    [displayRows, visibleColumns, cellValue, viewId],
+  )
 
   const applyPaint = useCallback((recordId: string, attribute: AttributeDef, backgroundToken: string | null, textToken: string | null) => {
     if (!viewId) return
@@ -1196,8 +1211,9 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
   const peekBaseRecord = peekIndex !== null ? recordAtRow(peekIndex) : null
   const peekRecord = peekBaseRecord ? { ...peekBaseRecord, ...edits.get(peekBaseRecord.id) } : null
   const setLayout = (nextLayout: 'grid' | 'kanban') => {
-    if (nextLayout === 'kanban' && !columns.some((attribute) => attribute.id === config.groupBy[0]?.attributeId && (attribute.type === 'select' || attribute.type === 'status'))) {
-      onViewConfigChange?.((current) => ({ ...current, groupBy: defaultKanbanGroupBy(columns) }))
+    if (nextLayout === 'kanban' && !columns.some((attribute) => attribute.id === config.kanban?.groupAttributeId && (attribute.type === 'select' || attribute.type === 'status'))) {
+      const kanban = createKanbanConfig(columns)
+      onViewConfigChange?.((current) => kanban ? { ...current, kanban } : current)
     }
     onLayoutChange?.(nextLayout)
   }
@@ -1221,7 +1237,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           attributes={columns}
           config={config}
           rows={kanbanRows}
-          onRecordMove={groupAttribute?.isReadOnly ? undefined : moveKanbanRecord}
+          onRecordMove={kanbanGroupAttribute?.isReadOnly ? undefined : moveKanbanRecord}
         />
       </div>
     )
@@ -1368,6 +1384,15 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
             onClose={() => setExpandedCell(null)}
             open
             value={expandedCell.value}
+          />
+        )}
+
+        {copyMenu && (
+          <CellCopyMenu
+            anchor={copyMenu.anchor}
+            rawValue={copyMenu.rawValue}
+            displayValue={copyMenu.displayValue}
+            onClose={() => setCopyMenu(null)}
           />
         )}
 

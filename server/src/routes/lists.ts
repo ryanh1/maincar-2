@@ -161,6 +161,7 @@ function toValidatorAttribute(attr: AttributeDef): ValidatorAttribute {
     isMulti: attr.isMulti,
     isReadOnly: attr.isReadOnly,
     optionsJson: attr.optionsJson ?? undefined,
+    validationJson: attr.validationJson ?? undefined,
   }
 }
 

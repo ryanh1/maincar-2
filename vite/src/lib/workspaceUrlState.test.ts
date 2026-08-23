@@ -4,6 +4,7 @@ import {
   decodeWorkspaceUrlState,
   encodeWorkspaceUrlState,
   legacySettingsPath,
+  setWorkspaceUrlState,
   settingsPath,
 } from './workspaceUrlState'
 
@@ -52,6 +53,12 @@ describe('workspaceUrlState', () => {
       search: 'maria@example.com',
       filter: { phone: '+15551234567' },
     } as unknown as Parameters<typeof encodeWorkspaceUrlState>[0])).toThrow(/not permitted/i)
+  })
+
+  it('preserves the CRM view-state parameter while updating workspace navigation state', () => {
+    const params = new URLSearchParams('v=encoded-view-state&legacy=drop-me')
+
+    expect(setWorkspaceUrlState(params, { selectedRecordId: 'record_123' }).toString()).toBe('ws=eyJ2ZXJzaW9uIjoxLCJzZWxlY3RlZFJlY29yZElkIjoicmVjb3JkXzEyMyJ9&v=encoded-view-state')
   })
 
   it('uses path segments for canonical Settings destinations and redirects legacy tabs', () => {

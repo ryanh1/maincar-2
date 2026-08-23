@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
-import { useWorkspaceUrlState } from '@/hooks/workspaceUrlState'
 import type { AttributeDef } from '@/lib/crmTypes'
-import type { WorkspaceViewConfig } from '@/lib/workspaceUrlState'
+import { decodeViewState, encodeViewState, type ViewStateOverlay } from './viewStateCodec'
 
 export type ViewSort = {
   attributeId: string
@@ -53,6 +53,13 @@ export type ChangeHighlightConfig = {
   onlyChangedRows: boolean
 }
 
+export type KanbanConfig = {
+  groupAttributeId: string
+  visibleOptionValues: string[]
+  cardAttributeIds: string[]
+  hiddenTerminalOptionValues?: string[]
+}
+
 /**
  * The live counterpart of SavedView.configJson. This route keeps the current
  * view state locally and uses the same shape the saved-view contract persists.
@@ -70,10 +77,7 @@ export type ViewConfig = {
   zoom: number
   columnWidths: Record<string, number>
   columnStyles: Array<{ attributeId: string; headerColor?: string }>
-  /** Fields shown on compact Kanban cards; omitted views use the first three visible fields. */
-  kanbanCardFieldIds?: string[]
-  /** Optional numeric or currency field summed in each Kanban column header. */
-  kanbanSummaryAttributeId?: string
+  kanban?: KanbanConfig
   changeHighlight: ChangeHighlightConfig
 }
 
@@ -119,12 +123,42 @@ export function createViewConfig(attributes: AttributeDef[]): ViewConfig {
   }
 }
 
-/** Deals normally group by pipeline stage; other objects use their first select-like field. */
-export function defaultKanbanGroupBy(attributes: AttributeDef[]): ViewSort[] {
-  const eligible = attributes.filter((attribute) => !attribute.isArchived && (attribute.type === 'select' || attribute.type === 'status'))
+function activeOptionValues(attribute: AttributeDef): string[] {
+  if (!Array.isArray(attribute.optionsJson)) return []
+  return attribute.optionsJson
+    .map((option, index) => ({ option, index }))
+    .filter(({ option }) => Boolean(option) && typeof option === 'object')
+    .map(({ option, index }) => {
+      const candidate = option as { value?: unknown; order?: unknown; isArchived?: unknown }
+      return typeof candidate.value === 'string' && !candidate.isArchived
+        ? { value: candidate.value, order: typeof candidate.order === 'number' ? candidate.order : index }
+        : null
+    })
+    .filter((option): option is { value: string; order: number } => option !== null)
+    .sort((left, right) => left.order - right.order)
+    .map((option) => option.value)
+}
+
+export function isKanbanGroupAttribute(attribute: AttributeDef): boolean {
+  return !attribute.isArchived && (attribute.type === 'select' || attribute.type === 'status') && activeOptionValues(attribute).length > 0
+}
+
+/** Deals normally group by pipeline stage; other objects use their first selectable field. */
+export function createKanbanConfig(attributes: AttributeDef[], groupAttributeId?: string): KanbanConfig | undefined {
+  const eligible = attributes.filter(isKanbanGroupAttribute)
   const pipelineStage = eligible.find((attribute) => /pipeline.?stage/i.test(attribute.slug) || /pipeline stage/i.test(attribute.name))
-  const groupAttribute = pipelineStage ?? eligible[0]
-  return groupAttribute ? [{ attributeId: groupAttribute.id, direction: 'asc' }] : []
+  const groupAttribute = eligible.find((attribute) => attribute.id === groupAttributeId) ?? pipelineStage ?? eligible[0]
+  return groupAttribute
+    ? {
+        groupAttributeId: groupAttribute.id,
+        visibleOptionValues: activeOptionValues(groupAttribute),
+        cardAttributeIds: attributes
+          .filter((attribute) => attribute.id !== groupAttribute.id && !attribute.isIdentity && !attribute.isArchived && attribute.storage !== 'list')
+          .sort((left, right) => left.sortOrder - right.sortOrder)
+          .slice(0, 3)
+          .map((attribute) => attribute.id),
+      }
+    : undefined
 }
 
 /** Reorder whole groups so their member columns always remain adjacent. */
@@ -152,30 +186,6 @@ export function reorderColumnGroup(columns: ViewColumn[], activeGroup: string, o
   return units.flatMap((unit) => unit.columns).map((column, order) => ({ ...column, order }))
 }
 
-function isViewSort(value: unknown, knownIds: Set<string>): value is ViewSort {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { attributeId?: unknown }).attributeId === 'string' &&
-    knownIds.has((value as { attributeId: string }).attributeId) &&
-    ((value as { direction?: unknown }).direction === 'asc' || (value as { direction?: unknown }).direction === 'desc')
-  )
-}
-
-function parseTeamScope(value: unknown): TeamScope | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const source = value as { teamIds?: unknown; leadUserIds?: unknown }
-  const validIds = (ids: unknown): string[] | undefined =>
-    Array.isArray(ids) && ids.every((id) => typeof id === 'string' && id.trim().length > 0)
-      ? [...new Set(ids)]
-      : undefined
-  const teamIds = validIds(source.teamIds)
-  const leadUserIds = validIds(source.leadUserIds)
-  return teamIds?.length || leadUserIds?.length
-    ? { ...(teamIds?.length ? { teamIds } : {}), ...(leadUserIds?.length ? { leadUserIds } : {}) }
-    : undefined
-}
-
 function mergeConfigWithAttributes(defaults: ViewConfig, current: ViewConfig): ViewConfig {
   const knownAttributeIds = new Set(defaults.columns.map((column) => column.attributeId))
   const retainedColumns = current.columns.filter((column) => knownAttributeIds.has(column.attributeId))
@@ -189,47 +199,24 @@ function mergeConfigWithAttributes(defaults: ViewConfig, current: ViewConfig): V
   }
 }
 
-function configFromWorkspaceState(defaults: ViewConfig, shared: WorkspaceViewConfig | undefined): ViewConfig {
-  if (!shared) return defaults
-  const knownIds = new Set(defaults.columns.map((column) => column.attributeId))
-  const layout = shared.layout
-  const retainedColumns = layout?.columns?.filter((column) => knownIds.has(column.attributeId))
-  const columnWidths = Object.fromEntries(
-    Object.entries(layout?.columnWidths ?? {}).filter(([attributeId]) => knownIds.has(attributeId)),
-  )
-  const current: ViewConfig = {
-    ...defaults,
-    ...(shared.sorts ? { sorts: shared.sorts.filter((sort) => isViewSort(sort, knownIds)) } : {}),
-    ...(parseTeamScope(shared.teamScope) ? { teamScope: parseTeamScope(shared.teamScope) } : {}),
-    ...(retainedColumns ? { columns: retainedColumns } : {}),
-    ...(layout?.groupBy ? { groupBy: layout.groupBy.filter((sort) => isViewSort(sort, knownIds)) } : {}),
-    ...(layout?.rowHeight ? { rowHeight: layout.rowHeight } : {}),
-    ...(layout?.gridLines !== undefined ? { gridLines: layout.gridLines } : {}),
-    ...(layout?.frozenRows !== undefined ? { frozenRows: layout.frozenRows } : {}),
-    ...(layout?.frozenCols !== undefined ? { frozenCols: layout.frozenCols } : {}),
-    ...(layout?.zoom !== undefined ? { zoom: layout.zoom } : {}),
-    columnWidths,
-  }
-  return mergeConfigWithAttributes(defaults, current)
-}
-
-function toWorkspaceState(config: ViewConfig): WorkspaceViewConfig {
-  const teamScope = parseTeamScope(config.teamScope)
+function applyViewStateOverlay(config: ViewConfig, overlay: ViewStateOverlay): ViewConfig {
+  const visibleColumns = overlay.columns ? new Map(overlay.columns.map((column) => [column.attributeId, column])) : null
   return {
-    ...(config.sorts.length ? { sorts: config.sorts } : {}),
-    ...(teamScope ? { teamScope } : {}),
-    layout: {
-      // Group names and wrapping are free-form local display settings, so they
-      // are intentionally excluded from the URL's structural allow-list.
-      columns: config.columns.map(({ attributeId, visible, order }) => ({ attributeId, visible, order })),
-      groupBy: config.groupBy,
-      rowHeight: config.rowHeight,
-      gridLines: config.gridLines,
-      frozenRows: config.frozenRows,
-      frozenCols: config.frozenCols,
-      zoom: config.zoom,
-      columnWidths: config.columnWidths,
-    },
+    ...config,
+    ...(visibleColumns ? {
+      columns: config.columns.map((column) => {
+        const shared = visibleColumns.get(column.attributeId)
+        return shared ? { ...column, visible: true, order: shared.order } : { ...column, visible: false }
+      }),
+    } : {}),
+    ...(overlay.sorts ? { sorts: overlay.sorts } : {}),
+    ...(overlay.filterTree ? { filterTree: overlay.filterTree } : {}),
+    ...(overlay.groupBy ? { groupBy: overlay.groupBy } : {}),
+    ...(overlay.rowHeight ? { rowHeight: overlay.rowHeight } : {}),
+    ...(overlay.gridLines !== undefined ? { gridLines: overlay.gridLines } : {}),
+    ...(overlay.frozenRows !== undefined ? { frozenRows: overlay.frozenRows } : {}),
+    ...(overlay.frozenCols !== undefined ? { frozenCols: overlay.frozenCols } : {}),
+    ...(overlay.zoom !== undefined ? { zoom: overlay.zoom } : {}),
   }
 }
 
@@ -296,19 +283,27 @@ export function sameViewConfig(left: ViewConfig, right: ViewConfig): boolean {
 
 type LocalViewState = Pick<
   ViewConfig,
-  'filterTree' | 'changeHighlight' | 'columnStyles' | 'kanbanCardFieldIds' | 'kanbanSummaryAttributeId'
+  'filterTree' | 'teamScope' | 'changeHighlight' | 'columnWidths' | 'columnStyles' | 'kanban'
 > & {
-  columns: Array<Pick<ViewColumn, 'attributeId' | 'wrap' | 'group' | 'collapsed'>>
+  columns: Array<Pick<ViewColumn, 'attributeId' | 'visible' | 'order' | 'wrap' | 'group' | 'collapsed'>>
 }
 
 function localViewState(config: ViewConfig): LocalViewState {
   return {
     filterTree: config.filterTree,
+    teamScope: config.teamScope,
     changeHighlight: config.changeHighlight,
+    columnWidths: config.columnWidths,
     columnStyles: config.columnStyles,
-    kanbanCardFieldIds: config.kanbanCardFieldIds,
-    kanbanSummaryAttributeId: config.kanbanSummaryAttributeId,
-    columns: config.columns.map(({ attributeId, wrap, group, collapsed }) => ({ attributeId, wrap, group, collapsed })),
+    kanban: config.kanban,
+    columns: config.columns.map(({ attributeId, visible, order, wrap, group, collapsed }) => ({
+      attributeId,
+      visible,
+      order,
+      ...(wrap !== undefined ? { wrap } : {}),
+      ...(group !== undefined ? { group } : {}),
+      ...(collapsed !== undefined ? { collapsed } : {}),
+    })),
   }
 }
 
@@ -317,26 +312,29 @@ function mergeLocalViewState(config: ViewConfig, local: LocalViewState | null): 
   const columnsById = new Map(local.columns.map((column) => [column.attributeId, column]))
   return {
     ...config,
-    ...(local.filterTree ? { filterTree: local.filterTree } : {}),
+    filterTree: local.filterTree,
+    teamScope: local.teamScope,
     changeHighlight: local.changeHighlight,
+    columnWidths: local.columnWidths,
     columnStyles: local.columnStyles,
-    ...(local.kanbanCardFieldIds ? { kanbanCardFieldIds: local.kanbanCardFieldIds } : {}),
-    ...(local.kanbanSummaryAttributeId ? { kanbanSummaryAttributeId: local.kanbanSummaryAttributeId } : {}),
-    columns: config.columns.map((column) => ({ ...column, ...columnsById.get(column.attributeId) })),
+    kanban: local.kanban,
+    columns: config.columns
+      .map((column) => ({ ...column, ...columnsById.get(column.attributeId) }))
+      .sort((left, right) => left.order - right.order),
   }
 }
 
-/** A saved view establishes the durable baseline; the workspace codec overlays safe route state. */
+/** A saved view establishes the durable baseline; `v` overlays safe route state for this session only. */
 export function useViewConfig(
   attributes: AttributeDef[],
   savedConfig?: ViewConfig,
 ): [ViewConfig, (update: (current: ViewConfig) => ViewConfig) => void, () => void] {
-  const [workspaceUrlState, updateWorkspaceUrlState] = useWorkspaceUrlState()
+  const [searchParams, setSearchParams] = useSearchParams()
   const sharedConfig = useMemo(() => {
     const defaults = createViewConfig(attributes)
     const saved = savedConfig ? mergeConfigWithAttributes(defaults, savedConfig) : defaults
-    return configFromWorkspaceState(saved, workspaceUrlState.viewConfig)
-  }, [attributes, savedConfig, workspaceUrlState.viewConfig])
+    return applyViewStateOverlay(saved, decodeViewState(searchParams.get('v'), attributes))
+  }, [attributes, savedConfig, searchParams])
 
   // Typed values and free-form display labels remain page-local. Navigation
   // state stays responsive to the URL while these settings never leak into it.
@@ -347,15 +345,23 @@ export function useViewConfig(
     (update: (current: ViewConfig) => ViewConfig) => {
       const next = update(config)
       setLocalConfig(localViewState(next))
-      updateWorkspaceUrlState((current) => ({ ...current, viewConfig: toWorkspaceState(next) }), { replace: true })
+      setSearchParams((current) => {
+        const params = new URLSearchParams(current)
+        params.set('v', encodeViewState(next))
+        return params
+      }, { replace: true })
     },
-    [config, updateWorkspaceUrlState],
+    [config, setSearchParams],
   )
 
   const resetConfig = useCallback(() => {
     setLocalConfig(null)
-    updateWorkspaceUrlState((current) => ({ ...current, viewConfig: undefined }), { replace: true })
-  }, [updateWorkspaceUrlState])
+    setSearchParams((current) => {
+      const params = new URLSearchParams(current)
+      params.delete('v')
+      return params
+    }, { replace: true })
+  }, [setSearchParams])
 
   return [config, updateConfig, resetConfig]
 }

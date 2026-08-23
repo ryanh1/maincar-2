@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Creates an issue clone with its own copy of the canonical local environment.
+set -euo pipefail
+source "$(dirname "$0")/mc-common.sh"
+
+die() { echo "mc-clone: $*" >&2; exit 2; }
+
+[ "$#" -eq 1 ] || die 'usage: mc-clone <issue-clone-directory>'
+
+requested="$1"
+parent="$(cd "$(dirname "$requested")" 2>/dev/null && pwd -P)" || die "parent directory does not exist: $(dirname "$requested")"
+name="$(basename "$requested")"
+case "$name" in ''|.|..) die 'destination must name a new clone directory' ;; esac
+destination="$parent/$name"
+[ ! -e "$destination" ] && [ ! -L "$destination" ] || die "destination already exists: $destination"
+
+source_env="$PRIMARY_CHECKOUT/.env"
+[ -r "$source_env" ] || die "missing readable canonical environment: $source_env"
+
+mc_sync_local_main
+
+tmp="$(mktemp -d "$parent/.mc-clone.XXXXXX")"
+cleanup() { [ -z "$tmp" ] || rm -rf "$tmp"; }
+trap cleanup EXIT
+
+git clone "$LOCAL_MAIN_REPO" "$tmp/repo" --quiet
+cp "$source_env" "$tmp/repo/.env"
+mv "$tmp/repo" "$destination"
+rmdir "$tmp"
+tmp=''
+
+echo "[mc-clone] created $destination with an independent .env copy"

@@ -11,6 +11,7 @@ import {
   UsersRound,
   User as UserIcon,
   Users,
+  Database,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -31,6 +32,7 @@ import { Settings_VoicemailGreetingTab } from './Settings_VoicemailGreetingTab'
 import { Settings_DispositionsTab } from './Settings_DispositionsTab'
 import { Settings_TeamsTab } from './Settings_TeamsTab'
 import { Settings_NextStepsTab } from './Settings_NextStepsTab'
+import { Settings_DataModelTab } from './Settings_DataModelTab'
 
 type TabId = SettingsSection
 
@@ -58,9 +60,10 @@ const TABS: TabDef[] = [
   // or delete any of them (SPEC-composer-templates.md § 2).
   { id: 'email-templates', label: 'Email templates', icon: FileText, needsOrg: true },
   { id: 'signatures', label: 'Signatures', icon: FileSignature, needsOrg: true },
-  // Hidden for a user with no org, like Organization and Members: connections belong to
+// Hidden for a user with no org, like Organization and Members: connections belong to
   // an org, so there is nothing to show without one.
   { id: 'integrations', label: 'Integrations', icon: Plug, needsOrg: true },
+  { id: 'data-model', label: 'Data model', icon: Database, needsOrg: true, adminOnly: true },
 ]
 
 const TAB_CONTENT: Record<TabId, ComponentType> = {
@@ -74,8 +77,9 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
   'voicemail-greeting': Settings_VoicemailGreetingTab,
   'email-templates': Settings_EmailTemplatesTab,
   signatures: Settings_EmailSignaturesTab,
-  integrations: Settings_IntegrationsTab,
+integrations: Settings_IntegrationsTab,
   teams: Settings_TeamsTab,
+  'data-model': Settings_DataModelTab,
 }
 
 /**

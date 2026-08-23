@@ -147,7 +147,10 @@ describe('RecordGrid', () => {
   it('writes a Kanban column drop through the optimistic field mutation and rolls it back when rejected', async () => {
     const status = attribute({ id: 'stage', slug: 'stage', name: 'Stage', type: 'status', optionsJson: [{ value: 'demo', label: 'Demo' }, { value: 'won', label: 'Won' }], sortOrder: 1 })
     const kanbanAttributes = [attribute({ id: 'name', slug: 'name', name: 'Deal', isIdentity: true, sortOrder: 0 }), status]
-    const config = { ...createViewConfig(kanbanAttributes), groupBy: [{ attributeId: 'stage', direction: 'asc' as const }] }
+    const config = {
+      ...createViewConfig(kanbanAttributes),
+      kanban: { groupAttributeId: 'stage', visibleOptionValues: ['demo', 'won'], cardAttributeIds: [] },
+    }
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'deal-1', name: 'Northstar', stage: 'demo' }], totalCount: 1,
       isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
