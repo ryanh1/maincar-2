@@ -12,6 +12,7 @@ import { playTestRing } from '@/lib/callAlertDelivery'
 import { callAlertDefaults, shouldRequestNotificationPermission, type CallAlertChannels, type CallAlertEvent, type CallAlertSettings } from '@/lib/callAlertSettings'
 import { formatTimeZoneName } from '@/lib/datetime'
 import { useAuth } from '@/providers/useAuth'
+import { enableCallWebPush, revokeCallWebPush } from '@/lib/webPush'
 
 const EVENTS: Array<{ id: CallAlertEvent; label: string }> = [
   { id: 'incoming', label: 'Incoming call' },
@@ -41,12 +42,18 @@ export function Settings_AlertsTab() {
     }
   }
 
-  function updateChannel(event: CallAlertEvent, channel: keyof CallAlertChannels, checked: boolean) {
+  async function updateChannel(event: CallAlertEvent, channel: keyof CallAlertChannels, checked: boolean) {
     const next = { ...settings, [event]: { ...settings[event], [channel]: checked } }
-    if (checked && typeof Notification !== 'undefined' && shouldRequestNotificationPermission(next[event], Notification.permission)) {
-      void Notification.requestPermission().then((permission) => {
+    try {
+      if (channel === 'browserNotification') {
+        if (checked) await enableCallWebPush()
+        else await revokeCallWebPush()
+      } else if (checked && typeof Notification !== 'undefined' && shouldRequestNotificationPermission(next[event], Notification.permission)) {
+        const permission = await Notification.requestPermission()
         if (permission !== 'granted') toast.error('Browser notifications are blocked. Change the browser permission to enable them.')
-      })
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not enable background browser alerts. Try again.')
     }
     void save(next)
   }
@@ -59,7 +66,7 @@ export function Settings_AlertsTab() {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Call alerts</CardTitle>
-          <CardDescription>Choose how this browser alerts the rep while Maincar is open.</CardDescription>
+          <CardDescription>Background browser alerts work after the tab closes while the browser stays running. Fully quit browsers cannot be reached.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {EVENTS.map(({ id, label }) => (

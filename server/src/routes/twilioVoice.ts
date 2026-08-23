@@ -55,6 +55,7 @@ import { PUBLIC_BASE_URL } from '../config.js'
 import prisma from '../db.js'
 import { queueUploadRecording } from '../jobs/uploadRecording.js'
 import { queueUploadVoicemail } from '../jobs/uploadVoicemail.js'
+import { queueCallWebPush } from '../jobs/callWebPush.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { matchInboundCallerToCrm } from '../lib/callMatch.js'
 import { automaticDispositionValue, TERMINAL_CALL_STATUSES, TWILIO_TO_CALL_STATUS } from '../lib/callStatus.js'
@@ -166,6 +167,7 @@ async function handleInboundCall(
       { route: 'POST /api/twilio/voice', requestId: req.id, orgId: call.orgId, callId: call.id },
       'inbound call ringing assigned browser Device',
     )
+    void queueCallWebPush({ userId: call.userId, event: 'incoming', eventKey: `call:${call.id}:incoming` })
 
     res.status(200).type('text/xml').send(
       buildInboundDeliveryTwiml({
@@ -224,6 +226,9 @@ async function respondWithInboundVoicemail(
     update: {},
   })
 
+  const assigned = await prisma.phoneNumber.findFirst({ where: { e164: inbound.toE164, status: 'active' }, select: { assignedUserId: true } })
+  if (assigned?.assignedUserId) void queueCallWebPush({ userId: assigned.assignedUserId, event: 'voicemail', eventKey: `voicemail:${inbound.callSid}` })
+
   logger.info(
     { route: 'POST /api/twilio/voice', requestId: req.id, orgId: inbound.orgId, callSid: inbound.callSid },
     'inbound call answered; playing greeting and recording voicemail',
@@ -280,7 +285,6 @@ router.post(
       where: { id: call.id, orgId: call.orgId, status: 'queued' },
       data: { status: 'ringing', startedAt: new Date(), twilioCallSid: callSid },
     })
-
     logger.info(
       { route: 'POST /api/twilio/voice', requestId: req.id, orgId: call.orgId, callId: call.id },
       'browser call ringing; returning bridge TwiML',
@@ -361,6 +365,7 @@ router.post(
         ...(Number.isFinite(durationS) ? { durationS } : {}),
       },
     })
+    if (status !== 'completed') void queueCallWebPush({ userId: call.userId, event: 'missed', eventKey: `call:${call.id}:missed` })
 
     // --- Return the next TwiML ---
     if (status === 'completed') {
