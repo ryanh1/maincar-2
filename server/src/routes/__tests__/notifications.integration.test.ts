@@ -75,6 +75,71 @@ afterAll(async () => {
 })
 
 describe('notification inbox API (integration, real Postgres)', () => {
+  it('returns one readable card for a folded bundle and applies its lifecycle action to the bundle row', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const recipient = await seedMember(prisma, org.orgId)
+    const suffix = `${Date.now()}${Math.floor(Math.random() * 1e6)}`
+    const actors = await Promise.all(['Ana', 'Sam', 'Jules'].map(async (firstName, index) => {
+      const actor = await prisma.user.create({
+        data: {
+          firebaseUid: `fb_bundle_${suffix}_${index}`,
+          email: `bundle_${suffix}_${index}@example.com`,
+          firstName,
+          lastName: 'Commenter',
+          currentOrgId: org.orgId,
+        },
+      })
+      await prisma.membership.create({ data: { userId: actor.id, orgId: org.orgId, roles: ['basic'] } })
+      return actor
+    }))
+    const objects = await Promise.all(actors.map((actor, index) => prisma.notificationObject.create({
+      data: {
+        orgId: org.orgId,
+        eventKey: `bundle-comment-${suffix}-${index}`,
+        actorUserId: actor.id,
+        verb: 'commented',
+        objectType: 'deal',
+        objectId: 'acme-deal',
+        sourceSnapshot: { title: 'Acme deal', preview: 'A comment was added.' },
+      },
+    })))
+    const bundle = await prisma.notification.create({
+      data: {
+        orgId: org.orgId,
+        notificationObjectId: objects[0].id,
+        recipientUserId: recipient.userId,
+        batchKey: `${recipient.userId}:comment:acme-deal`,
+        objectIds: objects.map((object) => object.id),
+        deliveryMode: 'batched',
+      },
+    })
+
+    const listed = await request(app)
+      .get(`/api/orgs/${org.orgId}/notifications`)
+      .set('Authorization', as(recipient.firebaseUid))
+
+    expect(listed.status).toBe(200)
+    expect(listed.body).toMatchObject({
+      total: 1,
+      notifications: [{
+        id: bundle.id,
+        bundleSize: 3,
+        summary: 'Ana and 2 others commented on the Acme deal',
+      }],
+    })
+
+    const archived = await request(app)
+      .patch(`/api/orgs/${org.orgId}/notifications/${bundle.id}`)
+      .set('Authorization', as(recipient.firebaseUid))
+      .send({ action: 'archive' })
+
+    expect(archived.status).toBe(200)
+    expect(await prisma.notification.findFirstOrThrow({ where: { id: bundle.id, orgId: org.orgId } })).toMatchObject({
+      archivedAt: expect.any(Date),
+      objectIds: objects.map((object) => object.id),
+    })
+  })
+
   it('lists only the recipient’s active inbox rows with pagination and safe source state', async () => {
     const org = await seedOrgWithAdmin(prisma)
     const recipient = await seedMember(prisma, org.orgId)
