@@ -15,6 +15,7 @@ import { Settings_EmailTemplatesTab } from './Settings_EmailTemplatesTab'
 import { Settings_EmailSignaturesTab } from './Settings_EmailSignaturesTab'
 import { Settings_IntegrationsTab } from './Settings_IntegrationsTab'
 import { Settings_CallRecordingsTab } from './Settings_CallRecordingsTab'
+import { Settings_InboundTab } from './Settings_InboundTab'
 import { Settings_VoicemailGreetingTab } from './Settings_VoicemailGreetingTab'
 import { Settings_DispositionsTab } from './Settings_DispositionsTab'
 import { Settings_TeamsTab } from './Settings_TeamsTab'
@@ -31,6 +32,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
   members: Settings_MembersTab,
   numbers: Settings_PhoneNumbersTab,
   'call-recordings': Settings_CallRecordingsTab,
+  inbound: Settings_InboundTab,
   dispositions: Settings_DispositionsTab,
   'next-steps': Settings_NextStepsTab,
   'voicemail-greeting': Settings_VoicemailGreetingTab,

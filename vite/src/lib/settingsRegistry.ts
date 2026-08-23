@@ -33,6 +33,7 @@ export const SETTINGS_TABS: SettingsTabDefinition[] = [
   { id: 'teams', label: 'Teams', icon: UsersRound, needsOrg: true },
   { id: 'numbers', label: 'Phone numbers', icon: Phone, needsOrg: true },
   { id: 'call-recordings', label: 'Call recordings', icon: Radio, needsOrg: true },
+  { id: 'inbound', label: 'Inbound calls', icon: Phone, needsOrg: true },
   { id: 'dispositions', label: 'Call dispositions', icon: ListChecks, needsOrg: true },
   { id: 'next-steps', label: 'Next steps', icon: ListChecks, needsOrg: true, adminOnly: true },
   { id: 'voicemail-greeting', label: 'Voicemail greeting', icon: Radio, needsOrg: true, adminOnly: true },

@@ -74,6 +74,7 @@ export const queryKeys = {
     list: (orgId: string, query: Record<string, unknown> = {}) => ['tasks', orgId, 'list', query] as const,
   },
   recordingPolicy: (orgId: string) => ['recordingPolicy', orgId] as const,
+  inboundForwarding: (orgId: string) => ['inboundForwarding', orgId] as const,
   captureSettings: (orgId: string) => ['captureSettings', orgId] as const,
   dispositions: (orgId: string) => ['dispositions', orgId] as const,
   nextSteps: {
