@@ -89,6 +89,44 @@ export interface GraphClient {
   createEvent(event: unknown): Promise<unknown>
 }
 
+/** Calendar-specific Graph operations. Kept separate so the legacy mail adapter's focused fakes stay small. */
+export interface GraphCalendarClient extends GraphClient {
+  /** Calendar inventory, including an opaque Graph next link when another page exists. */
+  listCalendars(opts?: { cursor?: string; limit?: number }): Promise<unknown>
+  /** One calendar resource by Graph id. */
+  getCalendar(calendarId: string): Promise<unknown>
+  /** A selected calendar's bounded event view, following Graph's opaque next link. */
+  listCalendarEvents(opts: {
+    calendarId: string
+    cursor?: string
+    startDateTime?: string
+    endDateTime?: string
+    limit?: number
+  }): Promise<unknown>
+  /** Create an event in a selected calendar. */
+  createCalendarEvent(calendarId: string, event: unknown): Promise<unknown>
+  /** One event in a selected calendar. */
+  getCalendarEvent(calendarId: string, eventId: string): Promise<unknown>
+  /** Update one event, optionally using Graph's conditional-write header. */
+  updateCalendarEvent(opts: {
+    calendarId: string
+    eventId: string
+    event: unknown
+    expectedVersion?: string
+  }): Promise<unknown>
+  /** Delete one event, optionally using Graph's conditional-write header. */
+  deleteCalendarEvent(opts: { calendarId: string; eventId: string; expectedVersion?: string }): Promise<unknown>
+  /** Send an RSVP action for one event. */
+  respondToCalendarEvent(opts: {
+    calendarId: string
+    eventId: string
+    response: 'accept' | 'decline' | 'tentativelyAccept'
+    comment?: string
+  }): Promise<unknown>
+  /** Work/school mailbox free-busy data. Personal Microsoft accounts do not support this Graph API. */
+  getSchedule(schedule: unknown): Promise<unknown>
+}
+
 /**
  * Build a Graph client bound to one access token. Construction is the only place a
  * Graph client comes into being in the whole repo.
@@ -98,7 +136,7 @@ export interface GraphClient {
  * a 429/503 and a RedirectHandler — both of which would hide a rate-limit the seam's
  * caller must own. Omitting them makes the first failure the one that surfaces.
  */
-export function graphClient(accessToken: string): GraphClient {
+export function graphClient(accessToken: string): GraphCalendarClient {
   const authProvider: AuthenticationProvider = { getAccessToken: async () => accessToken }
   const authHandler = new AuthenticationHandler(authProvider)
   authHandler.setNext(new HTTPMessageHandler())
@@ -131,6 +169,57 @@ export function graphClient(accessToken: string): GraphClient {
 
     createEvent(event) {
       return run(() => client.api('/me/events').post(event))
+    },
+
+    listCalendars(opts = {}) {
+      if (opts.cursor) return run(() => client.api(opts.cursor as string).get())
+      let req = client.api('/me/calendars')
+      if (opts.limit) req = req.top(opts.limit)
+      return run(() => req.get())
+    },
+
+    getCalendar(calendarId) {
+      return run(() => client.api(`/me/calendars/${encodeURIComponent(calendarId)}`).get())
+    },
+
+    listCalendarEvents(opts) {
+      if (opts.cursor) return run(() => client.api(opts.cursor as string).get())
+      let req = client.api(`/me/calendars/${encodeURIComponent(opts.calendarId)}/calendarView`).header('Prefer', 'outlook.timezone="UTC"')
+      if (opts.startDateTime) req = req.query({ startDateTime: opts.startDateTime })
+      if (opts.endDateTime) req = req.query({ endDateTime: opts.endDateTime })
+      if (opts.limit) req = req.top(opts.limit)
+      return run(() => req.get())
+    },
+
+    createCalendarEvent(calendarId, event) {
+      return run(() => client.api(`/me/calendars/${encodeURIComponent(calendarId)}/events`).post(event))
+    },
+
+    getCalendarEvent(calendarId, eventId) {
+      return run(() => client.api(`/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`).header('Prefer', 'outlook.timezone="UTC"').get())
+    },
+
+    updateCalendarEvent({ calendarId, eventId, event, expectedVersion }) {
+      let req = client.api(`/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`).header('Prefer', 'outlook.timezone="UTC"')
+      if (expectedVersion) req = req.header('If-Match', expectedVersion)
+      return run(() => req.patch(event))
+    },
+
+    deleteCalendarEvent({ calendarId, eventId, expectedVersion }) {
+      let req = client.api(`/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`)
+      if (expectedVersion) req = req.header('If-Match', expectedVersion)
+      return run(() => req.delete())
+    },
+
+    respondToCalendarEvent({ calendarId, eventId, response, comment }) {
+      const body = { ...(comment ? { comment } : {}), sendResponse: true }
+      return run(() =>
+        client.api(`/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}/${response}`).post(body),
+      )
+    },
+
+    getSchedule(schedule) {
+      return run(() => client.api('/me/calendar/getSchedule').header('Prefer', 'outlook.timezone="UTC"').post(schedule))
     },
   }
 }
