@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { BarChart3, CalendarDays, Database, Home, List, LogOut, Phone, Settings, Voicemail } from 'lucide-react'
+import { BarChart3, CalendarDays, Database, Home, List, ListChecks, LogOut, Phone, Settings, Voicemail } from 'lucide-react'
 import { Link, NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
@@ -15,6 +15,7 @@ const NAV = [
   { to: '/home', label: 'Home', icon: Home },
   { to: '/calls', label: 'Calls', icon: Phone },
   { to: '/calendar', label: 'Calendar', icon: CalendarDays },
+  { to: '/tasks', label: 'Tasks', icon: ListChecks },
   { to: '/voicemails', label: 'Voicemails', icon: Voicemail },
   { to: '/reports', label: 'Reports', icon: BarChart3 },
   { to: '/settings', label: 'Settings', icon: Settings },

@@ -19,6 +19,7 @@ import { JoinOrg } from '@/pages/JoinOrg'
 import { Records } from '@/pages/Records'
 import { RecordPage } from '@/pages/RecordPage'
 import { Reports } from '@/pages/Reports'
+import { Tasks } from '@/pages/Tasks'
 import { Settings, SettingsLegacyRedirect } from '@/pages/Settings'
 import { Welcome } from '@/pages/Welcome'
 import { VoicemailDetail } from '@/pages/VoicemailDetail'
@@ -46,6 +47,7 @@ const router = createBrowserRouter([
       { path: 'records/:slug', element: <Records /> },
       { path: 'records/:slug/:recordId', element: <RecordPage /> },
       { path: 'reports', element: <Reports /> },
+      { path: 'tasks', element: <Tasks /> },
       { path: 'lists/:listId', element: <CrmGrid /> },
       { path: 'welcome', element: <Welcome /> },
       { path: 'create-org', element: <CreateOrg /> },

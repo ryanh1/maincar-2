@@ -67,6 +67,10 @@ export const queryKeys = {
     // token per org is what the Device lifecycle actually needs.
     voiceToken: (orgId: string) => ['calls', 'voiceToken', orgId] as const,
   },
+  tasks: {
+    all: (orgId: string) => ['tasks', orgId] as const,
+    list: (orgId: string, query: Record<string, unknown> = {}) => ['tasks', orgId, 'list', query] as const,
+  },
   recordingPolicy: (orgId: string) => ['recordingPolicy', orgId] as const,
   dispositions: (orgId: string) => ['dispositions', orgId] as const,
   nextSteps: {
