@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 
 import { Badge } from '@/components/ui/badge'
+import { resolveOptionColor } from '@/lib/optionPalette'
 
 interface OptionChipProps {
   label: string
@@ -16,7 +17,7 @@ export function OptionChip({ label, color }: OptionChipProps) {
           aria-hidden="true"
           className="size-2 shrink-0 rounded-full"
           data-testid="option-chip-color"
-          style={{ backgroundColor: color } as CSSProperties}
+          style={{ backgroundColor: resolveOptionColor(color) } as CSSProperties}
         />
       )}
       <span className="truncate">{label}</span>

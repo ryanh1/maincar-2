@@ -1,5 +1,6 @@
 import type { ProvideEditorComponent } from '@glideapps/glide-data-grid'
 
+import { resolveOptionColor } from '@/lib/optionPalette'
 import type { ChipCell } from './chipCell'
 
 /** The dropdown `chipCellRenderer.provideEditor` opens on click (DECISIONS D4). */
@@ -34,7 +35,7 @@ export const ChipCellEditor: ProvideEditorComponent<ChipCell> = (props) => {
           >
             <span
               className="h-2.5 w-2.5 shrink-0 rounded-full"
-              style={{ backgroundColor: option.color ?? 'var(--muted-foreground)' }}
+              style={{ backgroundColor: resolveOptionColor(option.color) }}
             />
             <span className="truncate">{option.label}</span>
             {selectedValues.includes(option.value) && <span className="ml-auto text-xs">✓</span>}

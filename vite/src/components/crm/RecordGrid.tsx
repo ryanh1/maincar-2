@@ -420,6 +420,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         currencyCode: typeof record.currency === 'string' ? record.currency : undefined,
         flagged,
         wrap: configuredColumns.get(attr.id)?.wrap === true,
+        paintColors: colors.paintColors,
       })
       const change = changesByCell.get(`${record.id}:${attr.id}`)
       const paint = paintByCell.get(`${record.id}:${attr.id}`)

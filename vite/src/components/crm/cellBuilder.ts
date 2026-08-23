@@ -2,6 +2,7 @@ import { GridCellKind } from '@glideapps/glide-data-grid'
 import type { GridCell, Theme } from '@glideapps/glide-data-grid'
 
 import type { AttributeDef, AttributeOption } from '@/lib/crmTypes'
+import { resolveOptionColorHex } from '@/lib/optionPalette'
 import {
   coerceCheckbox,
   coerceDate,
@@ -72,6 +73,8 @@ export interface BuildGridCellOptions {
   currencyCode?: string
   flagged?: boolean
   wrap?: boolean
+  /** Theme-aware token→hex map (useGridColors), so chip option colors stay correct in dark mode. */
+  paintColors?: Record<string, string>
 }
 
 function fieldEditorCell(attr: AttributeDef, value: unknown, opts: BuildGridCellOptions): GridCell {
@@ -125,7 +128,10 @@ export function buildGridCell(attr: AttributeDef, value: unknown, opts: BuildGri
     case 'select':
     case 'status':
     case 'multiselect': {
-      const options = parseOptions(attr.optionsJson)
+      const options = parseOptions(attr.optionsJson).map((option) => ({
+        ...option,
+        color: resolveOptionColorHex(option.color, opts.paintColors),
+      }))
       const selectedValues = attr.isMulti
         ? Array.isArray(value)
           ? value.filter((entry): entry is string => typeof entry === 'string')
