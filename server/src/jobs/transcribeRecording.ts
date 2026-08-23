@@ -35,10 +35,46 @@ function transcriptSegments(orgId: string, result: DeepgramTranscript) {
   }))
 }
 
+// Twilio dual recordings put the parent call on channel zero and the child call
+// on channel one. A browser-originated outbound Call has the rep on the parent;
+// an inbound Call has the assigned browser rep on the child. This is a call-leg
+// fact, never an inference from what either person said.
+function repChannel(direction: string): number {
+  return direction === 'inbound' ? 1 : 0
+}
+
+function repDisplayName(user: { firstName: string | null; lastName: string | null }): string {
+  return [user.firstName, user.lastName].filter((part): part is string => Boolean(part?.trim())).join(' ') || 'Internal rep'
+}
+
+function speakerCandidates(result: DeepgramTranscript, direction: string) {
+  const candidates = new Map<string, { channel: number; speaker: number; confidence: number }>()
+  for (const segment of result.segments) {
+    const current = candidates.get(segment.speakerKey)
+    if (!current) {
+      candidates.set(segment.speakerKey, {
+        channel: segment.channel,
+        speaker: segment.speaker,
+        confidence: segment.confidence,
+      })
+      continue
+    }
+    current.confidence = Math.max(current.confidence, segment.confidence)
+  }
+  const internalChannel = repChannel(direction)
+  let outsideOrdinal = 0
+  return [...candidates.entries()].map(([speakerKey, candidate]) => ({
+    speakerKey,
+    ...candidate,
+    isInternal: candidate.channel === internalChannel,
+    ...(candidate.channel === internalChannel ? {} : { outsideOrdinal: ++outsideOrdinal }),
+  }))
+}
+
 /**
  * Write a completed provider pass as one transaction. Transcript segments belong
- * to the provider and are replaced as a set; CallSpeaker is intentionally never
- * touched, so manual identity corrections survive every final pass.
+ * to the provider and are replaced as a set. Automated speaker facts are seeded
+ * from the durable call leg; manual identity corrections are never replaced.
  */
 export async function persistFinalTranscript(
   client: Pick<PrismaClient, '$transaction'>,
@@ -47,8 +83,19 @@ export async function persistFinalTranscript(
   result: DeepgramTranscript,
 ): Promise<boolean> {
   return client.$transaction(async (tx) => {
+    const call = await tx.call.findFirst({
+      where: { id: callId, orgId },
+      select: {
+        id: true,
+        direction: true,
+        userId: true,
+        user: { select: { firstName: true, lastName: true } },
+      },
+    })
+    if (!call?.user) return false
+
     const updated = await tx.call.updateMany({
-      where: { id: callId, orgId, recordingPlanned: true, transcriptStatus: { not: 'done' } },
+      where: { id: callId, orgId, recordingPlanned: true },
       data: terminalTranscriptData('done', result.plainText),
     })
     if (updated.count === 0) return false
@@ -62,6 +109,36 @@ export async function persistFinalTranscript(
         segments: { deleteMany: {}, create: segments },
       },
     })
+
+    const candidates = speakerCandidates(result, call.direction)
+    const existing = await tx.callSpeaker.findMany({
+      where: { callId, orgId, speakerKey: { in: candidates.map((candidate) => candidate.speakerKey) } },
+      select: { speakerKey: true, manualOverride: true },
+    })
+    const existingByKey = new Map(existing.map((speaker) => [speaker.speakerKey, speaker]))
+
+    for (const candidate of candidates) {
+      if (existingByKey.get(candidate.speakerKey)?.manualOverride) continue
+      const data = candidate.isInternal
+        ? {
+            displayName: repDisplayName(call.user), source: 'call-user', confidence: 1,
+            evidence: { type: 'call-user', userId: call.userId }, userId: call.userId, personId: null,
+            confirmedAt: null, manualOverride: false,
+          }
+        : {
+            displayName: `Person ${candidate.outsideOrdinal}`, source: 'provider', confidence: candidate.confidence,
+            evidence: { type: 'deepgram-speaker', channel: candidate.channel, speaker: candidate.speaker, speakerKey: candidate.speakerKey },
+            userId: null, personId: null, confirmedAt: null, manualOverride: false,
+      }
+      if (existingByKey.has(candidate.speakerKey)) {
+        await tx.callSpeaker.updateMany({
+          where: { callId, orgId, speakerKey: candidate.speakerKey, manualOverride: false },
+          data,
+        })
+      } else {
+        await tx.callSpeaker.create({ data: { orgId, callId, speakerKey: candidate.speakerKey, ...data } })
+      }
+    }
     return true
   })
 }

@@ -37,7 +37,7 @@ vi.mock('../../db.js', async () => {
 
 import app from '../../app.js'
 import prisma from '../../db.js'
-import { seedCall, seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
+import { seedCall, seedOrgWithAdmin, seedPerson } from '../../test/integration/testPrisma.js'
 
 const as = (firebaseUid: string) => `Bearer ${firebaseUid}`
 
@@ -55,6 +55,67 @@ afterAll(async () => {
 })
 
 describe('call review detail (integration, real Postgres, real route)', () => {
+  it('lets an organization member manually name and link an outside speaker', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const call = await seedCall(prisma, { orgId: org.orgId, userId: org.adminUserId })
+    const person = await seedPerson(prisma, { orgId: org.orgId, firstName: 'Jordan' })
+    await prisma.callSpeaker.create({
+      data: { orgId: org.orgId, callId: call.id, speakerKey: 'deepgram:channel:1:speaker:0', source: 'provider', displayName: 'Person 1' },
+    })
+
+    const res = await request(app)
+      .patch(`/api/orgs/${org.orgId}/calls/${call.id}/speakers/deepgram:channel:1:speaker:0`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ displayName: 'Jordan Lee', personId: person.id })
+
+    expect(res.status).toBe(200)
+    expect(res.body.speaker).toMatchObject({ displayName: 'Jordan Lee', person: { id: person.id }, manualOverride: true })
+    await expect(prisma.callSpeaker.findFirstOrThrow({ where: { callId: call.id, orgId: org.orgId } })).resolves.toMatchObject({
+      displayName: 'Jordan Lee', personId: person.id, source: 'manual', manualOverride: true,
+    })
+  })
+
+  it('rejects linking an outside speaker to a person from another organization', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const other = await seedOrgWithAdmin(prisma)
+    const call = await seedCall(prisma, { orgId: org.orgId, userId: org.adminUserId })
+    const otherPerson = await seedPerson(prisma, { orgId: other.orgId, firstName: 'Other' })
+    await prisma.callSpeaker.create({
+      data: { orgId: org.orgId, callId: call.id, speakerKey: 'deepgram:channel:1:speaker:0', source: 'provider', displayName: 'Person 1' },
+    })
+
+    const res = await request(app)
+      .patch(`/api/orgs/${org.orgId}/calls/${call.id}/speakers/deepgram:channel:1:speaker:0`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ personId: otherPerson.id })
+
+    expect(res.status).toBe(400)
+    expect(res.body).toEqual({ error: 'Choose a person from this organization.' })
+    await expect(prisma.callSpeaker.findFirstOrThrow({ where: { callId: call.id, orgId: org.orgId } })).resolves.toMatchObject({
+      displayName: 'Person 1', personId: null, manualOverride: false,
+    })
+  })
+
+  it('does not let a member correct another organization’s speaker', async () => {
+    const mine = await seedOrgWithAdmin(prisma)
+    const theirs = await seedOrgWithAdmin(prisma)
+    const call = await seedCall(prisma, { orgId: theirs.orgId, userId: theirs.adminUserId })
+    await prisma.callSpeaker.create({
+      data: { orgId: theirs.orgId, callId: call.id, speakerKey: 'deepgram:channel:1:speaker:0', source: 'provider', displayName: 'Person 1' },
+    })
+
+    const res = await request(app)
+      .patch(`/api/orgs/${mine.orgId}/calls/${call.id}/speakers/deepgram:channel:1:speaker:0`)
+      .set('Authorization', as(mine.adminFirebaseUid))
+      .send({ displayName: 'Attempted rename' })
+
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Outside speaker not found' })
+    await expect(prisma.callSpeaker.findFirstOrThrow({ where: { callId: call.id, orgId: theirs.orgId } })).resolves.toMatchObject({
+      displayName: 'Person 1', manualOverride: false,
+    })
+  })
+
   it('does not disclose another organization’s call or issue a signed source', async () => {
     const mine = await seedOrgWithAdmin(prisma)
     const theirs = await seedOrgWithAdmin(prisma)
