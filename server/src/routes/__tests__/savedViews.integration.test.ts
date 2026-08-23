@@ -257,6 +257,67 @@ describe('SavedView (integration, real Postgres, real routes)', () => {
     expect(stored.objectId).toBe(object.id)
   })
 
+  it('persists a complete saved-view switcher order atomically', async () => {
+    const { org, admin, object } = await seedViewContext()
+    const first = await createView(org.orgId, admin.firebaseUid, object.id, 'First')
+    const second = await createView(org.orgId, admin.firebaseUid, object.id, 'Second')
+    const third = await createView(org.orgId, admin.firebaseUid, object.id, 'Third')
+
+    const order = [third.body.view.id, first.body.view.id, second.body.view.id]
+    await request(app)
+      .post(`/api/orgs/${org.orgId}/saved-views/reorder`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ objectId: object.id, viewIds: order })
+      .expect(204)
+
+    const stored = await prisma.savedView.findMany({
+      where: { orgId: org.orgId, objectId: object.id, ownerUserId: admin.id, deletedAt: null },
+      orderBy: { sortOrder: 'asc' },
+    })
+    expect(stored.map((view) => view.id)).toEqual(order)
+    expect(stored.map((view) => view.sortOrder)).toEqual([0, 1, 2])
+  })
+
+  it('rejects an incomplete switcher order without changing stored positions', async () => {
+    const { org, admin, object } = await seedViewContext()
+    const first = await createView(org.orgId, admin.firebaseUid, object.id, 'First')
+    const second = await createView(org.orgId, admin.firebaseUid, object.id, 'Second')
+
+    const rejected = await request(app)
+      .post(`/api/orgs/${org.orgId}/saved-views/reorder`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ objectId: object.id, viewIds: [second.body.view.id] })
+    expect(rejected.status).toBe(422)
+
+    const stored = await prisma.savedView.findMany({
+      where: { orgId: org.orgId, objectId: object.id, ownerUserId: admin.id, deletedAt: null },
+      orderBy: { sortOrder: 'asc' },
+    })
+    expect(stored.map((view) => [view.id, view.sortOrder])).toEqual([
+      [first.body.view.id, 0],
+      [second.body.view.id, 0],
+    ])
+  })
+
+  it('cannot reorder another member’s private view', async () => {
+    const { org, admin, object } = await seedViewContext()
+    const teammate = await prisma.user.create({
+      data: { firebaseUid: `saved-view-${randomUUID()}`, email: `saved-view-${randomUUID()}@example.test` },
+    })
+    await prisma.membership.create({ data: { orgId: org.orgId, userId: teammate.id, roles: ['basic'] } })
+    const mine = await createView(org.orgId, admin.firebaseUid, object.id, 'Mine')
+    const theirs = await createView(org.orgId, teammate.firebaseUid, object.id, 'Theirs')
+
+    const rejected = await request(app)
+      .post(`/api/orgs/${org.orgId}/saved-views/reorder`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ objectId: object.id, viewIds: [theirs.body.view.id, mine.body.view.id] })
+    expect(rejected.status).toBe(422)
+
+    const stored = await prisma.savedView.findFirstOrThrow({ where: { id: theirs.body.view.id, orgId: org.orgId } })
+    expect(stored.sortOrder).toBe(0)
+  })
+
   it('persists and reloads a Team scope unchanged with a saved grid view', async () => {
     const { org, admin, object } = await seedViewContext()
     const created = await request(app)
