@@ -97,7 +97,7 @@ describe('Records_SavedViewControls', () => {
     expect(onSave).toHaveBeenCalledOnce()
   })
 
-  it('renames, duplicates, changes visibility, and sets the selected view as default', async () => {
+  it('renames, duplicates, shares with the workspace, and sets the selected view as default', async () => {
     const user = userEvent.setup()
     const onRename = vi.fn()
     const onDuplicate = vi.fn()
@@ -134,13 +134,44 @@ describe('Records_SavedViewControls', () => {
     expect(onDuplicate).toHaveBeenCalledOnce()
 
     await user.click(screen.getByRole('button', { name: 'Show actions for My view view' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Share with everyone' }))
-    await user.click(screen.getByRole('button', { name: 'Share view' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Share with workspace' }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent("Members of this organization can find this in this object's view switcher. This does not create a public link.")
+    await user.click(screen.getByRole('button', { name: 'Share with workspace' }))
     expect(onVisibilityChange).toHaveBeenCalledWith(true)
 
     await user.click(screen.getByRole('button', { name: 'Show actions for My view view' }))
     await user.click(screen.getByRole('menuitem', { name: 'Set as default' }))
     expect(onSetDefault).toHaveBeenCalledOnce()
+  })
+
+  it('uses organization language when making a Shared view personal', async () => {
+    const user = userEvent.setup()
+    const onVisibilityChange = vi.fn()
+
+    renderWithProviders(
+      <Records_SavedViewControls
+        views={[{ ...sharedView, isDefault: false }]}
+        selectedViewId="shared"
+        hasUnsavedChanges={false}
+        isSaving={false}
+        onSelectView={vi.fn()}
+        onSave={vi.fn()}
+        onReset={vi.fn()}
+        onRename={vi.fn()}
+        onDuplicate={vi.fn()}
+        onDelete={vi.fn()}
+        onRestore={vi.fn()}
+        onVisibilityChange={onVisibilityChange}
+        onSetDefault={vi.fn()}
+        onReorder={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Show actions for Team pipeline view' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Make personal' }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('This view will no longer appear in other organization members’ switchers.')
+    await user.click(screen.getByRole('button', { name: 'Make personal' }))
+    expect(onVisibilityChange).toHaveBeenCalledWith(false)
   })
 
   it('hides the unsaved-changes controls when the live config matches the saved view', () => {

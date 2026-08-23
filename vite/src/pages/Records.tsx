@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Table2 } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -18,6 +18,7 @@ import {
   useSaveView,
   useSetDefaultView,
   useUpdateView,
+  type SavedView,
 } from '@/hooks/savedViews'
 import { useAuth } from '@/providers/useAuth'
 
@@ -30,7 +31,7 @@ import { Records_SavedViewControls } from './Records_SavedViewControls'
  */
 export function Records() {
   const { slug } = useParams<{ slug: string }>()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { org } = useAuth()
   const orgId = org?.id ?? null
@@ -43,10 +44,12 @@ export function Records() {
   const detail = objectQuery.data?.object ?? null
   const viewsQuery = useGetViews(orgId, detail?.id ?? null)
   const views = viewsQuery.data?.views ?? []
-  const [selectedViewId, setSelectedViewId] = useState<string | null>(null)
   const [layoutOverride, setLayoutOverride] = useState<'grid' | 'kanban' | null>(null)
+  const [optimisticallySelectedView, setOptimisticallySelectedView] = useState<SavedView | null>(null)
   const defaultView = views.find((view) => view.isDefault) ?? null
-  const selectedView = selectedViewId ? views.find((view) => view.id === selectedViewId) ?? null : defaultView
+  const requestedViewId = searchParams.get('viewId')
+  const requestedView = requestedViewId ? views.find((view) => view.id === requestedViewId) ?? null : null
+  const selectedView = requestedView ?? optimisticallySelectedView ?? defaultView
   const fallbackConfig = useMemo(() => createViewConfig(detail?.attributes ?? []), [detail?.attributes])
   const baselineConfig = selectedView?.config ?? fallbackConfig
   const layout = layoutOverride ?? (selectedView?.layout === 'kanban' ? 'kanban' : 'grid')
@@ -66,16 +69,32 @@ export function Records() {
   const isPending = objectsQuery.isPending || (!isUnavailable && object !== null && (objectQuery.isPending || viewsQuery.isPending))
   const isError = objectsQuery.isError || (!isUnavailable && (objectQuery.isError || viewsQuery.isError))
 
+  useEffect(() => {
+    if (!requestedViewId || !viewsQuery.isSuccess || requestedView || optimisticallySelectedView?.id === requestedViewId) return
+    toast.error('This saved view is no longer available. Showing the default view for this organization.')
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('viewId')
+      return next
+    }, { replace: true })
+  }, [optimisticallySelectedView, requestedView, requestedViewId, setSearchParams, viewsQuery.isSuccess])
+
   function retry() {
     void objectsQuery.refetch()
     if (object) void objectQuery.refetch()
     if (detail) void viewsQuery.refetch()
   }
 
-  function selectView(viewId: string | null) {
-    setSelectedViewId(viewId)
+  function selectView(viewId: string | null, optimisticView: SavedView | null = null) {
     setLayoutOverride(null)
+    setOptimisticallySelectedView(optimisticView)
     resetViewConfig()
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (viewId) next.set('viewId', viewId)
+      else next.delete('viewId')
+      return next
+    }, { replace: true })
   }
 
   async function saveChanges() {
@@ -85,7 +104,7 @@ export function Records() {
         await updateView.mutateAsync({ orgId, viewId: selectedView.id, config: viewConfig, layout })
       } else {
         const result = await saveView.mutateAsync({ orgId, objectId: detail.id, name: 'Default view', config: viewConfig, layout })
-        setSelectedViewId(result.view.id)
+        selectView(result.view.id, result.view)
         setLayoutOverride(null)
       }
     } catch (error) {
@@ -101,7 +120,7 @@ export function Records() {
         await updateView.mutateAsync({ orgId, viewId: selectedView.id, config: viewConfig, layout: nextLayout })
       } else {
         const result = await saveView.mutateAsync({ orgId, objectId: detail.id, name: 'Default view', config: viewConfig, layout: nextLayout })
-        setSelectedViewId(result.view.id)
+        selectView(result.view.id, result.view)
         setLayoutOverride(null)
       }
     } catch (error) {
@@ -184,18 +203,18 @@ export function Records() {
                 onDuplicate={() => manageView(async () => {
                   if (!selectedView) return
                   const duplicate = await duplicateView.mutateAsync({ orgId, viewId: selectedView.id })
-                  setSelectedViewId(duplicate.view.id)
+                  selectView(duplicate.view.id, duplicate.view)
                 })}
                 onDelete={() => manageView(async () => {
                   if (!selectedView) return
                   await deleteView.mutateAsync({ orgId, viewId: selectedView.id })
-                  setSelectedViewId(null)
+                  selectView(null)
                   resetViewConfig()
                 })}
                 onRestore={() => manageView(async () => {
                   if (!selectedView) return
                   await restoreView.mutateAsync({ orgId, viewId: selectedView.id })
-                  setSelectedViewId(selectedView.id)
+                  selectView(selectedView.id)
                 })}
                 onVisibilityChange={(isShared) => manageView(async () => {
                   if (!selectedView) return

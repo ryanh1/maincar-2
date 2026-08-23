@@ -29,6 +29,7 @@ type MenuAction = () => void | Promise<void>
 
 type Confirmation = {
   title: string
+  description: string
   actionLabel: string
   onConfirm: MenuAction
 }
@@ -94,7 +95,7 @@ export function Records_SavedViewControls_Menu({
       await onRename(name)
       setIsRenaming(false)
     }
-    if (selectedView.isShared) requestConfirmation({ title: 'Rename this Shared view?', actionLabel: 'Rename view', onConfirm: save })
+    if (selectedView.isShared) requestConfirmation({ title: 'Rename this Shared view?', description: 'This changes it for everyone.', actionLabel: 'Rename view', onConfirm: save })
     else run(save)
   }
 
@@ -103,15 +104,18 @@ export function Records_SavedViewControls_Menu({
       await onDelete()
       toast.success('View deleted.', { action: { label: 'Undo', onClick: () => run(onRestore) } })
     }
-    if (selectedView.isShared) requestConfirmation({ title: 'Delete this Shared view?', actionLabel: 'Delete view', onConfirm: remove })
+    if (selectedView.isShared) requestConfirmation({ title: 'Delete this Shared view?', description: 'This changes it for everyone.', actionLabel: 'Delete view', onConfirm: remove })
     else run(remove)
   }
 
   function changeVisibility() {
     const isSharing = !selectedView.isShared
     requestConfirmation({
-      title: isSharing ? 'Share this view?' : 'Make this view Personal?',
-      actionLabel: isSharing ? 'Share view' : 'Make Personal',
+      title: isSharing ? 'Share this view?' : 'Make this view personal?',
+      description: isSharing
+        ? "Members of this organization can find this in this object's view switcher. This does not create a public link."
+        : 'This view will no longer appear in other organization members’ switchers.',
+      actionLabel: isSharing ? 'Share with workspace' : 'Make personal',
       onConfirm: () => onVisibilityChange(isSharing),
     })
   }
@@ -146,7 +150,7 @@ export function Records_SavedViewControls_Menu({
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={() => { setRenameValue(selectedView.name); setIsRenaming(true) }}>Rename view</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => run(onDuplicate)}>Duplicate view</DropdownMenuItem>
-            <DropdownMenuItem onSelect={changeVisibility}>{selectedView.isShared ? 'Make Personal' : 'Share with everyone'}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={changeVisibility}>{selectedView.isShared ? 'Make personal' : 'Share with workspace'}</DropdownMenuItem>
             <DropdownMenuItem disabled={selectedView.isDefault} onSelect={() => run(onSetDefault)}>
               {selectedView.isDefault ? 'Already the default' : 'Set as default'}
             </DropdownMenuItem>
@@ -163,7 +167,7 @@ export function Records_SavedViewControls_Menu({
         <AlertDialogContent size="sm">
           <AlertDialogHeader>
             <AlertDialogTitle>{confirmation?.title}</AlertDialogTitle>
-            <AlertDialogDescription>This changes it for everyone.</AlertDialogDescription>
+            <AlertDialogDescription>{confirmation?.description}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>

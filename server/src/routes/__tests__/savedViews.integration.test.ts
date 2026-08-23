@@ -246,6 +246,12 @@ describe('SavedView (integration, real Postgres, real routes)', () => {
     expect(shared.status).toBe(200)
     expect(shared.body.view.isShared).toBe(true)
 
+    const teammateSwitcher = await request(app)
+      .get(`/api/orgs/${org.orgId}/saved-views?objectId=${object.id}`)
+      .set('Authorization', as(teammate.firebaseUid))
+    expect(teammateSwitcher.status).toBe(200)
+    expect(teammateSwitcher.body.views.map((view: { id: string }) => view.id)).toContain(created.body.view.id)
+
     const teammateEdit = await request(app)
       .patch(`/api/orgs/${org.orgId}/saved-views/${created.body.view.id}`)
       .set('Authorization', as(teammate.firebaseUid))
@@ -255,6 +261,17 @@ describe('SavedView (integration, real Postgres, real routes)', () => {
     const stored = await prisma.savedView.findFirstOrThrow({ where: { id: created.body.view.id, orgId: org.orgId } })
     expect(stored.name).toBe('Team prospects')
     expect(stored.objectId).toBe(object.id)
+
+    await request(app)
+      .patch(`/api/orgs/${org.orgId}/saved-views/${created.body.view.id}`)
+      .set('Authorization', as(admin.firebaseUid))
+      .send({ isShared: false })
+      .expect(200)
+
+    const personalSwitcher = await request(app)
+      .get(`/api/orgs/${org.orgId}/saved-views?objectId=${object.id}`)
+      .set('Authorization', as(teammate.firebaseUid))
+    expect(personalSwitcher.body.views.map((view: { id: string }) => view.id)).not.toContain(created.body.view.id)
   })
 
   it('returns 404 when a non-member guesses a shared view URL', async () => {
