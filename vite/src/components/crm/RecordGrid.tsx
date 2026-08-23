@@ -34,6 +34,7 @@ import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { RecordGridCreateRow } from './RecordGrid_CreateRow'
 import { GridRowFreezeMenu } from './GridRowFreezeMenu'
+import { CellExpandOverlay } from './CellExpandOverlay'
 import { formatCellValue } from './recordCellValue'
 import { ColumnGroupHeaders } from './ColumnGroupHeaders'
 import { createViewConfig, defaultKanbanGroupBy, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
@@ -140,6 +141,14 @@ function wrapIndex(index: number, length: number): number {
   return ((index % length) + length) % length
 }
 
+function textOverflowsCell(value: string, width: number): boolean {
+  const availableWidth = Math.max(0, width - 16)
+  const context = typeof OffscreenCanvas === 'undefined' ? null : new OffscreenCanvas(1, 1).getContext('2d')
+  if (!context) return value.length * 7 > availableWidth
+  context.font = '14px Inter'
+  return value.split('\n').some((line) => context.measureText(line).width > availableWidth)
+}
+
 /**
  * The Glide record grid (design-system.md → Tables and grids): canvas, 60fps,
  * a tinted frozen header row (native to Glide) plus a frozen leading column
@@ -186,6 +195,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
   const [headerMenu, setHeaderMenu] = useState<{ attribute: AttributeDef; anchor: GridMenuAnchor; columnIndex: number } | null>(null)
   const [rowFreezeMenu, setRowFreezeMenu] = useState<{ anchor: GridMenuAnchor; row: number } | null>(null)
+  const [expandedCell, setExpandedCell] = useState<{ column: number; row: number; anchor: GridMenuAnchor; value: string } | null>(null)
 
   const configuredColumns = useMemo(() => new Map(config.columns.map((column) => [column.attributeId, column])), [config.columns])
   const orderedVisibleColumns = useMemo(() => {
@@ -348,9 +358,15 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
       const record = displayRow.record
       const value = cellValue(record, attr)
       const flagged = flaggedCells.has(`${record.id}:${attr.slug}`)
-      return buildGridCell(attr, value, { orgId, timeZone: user?.timeZone, currencyCode: typeof record.currency === 'string' ? record.currency : undefined, flagged })
+      return buildGridCell(attr, value, {
+        orgId,
+        timeZone: user?.timeZone,
+        currencyCode: typeof record.currency === 'string' ? record.currency : undefined,
+        flagged,
+        wrap: configuredColumns.get(attr.id)?.wrap === true,
+      })
     },
-    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups, orgId],
+    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups, orgId, configuredColumns],
   )
 
   // The single coercion seam: runs for a typed commit AND a paste (glide
@@ -921,6 +937,10 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   const gridRowCount = groupAttribute ? displayRows.length : totalCount
 
   const onMouseMove = useCallback((args: GridMouseEventArgs) => {
+    setExpandedCell((current) => {
+      if (!current || args.kind !== 'cell') return null
+      return args.location[0] === current.column && args.location[1] === current.row ? current : null
+    })
     if (args.kind !== 'cell') {
       setHoveredRow(null)
       return
@@ -979,16 +999,42 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
     }
   }, [freezeColumnsAt, freezeRowsAt, onViewConfigChange])
 
-  const onCellClicked = useCallback(([_column, row]: Item) => {
+  const onCellClicked = useCallback(([_column, row]: Item, event: { bounds: Rectangle; preventDefault: () => void }) => {
     const displayRow = displayRows[row]
-    if (displayRow?.kind !== 'group') return
-    setCollapsedGroups((previous) => {
-      const next = new Set(previous)
-      if (next.has(displayRow.key)) next.delete(displayRow.key)
-      else next.add(displayRow.key)
-      return next
+    if (displayRow?.kind === 'group') {
+      setCollapsedGroups((previous) => {
+        const next = new Set(previous)
+        if (next.has(displayRow.key)) next.delete(displayRow.key)
+        else next.add(displayRow.key)
+        return next
+      })
+      return
+    }
+
+    const attribute = visibleColumns[_column]
+    if (!displayRow || !attribute || configuredColumns.get(attribute.id)?.wrap === true) return
+    const record = displayRow.record
+    const value = formatCellValue(
+      cellValue(record, attribute),
+      attribute.type,
+      user?.timeZone,
+      typeof record.currency === 'string' ? record.currency : undefined,
+      attribute.slug === 'amountMinor',
+    )
+    if (!textOverflowsCell(value, event.bounds.width)) return
+    event.preventDefault()
+    setExpandedCell({
+      column: _column,
+      row,
+      anchor: {
+        x: event.bounds.x - window.scrollX,
+        y: event.bounds.y - window.scrollY,
+        width: event.bounds.width,
+        height: event.bounds.height,
+      },
+      value,
     })
-  }, [displayRows])
+  }, [displayRows, visibleColumns, configuredColumns, cellValue, user?.timeZone])
 
   const [scrollOffsetX, setScrollOffsetX] = useState(0)
   const onGridVisibleRegionChanged = useCallback((range: Rectangle, tx: number) => {
@@ -1089,7 +1135,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
           onReorder={onColumnGroupReorder}
         />
       )}
-      <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => setHoveredRow(null)}>
+      <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => { setHoveredRow(null); setExpandedCell(null) }}>
         <DataEditor
         ref={dataEditorRef}
         columns={gridColumns}
@@ -1126,6 +1172,10 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
             anchor={headerMenu.anchor}
             config={config}
             onConfigChange={onViewConfigChange}
+            onToggleWrap={() => onViewConfigChange((current) => ({
+              ...current,
+              columns: current.columns.map((column) => column.attributeId === headerMenu.attribute.id ? { ...column, wrap: column.wrap !== true } : column),
+            }))}
             freezeActions={{
               freezeLabel: 'Freeze up to this column',
               onFreeze: () => onViewConfigChange((current) => ({ ...current, frozenCols: headerMenu.columnIndex + 1 })),
@@ -1136,6 +1186,16 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
               if (!open) setHeaderMenu(null)
             }}
             open
+            wrap={configuredColumns.get(headerMenu.attribute.id)?.wrap === true}
+          />
+        )}
+
+        {expandedCell && (
+          <CellExpandOverlay
+            anchor={expandedCell.anchor}
+            onClose={() => setExpandedCell(null)}
+            open
+            value={expandedCell.value}
           />
         )}
 

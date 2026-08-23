@@ -1135,4 +1135,79 @@ describe('RecordGrid', () => {
     expect(screen.getByText('Column actions for First name')).toBeInTheDocument()
     expect(onViewConfigChange).not.toHaveBeenCalled()
   })
+
+  it('toggles a column between clipped and wrapped text from its header menu', async () => {
+    const user = userEvent.setup()
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'A long value that needs more than one line' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const config = createViewConfig(ATTRIBUTES)
+    const onViewConfigChange = vi.fn()
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={onViewConfigChange} />,
+    )
+
+    act(() => {
+      ;(dataEditorProps.current!.onHeaderMenuClick as (column: number, bounds: { x: number; y: number; width: number; height: number }) => void)(
+        0,
+        { x: 16, y: 16, width: 160, height: 32 },
+      )
+    })
+    await user.click(screen.getByRole('button', { name: 'Wrap text' }))
+
+    const update = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    const wrappedConfig = update(config)
+    expect(wrappedConfig.columns.find((column) => column.attributeId === 'firstName')?.wrap).toBe(true)
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={wrappedConfig} onViewConfigChange={vi.fn()} />,
+    )
+    const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => { allowWrapping?: boolean }
+    expect(getCellContent([0, 0]).allowWrapping).toBe(true)
+  })
+
+  it('opens the full clipped value and closes it on Escape or pointer move away', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'A long value that does not fit in a narrow cell' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const config = { ...createViewConfig(ATTRIBUTES), columnWidths: { firstName: 50 } }
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} />)
+
+    const preventDefault = vi.fn()
+    act(() => {
+      ;(dataEditorProps.current!.onCellClicked as (item: [number, number], event: { bounds: { x: number; y: number; width: number; height: number }; preventDefault: () => void }) => void)(
+        [0, 0],
+        { bounds: { x: 16, y: 48, width: 50, height: 34 }, preventDefault },
+      )
+    })
+    expect(screen.getByText('A long value that does not fit in a narrow cell')).toBeInTheDocument()
+    expect(preventDefault).toHaveBeenCalled()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByText('A long value that does not fit in a narrow cell')).not.toBeInTheDocument()
+
+    act(() => {
+      ;(dataEditorProps.current!.onCellClicked as (item: [number, number], event: { bounds: { x: number; y: number; width: number; height: number }; preventDefault: () => void }) => void)(
+        [0, 0],
+        { bounds: { x: 16, y: 48, width: 50, height: 34 }, preventDefault },
+      )
+      ;(dataEditorProps.current!.onMouseMove as (event: { kind: string }) => void)({ kind: 'out-of-bounds' })
+    })
+    expect(screen.queryByText('A long value that does not fit in a narrow cell')).not.toBeInTheDocument()
+  })
 })

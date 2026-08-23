@@ -39,6 +39,8 @@ export type ViewColumn = {
   attributeId: string
   visible: boolean
   order: number
+  /** Omitted values preserve the default clipped cell rendering. */
+  wrap?: boolean
   group?: string
   collapsed?: boolean
 }

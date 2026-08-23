@@ -54,13 +54,14 @@ export function coerceForType(attr: AttributeDef, raw: string, existingValue: un
 // the coercion result for a caller (e.g. a toast) to surface.
 export const FLAGGED_THEME: Partial<Theme> = { textDark: '#dc2626', accentColor: '#dc2626' }
 
-function textCell(display: string, opts: { readOnly: boolean; flagged?: boolean }): GridCell {
+function textCell(display: string, opts: { readOnly: boolean; flagged?: boolean; wrap?: boolean }): GridCell {
   return {
     kind: GridCellKind.Text,
     data: display,
     displayData: display,
     allowOverlay: !opts.readOnly,
     readonly: opts.readOnly,
+    allowWrapping: opts.wrap,
     themeOverride: opts.flagged ? FLAGGED_THEME : undefined,
   }
 }
@@ -70,6 +71,7 @@ export interface BuildGridCellOptions {
   orgId?: string
   currencyCode?: string
   flagged?: boolean
+  wrap?: boolean
 }
 
 function fieldEditorCell(attr: AttributeDef, value: unknown, opts: BuildGridCellOptions): GridCell {
@@ -148,11 +150,11 @@ export function buildGridCell(attr: AttributeDef, value: unknown, opts: BuildGri
     }
 
     case 'ai':
-      return textCell(String(value ?? ''), { readOnly: true })
+      return textCell(String(value ?? ''), { readOnly: true, wrap: opts.wrap })
 
     default: {
       const display = opts.flagged ? String(value ?? '') : formatCellValue(value, attr.type, opts.timeZone)
-      return textCell(display, { readOnly: attr.isReadOnly, flagged: opts.flagged })
+      return textCell(display, { readOnly: attr.isReadOnly, flagged: opts.flagged, wrap: opts.wrap })
     }
   }
 }

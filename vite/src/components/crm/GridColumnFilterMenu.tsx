@@ -18,11 +18,13 @@ interface GridColumnFilterMenuProps {
   }
   onConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
   onOpenChange: (open: boolean) => void
+  onToggleWrap?: () => void
   open: boolean
+  wrap?: boolean
 }
 
 /** Header menus retain sorting and freezing; filtering lives in GridFilterBuilder. */
-export function GridColumnFilterMenu({ attribute, anchor, config, freezeActions, onConfigChange, onOpenChange, open }: GridColumnFilterMenuProps) {
+export function GridColumnFilterMenu({ attribute, anchor, config, freezeActions, onConfigChange, onOpenChange, onToggleWrap, open, wrap = false }: GridColumnFilterMenuProps) {
   const activeSort = config.sorts[0]
   const [draftSort, setDraftSort] = useState<'asc' | 'desc' | undefined>(activeSort?.attributeId === attribute.id ? activeSort.direction : undefined)
   const [clearSort, setClearSort] = useState(false)
@@ -61,6 +63,7 @@ export function GridColumnFilterMenu({ attribute, anchor, config, freezeActions,
             <div className="flex flex-col gap-1 border-b border-border pb-3">
               <Button size="sm" variant="secondary" className="w-full justify-start" onClick={freezeColumn}>{freezeActions.freezeLabel}</Button>
               <Button size="sm" variant="secondary" className="w-full justify-start" onClick={unfreezeColumns}>{freezeActions.unfreezeLabel}</Button>
+              {onToggleWrap && <Button size="sm" variant="secondary" className="w-full justify-start" onClick={() => { onToggleWrap(); closeMenu() }}>{wrap ? 'Clip text' : 'Wrap text'}</Button>}
             </div>
           )}
           <div className="flex flex-wrap gap-2">
