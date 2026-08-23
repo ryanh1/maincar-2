@@ -10,6 +10,7 @@ const {
   getRecordingDownloadUrlMock,
   deleteObjectMock,
   queueTranscodeGreetingMock,
+  queueCallWebPushMock,
 } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
@@ -23,6 +24,7 @@ const {
   getRecordingDownloadUrlMock: vi.fn(),
   deleteObjectMock: vi.fn(),
   queueTranscodeGreetingMock: vi.fn(),
+  queueCallWebPushMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
@@ -37,6 +39,10 @@ vi.mock('../../../dependencies/s3.js', () => ({
   deleteObject: deleteObjectMock,
 }))
 vi.mock('../../jobs/transcodeGreeting.js', () => ({ queueTranscodeGreeting: queueTranscodeGreetingMock }))
+// The full app also mounts Twilio voice routes. This greeting-route suite never
+// exercises their notification side effect, so keep that external dependency
+// outside this unit test's import graph.
+vi.mock('../../jobs/callWebPush.js', () => ({ queueCallWebPush: queueCallWebPushMock }))
 
 import app from '../../app.js'
 
