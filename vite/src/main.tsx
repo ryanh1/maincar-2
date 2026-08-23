@@ -13,6 +13,7 @@ import { DatePickerFixture } from './components/ui/DatePickerFixture'
 import { ReportsFixture } from './pages/ReportsFixture'
 import { CallTranscriptFixture } from './pages/CallTranscriptFixture'
 import { RecordsFixture } from './pages/RecordsFixture'
+import { ListRecordsFixture } from './pages/ListRecordsFixture'
 import { ComposerCardFixture } from './components/composer/ComposerCardFixture'
 import { Settings_EmailSignaturesFixture } from './pages/Settings_EmailSignaturesFixture'
 import { Settings_EmailTemplatesFixture } from './pages/Settings_EmailTemplatesFixture'
@@ -47,6 +48,8 @@ createRoot(document.getElementById('root')!).render(
       <CallTranscriptFixture />
     ) : import.meta.env.DEV && window.location.pathname.startsWith('/__fixtures/records/') ? (
       <RecordsFixture />
+    ) : import.meta.env.DEV && window.location.pathname.startsWith('/__fixtures/lists/') ? (
+      <ListRecordsFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/composer-focus' ? (
       <ComposerCardFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/email-signatures' ? (
