@@ -114,8 +114,8 @@ describe('DialerProvider', () => {
     const { result } = renderDialer()
     expect(result.current.activeCall).toBeNull()
 
-    act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: true }))
-    expect(result.current.activeCall).toEqual({ orgId: 'org-1', callId: 'call-1', recording: true })
+    act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', personId: 'person-1', companyId: 'company-1', recording: true }))
+    expect(result.current.activeCall).toEqual({ orgId: 'org-1', callId: 'call-1', personId: 'person-1', companyId: 'company-1', recording: true })
 
     act(() => result.current.reset())
     expect(result.current.activeCall).toBeNull()

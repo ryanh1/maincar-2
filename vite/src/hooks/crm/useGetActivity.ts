@@ -9,16 +9,27 @@ export type ActivityScope =
   | { personId: string }
   | { dealId: string }
 
+export interface GetActivityOptions {
+  sourceType?: string
+  limit?: number
+}
+
 /**
  * One record's activity feed (`GET /api/orgs/:orgId/activity`, MAI-140), scoped to
  * exactly one of company/person/deal. Page one only — the peek drawer's read-only
  * scaffold (MAI-167) doesn't scroll the feed yet.
  */
-export function useGetActivity(orgId: string | null | undefined, scope: ActivityScope | null) {
+export function useGetActivity(
+  orgId: string | null | undefined,
+  scope: ActivityScope | null,
+  options: GetActivityOptions = {},
+) {
   const params = scope ? new URLSearchParams(scope as Record<string, string>) : null
+  if (params && options.sourceType) params.set('sourceType', options.sourceType)
+  if (params && options.limit) params.set('limit', String(options.limit))
 
   return useQuery({
-    queryKey: queryKeys.activity.list(orgId ?? 'none', scope ?? {}, 1),
+    queryKey: queryKeys.activity.list(orgId ?? 'none', scope ?? {}, 1, options),
     enabled: !!orgId && !!scope,
     queryFn: () => jsonFetch<GetActivityResponse>(`/api/orgs/${orgId}/activity?${params!.toString()}`),
   })

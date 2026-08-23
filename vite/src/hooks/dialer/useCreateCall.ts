@@ -76,6 +76,8 @@ export function useCreateCall() {
         orgId: variables.orgId,
         callId: data.call.id,
         toE164: data.call.toE164,
+        personId: data.call.personId,
+        companyId: data.call.companyId,
         recording: data.call.recordingPlanned === true,
       })
       // Connect the Device with the row's id, so the voice webhook
@@ -104,6 +106,8 @@ export function useCreateCall() {
           orgId: variables.orgId,
           callId: call.id,
           toE164: call.toE164,
+          personId: call.personId,
+          companyId: call.companyId,
           recording: call.recordingPlanned === true,
         },
         call.status,

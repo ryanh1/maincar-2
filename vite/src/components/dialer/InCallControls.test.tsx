@@ -12,9 +12,10 @@ import { InCallControls } from './InCallControls'
  * shows for a given state, or which seam a press reaches, never the network or
  * the Voice SDK underneath it.
  */
-const { useDialerMock, useEndCallMock, muteCallMock, mutateMock, toastErrorMock } = vi.hoisted(() => ({
+const { useDialerMock, useEndCallMock, useGetActivityMock, muteCallMock, mutateMock, toastErrorMock } = vi.hoisted(() => ({
   useDialerMock: vi.fn(),
   useEndCallMock: vi.fn(),
+  useGetActivityMock: vi.fn(),
   muteCallMock: vi.fn(),
   mutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
@@ -25,6 +26,8 @@ vi.mock('@/components/dialer/dialerContext', async (importOriginal) => ({
   useDialer: useDialerMock,
 }))
 vi.mock('@/hooks/dialer', () => ({ useEndCall: useEndCallMock }))
+vi.mock('@/hooks/crm', () => ({ useGetActivity: useGetActivityMock }))
+vi.mock('@/providers/useAuth', () => ({ useAuth: () => ({ user: { timeZone: 'America/New_York' } }) }))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
 
 beforeEach(() => {
@@ -36,6 +39,23 @@ beforeEach(() => {
     muteCall: muteCallMock,
   })
   useEndCallMock.mockReturnValue({ mutate: mutateMock, isPending: false })
+  useGetActivityMock.mockReturnValue({
+    data: {
+      activity: [
+        {
+          id: 'activity-1', sourceType: 'call', sourceId: 'call-prior-1', summary: 'Completed call',
+          preview: 'Asked for a demo.', direction: 'outbound', occurredAt: '2026-08-23T15:00:00.000Z',
+          createdByUserId: 'user-1', companyId: 'company-1', personId: 'person-2', dealId: null,
+          createdAt: '2026-08-23T15:00:00.000Z',
+        },
+      ],
+      page: 1,
+      limit: 3,
+      hasMore: false,
+    },
+    isPending: false,
+    isError: false,
+  })
 })
 
 function renderControls(props: Partial<Parameters<typeof InCallControls>[0]> = {}) {
@@ -182,6 +202,32 @@ describe('InCallControls', () => {
 
     expect(screen.queryByRole('button', { name: 'Mute the call' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'End the call' })).toBeInTheDocument()
+  })
+
+  it('shows a linked company\'s prior calls only after the collapsed strip is expanded', () => {
+    renderControls({ companyId: 'company-1', companyName: 'Acme' })
+
+    const priorCalls = screen.getByRole('button', { name: 'Prior calls at Acme' })
+    expect(priorCalls).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Completed call')).not.toBeInTheDocument()
+    expect(useGetActivityMock).toHaveBeenCalledWith(
+      'org-1',
+      { companyId: 'company-1' },
+      { sourceType: 'call', limit: 3 },
+    )
+
+    fireEvent.click(priorCalls)
+
+    expect(priorCalls).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Completed call')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }))
+    expect(screen.getByText('Asked for a demo.')).toBeInTheDocument()
+  })
+
+  it('does not render a prior-call strip when the live call has no linked company', () => {
+    renderControls()
+
+    expect(screen.queryByRole('button', { name: /Prior calls at/ })).not.toBeInTheDocument()
   })
 
   it('gives every icon-only control a verb-and-object accessible name', () => {

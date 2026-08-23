@@ -40,7 +40,13 @@ vi.mock('@/dependencies/twilioVoice', () => ({
   // `function`, not an arrow, so `new Device(token)` in DialerProvider works —
   // an arrow function cannot be a constructor.
   Device: vi.fn(function Device() {
-    return { connect: deviceConnectMock, updateToken: vi.fn(), destroy: vi.fn(), on: vi.fn() }
+    return {
+      connect: deviceConnectMock,
+      updateToken: vi.fn(),
+      destroy: vi.fn(),
+      on: vi.fn(),
+      register: vi.fn().mockResolvedValue(undefined),
+    }
   }),
 }))
 
@@ -56,6 +62,8 @@ function queuedCall(id: string, status: Call['status'] = 'queued'): Call {
     toE164: '+12025550123',
     recordingPlanned: true,
     recordingReason: 'allowed',
+    personId: 'person-1',
+    companyId: 'company-1',
     twilioCallSid: null,
     createdAt: '2026-08-20T12:00:00.000Z',
   }
@@ -122,6 +130,8 @@ describe('useCreateCall', () => {
       orgId: 'org-1',
       callId: 'call-1',
       toE164: '+12025550123',
+      personId: 'person-1',
+      companyId: 'company-1',
       recording: true,
     })
   })
@@ -184,6 +194,8 @@ describe('useCreateCall', () => {
       orgId: 'org-1',
       callId: 'call-existing',
       toE164: '+12025550123',
+      personId: 'person-1',
+      companyId: 'company-1',
       recording: true,
     })
     expect(deviceConnectMock).not.toHaveBeenCalled()

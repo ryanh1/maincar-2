@@ -179,8 +179,8 @@ export const queryKeys = {
     // Keyed by org and the scope (companyId/personId/dealId): the feed route
     // accepts at most one spine scope, so the pair "which record" + "which
     // page" is the whole identity of a feed read.
-    list: (orgId: string, scope: Record<string, unknown>, page: number) =>
-      ['activity', orgId, scope, page] as const,
+    list: (orgId: string, scope: Record<string, unknown>, page: number, filters: object = {}) =>
+      ['activity', orgId, scope, page, filters] as const,
   },
   reports: {
     // Reports are scoped to an organization and may change from every lifecycle
