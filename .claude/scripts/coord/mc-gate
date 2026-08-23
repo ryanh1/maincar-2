@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
-# Runs the test gate while holding a global slot. The safe default is serial:
-# a full gate can otherwise saturate this machine and make tests flaky.
+# Runs bounded focused checks or a full delivery gate while holding a global
+# worker-budget slot. The M5 Pro defaults reserve six of eighteen CPU workers
+# for the OS, editor, containers, and other sessions.
 #
-#   mc-gate                       # run full gate (typecheck, lint, test, test:integration)
 #   mc-gate --classify            # print the scope decision and changed files, run nothing
-#   mc-gate npm test              # just that command, still queued
-#   MC_MAX_JOBS=2 mc-gate         # deliberately allow two runners
-#   MC_GATE_FULL=1 mc-gate        # force the full gate, ignore the classifier
+#   mc-gate --focused -- npm --prefix vite exec vitest run src/pages/Records.test.tsx
+#   mc-gate --delivery            # full verify; only this class can deliver
+#   MC_GATE_OVERRIDE=1 MC_GATE_DELIVERY_LIMIT=1 mc-gate --delivery
 #
-# SCOPE-AWARE GATE. With no arguments, mc-gate looks at what the diff actually
-# changed and runs only the checks that change could affect:
-#   docs-only   -> skip typecheck/lint/build/tests
-#   server-only -> skip the WEB test suite
-#   web-only    -> skip the SERVER test suite
-#   anything else (schema, deps, mixed, unknown path) -> the full gate
+# The class is explicit. `--focused` accepts only one named Vitest or Playwright
+# file, so an arbitrary shell command can never quietly borrow the focused lane.
 set -euo pipefail
 source "$(dirname "$0")/mc-common.sh"
 mc_assert_ticket_checkout || exit 2
@@ -34,52 +30,145 @@ if [ "${1:-}" = "--classify" ]; then
   exit 0
 fi
 
-MAX="${MC_MAX_JOBS:-1}"
-case "$MAX" in
-  ''|*[!0-9]*|0)
-    echo "[mc-gate] MC_MAX_JOBS must be a positive integer (got: $MAX)" >&2
+CLASS=""
+if [ "${1:-}" = "--focused" ]; then
+  CLASS="focused"
+  shift
+  if [ "${1:-}" != "--" ]; then
+    echo "[mc-gate] focused checks require '--' before the approved test command." >&2
     exit 2
-    ;;
-esac
+  fi
+  shift
+elif [ "${1:-}" = "--delivery" ]; then
+  CLASS="delivery"
+  shift
+  if [ "$#" -ne 0 ]; then
+    echo "[mc-gate] delivery does not accept a command; it always runs the full verification suite." >&2
+    exit 2
+  fi
+else
+  echo "[mc-gate] choose --focused or --delivery explicitly (or use --classify)." >&2
+  exit 2
+fi
+
+is_positive_integer() { case "$1" in ''|*[!0-9]*|0) return 1 ;; *) return 0 ;; esac; }
+is_nonnegative_integer() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+DEFAULT_MACHINE_WORKERS=18
+DEFAULT_RESERVED_SYSTEM_WORKERS=6
+DEFAULT_GLOBAL_WORKER_BUDGET=12
+DEFAULT_DELIVERY_LIMIT=2
+DEFAULT_VITEST_WORKERS=4
+DEFAULT_PLAYWRIGHT_WORKERS=2
+
+override=0
+if [ "${MC_GATE_OVERRIDE:-}" = "1" ]; then override=1; fi
+for setting in MC_GATE_MACHINE_WORKERS MC_GATE_RESERVED_SYSTEM_WORKERS MC_GATE_GLOBAL_WORKER_BUDGET MC_GATE_DELIVERY_LIMIT MC_GATE_VITEST_WORKERS MC_GATE_PLAYWRIGHT_WORKERS; do
+  if [ -n "${!setting:-}" ] && [ "$override" -ne 1 ]; then
+    echo "[mc-gate] $setting requires MC_GATE_OVERRIDE=1; defaults protect the shared M5 Pro budget." >&2
+    exit 2
+  fi
+done
+
+MACHINE_WORKERS="${MC_GATE_MACHINE_WORKERS:-$DEFAULT_MACHINE_WORKERS}"
+RESERVED_SYSTEM_WORKERS="${MC_GATE_RESERVED_SYSTEM_WORKERS:-$DEFAULT_RESERVED_SYSTEM_WORKERS}"
+GLOBAL_WORKER_BUDGET="${MC_GATE_GLOBAL_WORKER_BUDGET:-$DEFAULT_GLOBAL_WORKER_BUDGET}"
+DELIVERY_LIMIT="${MC_GATE_DELIVERY_LIMIT:-$DEFAULT_DELIVERY_LIMIT}"
+DELIVERY_VITEST_WORKERS="${MC_GATE_VITEST_WORKERS:-$DEFAULT_VITEST_WORKERS}"
+DELIVERY_PLAYWRIGHT_WORKERS="${MC_GATE_PLAYWRIGHT_WORKERS:-$DEFAULT_PLAYWRIGHT_WORKERS}"
+
+if ! is_positive_integer "$MACHINE_WORKERS" || ! is_nonnegative_integer "$RESERVED_SYSTEM_WORKERS" || ! is_positive_integer "$GLOBAL_WORKER_BUDGET" || ! is_positive_integer "$DELIVERY_LIMIT" || ! is_positive_integer "$DELIVERY_VITEST_WORKERS" || ! is_positive_integer "$DELIVERY_PLAYWRIGHT_WORKERS"; then
+  echo "[mc-gate] scheduler settings must be positive integers (reserve may be zero)." >&2
+  exit 2
+fi
+if [ "$RESERVED_SYSTEM_WORKERS" -ge "$MACHINE_WORKERS" ] || [ "$GLOBAL_WORKER_BUDGET" -gt $((MACHINE_WORKERS - RESERVED_SYSTEM_WORKERS)) ]; then
+  echo "[mc-gate] global worker budget must leave the configured system headroom." >&2
+  exit 2
+fi
+
+if [ "$CLASS" = "focused" ]; then
+  VITEST_WORKERS=1
+  PLAYWRIGHT_WORKERS=1
+  if [ "$#" -ne 7 ] || [ "$1" != "npm" ] || [ "$2" != "--prefix" ] || { [ "$3" != "server" ] && [ "$3" != "vite" ]; } || [ "$4" != "exec" ] || { [ "$5" != "vitest" ] && [ "$5" != "playwright" ]; }; then
+    echo "[mc-gate] focused checks must name one test file with: npm --prefix <server|vite> exec <vitest|playwright> <run|test> <file>." >&2
+    exit 2
+  fi
+  if { [ "$5" = "vitest" ] && [ "$6" != "run" ]; } || { [ "$5" = "playwright" ] && { [ "$3" != "vite" ] || [ "$6" != "test" ]; }; } || [[ "$7" != *.test.* && "$7" != *.spec.* ]]; then
+    echo "[mc-gate] focused checks must name one test file with: npm --prefix <server|vite> exec <vitest|playwright> <run|test> <file>." >&2
+    exit 2
+  fi
+  GATE_WORKERS=$((VITEST_WORKERS + PLAYWRIGHT_WORKERS))
+else
+  VITEST_WORKERS="$DELIVERY_VITEST_WORKERS"
+  PLAYWRIGHT_WORKERS="$DELIVERY_PLAYWRIGHT_WORKERS"
+  GATE_WORKERS=$((VITEST_WORKERS + PLAYWRIGHT_WORKERS))
+  if [ $((DELIVERY_LIMIT * GATE_WORKERS)) -gt "$GLOBAL_WORKER_BUDGET" ]; then
+    echo "[mc-gate] $DELIVERY_LIMIT delivery gates × $GATE_WORKERS framework workers exceeds global worker budget $GLOBAL_WORKER_BUDGET." >&2
+    exit 2
+  fi
+fi
+
+if [ "$override" -eq 1 ]; then
+  echo "[mc-gate] WARNING: manual scheduler override is active; this can reduce headroom or change queue capacity." >&2
+fi
+
 SEM="$STATE/locks/gate"
 mkdir -p "$SEM"
+
+reap_slots_and_measure() {
+  ACTIVE_WORKERS=0
+  ACTIVE_DELIVERIES=0
+  local d owner workers class
+  for d in "$SEM"/slot-*; do
+    [ -d "$d" ] || continue
+    owner=$(cat "$d/pid" 2>/dev/null || echo "")
+    if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then
+      rm -rf "$d"
+      continue
+    fi
+    workers=$(cat "$d/workers" 2>/dev/null || echo "")
+    class=$(cat "$d/class" 2>/dev/null || echo "unknown")
+    # Older mc-gate versions recorded only a PID. Treat a live legacy slot as
+    # the entire budget so a rollout never runs a new bounded gate beside an
+    # unbounded old full gate.
+    if ! is_positive_integer "$workers"; then
+      workers="$GLOBAL_WORKER_BUDGET"
+      class="delivery"
+    fi
+    ACTIVE_WORKERS=$((ACTIVE_WORKERS + workers))
+    if [ "$class" = "delivery" ]; then
+      ACTIVE_DELIVERIES=$((ACTIVE_DELIVERIES + 1))
+    fi
+  done
+}
 
 acquire() {
   local waited=0 timeout=3600
   while :; do
-    # Clear dead slots before choosing one. A serial runner must also wait for
-    # an active old multi-slot runner; otherwise a transition from the former
-    # default (four) could still run two gates at once.
-    local active_runner=0 d owner
-    for d in "$SEM"/slot-*; do
-      [ -d "$d" ] || continue
-      owner=$(cat "$d/pid" 2>/dev/null || echo "")
-      if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
-        rm -rf "$d"
-        continue
+    if mc_lock_acquire "$SEM/admission.lock" 15; then
+      reap_slots_and_measure
+      if { [ "$CLASS" != "delivery" ] || [ "$ACTIVE_DELIVERIES" -lt "$DELIVERY_LIMIT" ]; } && [ $((ACTIVE_WORKERS + GATE_WORKERS)) -le "$GLOBAL_WORKER_BUDGET" ]; then
+        SLOT_DIR="$SEM/slot-$$"
+        mkdir "$SLOT_DIR"
+        printf '%s\n' "$$" > "$SLOT_DIR/pid"
+        printf '%s\n' "$CLASS" > "$SLOT_DIR/class"
+        printf '%s\n' "$GATE_WORKERS" > "$SLOT_DIR/workers"
+        mc_lock_release "$SEM/admission.lock"
+        return 0
       fi
-      active_runner=1
-    done
-
-    if [ "$MAX" -ne 1 ] || [ "$active_runner" -eq 0 ]; then
-      for n in $(seq 1 "$MAX"); do
-        d="$SEM/slot-$n"
-        if mkdir "$d" 2>/dev/null; then echo $$ > "$d/pid"; SLOT_DIR="$d"; return 0; fi
-        owner=$(cat "$d/pid" 2>/dev/null || echo "")
-        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then rm -rf "$d"; fi
-      done
+      mc_lock_release "$SEM/admission.lock"
     fi
-    if [ "$waited" -eq 0 ]; then echo "[mc-gate] $MAX runners busy — queued. Waiting..."; fi
+    if [ "$waited" -eq 0 ]; then echo "[mc-gate] $CLASS lane is at capacity — queued (delivery limit $DELIVERY_LIMIT, worker budget $GLOBAL_WORKER_BUDGET)."; fi
     [ "$waited" -ge "$timeout" ] && { echo "[mc-gate] waited an hour, giving up" >&2; return 1; }
-    sleep 5; waited=$((waited+5))
+    sleep 1; waited=$((waited+1))
   done
 }
 
 SLOT_DIR=""
 acquire || { echo "[mc-gate] could not get a runner slot." >&2; exit 1; }
 trap '[ -n "$SLOT_DIR" ] && rm -rf "$SLOT_DIR"' EXIT
-echo "[mc-gate] running (slot $(basename "$SLOT_DIR"), limit $MAX)"
-mc_log "gate acquire $(basename "$SLOT_DIR")"
+echo "[mc-gate] running (class $CLASS, slot $(basename "$SLOT_DIR"), limit $DELIVERY_LIMIT, vitest=$VITEST_WORKERS, playwright=$PLAYWRIGHT_WORKERS, global budget=$GLOBAL_WORKER_BUDGET)"
+mc_log "gate acquire $(basename "$SLOT_DIR") class=$CLASS workers=$GATE_WORKERS"
 
 cd "$(mc_worktree)"
 
@@ -91,39 +180,13 @@ if ! mc_ensure_prisma_client; then
   exit 3
 fi
 
-# Decide the scope BEFORE running anything, and ONLY for the no-argument gate.
-SCOPE="full"
-if [ $# -eq 0 ] && [ -z "${MC_GATE_FULL:-}" ]; then
-  if cf="$(mc_changed_files)" && [ -n "$cf" ]; then
-    SCOPE="$(printf '%s\n' "$cf" | mc_classify_files)"
-  fi
-fi
-mc_log "gate scope=$SCOPE"
-
 # set +e around the run: with `set -e` a failing gate exits right here,
 # so rc= and the log line below never execute and events.tsv only ever records rc=0.
 set +e
-if [ $# -gt 0 ]; then
-  # Explicit command: run verbatim, still queued.
-  "$@"
-elif [ "$SCOPE" = "docs" ]; then
-  echo "[mc-gate] SCOPE=docs — only markdown/docs changed."
-  echo "[mc-gate] SKIPPING typecheck, lint, build, and tests."
-  echo "[mc-gate] (Force the full gate with: MC_GATE_FULL=1 mc-gate)"
-  exit 0
-elif [ "$SCOPE" = "server" ]; then
-  echo "[mc-gate] SCOPE=server — only server code changed. SKIPPING the WEB test suite."
-  echo "[mc-gate] (test:integration still runs — CLAUDE.md: 'not an extra')"
-  echo "[mc-gate] (Force the full gate with: MC_GATE_FULL=1 mc-gate)"
-  npm run typecheck && npm run lint && npm run build && npm run test:server && npm run test:integration
-elif [ "$SCOPE" = "web" ]; then
-  echo "[mc-gate] SCOPE=web — only web code changed. SKIPPING the SERVER test suite."
-  echo "[mc-gate] (test:integration still runs — CLAUDE.md: 'not an extra')"
-  echo "[mc-gate] (Force the full gate with: MC_GATE_FULL=1 mc-gate)"
-  npm run typecheck && npm run lint && npm run build && npm run test:web && npm run test:integration
+if [ "$CLASS" = "focused" ]; then
+  VITEST_MAX_WORKERS="$VITEST_WORKERS" PLAYWRIGHT_WORKERS="$PLAYWRIGHT_WORKERS" "$@"
 else
-  echo "[mc-gate] SCOPE=full — running every check."
-  npm run verify
+  VITEST_MAX_WORKERS="$VITEST_WORKERS" PLAYWRIGHT_WORKERS="$PLAYWRIGHT_WORKERS" npm run verify
 fi
 rc=$?
 set -e
