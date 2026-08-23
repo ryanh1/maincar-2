@@ -662,6 +662,18 @@ describe('POST /api/orgs/:orgId/people/:id/phones', () => {
     expect(call.create.isPrimary).toBe(false)
   })
 
+  it('appends a newly-added phone after the current highest position', async () => {
+    prismaMock.personPhone.findFirst.mockResolvedValue({ position: 2 })
+
+    const res = await request(app)
+      .post(`${URL_A}/p-1/phones`)
+      .set('Authorization', AUTH)
+      .send({ e164: '+12025550135', label: 'work' })
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.personPhone.upsert.mock.calls[0][0].create.position).toBe(3)
+  })
+
   it('does not overwrite a retained dead status on re-add (only sent fields)', async () => {
     const res = await request(app)
       .post(`${URL_A}/p-1/phones`)
@@ -716,10 +728,10 @@ describe('DELETE /api/orgs/:orgId/people/:id/phones/:phoneId', () => {
     expect(prismaMock.personPhone.deleteMany).toHaveBeenCalledWith({
       where: { id: 'ph-1', personId: 'p-1', orgId: ORG_A },
     })
-    // Reconcile promoted the survivor to primary.
-    expect(prismaMock.personPhone.updateMany).toHaveBeenCalledWith({
-      where: { personId: 'p-1', orgId: ORG_A, id: 'ph-2', isPrimary: false },
-      data: { isPrimary: true },
+    // Reconcile promotes the survivor and compacts it to the first dial position.
+    expect(prismaMock.personPhone.updateMany).toHaveBeenLastCalledWith({
+      where: { personId: 'p-1', orgId: ORG_A, id: 'ph-2' },
+      data: { isPrimary: true, position: 0 },
     })
   })
 

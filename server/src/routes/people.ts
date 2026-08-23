@@ -75,6 +75,7 @@ function mapPhoneToApi(phone: PersonPhone) {
     lineTypeCheckedAt: phone.lineTypeCheckedAt ? phone.lineTypeCheckedAt.toISOString() : null,
     source: phone.source,
     isPrimary: phone.isPrimary,
+    position: phone.position,
     timesDialed: phone.timesDialed,
     lastDialedAt: phone.lastDialedAt ? phone.lastDialedAt.toISOString() : null,
     timesConnected: phone.timesConnected,
@@ -349,6 +350,54 @@ export async function reconcilePrimary(
   })
 }
 
+/** The phone-specific companion to reconcilePrimary: it keeps the primary row
+ * first and every remaining row in one contiguous, durable position order. */
+export interface PhoneOrderDelegate {
+  findMany(args: {
+    where: { personId: string; orgId: string }
+    orderBy: Array<{ position: 'asc' } | { createdAt: 'asc' } | { id: 'asc' }>
+    select: { id: true; isPrimary: true; position: true }
+  }): Promise<Array<{ id: string; isPrimary: boolean; position: number }>>
+  updateMany(args: {
+    where: Record<string, unknown>
+    data: Record<string, unknown>
+  }): Promise<{ count: number }>
+}
+
+export async function reconcilePhoneOrder(
+  delegate: PhoneOrderDelegate,
+  personId: string,
+  orgId: string,
+  preferId?: string,
+): Promise<void> {
+  const rows = await delegate.findMany({
+    where: { personId, orgId },
+    orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    select: { id: true, isPrimary: true, position: true },
+  })
+  if (rows.length === 0) return
+
+  const primaryId =
+    (preferId && rows.some((row) => row.id === preferId) ? preferId : undefined) ??
+    rows.find((row) => row.isPrimary)?.id ??
+    rows[0].id
+  const ordered = [
+    rows.find((row) => row.id === primaryId)!,
+    ...rows.filter((row) => row.id !== primaryId),
+  ]
+
+  // Shift every row out of the target range before assigning contiguous positions.
+  // This makes a primary promotion safe under @@unique([personId, position]).
+  await delegate.updateMany({
+    where: { personId, orgId },
+    data: { position: { increment: rows.length } },
+  })
+  await Promise.all(ordered.map((row, position) => delegate.updateMany({
+    where: { id: row.id, personId, orgId },
+    data: { isPrimary: row.id === primaryId, position },
+  })))
+}
+
 // ============================================================
 // List input
 // ============================================================
@@ -557,7 +606,7 @@ router.post(
         },
       })
 
-      for (const p of phones) {
+      for (const [position, p] of phones.entries()) {
         await tx.personPhone.create({
           data: {
             orgId,
@@ -572,6 +621,7 @@ router.post(
             lineType: p.lineType,
             source: p.source,
             isPrimary: p.isPrimary ?? false,
+            position,
             bestTimeToCall: p.bestTimeToCall,
           },
         })
@@ -608,7 +658,7 @@ router.post(
             select: { id: true },
           }))?.id
         : undefined
-      await reconcilePrimary(tx.personPhone as unknown as PrimaryDelegate, person.id, orgId, preferPhoneId)
+      await reconcilePhoneOrder(tx.personPhone as unknown as PhoneOrderDelegate, person.id, orgId, preferPhoneId)
       await reconcilePrimary(tx.personEmail as unknown as PrimaryDelegate, person.id, orgId, preferEmailId)
 
       const created = await tx.person.findFirstOrThrow({
@@ -898,6 +948,11 @@ router.post(
     if ('bestTimeToCall' in raw) updateData.bestTimeToCall = body.bestTimeToCall ?? null
 
     const phone = await prisma.$transaction(async (tx) => {
+      const lastPhone = await tx.personPhone.findFirst({
+        where: { personId, orgId },
+        orderBy: { position: 'desc' },
+        select: { position: true },
+      })
       const upserted = await tx.personPhone.upsert({
         where: { personId_e164: { personId, e164 } },
         create: {
@@ -913,13 +968,14 @@ router.post(
           lineType: body.lineType,
           source: body.source,
           isPrimary: false, // set by reconcile below, so the invariant is one code path
+          position: (lastPhone?.position ?? -1) + 1,
           bestTimeToCall: body.bestTimeToCall,
         },
         update: updateData,
       })
       // Prefer this row for primary only when the caller explicitly asked.
       const preferId = body.isPrimary ? upserted.id : undefined
-      await reconcilePrimary(tx.personPhone as unknown as PrimaryDelegate, personId, orgId, preferId)
+      await reconcilePhoneOrder(tx.personPhone as unknown as PhoneOrderDelegate, personId, orgId, preferId)
       return tx.personPhone.findFirstOrThrow({ where: { id: upserted.id, orgId } })
     })
 
@@ -1001,7 +1057,7 @@ router.patch(
       // If the caller set this row primary, prefer it; if they set it false while
       // it was the only primary, reconcile still guarantees one primary remains.
       const preferId = body.isPrimary === true ? phoneId : undefined
-      await reconcilePrimary(tx.personPhone as unknown as PrimaryDelegate, personId, orgId, preferId)
+      await reconcilePhoneOrder(tx.personPhone as unknown as PhoneOrderDelegate, personId, orgId, preferId)
       return tx.personPhone.findFirstOrThrow({ where: { id: phoneId, orgId } })
     }).catch((error: unknown) => {
       if (typeof error === 'object' && error !== null && 'httpDuplicate' in error) {
@@ -1043,7 +1099,7 @@ router.delete(
       const result = await tx.personPhone.deleteMany({ where: { id: phoneId, personId, orgId } })
       if (result.count === 0) return false
       // The deleted row may have been the primary; promote the oldest remaining.
-      await reconcilePrimary(tx.personPhone as unknown as PrimaryDelegate, personId, orgId)
+      await reconcilePhoneOrder(tx.personPhone as unknown as PhoneOrderDelegate, personId, orgId)
       return true
     })
     if (!deleted) {

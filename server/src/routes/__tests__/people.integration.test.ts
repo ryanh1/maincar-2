@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import type { PrismaClient } from '../../generated/prisma/client.js'
 import { createTestPrisma, seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
-import { reconcilePrimary, normalizeE164, type PrimaryDelegate } from '../people.js'
+import { reconcilePhoneOrder, normalizeE164, type PhoneOrderDelegate } from '../people.js'
 
 describe('Person primary invariant + idempotency (integration, real Postgres)', () => {
   let prisma: PrismaClient
@@ -37,13 +37,14 @@ describe('Person primary invariant + idempotency (integration, real Postgres)', 
     e164: string,
     opts: { prefer?: boolean; createdAt?: Date } = {},
   ): Promise<string> {
+    const position = await prisma.personPhone.count({ where: { orgId, personId } })
     const created = await prisma.personPhone.upsert({
       where: { personId_e164: { personId, e164: normalizeE164(e164) } },
-      create: { orgId, personId, e164: normalizeE164(e164), isPrimary: false, ...(opts.createdAt ? { createdAt: opts.createdAt } : {}) },
+      create: { orgId, personId, e164: normalizeE164(e164), isPrimary: false, position, ...(opts.createdAt ? { createdAt: opts.createdAt } : {}) },
       update: {},
     })
-    await reconcilePrimary(
-      prisma.personPhone as unknown as PrimaryDelegate,
+    await reconcilePhoneOrder(
+      prisma.personPhone as unknown as PhoneOrderDelegate,
       personId,
       orgId,
       opts.prefer ? created.id : undefined,
@@ -68,6 +69,7 @@ describe('Person primary invariant + idempotency (integration, real Postgres)', 
     // Exactly one primary, and the first one keeps it (no prefer given).
     expect(primaries).toHaveLength(1)
     expect(primaries[0].id).toBe(first)
+    expect((await prisma.personPhone.findMany({ where: { orgId: org.orgId, personId }, orderBy: { position: 'asc' } })).map((phone) => phone.position)).toEqual([0, 1])
   })
 
   it('promotes a requested phone to primary and demotes the former one', async () => {
@@ -97,14 +99,15 @@ describe('Person primary invariant + idempotency (integration, real Postgres)', 
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
     })
     // Make the newest the primary explicitly.
-    await reconcilePrimary(prisma.personPhone as unknown as PrimaryDelegate, personId, org.orgId, primary)
+    await reconcilePhoneOrder(prisma.personPhone as unknown as PhoneOrderDelegate, personId, org.orgId, primary)
 
     // Delete the primary, then reconcile — the route's delete path.
     await prisma.personPhone.deleteMany({ where: { id: primary, personId, orgId: org.orgId } })
-    await reconcilePrimary(prisma.personPhone as unknown as PrimaryDelegate, personId, org.orgId)
+    await reconcilePhoneOrder(prisma.personPhone as unknown as PhoneOrderDelegate, personId, org.orgId)
 
     const primaries = await primaryPhones(org.orgId, personId)
     expect(primaries.map((p) => p.id)).toEqual([older])
+    expect((await prisma.personPhone.findMany({ where: { orgId: org.orgId, personId } }))[0].position).toBe(0)
   })
 
   it('leaves zero primaries when the last phone is deleted', async () => {
@@ -113,7 +116,7 @@ describe('Person primary invariant + idempotency (integration, real Postgres)', 
 
     const only = await addPhone(org.orgId, personId, '+12025550001')
     await prisma.personPhone.deleteMany({ where: { id: only, personId, orgId: org.orgId } })
-    await reconcilePrimary(prisma.personPhone as unknown as PrimaryDelegate, personId, org.orgId)
+    await reconcilePhoneOrder(prisma.personPhone as unknown as PhoneOrderDelegate, personId, org.orgId)
 
     expect(await primaryPhones(org.orgId, personId)).toHaveLength(0)
   })
@@ -143,13 +146,13 @@ describe('Person primary invariant + idempotency (integration, real Postgres)', 
     const personId = await seedPerson(org.orgId)
 
     await prisma.personPhone.create({
-      data: { orgId: org.orgId, personId, e164: '+12025550001', isPrimary: true, createdAt: new Date('2026-01-01T00:00:00.000Z') },
+      data: { orgId: org.orgId, personId, e164: '+12025550001', isPrimary: true, position: 0, createdAt: new Date('2026-01-01T00:00:00.000Z') },
     })
     await prisma.personPhone.create({
-      data: { orgId: org.orgId, personId, e164: '+12025550002', isPrimary: true, createdAt: new Date('2026-02-01T00:00:00.000Z') },
+      data: { orgId: org.orgId, personId, e164: '+12025550002', isPrimary: true, position: 1, createdAt: new Date('2026-02-01T00:00:00.000Z') },
     })
 
-    await reconcilePrimary(prisma.personPhone as unknown as PrimaryDelegate, personId, org.orgId)
+    await reconcilePhoneOrder(prisma.personPhone as unknown as PhoneOrderDelegate, personId, org.orgId)
 
     const primaries = await primaryPhones(org.orgId, personId)
     expect(primaries).toHaveLength(1)

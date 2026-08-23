@@ -1697,6 +1697,8 @@ model PersonPhone {
 
   source    String? // manual | import | enrichment | inbound_call | ai_call
   isPrimary Boolean @default(false) // app-enforced: at most one true per person (§5.11)
+  // A durable, contiguous per-person dial order. The primary row is position 0.
+  position  Int     @default(0)
 
   // Dial-order signals — cheap rollups written by the dialer; bestTimeToCall is a
   // nightly job (PHASE 2). Freshness is derived from lastDialedAt, not stored.
@@ -1712,6 +1714,7 @@ model PersonPhone {
   updatedAt DateTime @updatedAt
 
   @@unique([personId, e164]) // re-adding the same number is idempotent
+  @@unique([personId, position])
   @@index([orgId])
   @@index([orgId, e164])
   @@index([orgId, status])
