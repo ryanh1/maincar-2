@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
-import { Route, Routes } from 'react-router-dom'
+import { Route, Routes, useLocation } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 
@@ -18,6 +18,7 @@ const {
   useSaveViewMock,
   useSetDefaultViewMock,
   useUpdateViewMock,
+  toastErrorMock,
 } = vi.hoisted(() => ({
   useDeleteViewMock: vi.fn(),
   useDuplicateViewMock: vi.fn(),
@@ -29,6 +30,7 @@ const {
   useSaveViewMock: vi.fn(),
   useSetDefaultViewMock: vi.fn(),
   useUpdateViewMock: vi.fn(),
+  toastErrorMock: vi.fn(),
 }))
 const recordGridMock = vi.hoisted(() => vi.fn())
 
@@ -50,6 +52,10 @@ vi.mock('@/hooks/savedViews', () => ({
   useSaveView: useSaveViewMock,
   useSetDefaultView: useSetDefaultViewMock,
   useUpdateView: useUpdateViewMock,
+}))
+
+vi.mock('sonner', () => ({
+  toast: { error: toastErrorMock },
 }))
 
 vi.mock('@/components/crm/RecordGrid', () => ({
@@ -92,10 +98,15 @@ function object(overrides: Record<string, unknown> = {}) {
 function renderRecords(path: string) {
   return renderWithProviders(
     <Routes>
-      <Route path="/records/:slug" element={<Records />} />
+      <Route path="/records/:slug" element={<><Records /><LocationProbe /></>} />
     </Routes>,
     { initialEntries: [path] },
   )
+}
+
+function LocationProbe() {
+  const location = useLocation()
+  return <output aria-label="Current route">{location.pathname}{location.search}</output>
 }
 
 describe('Records', () => {
@@ -201,5 +212,61 @@ describe('Records', () => {
 
     expect(screen.getByText('kanban')).toBeInTheDocument()
     await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org-1', viewId: 'view-1', layout: 'kanban' })))
+  })
+
+  it('falls back to the object default when a bookmarked view is no longer visible', async () => {
+    const person = object()
+    const defaultView = {
+      id: 'default', objectId: 'person', name: 'Default people', layout: 'grid' as const,
+      config: createViewConfig([]), ownerUserId: 'user-1', isShared: false, isDefault: true, sortOrder: 0,
+      createdAt: '', updatedAt: '',
+    }
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetViewsMock.mockReturnValue({ data: { views: [defaultView] }, isPending: false, isError: false, isSuccess: true, refetch: vi.fn() })
+
+    renderRecords('/records/person?viewId=made-personal')
+
+    expect(screen.getByRole('combobox', { name: 'Saved view' })).toHaveTextContent('Default people')
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith('This saved view is no longer available. Showing the default view for this organization.'))
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('/records/person')
+  })
+
+  it('writes the selected saved view to the URL so it can be reopened', async () => {
+    const user = userEvent.setup()
+    const person = object()
+    const defaultView = { id: 'default', objectId: 'person', name: 'Default people', layout: 'grid' as const, config: createViewConfig([]), ownerUserId: 'user-1', isShared: false, isDefault: true, sortOrder: 0, createdAt: '', updatedAt: '' }
+    const sharedView = { ...defaultView, id: 'team', name: 'Team pipeline', isShared: true, isDefault: false }
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetViewsMock.mockReturnValue({ data: { views: [defaultView, sharedView] }, isPending: false, isError: false, isSuccess: true, refetch: vi.fn() })
+
+    renderRecords('/records/person')
+
+    await user.click(screen.getByRole('combobox', { name: 'Saved view' }))
+    await user.click(screen.getByRole('option', { name: 'Team pipeline' }))
+
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('/records/person?viewId=team')
+  })
+
+  it('keeps a newly saved view selected until the refreshed switcher includes it', async () => {
+    const user = userEvent.setup()
+    const attribute = { id: 'name', objectId: 'person', slug: 'name', name: 'Name', description: null, icon: null, type: 'text', optionsJson: null, refObjectId: null, formatJson: null, validationJson: null, isIdentity: true, storage: 'column', isMulti: false, isRequired: false, isUnique: false, isReadOnly: false, isSystem: true, defaultJson: null, sortOrder: 0, isArchived: false, createdAt: '', updatedAt: '' }
+    const person = object({ attributes: [attribute] })
+    const savedView = { id: 'saved', objectId: 'person', name: 'My new view', layout: 'grid' as const, config: createViewConfig([attribute]), ownerUserId: 'user-1', isShared: false, isDefault: false, sortOrder: 0, createdAt: '', updatedAt: '' }
+    const save = vi.fn().mockResolvedValue({ view: savedView })
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetViewsMock.mockReturnValue({ data: { views: [] }, isPending: false, isError: false, isSuccess: true, refetch: vi.fn() })
+    useSaveViewMock.mockReturnValue({ isPending: false, mutateAsync: save })
+
+    renderRecords('/records/person')
+
+    await user.click(screen.getByRole('button', { name: 'Change sort' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(save).toHaveBeenCalledOnce())
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('viewId=saved')
+    expect(toastErrorMock).not.toHaveBeenCalled()
   })
 })

@@ -551,6 +551,7 @@ test('manages a saved view without changing its records', async ({ page }) => {
     }
     return route.fallback()
   })
+  await page.route('**/api/orgs/org-fixture/cell-styles**', (route) => route.fulfill({ json: { styles: [] } }))
 
   await page.goto('/__fixtures/records/company')
   await page.getByRole('combobox', { name: 'Saved view' }).click()
@@ -563,8 +564,9 @@ test('manages a saved view without changing its records', async ({ page }) => {
   await expect.poll(() => requests).toContainEqual(expect.objectContaining({ method: 'PATCH', path: '/api/orgs/org-fixture/saved-views/personal', body: { name: 'Q3 prospects' } }))
 
   await page.getByRole('button', { name: 'Show actions for Q3 prospects view' }).click()
-  await page.getByRole('menuitem', { name: 'Share with everyone' }).click()
-  await page.getByRole('button', { name: 'Share view' }).click()
+  await page.getByRole('menuitem', { name: 'Share with workspace' }).click()
+  await expect(page.getByRole('alertdialog')).toContainText("Members of this organization can find this in this object's view switcher. This does not create a public link.")
+  await page.getByRole('button', { name: 'Share with workspace' }).click()
   await expect.poll(() => requests).toContainEqual(expect.objectContaining({ method: 'PATCH', path: '/api/orgs/org-fixture/saved-views/personal', body: { isShared: true } }))
 
   await page.getByRole('button', { name: 'Show actions for Q3 prospects view' }).click()
