@@ -60,6 +60,8 @@ other stacks on this machine (loadwire, maincar, lita, bari).
 | `npm run docker:down`    | Stop them (data is kept — it lives in a named volume)      |
 | `npm run firebase:dev`   | Just the Firebase emulators                                |
 | `npm run firebase:save`  | Checkpoint the emulator's accounts right now               |
+| `npm run gh-to-mirror`   | Copy the newest GitHub `main` into the local bare mirror    |
+| `npm run mirror-to-main` | Safely refresh the normal checkout, packages, and database |
 
 ## The public tunnel
 

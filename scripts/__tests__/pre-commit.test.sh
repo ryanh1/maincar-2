@@ -46,8 +46,8 @@ run_hook() {
   )
 }
 
-# Full test commands must never be called here. They belong only to
-# `mc-gate --delivery`, which applies the shared delivery-lane worker budget.
+# Full test commands must never be called here. They run once on a combined
+# committed tree through `mc-train` and the shared scheduler.
 run_hook > "$SANDBOX/hook.out" 2>&1 || fail 'the hook blocked a clean docs-only commit'
 [ "$(cat "$REPO/.git/VERIFY_STATUS")" = 'green' ] ||
   fail 'the hook did not record a green static-check verdict'
@@ -68,8 +68,9 @@ grep -Fq 'COMMIT BLOCKED — server typecheck failed' "$SANDBOX/ours.out" ||
   fail 'the hook did not report an attributable typecheck failure'
 
 # Rebase replays a commit but does not run pre-commit. Its prepare hook must
-# keep the receipt that came from the original commit, rather than append a
-# false unverified trailer. This reproduces the delivery workflow exactly.
+# keep the verdict from the original commit rather than append a false
+# unverified trailer. This remains a hook invariant even though train delivery
+# merges immutable heads instead of requiring each session to rebase.
 REBASE_REPO="$SANDBOX/rebase-repo"
 git init "$REBASE_REPO" --quiet
 git -C "$REBASE_REPO" config user.name 'Hook test'

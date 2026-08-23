@@ -6,18 +6,9 @@ paths:
 
 # Where tests live, and what every feature ships with
 
-> Moved out of the always-loaded CLAUDE.md so it loads only when you
-> touch code that needs it. Same authority as CLAUDE.md. Do not duplicate it back.
-
-- **New features ship with tests.** Routes (valid/invalid/edge), components
-  (interaction, loading, error). Mock external services.
-- **Where tests live.** Server tests go in `server/src/__tests__/`, mirroring the folder they
-  cover (`server/src/routes/__tests__/auth.test.ts` for `server/src/routes/auth.ts`). Client tests sit beside the file they cover
-  (`SomeComponent.test.tsx` next to `SomeComponent.tsx`); shared render helpers and mocks live
-  in `vite/src/test/utils`.
-- **Coordination gates.** During development, run exactly one named test through
-  `./.claude/scripts/coord/mc-gate --focused -- npm --prefix <server|vite> exec vitest run path/to/file.test.ts`.
-  After committing and rebasing onto current `origin/main`, run
-  `./.claude/scripts/coord/mc-gate --delivery`. It records the exact verified
-  branch-head/main pair required by `mc-merge`; the focused lane never
-  substitutes for the full gate or guesses broad-command intent.
+- **New features ship with tests.** Routes cover valid, invalid, and edge behavior. Components cover interaction, loading, and error behavior. Mock external services.
+- **Server tests** mirror source paths under `server/src/__tests__/` or the neighboring `__tests__` folder already used by that area.
+- **Client tests** sit beside the file they cover; shared render helpers and mocks live in `vite/src/test/utils`.
+- **Focused development checks** use one named Vitest file through `mc-gate --focused`. Playwright is never accepted or reserved by the coordination gate.
+- **Delivery tests** run on the combined train tree, not once per waiting session. Enqueue records focused tests and coverage intent; the train selects low, normal, or high verification and records exactly what ran.
+- **Browser journeys** remain required for visible behavior, but they are manual/runtime verification and never part of this local delivery gate.

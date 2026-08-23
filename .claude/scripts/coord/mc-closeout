@@ -23,7 +23,7 @@ fi
 
 receipt="$STATE/deliveries/$issue.tsv"
 if [ ! -f "$receipt" ]; then
-  echo "mc-closeout: no post-push delivery receipt for $issue. Use mc-merge first." >&2
+  echo "mc-closeout: no post-push delivery receipt for $issue. Deliver its ready head through mc-train first." >&2
   exit 1
 fi
 if [ -e "$worktree" ]; then
