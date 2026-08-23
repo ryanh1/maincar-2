@@ -42,14 +42,6 @@ The `linear-execute-issue` skill is your workflow for taking an issue from Linea
 
 Use this skill whenever you're working on an existing Linear issue.
 
-## Gate classes
-
-Use `mc-gate --focused -- npm --prefix <server|vite> exec vitest run path/to/file.test.ts`
-only for one named test during development. The command is intentionally strict:
-broad or arbitrary commands cannot claim the focused lane. Before committing,
-use `mc-gate --delivery`; `mc-merge --gate` invokes that same delivery class
-after its locked rebase. Focused checks never satisfy pre-commit or delivery.
-
 ## Branch Naming
 
 Create a branch for each issue using the issue key:

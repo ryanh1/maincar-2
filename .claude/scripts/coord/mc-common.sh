@@ -306,32 +306,16 @@ mc_title_overlap() { # <title-a> <title-b> -> prints integer percent 0..100
 # --- atomic lock via mkdir, with stale reaping by pid ---
 # mc_lock_acquire <lockdir> <timeout-seconds>  -> 0 ok, 1 timeout
 mc_lock_acquire() {
-  local dir="$1" timeout="${2:-300}" waited=0 owner
+  local dir="$1" timeout="${2:-300}" waited=0
   while :; do
-    # Let a live creator finish recording its PID before deciding an empty
-    # directory came from an interrupted creator. Checking before mkdir avoids
-    # repeatedly touching the directory while a contender is inspecting it.
-    if [ -d "$dir" ] && [ ! -s "$dir/pid" ]; then
-      sleep 1
-      if [ -d "$dir" ] && [ ! -s "$dir/pid" ]; then
-        rm -rf "$dir" 2>/dev/null
-        continue
-      fi
-    fi
     if mkdir "$dir" 2>/dev/null; then echo $$ > "$dir/pid"; return 0; fi
     # Reap a lock whose owner died.
-    owner=$(cat "$dir/pid" 2>/dev/null || echo "")
+    local owner; owner=$(cat "$dir/pid" 2>/dev/null || echo "")
     if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
       rm -rf "$dir" 2>/dev/null; continue
     fi
-    # If an interrupted process died between mkdir and writing its PID, the old
-    # code waited until timeout forever. The pre-mkdir check above gives a live
-    # creator a moment to finish before recovering an empty directory.
-    if [ -z "$owner" ]; then
-      continue
-    fi
     [ "$waited" -ge "$timeout" ] && return 1
-    sleep 1; waited=$((waited+1))
+    sleep 2; waited=$((waited+2))
   done
 }
 mc_lock_release() { rm -rf "$1" 2>/dev/null; }

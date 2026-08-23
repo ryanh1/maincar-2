@@ -50,17 +50,17 @@ eval "$(./.claude/scripts/coord/mc-slot --env)"
 # Now your shell has: API_PORT, VITE_PORT, FB_AUTH_PORT, etc.
 ```
 
-### 3. Run a bounded test lane
+### 3. Run tests with the queue
 
 ```bash
-./.claude/scripts/coord/mc-gate --focused -- npm --prefix vite exec vitest run src/pages/Records.test.tsx
-# Runs one named test with one Vitest and one Playwright worker available.
+./.claude/scripts/coord/mc-gate
+# Runs: typecheck, lint, build, test, test:integration
+# Queues if 4+ are already running
 ```
 
-Before committing or delivering, run the full delivery class:
+Or run specific tests:
 ```bash
-./.claude/scripts/coord/mc-gate --delivery
-# Runs the complete verify suite. At most two delivery gates run at once.
+./.claude/scripts/coord/mc-gate npm run test:server
 ```
 
 ### 4. Merge safely
@@ -94,7 +94,7 @@ Before committing or delivering, run the full delivery class:
 | `mc-common.sh` | Shared toolbox (lock, log, local-mirror sync) | Never run directly; sourced by others |
 | `mc-local-main` | Creates/refreshes the local bare `main` mirror; `refresh` also safely updates the runnable primary checkout and changed dependencies | Before creating ticket clones; use `refresh` after a dependency-changing delivery |
 | `mc-slot` | Assigns stable ports for your worktree | `eval "$(mc-slot --env)"` at the start |
-| `mc-gate` | Runs explicit focused or full delivery lanes under a bounded worker scheduler | During development and before every merge |
+| `mc-gate` | Runs tests with a serial queue by default | Before every merge |
 | `mc-merge` | Merges your branch safely, with a lock | When work is done and tests pass |
 | `mc-closeout` | Proves GitHub delivery and clone cleanup | Immediately before Linear Done |
 | `mc-migrate` | Creates non-colliding database migrations | When you need a new migration |
@@ -121,11 +121,10 @@ git checkout -b mai-123-feature
 git add file.ts
 git commit -m "MAI-123: Feature description"
 
-# Run one named test while implementing, then the full delivery gate.
-./.claude/scripts/coord/mc-gate --focused -- npm --prefix vite exec vitest run src/pages/Records.test.tsx
-./.claude/scripts/coord/mc-gate --delivery
-# [mc-gate] running (class delivery, slot slot-..., limit 2, vitest=4, playwright=2, global budget=12)
-# ... full verify runs ...
+# Run tests (queued if needed)
+./.claude/scripts/coord/mc-gate
+# [mc-gate] running (slot 1, limit 1)
+# ... typecheck, lint, build, tests run ...
 
 # If tests pass, merge
 ./.claude/scripts/coord/mc-merge --gate -m "MAI-123: Feature description"
@@ -134,55 +133,43 @@ git commit -m "MAI-123: Feature description"
 # [mc-merge] merged and pushed. mai-123-feature is on main.
 ```
 
-**Example: Two delivery gates run in parallel**
+**Example: Two sessions use the queue**
 
 ```
 Session A (MAI-123):
   mc-slot → slot 0 (API 3010, VITE 5183)
-  mc-gate --delivery → delivery slot 1 (6 framework workers)
+  mc-gate → slot 1 (test runner 1)
   mc-gate → done
   mc-merge → gets lock, merges, releases lock
 
 Session B (MAI-124):
   mc-slot → slot 1 (API 3020, VITE 5184)
-  mc-gate --delivery → delivery slot 2 (6 framework workers)
-  mc-gate → done
+  mc-gate → waits for Session A's test runner
+  mc-gate → slot 1 after Session A finishes
   mc-merge → waits for lock (Session A holds it)
            → gets lock after Session A releases it
            → merges
 ```
 
-No port collisions, no test thrashing, no clobbered merges. The default budget
-reserves six of eighteen M5 Pro workers for the system, allowing two delivery
-gates with four Vitest and two Playwright workers each. A third delivery gate
-queues until capacity returns.
+No port collisions, no test thrashing, no clobbered merges. Full gates run
+serially by default because their parallel workers can already saturate a
+development machine.
 
 ## Configuration
 
-### Explicit manual scheduler override
+### Limit the number of test runners
 
 ```bash
-MC_GATE_OVERRIDE=1 MC_GATE_DELIVERY_LIMIT=1 ./.claude/scripts/coord/mc-gate --delivery
-# Emits a warning and deliberately reduces delivery concurrency for an exceptional case.
+MC_MAX_JOBS=2 mc-gate
+# Deliberately allow 2 tests at a time (default is 1)
 ```
 
-The protected defaults are `MC_GATE_MACHINE_WORKERS=18`,
-`MC_GATE_RESERVED_SYSTEM_WORKERS=6`, `MC_GATE_GLOBAL_WORKER_BUDGET=12`,
-`MC_GATE_DELIVERY_LIMIT=2`, `MC_GATE_VITEST_WORKERS=4`, and
-`MC_GATE_PLAYWRIGHT_WORKERS=2`. To change any of them, set
-`MC_GATE_OVERRIDE=1`; invalid budgets (including a delivery total beyond the
-global budget) are rejected. The warning is intentional: overrides are for
-exceptional situations, never routine development.
-
-### Focused checks
+### Force full gate (skip scope detection)
 
 ```bash
-./.claude/scripts/coord/mc-gate --focused -- npm --prefix server exec vitest run src/routes/__tests__/auth.test.ts
+MC_GATE_FULL=1 mc-gate
+# Runs typecheck/lint/build/tests even if only docs changed
 ```
-
-Focused checks must be one named Vitest or Playwright test file in `server/` or
-`vite/`; a broad suite or arbitrary shell command is refused. They are bounded
-development feedback, not an alternative to the delivery requirement.
 
 ### Use a different database container
 
@@ -202,8 +189,7 @@ MC_STATE_HOME=~/my-coord-state mc-slot
 → Another session is stuck. Run `mc-doctor` to see who holds it.
 
 **"mc-gate FAILED rc=X"**
-→ Re-run the same named test through `--focused` to debug. Do not reclassify a
-broad suite as focused; delivery gates stay full by design.
+→ Run the failing check locally to debug (tests under load fail at random without the queue).
 
 **"Could not create throwaway database"**
 → Docker or Postgres is not running. Run `npm run docker:up`.
@@ -215,8 +201,8 @@ broad suite as focused; delivery gates stay full by design.
 
 The coordination scripts are not optional for a feature branch's closeout:
 
-1. Run a named focused test during implementation, then
-   `./.claude/scripts/coord/mc-gate --delivery` before committing.
+1. Run focused tests during implementation, then `MC_GATE_FULL=1
+   ./.claude/scripts/coord/mc-gate` before committing.
 2. Commit the feature with its tests.
 3. Run `./.claude/scripts/coord/mc-merge --gate -m "MAI-123: ..."`; it is the
    only supported merge-and-push route to `main`.
