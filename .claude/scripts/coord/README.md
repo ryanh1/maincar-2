@@ -21,16 +21,18 @@ We use clones, not Git worktrees. A clone has its own Git data and files, so one
 ## Start an issue
 
 ```bash
-npm run gh-to-mirror
-cd ~/code/maincar-2-worktrees
-git clone ~/code/maincar-2-coord/local-main.git mai-123-short-title
-cd mai-123-short-title
+cd ~/Documents/Coding/My\ Projects/maincar-2
+./.claude/scripts/coord/mc-clone ~/code/maincar-2-worktrees/mai-123-short-title
+cd ~/code/maincar-2-worktrees/mai-123-short-title
 git checkout -b <Linear gitBranchName exactly>
 eval "$(./.claude/scripts/coord/mc-slot --env)"
 npm run hooks:install
 ```
 
-Use one clone per issue. Never edit or commit in the normal `maincar-2` folder.
+`mc-clone` syncs the local mirror and copies the primary checkout's ignored `.env`
+into the new clone. The clone owns that file: it is not a symlink and later primary
+environment changes do not modify it. Use one clone per issue. Never edit or commit
+in the normal `maincar-2` folder.
 
 ## Develop with focused tests
 
@@ -131,6 +133,7 @@ Move Linear to Done only after `LINEAR_DONE_ALLOWED` prints.
 | Script | Purpose |
 | --- | --- |
 | `mc-common.sh` | Shared locks, mirror, safe primary refresh, small delivery record |
+| `mc-clone` | Create an issue clone with an independent local `.env` copy |
 | `mc-local-main` | GitHub → mirror sync and explicit mirror → primary refresh |
 | `mc-slot` | Stable per-clone ports |
 | `mc-gate` | Three-job check scheduler with one or two test workers per job |
