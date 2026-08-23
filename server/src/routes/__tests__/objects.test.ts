@@ -23,8 +23,12 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
       deleteMany: vi.fn(),
     },
     attributeDef: { findMany: vi.fn() },
-    fieldHistory: { findMany: vi.fn() },
-    record: { count: vi.fn() },
+    fieldHistory: { findMany: vi.fn(), createMany: vi.fn() },
+    record: { count: vi.fn(), findFirst: vi.fn(), updateMany: vi.fn() },
+    person: { findFirst: vi.fn(), updateMany: vi.fn() },
+    company: { findFirst: vi.fn(), updateMany: vi.fn() },
+    deal: { findFirst: vi.fn(), updateMany: vi.fn() },
+    $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
 }))
@@ -99,6 +103,27 @@ function objectRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function attributeRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'attr-name',
+    orgId: ORG_A,
+    objectId: 'obj-1',
+    slug: 'name',
+    name: 'Name',
+    type: 'text',
+    storage: 'custom',
+    isMulti: false,
+    isReadOnly: false,
+    isRequired: false,
+    isUnique: false,
+    optionsJson: null,
+    validationJson: null,
+    isArchived: false,
+    deletedAt: null,
+    ...overrides,
+  }
+}
+
 function authAs(membership: ReturnType<typeof membershipRow> | null = membershipRow()): void {
   verifyTokenMock.mockResolvedValue({ uid: 'uid-a', email: 'a@orga.com' })
   prismaMock.user.findUnique.mockResolvedValue(userRow())
@@ -107,7 +132,7 @@ function authAs(membership: ReturnType<typeof membershipRow> | null = membership
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   authAs()
   prismaMock.objectDef.findFirst.mockResolvedValue(null)
   prismaMock.objectDef.findMany.mockResolvedValue([objectRow()])
@@ -115,8 +140,132 @@ beforeEach(() => {
   prismaMock.objectDef.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.attributeDef.findMany.mockResolvedValue([])
   prismaMock.fieldHistory.findMany.mockResolvedValue([])
+  prismaMock.fieldHistory.createMany.mockResolvedValue({ count: 1 })
   prismaMock.record.count.mockResolvedValue(0)
+  prismaMock.record.findFirst.mockResolvedValue(null)
+  prismaMock.record.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.person.findFirst.mockResolvedValue(null)
+  prismaMock.person.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.company.findFirst.mockResolvedValue(null)
+  prismaMock.company.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.deal.findFirst.mockResolvedValue(null)
+  prismaMock.deal.updateMany.mockResolvedValue({ count: 1 })
+  prismaMock.$transaction.mockImplementation(async (fn: (tx: typeof prismaMock) => unknown) => fn(prismaMock))
   prismaMock.$queryRaw.mockResolvedValue([])
+})
+
+// ============================================================
+// POST — bulk editField (MAI-451)
+// ============================================================
+describe('POST /api/orgs/:orgId/objects/:id/bulk — editField', () => {
+  it('writes a record-backed field and its old/new FieldHistory row together', async () => {
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(objectRow())
+    prismaMock.attributeDef.findMany.mockResolvedValueOnce([attributeRow()])
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([{ id: 'record-1', createdAt: NOW, updatedAt: NOW, valuesJson: { name: 'Before' }, __sortKey0: 'record-1' }])
+      .mockResolvedValueOnce([{ count: '1' }])
+    prismaMock.record.findFirst.mockResolvedValueOnce({
+      id: 'record-1', orgId: ORG_A, objectId: 'obj-1', deletedAt: null, valuesJson: { name: 'Before' },
+    })
+
+    const res = await request(app)
+      .post(`${URL_A}/obj-1/bulk`)
+      .set('Authorization', AUTH)
+      .send({ selection: { mode: 'ids', ids: ['record-1'] }, action: { type: 'editField', attribute: 'name', value: 'After' } })
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ affectedCount: 1 })
+    expect(prismaMock.record.updateMany).toHaveBeenCalledWith({
+      where: { id: 'record-1', orgId: ORG_A, objectId: 'obj-1', deletedAt: null },
+      data: { valuesJson: { name: 'After' } },
+    })
+    expect(prismaMock.fieldHistory.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({
+        orgId: ORG_A,
+        objectSlug: 'project',
+        recordId: 'record-1',
+        attribute: 'name',
+        oldJson: 'Before',
+        newJson: 'After',
+        changedByUserId: 'user-a',
+      })],
+    })
+  })
+
+  it('writes a table-backed field through updateMany and records its old/new history', async () => {
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(objectRow({ id: 'obj-person', slug: 'person', storage: 'table' }))
+    prismaMock.attributeDef.findMany.mockResolvedValueOnce([attributeRow({ objectId: 'obj-person', slug: 'title', name: 'Title', storage: 'column' })])
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([{ id: 'person-1', createdAt: NOW, updatedAt: NOW, title: 'Before', customJson: {}, __sortKey0: 'person-1' }])
+      .mockResolvedValueOnce([{ count: '1' }])
+
+    const res = await request(app)
+      .post(`${URL_A}/obj-person/bulk`)
+      .set('Authorization', AUTH)
+      .send({ selection: { mode: 'ids', ids: ['person-1'] }, action: { type: 'editField', attribute: 'title', value: 'After' } })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.person.updateMany).toHaveBeenCalledWith({
+      where: { id: 'person-1', orgId: ORG_A, deletedAt: null },
+      data: { title: 'After' },
+    })
+    expect(prismaMock.fieldHistory.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ attribute: 'title', oldJson: 'Before', newJson: 'After' })],
+    })
+  })
+
+  it.each([
+    ['missing', attributeRow({ slug: 'other' }), 'Unknown field'],
+    ['read-only', attributeRow({ isReadOnly: true }), 'read-only'],
+    ['list-backed', attributeRow({ storage: 'list' }), 'list'],
+    ['wrong type', attributeRow({ type: 'number' }), 'must be a number'],
+  ])('422s a %s field edit before selecting or writing rows', async (_case, attribute, error) => {
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(objectRow())
+    prismaMock.attributeDef.findMany.mockResolvedValueOnce([attribute])
+
+    const res = await request(app)
+      .post(`${URL_A}/obj-1/bulk`)
+      .set('Authorization', AUTH)
+      .send({ selection: { mode: 'ids', ids: ['record-1'] }, action: { type: 'editField', attribute: 'name', value: 'not-a-number' } })
+
+    expect(res.status).toBe(422)
+    expect(res.body.error).toContain(error)
+    expect(prismaMock.record.updateMany).not.toHaveBeenCalled()
+    expect(prismaMock.$queryRaw).not.toHaveBeenCalled()
+  })
+
+  it('404s an explicit selected id outside the organization before any write', async () => {
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(objectRow())
+    prismaMock.attributeDef.findMany.mockResolvedValueOnce([attributeRow()])
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ count: '0' }])
+
+    const res = await request(app)
+      .post(`${URL_A}/obj-1/bulk`)
+      .set('Authorization', AUTH)
+      .send({ selection: { mode: 'ids', ids: ['record-in-other-org'] }, action: { type: 'editField', attribute: 'name', value: 'After' } })
+
+    expect(res.status).toBe(404)
+    expect(prismaMock.record.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('rejects edits above the inline 200-row ceiling before writing', async () => {
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(objectRow())
+    prismaMock.attributeDef.findMany.mockResolvedValueOnce([attributeRow()])
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([{ id: 'record-1', createdAt: NOW, updatedAt: NOW, valuesJson: {}, __sortKey0: 'record-1' }])
+      .mockResolvedValueOnce([{ count: '201' }])
+
+    const res = await request(app)
+      .post(`${URL_A}/obj-1/bulk`)
+      .set('Authorization', AUTH)
+      .send({ selection: { mode: 'ids', ids: ['record-1'] }, action: { type: 'editField', attribute: 'name', value: 'After' } })
+
+    expect(res.status).toBe(422)
+    expect(res.body.error).toContain('more than 200')
+    expect(prismaMock.record.updateMany).not.toHaveBeenCalled()
+  })
 })
 
 // ============================================================

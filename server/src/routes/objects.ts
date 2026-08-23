@@ -30,8 +30,9 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { getObjectSurfaceCapabilities } from '../crm/objectCapabilities.js'
-import { listFieldChangesInWindow } from '../crm/fieldHistory.js'
+import { diffFieldValues, listFieldChangesInWindow, recordFieldHistoryInTx } from '../crm/fieldHistory.js'
 import { isRecordGridCreateSupported, listRecords, ListQueryError, type ListQuery } from '../crm/recordList.js'
+import { checkValueShape } from '../crm/valuesValidator.js'
 import { Prisma } from '../generated/prisma/client.js'
 import type { ObjectDef, AttributeDef, PrismaClient } from '../generated/prisma/client.js'
 
@@ -190,6 +191,7 @@ const bulkSelectionSchema = z.discriminatedUnion('mode', [
 const bulkActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('delete') }).strict(),
   z.object({ type: z.literal('changeOwner'), ownerUserId: z.string().trim().min(1).nullable() }).strict(),
+  z.object({ type: z.literal('editField'), attribute: z.string().trim().min(1), value: z.unknown() }).strict(),
   z.object({ type: z.literal('addToList'), listId: z.string().trim().min(1) }).strict(),
   z.object({ type: z.literal('export') }).strict(),
 ])
@@ -199,6 +201,16 @@ const BULK_PAGE_SIZE = 500
 const MAX_BULK_EXPORT_ROWS = 10_000
 
 type BulkSelection = z.infer<typeof bulkSelectionSchema>
+
+type BulkTableModel = {
+  findFirst(args: { where: { id: string; orgId: string; deletedAt: null }; select: { customJson: true } }): Promise<{ customJson: unknown } | null>
+  updateMany(args: { where: { id: string; orgId: string; deletedAt: null }; data: Record<string, unknown> }): Promise<{ count: number }>
+}
+
+function bulkTableModel(tx: Prisma.TransactionClient, slug: string): BulkTableModel | null {
+  const models: Record<string, unknown> = { person: tx.person, company: tx.company, deal: tx.deal }
+  return (models[slug] as BulkTableModel | undefined) ?? null
+}
 
 /** Pages through a compact selection server-side, so a full filtered set never becomes a client-side id list. */
 async function* selectedRowPages(
@@ -568,6 +580,34 @@ router.post(
         }
       }
 
+      let editAttribute: AttributeDef | null = null
+      let editPages: { rows: Record<string, unknown>[]; totalCount: number }[] | null = null
+      if (action.type === 'editField') {
+        const attribute = attributes.find((candidate) => candidate.slug === action.attribute)
+        if (!attribute) return void res.status(422).json({ error: `Unknown field: ${action.attribute}.` })
+        if (attribute.isReadOnly) return void res.status(422).json({ error: `${attribute.name} is read-only.` })
+        if (attribute.storage === 'list') return void res.status(422).json({ error: `${attribute.name} is stored on list entries and cannot be bulk edited.` })
+        const shapeError = checkValueShape(attribute, action.value)
+        if (shapeError) return void res.status(422).json({ error: shapeError })
+        if (object.storage === 'table' && !['person', 'company', 'deal'].includes(object.slug)) {
+          return void res.status(422).json({ error: `${object.name} does not support bulk field edits.` })
+        }
+
+        // The inline path is intentionally bounded. Resolve all pages before the
+        // first write so a mixed-org explicit selection cannot mutate a subset.
+        editPages = []
+        for await (const page of selectedRowPages(prisma, { orgId, object, attributes, selection })) {
+          if (page.totalCount > 200) {
+            return void res.status(422).json({ error: 'Bulk edits of more than 200 rows run in the background.' })
+          }
+          if (selection.mode === 'ids' && page.totalCount !== new Set(selection.ids).size) {
+            return void res.status(404).json({ error: 'One or more selected records were not found.' })
+          }
+          editPages.push(page)
+        }
+        editAttribute = attribute
+      }
+
       let destinationList: { id: string } | null = null
       if (action.type === 'addToList') {
         const list = await prisma.list.findFirst({ where: { id: action.listId, orgId, deletedAt: null } })
@@ -579,9 +619,9 @@ router.post(
       }
 
       let affectedCount = 0
-      for await (const page of selectedRowPages(prisma, { orgId, object, attributes, selection })) {
+      const processPage = async (page: { rows: Record<string, unknown>[] }) => {
         const recordIds = page.rows.map((row) => String(row.id))
-        if (recordIds.length === 0) continue
+        if (recordIds.length === 0) return
 
         if (action.type === 'delete') {
           const data = { deletedAt: new Date() }
@@ -625,6 +665,72 @@ router.post(
             skipDuplicates: true,
           })
           affectedCount += result.count
+        }
+        if (action.type === 'editField' && editAttribute) {
+          for (const row of page.rows) {
+            const recordId = String(row.id)
+            if (object.storage === 'record') {
+              const updatedCount = await prisma.$transaction(async (tx) => {
+                const existing = await tx.record.findFirst({ where: { id: recordId, orgId, objectId: object.id, deletedAt: null } })
+                if (!existing) return 0
+                const before = (existing.valuesJson ?? {}) as Record<string, unknown>
+                const after = { ...before, [editAttribute!.slug]: action.value }
+                const result = await tx.record.updateMany({
+                  where: { id: recordId, orgId, objectId: object.id, deletedAt: null },
+                  data: { valuesJson: after as Prisma.InputJsonValue },
+                })
+                if (result.count === 0) return 0
+                await recordFieldHistoryInTx(tx, {
+                  orgId,
+                  objectSlug: object.slug,
+                  recordId,
+                  changes: diffFieldValues(before, after, { only: [editAttribute!.slug], mode: 'full' }),
+                  changedByUserId: userId,
+                  attributes: [editAttribute!],
+                })
+                return result.count
+              })
+              affectedCount += updatedCount
+              continue
+            }
+
+            const updatedCount = await prisma.$transaction(async (tx) => {
+              const model = bulkTableModel(tx, object.slug)
+              if (!model) return 0
+              const where = { id: recordId, orgId, deletedAt: null }
+              const existing = editAttribute!.storage === 'custom'
+                ? await model.findFirst({ where, select: { customJson: true } })
+                : null
+              if (editAttribute!.storage === 'custom' && !existing) return 0
+              const before = editAttribute!.storage === 'custom'
+                ? ((existing!.customJson ?? {}) as Record<string, unknown>)
+                : { [editAttribute!.slug]: row[editAttribute!.slug] }
+              const after = { ...before, [editAttribute!.slug]: action.value }
+              const data = editAttribute!.storage === 'custom'
+                ? { customJson: after }
+                : { [editAttribute!.slug]: action.value }
+              const result = await model.updateMany({ where, data })
+              if (result.count === 0) return 0
+              await recordFieldHistoryInTx(tx, {
+                orgId,
+                objectSlug: object.slug,
+                recordId,
+                changes: diffFieldValues(before, after, { only: [editAttribute!.slug], mode: 'full' }),
+                changedByUserId: userId,
+                attributes: [editAttribute!],
+              })
+              return result.count
+            })
+            affectedCount += updatedCount
+          }
+        }
+      }
+
+      if (editPages) {
+        for (const page of editPages) await processPage(page)
+      } else {
+        for await (const page of selectedRowPages(prisma, { orgId, object, attributes, selection })) {
+          await processPage(page)
         }
       }
 
