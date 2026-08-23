@@ -13,6 +13,8 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { SavedView } from '@/hooks/savedViews'
 
+import { Records_SavedViewControls_Menu } from './Records_SavedViewControls_Menu'
+
 const DEFAULT_VIEW_ID = '__default__'
 
 interface RecordsSavedViewControlsProps {
@@ -23,6 +25,13 @@ interface RecordsSavedViewControlsProps {
   onSelectView: (viewId: string | null) => void
   onSave: () => void
   onReset: () => void
+  onRename: (name: string) => void | Promise<void>
+  onDuplicate: () => void | Promise<void>
+  onDelete: () => void | Promise<void>
+  onRestore: () => void | Promise<void>
+  onVisibilityChange: (isShared: boolean) => void | Promise<void>
+  onSetDefault: () => void | Promise<void>
+  onReorder: (viewIds: string[]) => void | Promise<void>
 }
 
 /** Saved-view selection and persistence controls for the record grid toolbar. */
@@ -34,8 +43,15 @@ export function Records_SavedViewControls({
   onSelectView,
   onSave,
   onReset,
+  onRename,
+  onDuplicate,
+  onDelete,
+  onRestore,
+  onVisibilityChange,
+  onSetDefault,
+  onReorder,
 }: RecordsSavedViewControlsProps) {
-  const selectedView = views.find((view) => view.id === selectedViewId)
+  const selectedView = views.find((view) => view.id === selectedViewId) ?? null
 
   return (
     <div className="flex items-center gap-1">
@@ -49,6 +65,19 @@ export function Records_SavedViewControls({
         </SelectContent>
       </Select>
 
+      <Records_SavedViewControls_Menu
+        view={selectedView}
+        views={views}
+        disabled={isSaving}
+        onRename={onRename}
+        onDuplicate={onDuplicate}
+        onDelete={onDelete}
+        onRestore={onRestore}
+        onVisibilityChange={onVisibilityChange}
+        onSetDefault={onSetDefault}
+        onReorder={onReorder}
+      />
+
       {hasUnsavedChanges && (
         <>
           {selectedView?.isShared ? (
@@ -59,7 +88,7 @@ export function Records_SavedViewControls({
               <AlertDialogContent size="sm">
                 <AlertDialogHeader>
                   <AlertDialogTitle>Save changes to this Shared view?</AlertDialogTitle>
-                  <AlertDialogDescription>Everyone with access sees your updates.</AlertDialogDescription>
+                  <AlertDialogDescription>This changes it for everyone.</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>

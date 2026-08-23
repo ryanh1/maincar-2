@@ -7,11 +7,25 @@ import type { ReactNode } from 'react'
 import { createViewConfig, type ViewConfig } from '@/components/crm/viewConfig'
 import { renderWithProviders } from '@/test/utils'
 
-const { useGetObjectMock, useGetObjectsMock, useGetViewsMock, useSaveViewMock, useUpdateViewMock } = vi.hoisted(() => ({
+const {
+  useDeleteViewMock,
+  useDuplicateViewMock,
+  useGetObjectMock,
+  useGetObjectsMock,
+  useGetViewsMock,
+  useRestoreViewMock,
+  useSaveViewMock,
+  useSetDefaultViewMock,
+  useUpdateViewMock,
+} = vi.hoisted(() => ({
+  useDeleteViewMock: vi.fn(),
+  useDuplicateViewMock: vi.fn(),
   useGetObjectMock: vi.fn(),
   useGetObjectsMock: vi.fn(),
   useGetViewsMock: vi.fn(),
+  useRestoreViewMock: vi.fn(),
   useSaveViewMock: vi.fn(),
+  useSetDefaultViewMock: vi.fn(),
   useUpdateViewMock: vi.fn(),
 }))
 const recordGridMock = vi.hoisted(() => vi.fn())
@@ -27,7 +41,11 @@ vi.mock('@/hooks/crm', () => ({
 
 vi.mock('@/hooks/savedViews', () => ({
   useGetViews: useGetViewsMock,
+  useDeleteView: useDeleteViewMock,
+  useDuplicateView: useDuplicateViewMock,
+  useRestoreView: useRestoreViewMock,
   useSaveView: useSaveViewMock,
+  useSetDefaultView: useSetDefaultViewMock,
   useUpdateView: useUpdateViewMock,
 }))
 
@@ -83,6 +101,10 @@ describe('Records', () => {
     useGetViewsMock.mockReturnValue({ data: { views: [] }, isPending: false, isError: false, refetch: vi.fn() })
     useSaveViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
     useUpdateViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
+    useDuplicateViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
+    useDeleteViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
+    useRestoreViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
+    useSetDefaultViewMock.mockReturnValue({ isPending: false, mutateAsync: vi.fn() })
   })
 
   it('sends the PageHeader New action to a grid that supports creation', async () => {
