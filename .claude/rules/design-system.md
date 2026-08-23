@@ -10,9 +10,7 @@ paths:
 
 ## Design system (do not deviate)
 
-The identity lives in [12c-brand-and-identity](docs/development-guidelines/12c-brand-and-identity.md)
-and the token mechanism in [16-theming-and-dark-mode](docs/development-guidelines/16-theming-and-dark-mode.md).
-This section is the enforceable subset. **Read it before building any screen.**
+This section is the enforceable subset of the design system. **Read it before building any screen.**
 
 **Benchmarks:** Attio for sizing, spacing, and overall feel. Google Sheets for the
 dense grid. shadcn/ui page templates for surface and border treatment. Airtable is a
