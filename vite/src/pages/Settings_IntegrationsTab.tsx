@@ -10,7 +10,7 @@ import {
   useGetIntegrations,
 } from '@/hooks/integrations'
 import type { ConnectMode, IntegrationCard, Provider } from '@/hooks/integrations'
-import { useUrlString } from '@/hooks/urlState'
+import { useWorkspaceUrlState } from '@/hooks/workspaceUrlState'
 import { ApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { useAuth } from '@/providers/useAuth'
@@ -54,7 +54,11 @@ export function Settings_IntegrationsTab() {
   const integrations = useGetIntegrations(orgId)
   const connect = useConnectIntegration()
   const queryClient = useQueryClient()
-  const [, setMailboxId] = useUrlString('mailbox')
+  const [, updateWorkspaceUrlState] = useWorkspaceUrlState()
+  const setMailboxId = (mailboxId: string) => updateWorkspaceUrlState((current) => ({
+    ...current,
+    ...(mailboxId ? { selectedRecordId: mailboxId } : { selectedRecordId: undefined }),
+  }))
 
   // Which provider's popup is open, so exactly that provider's card reads busy. `null`
   // when no consent is in flight.

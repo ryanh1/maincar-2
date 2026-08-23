@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
 import {
@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import { useUrlString } from '@/hooks/urlState'
+import { useWorkspaceUrlState } from '@/hooks/workspaceUrlState'
 import {
   useDisconnectMailbox,
   useGetMailboxes,
@@ -27,8 +27,8 @@ import type { Mailbox } from '@/lib/mailboxTypes'
 import { ApiError } from '@/lib/api'
 import { formatDateTime } from '@/lib/datetime'
 
-// Per-mailbox settings, deep-linkable via `?mailbox=<id>` (SPEC-int-mailboxes.md AC 7,
-// IH-30). Open state lives in the URL through `useUrlString`, never `useState`, so a
+// Per-mailbox settings are deep-linkable through the safe workspace URL codec (SPEC-int-mailboxes.md AC 7,
+// IH-30). Open state lives in the URL through `useWorkspaceUrlState`, never `useState`, so a
 // shared link opens straight on that mailbox. No sync toggle, import-past-messages
 // control, or automation switch lives here: maincar-2 has no pipeline behind any of the
 // three, and a live-looking control with nothing behind it is what CLAUDE.md forbids.
@@ -39,16 +39,23 @@ interface DrawerProps {
   timeZone: string | null | undefined
 }
 
-/** Reads `?mailbox=<id>` and renders that mailbox's settings, or nothing if it names none. */
+/** Reads the selected opaque record id and renders that mailbox's settings, or nothing if it names none. */
 export function Settings_Integrations_MailboxDrawer({ orgId, timeZone }: DrawerProps) {
-  const [mailboxId, setMailboxId] = useUrlString('mailbox')
+  const [workspaceUrlState, updateWorkspaceUrlState] = useWorkspaceUrlState()
+  const mailboxId = workspaceUrlState.selectedRecordId ?? ''
+  const setMailboxId = useCallback((nextMailboxId: string) => {
+    updateWorkspaceUrlState((current) => ({
+      ...current,
+      ...(nextMailboxId ? { selectedRecordId: nextMailboxId } : { selectedRecordId: undefined }),
+    }))
+  }, [updateWorkspaceUrlState])
   const mailboxes = useGetMailboxes(orgId)
 
   const mailbox = mailboxId
     ? mailboxes.data?.mailboxes.find((candidate) => candidate.id === mailboxId)
     : undefined
 
-  // A `?mailbox=` id that no longer exists (disconnected elsewhere, or simply wrong)
+  // A selected record id that no longer exists (disconnected elsewhere, or simply wrong)
   // closes the drawer instead of rendering an empty one — only once the list has
   // actually loaded, so a fresh deep link isn't closed before its data arrives.
   useEffect(() => {

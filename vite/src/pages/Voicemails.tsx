@@ -1,12 +1,13 @@
 import { Search, Voicemail } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useState } from 'react'
 
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useGetVoicemails } from '@/hooks/voicemails'
-import { useSetUrlParams, useUrlInt, useUrlString } from '@/hooks/urlState'
+import { useUrlInt } from '@/hooks/urlState'
 import { formatDateTime } from '@/lib/datetime'
 import { formatElapsed } from '@/lib/duration'
 import type { VoicemailListItem } from '@/lib/voicemailTypes'
@@ -17,8 +18,7 @@ const PAGE_SIZE = 25
 /** The shared inbox for received voicemails, pageable and searchable by caller. */
 export function Voicemails() {
   const { user, org } = useAuth()
-  const setUrlParams = useSetUrlParams()
-  const [search] = useUrlString('q', '')
+  const [search, setSearch] = useState('')
   const [page, setPage] = useUrlInt('page', 1)
   const query = useGetVoicemails(org?.id, {
     page,
@@ -46,7 +46,7 @@ export function Voicemails() {
             placeholder="Search by caller number"
             aria-label="Search voicemails by caller number"
             value={search}
-            onChange={(event) => setUrlParams({ q: event.target.value, page: null })}
+            onChange={(event) => { setSearch(event.target.value); setPage(1) }}
           />
         </div>
 

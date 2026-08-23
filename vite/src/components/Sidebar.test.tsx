@@ -166,7 +166,7 @@ describe('Sidebar broken-connection badge', () => {
     })
     expect(badge).toHaveTextContent('2')
     // Clicking it lands on the Integrations tab, not the default Settings tab.
-    expect(badge).toHaveAttribute('href', '/settings?tab=integrations')
+    expect(badge).toHaveAttribute('href', '/settings/integrations')
   })
 
   it('names the problem in the accessible label, never a bare number', async () => {

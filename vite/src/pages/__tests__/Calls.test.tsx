@@ -127,9 +127,11 @@ describe('the calls list', () => {
     expect(screen.getByText('No calls yet. Place one from the dialer.')).toBeInTheDocument()
   })
 
-  it('tells the searcher how to recover when a search matches nothing', () => {
+  it('tells the searcher how to recover when a search matches nothing', async () => {
     useGetCallsMock.mockReturnValue(listState({ data: callsResponse({ calls: [], total: 0 }) }))
-    renderWithProviders(<Calls />, { initialEntries: ['/calls?q=999'] })
+    const user = userEvent.setup()
+    renderWithProviders(<Calls />)
+    await user.type(screen.getByLabelText('Search calls by number'), '999')
 
     expect(
       screen.getByText('No call matches this number. Clear the search to see them all.'),
@@ -138,7 +140,7 @@ describe('the calls list', () => {
 })
 
 describe('URL state', () => {
-  it('asks the SERVER for the page, sort, dir, and search read from the URL', () => {
+  it('asks the SERVER for safe page, sort, and direction state while ignoring a literal search', () => {
     renderWithProviders(<Calls />, {
       initialEntries: ['/calls?q=201&sort=toE164&dir=asc&page=3'],
     })
@@ -148,7 +150,7 @@ describe('URL state', () => {
       limit: 25,
       sort: 'toE164',
       dir: 'asc',
-      q: '201',
+      q: undefined,
     })
   })
 
@@ -164,10 +166,10 @@ describe('URL state', () => {
     })
   })
 
-  it('restores the search box from the URL on reload', () => {
+  it('does not restore a literal search from the URL on reload', () => {
     renderWithProviders(<Calls />, { initialEntries: ['/calls?q=555'] })
 
-    expect(screen.getByLabelText('Search calls by number')).toHaveValue('555')
+    expect(screen.getByLabelText('Search calls by number')).toHaveValue('')
   })
 
   it('a header click sorts, and a second click flips the direction', async () => {
@@ -197,9 +199,10 @@ describe('URL state', () => {
     expect(screen.queryByRole('button', { name: 'Sort by Transcript' })).not.toBeInTheDocument()
   })
 
-  it('shows a Clear button only while a search is active, and clearing drops q', async () => {
+  it('shows a Clear button only while a search is active, and clearing resets the local query', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<Calls />, { initialEntries: ['/calls?q=555&page=2'] })
+    renderWithProviders(<Calls />, { initialEntries: ['/calls?page=2'] })
+    await user.type(screen.getByLabelText('Search calls by number'), '555')
 
     await user.click(screen.getByRole('button', { name: 'Clear' }))
     await waitFor(() =>

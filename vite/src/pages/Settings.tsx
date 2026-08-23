@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react'
+import { Navigate, NavLink, useLocation, useParams } from 'react-router-dom'
 import {
   Building2,
   FileText,
@@ -14,7 +15,7 @@ import {
 } from 'lucide-react'
 
 import { Separator } from '@/components/ui/separator'
-import { useUrlString } from '@/hooks/urlState'
+import { legacySettingsPath, settingsPath, type SettingsSection } from '@/lib/workspaceUrlState'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
 
@@ -30,18 +31,7 @@ import { Settings_VoicemailGreetingTab } from './Settings_VoicemailGreetingTab'
 import { Settings_DispositionsTab } from './Settings_DispositionsTab'
 import { Settings_TeamsTab } from './Settings_TeamsTab'
 
-type TabId =
-  | 'profile'
-  | 'organization'
-  | 'members'
-  | 'teams'
-  | 'numbers'
-  | 'call-recordings'
-  | 'dispositions'
-  | 'voicemail-greeting'
-  | 'email-templates'
-  | 'signatures'
-  | 'integrations'
+type TabId = SettingsSection
 
 interface TabDef {
   id: TabId
@@ -95,7 +85,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
  */
 export function Settings() {
   const { org, isAdmin } = useAuth()
-  const [tabParam, setTabParam] = useUrlString('tab', 'profile')
+  const { section } = useParams<{ section: string }>()
 
   const visibleTabs = TABS.filter((tab) => {
     if (tab.needsOrg && !org) return false
@@ -103,8 +93,10 @@ export function Settings() {
     return true
   })
 
-  const activeTab: TabId = visibleTabs.find((tab) => tab.id === tabParam)?.id ?? 'profile'
+  const activeTab: TabId = visibleTabs.find((tab) => tab.id === section)?.id ?? 'profile'
   const ActiveTabContent = TAB_CONTENT[activeTab]
+
+  if (section !== undefined && section !== activeTab) return <Navigate to={settingsPath(activeTab)} replace />
 
   return (
     // Wide enough for the Members table (Loadwire's settings shell is the same
@@ -121,11 +113,10 @@ export function Settings() {
             const Icon = tab.icon
             const isActive = activeTab === tab.id
             return (
-              <button
+              <NavLink
                 key={tab.id}
-                type="button"
                 aria-current={isActive ? 'page' : undefined}
-                onClick={() => setTabParam(tab.id)}
+                to={settingsPath(tab.id)}
                 className={cn(
                   'flex items-center gap-3 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition-colors',
                   isActive
@@ -135,7 +126,7 @@ export function Settings() {
               >
                 <Icon size={16} />
                 {tab.label}
-              </button>
+              </NavLink>
             )
           })}
         </nav>
@@ -146,4 +137,10 @@ export function Settings() {
       </div>
     </div>
   )
+}
+
+/** Drops legacy query parameters while preserving the requested Settings section. */
+export function SettingsLegacyRedirect() {
+  const { search } = useLocation()
+  return <Navigate to={legacySettingsPath(new URLSearchParams(search).get('tab'))} replace />
 }

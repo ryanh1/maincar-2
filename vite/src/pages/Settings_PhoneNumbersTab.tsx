@@ -43,8 +43,8 @@ const COLUMNS: { label: string; sort: SortColumn | null; className?: string }[] 
  * Each row also carries the one action that stops the org paying for a number:
  * releasing it. That lives in Settings_PhoneNumbers_Row, behind a confirm.
  *
- * Search, sort, and page all live in the query string and run on the server, so
- * a reload or a pasted link restores the same bounded view.
+ * Sort and page remain navigable URL state. Search text stays ephemeral so a
+ * copied link never exposes a phone number.
  */
 export function Settings_PhoneNumbersTab() {
   const { org, user, isAdmin } = useAuth()
@@ -61,7 +61,7 @@ export function Settings_PhoneNumbersTab() {
       : !isAdmin
 
   const setUrlParams = useSetUrlParams()
-  const [search] = useUrlString('q', '')
+  const [search, setSearch] = useState('')
   const [sort] = useUrlString('sort', 'createdAt')
   const [dir] = useUrlString('dir', 'desc')
   const [page, setPage] = useUrlInt('page', 1)
@@ -151,12 +151,12 @@ export function Settings_PhoneNumbersTab() {
               placeholder="Search by number"
               aria-label="Search phone numbers"
               value={search}
-              onChange={(event) => setUrlParams({ q: event.target.value, page: null })}
+              onChange={(event) => { setSearch(event.target.value); setPage(1) }}
             />
           </div>
 
           {hasSearch && (
-            <Button variant="ghost" size="sm" onClick={() => setUrlParams({ q: null, page: null })}>
+            <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setPage(1) }}>
               <X size={16} aria-hidden />
               Clear
             </Button>

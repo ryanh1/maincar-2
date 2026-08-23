@@ -34,6 +34,6 @@ describe('KeyboardProvider', () => {
     await user.keyboard('{Meta>}k{/Meta}')
     await user.click(screen.getByRole('option', { name: 'Phone numbers' }))
 
-    expect(screen.getByText('/settings?tab=numbers')).toBeInTheDocument()
+    expect(screen.getByText('/settings/numbers')).toBeInTheDocument()
   })
 })

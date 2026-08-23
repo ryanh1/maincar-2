@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { Route, Routes } from 'react-router-dom'
 
 import { renderWithProviders } from '@/test/utils'
 
@@ -25,6 +26,15 @@ function mockAuth(overrides: Record<string, unknown> = {}) {
   useAuthMock.mockReturnValue({ org: ORG, isAdmin: true, ...overrides })
 }
 
+function renderSettings(initialEntry = '/settings/profile') {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/settings/:section" element={<Settings />} />
+    </Routes>,
+    { initialEntries: [initialEntry] },
+  )
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mockAuth()
@@ -32,18 +42,18 @@ beforeEach(() => {
 
 describe('Settings', () => {
   it('shows Profile, Organization, and Members to an admin, defaulting to Profile', () => {
-    renderWithProviders(<Settings />)
+    renderSettings()
 
-    expect(screen.getByRole('button', { name: 'Profile' })).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('button', { name: 'Organization' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Members' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Profile' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Organization' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Members' })).toBeInTheDocument()
     expect(screen.getByText('profile tab content')).toBeInTheDocument()
   })
 
   it('adds Call recordings without reintroducing Devices as a standalone Settings destination', () => {
-    renderWithProviders(<Settings />)
+    renderSettings()
 
-    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+    expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual([
       'Profile',
       'Organization',
       'Members',
@@ -56,21 +66,21 @@ describe('Settings', () => {
       'Signatures',
       'Integrations',
     ])
-    expect(screen.queryByRole('button', { name: 'Devices' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Devices' })).not.toBeInTheDocument()
   })
 
   it('switches tabs on click and updates the URL', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<Settings />)
+    renderSettings()
 
-    await user.click(screen.getByRole('button', { name: 'Organization' }))
+    await user.click(screen.getByRole('link', { name: 'Organization' }))
 
     expect(screen.getByText('organization tab content')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Organization' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Organization' })).toHaveAttribute('aria-current', 'page')
   })
 
   it('opens directly on the tab named in the URL', () => {
-    renderWithProviders(<Settings />, { initialEntries: ['/settings?tab=members'] })
+    renderSettings('/settings/members')
 
     expect(screen.getByText('members tab content')).toBeInTheDocument()
   })
@@ -78,17 +88,17 @@ describe('Settings', () => {
   it('hides Members from a non-admin of the active org', () => {
     mockAuth({ isAdmin: false })
 
-    renderWithProviders(<Settings />)
+    renderSettings()
 
-    expect(screen.getByRole('button', { name: 'Profile' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Organization' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Profile' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Organization' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Members' })).not.toBeInTheDocument()
   })
 
-  it('falls back to Profile when the URL names a tab hidden from this user', () => {
+  it('falls back to Profile when the path names a section hidden from this user', () => {
     mockAuth({ isAdmin: false })
 
-    renderWithProviders(<Settings />, { initialEntries: ['/settings?tab=members'] })
+    renderSettings('/settings/members')
 
     expect(screen.getByText('profile tab content')).toBeInTheDocument()
   })
@@ -96,10 +106,10 @@ describe('Settings', () => {
   it('hides Organization and Members for a user with no active org', () => {
     mockAuth({ org: null })
 
-    renderWithProviders(<Settings />)
+    renderSettings()
 
-    expect(screen.getByRole('button', { name: 'Profile' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Organization' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Profile' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Organization' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Members' })).not.toBeInTheDocument()
   })
 })

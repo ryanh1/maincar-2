@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
 
+import { useWorkspaceUrlState } from '@/hooks/workspaceUrlState'
 import type { AttributeDef } from '@/lib/crmTypes'
+import type { WorkspaceViewConfig } from '@/lib/workspaceUrlState'
 
 export type ViewSort = {
   attributeId: string
@@ -95,13 +96,6 @@ export type RecordListQuery = {
   teamScope?: TeamScope
 }
 
-type SharedViewConfig = {
-  version: 1
-  sorts: ViewSort[]
-  teamScope?: TeamScope
-  changeHighlight?: ChangeHighlightConfig
-}
-
 const EMPTY_CONFIG: Omit<ViewConfig, 'columns'> = {
   sorts: [],
   groupBy: [],
@@ -182,49 +176,6 @@ function parseTeamScope(value: unknown): TeamScope | undefined {
     : undefined
 }
 
-function parseChangeHighlight(value: unknown): ChangeHighlightConfig | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const source = value as { mode?: unknown; days?: unknown; onlyChangedRows?: unknown }
-  if (
-    (source.mode !== 'off' && source.mode !== 'on') ||
-    typeof source.days !== 'number' || !Number.isInteger(source.days) || source.days < 1 || source.days > 365 ||
-    typeof source.onlyChangedRows !== 'boolean'
-  ) return undefined
-  return { mode: source.mode, days: source.days, onlyChangedRows: source.onlyChangedRows }
-}
-
-function decodeSharedConfig(encoded: string | null, attributes: AttributeDef[]): SharedViewConfig | null {
-  if (!encoded) return null
-
-  try {
-    const parsed: unknown = JSON.parse(atob(encoded))
-    if (typeof parsed !== 'object' || parsed === null || (parsed as { version?: unknown }).version !== 1) return null
-    const knownIds = new Set(attributes.map((attribute) => attribute.id))
-    const sorts = Array.isArray((parsed as { sorts?: unknown }).sorts)
-      ? (parsed as { sorts: unknown[] }).sorts.filter((sort) => isViewSort(sort, knownIds))
-      : []
-    const teamScope = parseTeamScope((parsed as { teamScope?: unknown }).teamScope)
-    const changeHighlight = parseChangeHighlight((parsed as { changeHighlight?: unknown }).changeHighlight)
-    return { version: 1, sorts, ...(teamScope ? { teamScope } : {}), ...(changeHighlight ? { changeHighlight } : {}) }
-  } catch {
-    return null
-  }
-}
-
-function encodeSharedConfig(config: ViewConfig): string | null {
-  const teamScope = parseTeamScope(config.teamScope)
-  const changeHighlight = parseChangeHighlight(config.changeHighlight)
-  const hasChangeHighlight = changeHighlight?.mode === 'on' || changeHighlight?.onlyChangedRows === true || changeHighlight?.days !== 7
-  if (config.sorts.length === 0 && !teamScope && !hasChangeHighlight) return null
-  const shared: SharedViewConfig = {
-    version: 1,
-    sorts: config.sorts,
-    ...(teamScope ? { teamScope } : {}),
-    ...(hasChangeHighlight && changeHighlight ? { changeHighlight } : {}),
-  }
-  return btoa(JSON.stringify(shared))
-}
-
 function mergeConfigWithAttributes(defaults: ViewConfig, current: ViewConfig): ViewConfig {
   const knownAttributeIds = new Set(defaults.columns.map((column) => column.attributeId))
   const retainedColumns = current.columns.filter((column) => knownAttributeIds.has(column.attributeId))
@@ -235,6 +186,50 @@ function mergeConfigWithAttributes(defaults: ViewConfig, current: ViewConfig): V
     ...defaults,
     ...current,
     columns: [...retainedColumns, ...newColumns],
+  }
+}
+
+function configFromWorkspaceState(defaults: ViewConfig, shared: WorkspaceViewConfig | undefined): ViewConfig {
+  if (!shared) return defaults
+  const knownIds = new Set(defaults.columns.map((column) => column.attributeId))
+  const layout = shared.layout
+  const retainedColumns = layout?.columns?.filter((column) => knownIds.has(column.attributeId))
+  const columnWidths = Object.fromEntries(
+    Object.entries(layout?.columnWidths ?? {}).filter(([attributeId]) => knownIds.has(attributeId)),
+  )
+  const current: ViewConfig = {
+    ...defaults,
+    ...(shared.sorts ? { sorts: shared.sorts.filter((sort) => isViewSort(sort, knownIds)) } : {}),
+    ...(parseTeamScope(shared.teamScope) ? { teamScope: parseTeamScope(shared.teamScope) } : {}),
+    ...(retainedColumns ? { columns: retainedColumns } : {}),
+    ...(layout?.groupBy ? { groupBy: layout.groupBy.filter((sort) => isViewSort(sort, knownIds)) } : {}),
+    ...(layout?.rowHeight ? { rowHeight: layout.rowHeight } : {}),
+    ...(layout?.gridLines !== undefined ? { gridLines: layout.gridLines } : {}),
+    ...(layout?.frozenRows !== undefined ? { frozenRows: layout.frozenRows } : {}),
+    ...(layout?.frozenCols !== undefined ? { frozenCols: layout.frozenCols } : {}),
+    ...(layout?.zoom !== undefined ? { zoom: layout.zoom } : {}),
+    columnWidths,
+  }
+  return mergeConfigWithAttributes(defaults, current)
+}
+
+function toWorkspaceState(config: ViewConfig): WorkspaceViewConfig {
+  const teamScope = parseTeamScope(config.teamScope)
+  return {
+    ...(config.sorts.length ? { sorts: config.sorts } : {}),
+    ...(teamScope ? { teamScope } : {}),
+    layout: {
+      // Group names and wrapping are free-form local display settings, so they
+      // are intentionally excluded from the URL's structural allow-list.
+      columns: config.columns.map(({ attributeId, visible, order }) => ({ attributeId, visible, order })),
+      groupBy: config.groupBy,
+      rowHeight: config.rowHeight,
+      gridLines: config.gridLines,
+      frozenRows: config.frozenRows,
+      frozenCols: config.frozenCols,
+      zoom: config.zoom,
+      columnWidths: config.columnWidths,
+    },
   }
 }
 
@@ -291,72 +286,76 @@ export function toRecordListQuery(config: ViewConfig, attributes: AttributeDef[]
 }
 
 /**
- * Route-owned live view state. The `v` parameter holds versioned, allow-listed
- * sort state and Team-scope ids; filter literals and local display controls
- * remain in memory so CRM values and PII never leak into a shared URL.
+ * Route-owned live view state. The workspace codec holds versioned,
+ * allow-listed structure and layout; filter literals remain in memory so CRM
+ * values and PII never leak into a shared URL.
  */
 export function sameViewConfig(left: ViewConfig, right: ViewConfig): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
-/** A saved view establishes the durable baseline; `v` remains a temporary URL overlay. */
+type LocalViewState = Pick<
+  ViewConfig,
+  'filterTree' | 'changeHighlight' | 'columnStyles' | 'kanbanCardFieldIds' | 'kanbanSummaryAttributeId'
+> & {
+  columns: Array<Pick<ViewColumn, 'attributeId' | 'wrap' | 'group' | 'collapsed'>>
+}
+
+function localViewState(config: ViewConfig): LocalViewState {
+  return {
+    filterTree: config.filterTree,
+    changeHighlight: config.changeHighlight,
+    columnStyles: config.columnStyles,
+    kanbanCardFieldIds: config.kanbanCardFieldIds,
+    kanbanSummaryAttributeId: config.kanbanSummaryAttributeId,
+    columns: config.columns.map(({ attributeId, wrap, group, collapsed }) => ({ attributeId, wrap, group, collapsed })),
+  }
+}
+
+function mergeLocalViewState(config: ViewConfig, local: LocalViewState | null): ViewConfig {
+  if (!local) return config
+  const columnsById = new Map(local.columns.map((column) => [column.attributeId, column]))
+  return {
+    ...config,
+    ...(local.filterTree ? { filterTree: local.filterTree } : {}),
+    changeHighlight: local.changeHighlight,
+    columnStyles: local.columnStyles,
+    ...(local.kanbanCardFieldIds ? { kanbanCardFieldIds: local.kanbanCardFieldIds } : {}),
+    ...(local.kanbanSummaryAttributeId ? { kanbanSummaryAttributeId: local.kanbanSummaryAttributeId } : {}),
+    columns: config.columns.map((column) => ({ ...column, ...columnsById.get(column.attributeId) })),
+  }
+}
+
+/** A saved view establishes the durable baseline; the workspace codec overlays safe route state. */
 export function useViewConfig(
   attributes: AttributeDef[],
   savedConfig?: ViewConfig,
 ): [ViewConfig, (update: (current: ViewConfig) => ViewConfig) => void, () => void] {
-  const [searchParams, setSearchParams] = useSearchParams()
-  const baseConfig = useMemo(() => {
+  const [workspaceUrlState, updateWorkspaceUrlState] = useWorkspaceUrlState()
+  const sharedConfig = useMemo(() => {
     const defaults = createViewConfig(attributes)
     const saved = savedConfig ? mergeConfigWithAttributes(defaults, savedConfig) : defaults
-    const shared = decodeSharedConfig(searchParams.get('v'), attributes)
-    return shared
-      ? {
-          ...saved,
-          sorts: shared.sorts,
-          ...(shared.teamScope ? { teamScope: shared.teamScope } : {}),
-          ...(shared.changeHighlight ? { changeHighlight: shared.changeHighlight } : {}),
-        }
-      : saved
-  }, [attributes, savedConfig, searchParams])
+    return configFromWorkspaceState(saved, workspaceUrlState.viewConfig)
+  }, [attributes, savedConfig, workspaceUrlState.viewConfig])
 
-  const [localConfig, setLocalConfig] = useState<ViewConfig | null>(null)
-  // Attribute data can arrive after the route mounts. Merge it at render time so
-  // a newly available field gets a default column without an effect-driven reset
-  // of the controls a person has already changed.
-  const config = useMemo(
-    () => (localConfig ? mergeConfigWithAttributes(baseConfig, localConfig) : baseConfig),
-    [baseConfig, localConfig],
-  )
+  // Typed values and free-form display labels remain page-local. Navigation
+  // state stays responsive to the URL while these settings never leak into it.
+  const [localConfig, setLocalConfig] = useState<LocalViewState | null>(null)
+  const config = useMemo(() => mergeLocalViewState(sharedConfig, localConfig), [sharedConfig, localConfig])
 
   const updateConfig = useCallback(
     (update: (current: ViewConfig) => ViewConfig) => {
       const next = update(config)
-      setLocalConfig(next)
-      const encoded = encodeSharedConfig(next)
-      setSearchParams(
-        (previous) => {
-          const params = new URLSearchParams(previous)
-          if (encoded) params.set('v', encoded)
-          else params.delete('v')
-          return params
-        },
-        { replace: true },
-      )
+      setLocalConfig(localViewState(next))
+      updateWorkspaceUrlState((current) => ({ ...current, viewConfig: toWorkspaceState(next) }), { replace: true })
     },
-    [config, setSearchParams],
+    [config, updateWorkspaceUrlState],
   )
 
   const resetConfig = useCallback(() => {
     setLocalConfig(null)
-    setSearchParams(
-      (previous) => {
-        const params = new URLSearchParams(previous)
-        params.delete('v')
-        return params
-      },
-      { replace: true },
-    )
-  }, [setSearchParams])
+    updateWorkspaceUrlState((current) => ({ ...current, viewConfig: undefined }), { replace: true })
+  }, [updateWorkspaceUrlState])
 
   return [config, updateConfig, resetConfig]
 }

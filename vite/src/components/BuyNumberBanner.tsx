@@ -25,7 +25,7 @@ export function BuyNumberBanner() {
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/60 px-3 py-2">
       <p className="text-sm">You need a number to call out.</p>
-      <Link to="/settings?tab=numbers" className={cn(buttonVariants({ size: 'sm' }))}>
+      <Link to="/settings/numbers" className={cn(buttonVariants({ size: 'sm' }))}>
         Buy a number
       </Link>
     </div>
