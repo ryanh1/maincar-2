@@ -313,6 +313,12 @@ test('renders Deals as a persisted Kanban board grouped by pipeline stage', asyn
   const consoleErrors: string[] = []
   const patchBodies: Array<Record<string, unknown>> = []
   const attributes = [dealNameAttribute, pipelineStageAttribute, amountAttribute]
+  const deals = [
+    { id: 'deal-1', name: 'Northstar', pipelineStage: 'discovery', amount: 5000, createdAt: '', updatedAt: '' },
+    { id: 'deal-4', name: 'Bluebird', pipelineStage: 'discovery', amount: 8000, createdAt: '', updatedAt: '' },
+    { id: 'deal-2', name: 'Acme', pipelineStage: 'proposal', amount: 12000, createdAt: '', updatedAt: '' },
+    { id: 'deal-3', name: 'Unqualified', pipelineStage: null, amount: 700, createdAt: '', updatedAt: '' },
+  ]
   const config = {
     columns: attributes.map((attribute, order) => ({ attributeId: attribute.id, visible: true, order })),
     sorts: [], groupBy: [], rowHeight: 'compact', gridLines: true, frozenRows: 0, frozenCols: 1, zoom: 100, columnWidths: {}, columnStyles: [],
@@ -331,13 +337,17 @@ test('renders Deals as a persisted Kanban board grouped by pipeline stage', asyn
     if (request.method() === 'GET' && pathname.endsWith('/objects')) return route.fulfill({ json: { objects: [dealObject] } })
     if (request.method() === 'GET' && pathname.endsWith('/objects/deal')) return route.fulfill({ json: { object: { ...dealObject, attributes } } })
     if (request.method() === 'POST' && pathname.endsWith('/objects/deal/list')) {
-      return route.fulfill({ json: { rows: [
-        { id: 'deal-1', name: 'Northstar', pipelineStage: 'discovery', amount: 5000, createdAt: '', updatedAt: '' },
-        { id: 'deal-2', name: 'Acme', pipelineStage: 'proposal', amount: 12000, createdAt: '', updatedAt: '' },
-        { id: 'deal-3', name: 'Unqualified', pipelineStage: null, amount: 700, createdAt: '', updatedAt: '' },
-      ], nextCursor: null, totalCount: 3 } })
+      return route.fulfill({ json: { rows: deals, nextCursor: null, totalCount: deals.length } })
     }
     return route.fallback()
+  })
+  await page.route('**/api/orgs/org-fixture/deals/*', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    const body = route.request().postDataJSON() as { pipelineStage?: string }
+    const deal = deals.find((candidate) => candidate.id === route.request().url().split('/').at(-1))
+    if (deal && body.pipelineStage) deal.pipelineStage = body.pipelineStage
+    patchBodies.push(body)
+    return route.fulfill({ json: { deal } })
   })
   await page.route('**/api/orgs/org-fixture/saved-views**', async (route) => {
     const request = route.request()
@@ -355,7 +365,7 @@ test('renders Deals as a persisted Kanban board grouped by pipeline stage', asyn
   await page.goto('/__fixtures/records/deal')
   await expect(page.getByTestId('data-grid-canvas')).toBeVisible()
   await page.getByRole('button', { name: 'Kanban' }).click()
-  await expect(page.getByRole('heading', { name: 'Discovery 1' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Discovery 2' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Proposal 1' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No value 1' })).toBeVisible()
   await expect(page.getByText('Northstar')).toBeVisible()
@@ -365,8 +375,33 @@ test('renders Deals as a persisted Kanban board grouped by pipeline stage', asyn
     expect.objectContaining({ config: expect.objectContaining({ groupBy: [{ attributeId: 'pipeline-stage', direction: 'asc' }] }) }),
   ])
 
+  const discoveryCards = page.getByLabel('Discovery cards')
+  const northstar = page.getByText('Northstar').locator('xpath=..')
+  const bluebird = page.getByText('Bluebird').locator('xpath=..')
+  const northstarBounds = await northstar.boundingBox()
+  const bluebirdBounds = await bluebird.boundingBox()
+  if (!northstarBounds || !bluebirdBounds) throw new Error('The Kanban cards were not measurable.')
+  await page.mouse.move(northstarBounds.x + (northstarBounds.width / 2), northstarBounds.y + (northstarBounds.height / 2))
+  await page.mouse.down()
+  await page.mouse.move(bluebirdBounds.x + (bluebirdBounds.width / 2), bluebirdBounds.y + (bluebirdBounds.height / 2), { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(() => discoveryCards.locator('h3').allTextContents()).toEqual(['Bluebird', 'Northstar'])
+
+  const proposalCards = page.getByLabel('Proposal cards')
+  const proposalBounds = await proposalCards.boundingBox()
+  const reorderedNorthstarBounds = await northstar.boundingBox()
+  if (!reorderedNorthstarBounds || !proposalBounds) throw new Error('The Kanban cards were not measurable.')
+  await page.mouse.move(reorderedNorthstarBounds.x + (reorderedNorthstarBounds.width / 2), reorderedNorthstarBounds.y + (reorderedNorthstarBounds.height / 2))
+  await page.mouse.down()
+  await page.mouse.move(proposalBounds.x + (proposalBounds.width / 2), proposalBounds.y + (proposalBounds.height / 2), { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(() => patchBodies.at(-1)).toEqual({ pipelineStage: 'proposal' })
+  await expect(page.getByRole('heading', { name: 'Discovery 1' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Proposal 2' })).toBeVisible()
+
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Discovery 1' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Proposal 2' })).toBeVisible()
   expect(consoleErrors).toEqual([])
 })
 

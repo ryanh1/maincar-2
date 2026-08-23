@@ -32,6 +32,15 @@ vi.mock('@/providers/useAuth', () => ({
   useAuth: () => ({ user: { timeZone: 'America/New_York' } }),
 }))
 
+vi.mock('./KanbanBoard', () => ({
+  KanbanBoard: ({ rows, onRecordMove }: { rows: Array<{ id: string; stage?: unknown }>; onRecordMove?: (record: { id: string; stage?: unknown }, value: string | null) => void }) => (
+    <div>
+      <button type="button" onClick={() => onRecordMove?.(rows[0], 'won')}>Move first Kanban card to Won</button>
+      <output>{`stage: ${String(rows[0]?.stage)}`}</output>
+    </div>
+  ),
+}))
+
 // The real module pulls in canvas rendering internals jsdom cannot run, and this
 // test is about RecordGrid's own wiring (columns, freezing, cell lookup,
 // prefetch) rather than canvas drawing — so the whole module is replaced, not
@@ -126,6 +135,27 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('RecordGrid', () => {
+  it('writes a Kanban column drop through the optimistic field mutation and rolls it back when rejected', async () => {
+    const status = attribute({ id: 'stage', slug: 'stage', name: 'Stage', type: 'status', optionsJson: [{ value: 'demo', label: 'Demo' }, { value: 'won', label: 'Won' }], sortOrder: 1 })
+    const kanbanAttributes = [attribute({ id: 'name', slug: 'name', name: 'Deal', isIdentity: true, sortOrder: 0 }), status]
+    const config = { ...createViewConfig(kanbanAttributes), groupBy: [{ attributeId: 'stage', direction: 'asc' as const }] }
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'deal-1', name: 'Northstar', stage: 'demo' }], totalCount: 1,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    let rejectMutation!: (error: Error) => void
+    mutateAsync.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectMutation = reject }))
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={kanbanAttributes} viewConfig={config} onViewConfigChange={vi.fn()} layout="kanban" />)
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Move first Kanban card to Won' }))
+
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ recordId: 'deal-1', attribute: status, value: 'won' }))
+    expect(screen.getByText('stage: won')).toBeInTheDocument()
+    rejectMutation(new Error('offline'))
+    await waitFor(() => expect(screen.getByText('stage: demo')).toBeInTheDocument())
+  })
+
   it('tints changed cells, caps their dot badge, shows the change hover, and can limit rows to changes', () => {
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'record-1', firstName: 'Ada' }, { id: 'record-2', firstName: 'Grace' }], totalCount: 2,

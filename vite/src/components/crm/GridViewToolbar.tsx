@@ -20,6 +20,7 @@ import { memberDisplayName, useGetMembers, useGetTeams } from '@/hooks/orgs'
 import type { TeamScope, ViewConfig } from './viewConfig'
 import { GridFilterBuilder } from './GridFilterBuilder'
 import { GridSortPopover } from './GridSortPopover'
+import { KanbanCardFieldPicker } from './KanbanCardFieldPicker'
 
 interface GridViewToolbarProps {
   leading?: ReactNode
@@ -145,20 +146,7 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
   }
 
   const kanbanGroupFields = attributes.filter((attribute) => attribute.type === 'select' || attribute.type === 'status')
-  const cardFieldIds = config.kanbanCardFieldIds ?? attributes
-    .filter((attribute) => attribute.id !== attributes.find((candidate) => candidate.isIdentity)?.id && attribute.id !== config.groupBy[0]?.attributeId)
-    .filter((attribute) => config.columns.find((column) => column.attributeId === attribute.id)?.visible !== false)
-    .slice(0, 3)
-    .map((attribute) => attribute.id)
   const summaryFields = attributes.filter((attribute) => attribute.type === 'number' || attribute.type === 'currency')
-
-  function toggleCardField(attributeId: string, checked: boolean) {
-    onConfigChange((current) => {
-      const selected = current.kanbanCardFieldIds ?? cardFieldIds
-      const kanbanCardFieldIds = checked ? [...selected, attributeId] : selected.filter((id) => id !== attributeId)
-      return { ...current, kanbanCardFieldIds }
-    })
-  }
 
   function applyCustomChangeWindow() {
     const days = Number(customChangeDays)
@@ -363,20 +351,7 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
 
       {layout === 'kanban' && (
         <>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="secondary" size="sm"><Columns3Cog size={16} />Card fields<ChevronDown size={16} /></Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuLabel>Fields on cards</DropdownMenuLabel>
-              {attributes.filter((attribute) => !attribute.isIdentity).map((attribute) => (
-                <DropdownMenuCheckboxItem key={attribute.id} checked={cardFieldIds.includes(attribute.id)} onSelect={(event) => event.preventDefault()} onCheckedChange={(checked) => toggleCardField(attribute.id, checked)}>
-                  {attribute.name}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {cardFieldIds.length > 5 && <span className="text-xs text-text-muted">Cards get noisy with more than five fields.</span>}
+          <KanbanCardFieldPicker attributes={attributes} config={config} onConfigChange={onConfigChange} />
           {summaryFields.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
