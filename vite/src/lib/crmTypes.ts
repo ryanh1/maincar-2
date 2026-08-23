@@ -114,6 +114,25 @@ export interface ListRecordsResponse {
   totalCount: number
 }
 
+export type RecordBulkSelection =
+  | { mode: 'ids'; ids: string[] }
+  | { mode: 'filter'; filter?: unknown; teamScope?: unknown }
+
+export type RecordBulkAction =
+  | { type: 'delete' }
+  | { type: 'changeOwner'; ownerUserId: string | null }
+  | { type: 'addToList'; listId: string }
+  | { type: 'export' }
+
+export interface BulkRecordsResponse {
+  affectedCount: number
+}
+
+export interface BulkExportResponse {
+  rows: RecordRow[]
+  totalCount: number
+}
+
 /** One changed cell in a bounded window, summarized by the field-history reader. */
 export interface FieldChange {
   recordId: string

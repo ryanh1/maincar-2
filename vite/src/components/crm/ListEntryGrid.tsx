@@ -1,15 +1,19 @@
-import { useCallback, useMemo } from 'react'
-import { DataEditor, GridCellKind } from '@glideapps/glide-data-grid'
-import type { GridCell, GridColumn, Item, Rectangle, Theme } from '@glideapps/glide-data-grid'
+import { useCallback, useMemo, useState } from 'react'
+import { DataEditor, GridCellKind, emptyGridSelection } from '@glideapps/glide-data-grid'
+import type { GridCell, GridColumn, GridSelection, Item, Rectangle, Theme } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
 
 import { useAuth } from '@/providers/useAuth'
-import type { AttributeDef, CrmListEntry } from '@/lib/crmTypes'
+import type { AttributeDef, CrmListEntry, ObjectDef } from '@/lib/crmTypes'
 import { buildGridCell } from './cellBuilder'
 import { chipCellRenderer } from './chipCell'
 import { useGridColors } from './useGridColors'
+import { useRowSelection } from './useRowSelection'
+import { BulkActionBar } from './BulkActionBar'
 
 interface ListEntryGridProps {
+  orgId: string
+  object: ObjectDef | null
   attributes: AttributeDef[]
   entries: CrmListEntry[]
   totalCount: number
@@ -20,9 +24,11 @@ interface ListEntryGridProps {
 }
 
 /** A read-only Glide grid: list values come from ListEntry, never a record PATCH. */
-export function ListEntryGrid({ attributes, entries, totalCount, hasNextPage, isFetchingNextPage, fetchNextPage, onRemoveEntry }: ListEntryGridProps) {
+export function ListEntryGrid({ orgId, object, attributes, entries, totalCount, hasNextPage, isFetchingNextPage, fetchNextPage, onRemoveEntry }: ListEntryGridProps) {
   const { user } = useAuth()
   const colors = useGridColors()
+  const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
+  const rowSelection = useRowSelection(entries.flatMap((entry) => entry.target ? [entry.targetId] : []), totalCount)
   const columns = useMemo(() => attributes.filter((attribute) => !attribute.isArchived), [attributes])
   const gridColumns = useMemo<GridColumn[]>(
     () => [
@@ -53,5 +59,8 @@ export function ListEntryGrid({ attributes, entries, totalCount, hasNextPage, is
   }, [entries.length, fetchNextPage, hasNextPage, isFetchingNextPage])
   const theme = useMemo<Partial<Theme>>(() => ({ accentColor: colors.accent, textDark: colors.cellText, textMedium: colors.mutedText, textLight: colors.mutedText, textHeader: colors.headerText, bgCell: colors.background, bgHeader: colors.headerBg, bgHeaderHasFocus: colors.headerBg, bgHeaderHovered: colors.headerBg, borderColor: colors.border, horizontalBorderColor: colors.border, fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }), [colors])
   if (columns.length === 0) return <p className="text-sm text-muted-foreground">This list’s object has no fields yet.</p>
-  return <div className="h-full min-h-0 border border-border bg-bg"><DataEditor columns={gridColumns} getCellContent={getCellContent} customRenderers={[chipCellRenderer]} rows={totalCount} freezeColumns={1} rowHeight={32} rowMarkers="none" verticalBorder smoothScrollX smoothScrollY onVisibleRegionChanged={onVisibleRegionChanged} onCellClicked={requestRemoval} onCellActivated={requestRemoval} theme={theme} width="100%" height="100%" /></div>
+  return <div className="flex h-full min-h-0 flex-col border border-border bg-bg">
+    {object && rowSelection.selectedCount > 0 && <BulkActionBar orgId={orgId} object={object} attributes={attributes} selection={{ mode: 'ids', ids: [...rowSelection.selectedIds] }} selectedCount={rowSelection.selectedCount} canChangeOwner={attributes.some((attribute) => attribute.slug === 'ownerUserId' && attribute.type === 'user_reference')} onClear={rowSelection.clear} />}
+    <div className="min-h-0 flex-1"><DataEditor columns={gridColumns} getCellContent={getCellContent} customRenderers={[chipCellRenderer]} rows={totalCount} freezeColumns={1} rowHeight={32} rowMarkers={{ kind: 'checkbox-visible', width: 32 }} rowSelect="multi" verticalBorder smoothScrollX smoothScrollY onVisibleRegionChanged={onVisibleRegionChanged} onCellClicked={requestRemoval} onCellActivated={requestRemoval} gridSelection={gridSelection} onGridSelectionChange={(nextSelection) => { setGridSelection(nextSelection); rowSelection.setLoadedSelection(nextSelection.rows.toArray().flatMap((row) => entries[row]?.target ? [entries[row].targetId] : [])) }} theme={theme} width="100%" height="100%" /></div>
+  </div>
 }
