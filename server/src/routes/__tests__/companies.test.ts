@@ -38,6 +38,9 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   deleteFirebaseUser: vi.fn(),
 }))
 
+const mailRematch = vi.hoisted(() => ({ queueMailRematch: vi.fn() }))
+vi.mock('../../jobs/mailRematch.js', () => ({ queueMailRematch: mailRematch.queueMailRematch }))
+
 import app from '../../app.js'
 
 const NOW = new Date('2026-08-20T12:00:00.000Z')
@@ -127,6 +130,7 @@ beforeEach(() => {
   prismaMock.company.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'activity-1' })
   prismaMock.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prismaMock))
+  mailRematch.queueMailRematch.mockResolvedValue('job-1')
 })
 
 // ============================================================
@@ -516,5 +520,20 @@ describe('DELETE /api/orgs/:orgId/companies/:id', () => {
     expect(res.status).toBe(404)
     expect(res.body.error).toBe('Organization not found')
     expect(prismaMock.company.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/orgs/:orgId/companies — rematch dispatch', () => {
+  it('queues a company-keyed mail rematch after creating the company', async () => {
+    prismaMock.company.create.mockResolvedValue(companyRow({ id: 'co-rematch' }))
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ domain: 'acme.com' })
+
+    expect(res.status).toBe(201)
+    expect(mailRematch.queueMailRematch).toHaveBeenCalledWith({
+      orgId: ORG_A,
+      recordType: 'company',
+      recordId: 'co-rematch',
+    })
   })
 })

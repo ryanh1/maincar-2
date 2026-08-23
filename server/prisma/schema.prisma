@@ -111,6 +111,10 @@ model Org {
   emailAttachments  EmailAttachment[]
   mailBackfills     MailBackfill[]
 
+  // Zero-match capture stays outside the CRM until a later Person or Company
+  // makes it attachable (MAI-439). F6 owns deleting expired rows.
+  unmatchedActivities UnmatchedActivity[]
+
   // Text activity (MAI-138 T10). Back-relations so a deleted org cascades its
   // messages and their MMS media away — the same onDelete: Cascade the rest of
   // the CRM spine already uses.
@@ -2337,6 +2341,39 @@ model EmailParticipant {
   // The match path: "which unlinked participants have this address?"
   @@index([orgId, address])
   @@index([personId])
+}
+
+// -----------------------------------------------------------------------------
+// UnmatchedActivity — a short-lived pre-CRM buffer for capture sources (MAI-439).
+//
+// An activity that passes capture exclusions but resolves to no CRM target is not
+// an Email/Meeting yet: it belongs here until a later Person or Company can claim
+// it. `payload` holds the source data needed to rehydrate the real activity, while
+// the normalized participant columns make rematch selection tenant-scoped. F6 is
+// the only owner of retention; this model deliberately has no expiry timer.
+// -----------------------------------------------------------------------------
+model UnmatchedActivity {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  sourceType String // email | meeting (email is the first F2-rematch source)
+  sourceKey  String // provider-stable dedupe key, scoped to org + source type
+  occurredAt DateTime
+
+  // Normalized lowercase exact addresses plus every parent-domain candidate
+  // (`jane@sub.acme.com` stores sub.acme.com and acme.com) for a narrow rematch.
+  participantAddresses        String[] @default([])
+  participantDomainCandidates String[] @default([])
+
+  // JSON source data required to create the CRM activity only after it matches.
+  payload Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, sourceType, sourceKey])
+  @@index([orgId, sourceType, occurredAt])
 }
 
 // One attachment on an email. storageUrl is the seam to our own copy: it holds a

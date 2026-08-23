@@ -75,6 +75,9 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   deleteFirebaseUser: vi.fn(),
 }))
 
+const mailRematch = vi.hoisted(() => ({ queueMailRematch: vi.fn() }))
+vi.mock('../../jobs/mailRematch.js', () => ({ queueMailRematch: mailRematch.queueMailRematch }))
+
 import app from '../../app.js'
 
 const NOW = new Date('2026-08-20T12:00:00.000Z')
@@ -206,6 +209,7 @@ function authAs(membership: ReturnType<typeof membershipRow> | null = membership
 beforeEach(() => {
   vi.clearAllMocks()
   authAs()
+  mailRematch.queueMailRematch.mockResolvedValue('job-1')
   // Person defaults.
   prismaMock.person.findFirst.mockResolvedValue(null)
   prismaMock.person.findFirstOrThrow.mockResolvedValue(personRow())
@@ -759,5 +763,21 @@ describe('POST /api/orgs/:orgId/people/:id/emails', () => {
 
     expect(res.status).toBe(400)
     expect(prismaMock.personEmail.upsert).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/orgs/:orgId/people — rematch dispatch', () => {
+  it('queues a person-keyed mail rematch after creating the person', async () => {
+    prismaMock.person.create.mockResolvedValue(personRow({ id: 'person-rematch' }))
+    prismaMock.person.findFirstOrThrow.mockResolvedValue(personRow({ id: 'person-rematch' }))
+
+    const res = await request(app).post(URL_A).set('Authorization', AUTH).send({ firstName: 'Jane' })
+
+    expect(res.status).toBe(201)
+    expect(mailRematch.queueMailRematch).toHaveBeenCalledWith({
+      orgId: ORG_A,
+      recordType: 'person',
+      recordId: 'person-rematch',
+    })
   })
 })

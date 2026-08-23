@@ -27,6 +27,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { activityFromRecordCreated, recordActivityInTx } from '../crm/activityFeed.js'
+import { queueMailRematch } from '../jobs/mailRematch.js'
 import type { Company, Prisma } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
@@ -358,6 +359,9 @@ router.post(
     }
 
     logger.info({ orgId, userId, companyId: created.id }, 'created a company')
+    void queueMailRematch({ orgId, recordType: 'company', recordId: created.id }).catch((error) => {
+      logger.error({ orgId, companyId: created.id, error }, 'could not queue mail rematch after company creation')
+    })
 
     // --- Return response ---
     res.status(201).json({ company: mapCompanyToApi(created) })

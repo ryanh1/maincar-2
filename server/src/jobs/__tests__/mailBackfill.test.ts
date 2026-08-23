@@ -14,6 +14,7 @@ const db = vi.hoisted(() => ({
 const provider = vi.hoisted(() => ({ provider: 'google' as const, listBackfillMessages: vi.fn(), listBackfillEvents: vi.fn() }))
 const matcher = vi.hoisted(() => ({ resolveParticipantsToCrm: vi.fn(), attachEmailMatchInTx: vi.fn(), attachMeetingMatchInTx: vi.fn() }))
 const queue = vi.hoisted(() => ({ sendJob: vi.fn(), workJob: vi.fn() }))
+const unmatchedHold = vi.hoisted(() => ({ holdUnmatchedEmailInTx: vi.fn() }))
 
 vi.mock('../../db.js', () => ({
   default: {
@@ -24,6 +25,7 @@ vi.mock('../../db.js', () => ({
 }))
 vi.mock('../../lib/mail/getMailProvider.js', () => ({ getMailProvider: vi.fn(() => provider) }))
 vi.mock('../../lib/crmMatch.js', () => matcher)
+vi.mock('../mailRematch.js', () => ({ holdUnmatchedEmailInTx: unmatchedHold.holdUnmatchedEmailInTx }))
 vi.mock('../queue.js', () => ({ JOB_MAIL_BACKFILL: 'mail-backfill', sendJob: queue.sendJob, workJob: queue.workJob }))
 
 import { mailBackfillJob, queueMailBackfill, registerMailBackfillWorker } from '../mailBackfill.js'
@@ -62,6 +64,7 @@ beforeEach(() => {
   matcher.resolveParticipantsToCrm.mockResolvedValue(match)
   matcher.attachEmailMatchInTx.mockResolvedValue(true)
   matcher.attachMeetingMatchInTx.mockResolvedValue(true)
+  unmatchedHold.holdUnmatchedEmailInTx.mockResolvedValue(undefined)
 })
 
 describe('mailBackfillJob', () => {
@@ -83,13 +86,21 @@ describe('mailBackfillJob', () => {
     }))
   })
 
-  it('does not persist a provider message that has no CRM match', async () => {
+  it('holds a provider message that has no CRM match', async () => {
     matcher.resolveParticipantsToCrm.mockResolvedValue({ ...match, primaryPersonId: null, primaryCompanyId: null, personIds: [], companyIds: [] })
 
     await mailBackfillJob({ mailAccountId: 'mailbox-1' })
 
     expect(db.emailCreate).not.toHaveBeenCalled()
     expect(matcher.attachEmailMatchInTx).not.toHaveBeenCalled()
+    expect(unmatchedHold.holdUnmatchedEmailInTx).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        orgId: 'org-1',
+        sourceKey: 'mailbox-1:google-1',
+        participants: expect.arrayContaining([expect.objectContaining({ address: 'jane@acme.com' })]),
+      }),
+    )
     expect(db.backfillUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ scannedCount: { increment: 1 }, matchedCount: { increment: 0 } }),
     }))

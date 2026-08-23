@@ -4,6 +4,7 @@ import { attachEmailMatchInTx, attachMeetingMatchInTx, resolveParticipantsToCrm 
 import { getMailProvider } from '../lib/mail/getMailProvider.js'
 import { CursorExpiredError, RateLimitedError } from '../lib/mail/mailErrors.js'
 import type { CalendarEvent, InboundMessage, MailProvider } from '../lib/mail/MailProvider.js'
+import { holdUnmatchedEmailInTx } from './mailRematch.js'
 import { JOB_MAIL_SYNC, scheduleJob, sendJob, workJob } from './queue.js'
 
 const PAGE_SIZE = 100
@@ -54,8 +55,9 @@ async function persistMessage(
     where: { orgId: account.orgId, mailAccountId: account.id, providerMessageId: message.providerMsgId },
     select: { id: true },
   })
+  const direction: 'inbound' | 'outbound' = message.isOutbound ? 'outbound' : 'inbound'
   const data = {
-    direction: message.isOutbound ? 'outbound' : 'inbound',
+    direction,
     subject: message.subject,
     bodyHtml: message.bodyHtml,
     bodyText: message.bodyText,
@@ -68,6 +70,31 @@ async function persistMessage(
     receivedAt: message.isOutbound ? null : message.sentAt,
   }
   const participants = messageParticipants(message)
+  const match = await resolveParticipantsToCrm(tx, {
+    orgId: account.orgId,
+    participants: participants.map((participant) => ({ address: participant.email })),
+    occurredAt: message.sentAt,
+    direction,
+  })
+  // The first capture of a zero-match message belongs in MAI-439's hold, not in
+  // the CRM Email table. Existing rows predate this guard and stay available for
+  // the 30-day rematch pass to attach without destructive rewrites.
+  if (!existing && !match.excluded && match.personIds.length === 0 && match.companyIds.length === 0 && !match.dealId) {
+    await holdUnmatchedEmailInTx(tx, {
+      orgId: account.orgId,
+      sourceKey: `${account.id}:${message.providerMsgId}`,
+      occurredAt: message.sentAt,
+      email: { mailAccountId: account.id, ...data },
+      participants: participants.map((participant) => ({
+        role: participant.role,
+        name: participant.name ?? null,
+        address: participant.email,
+      })),
+    })
+    return
+  }
+  if (match.excluded) return
+
   const email = existing
     ? await (async () => {
         await tx.email.updateMany({ where: { id: existing.id, orgId: account.orgId }, data })
@@ -87,12 +114,6 @@ async function persistMessage(
           participants: { create: participants.map((participant) => ({ orgId: account.orgId, role: participant.role, name: participant.name ?? null, address: participant.email })) },
         },
       })
-  const match = await resolveParticipantsToCrm(tx, {
-    orgId: account.orgId,
-    participants: participants.map((participant) => ({ address: participant.email })),
-    occurredAt: message.sentAt,
-    direction: message.isOutbound ? 'outbound' : 'inbound',
-  })
   await attachEmailMatchInTx(tx, email, match)
 }
 

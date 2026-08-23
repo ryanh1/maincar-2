@@ -35,6 +35,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { activityFromRecordCreated, recordActivityInTx } from '../crm/activityFeed.js'
+import { queueMailRematch } from '../jobs/mailRematch.js'
 import {
   diffFieldValues,
   loadHistoryAttributes,
@@ -627,6 +628,9 @@ router.post(
     })
 
     logger.info({ orgId, userId, personId: created.id }, 'created a person')
+    void queueMailRematch({ orgId, recordType: 'person', recordId: created.id }).catch((error) => {
+      logger.error({ orgId, personId: created.id, error }, 'could not queue mail rematch after person creation')
+    })
 
     // --- Return response ---
     res.status(201).json({ person: mapPersonToApi(created) })

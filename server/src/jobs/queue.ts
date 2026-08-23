@@ -42,6 +42,7 @@ export const JOB_TRANSCODE_VOICEMAIL_DROP = 'transcode-voicemail-drop'
 
 export const JOB_MAIL_SYNC = 'mail-sync'
 export const JOB_MAIL_BACKFILL = 'mail-backfill'
+export const JOB_MAIL_REMATCH = 'mail-rematch'
 
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
@@ -57,6 +58,7 @@ export const JOB_NAMES = [
   JOB_TRANSCODE_VOICEMAIL_DROP,
   JOB_MAIL_SYNC,
   JOB_MAIL_BACKFILL,
+  JOB_MAIL_REMATCH,
 ] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
@@ -110,6 +112,9 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number; 
   // Provider rate limits and transient mailbox errors need a longer retry budget;
   // writes are idempotent by mailbox + provider message id.
   [JOB_MAIL_BACKFILL]: { retryLimit: 5, retryDelay: 60 },
+  // Capture history is idempotent and attaches transactionally, so three retries
+  // are safe for a transient database failure during a create-triggered rematch.
+  [JOB_MAIL_REMATCH]: { retryLimit: 3, retryDelay: 30 },
 }
 
 let boss: PgBoss | null = null

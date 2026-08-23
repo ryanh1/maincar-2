@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const db = vi.hoisted(() => ({
   mailAccount: { findFirst: vi.fn(), updateMany: vi.fn() },
   membership: { findFirst: vi.fn() },
+  unmatchedActivity: { upsert: vi.fn() },
   email: { findFirst: vi.fn(), findFirstOrThrow: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
   emailParticipant: { deleteMany: vi.fn(), createMany: vi.fn() },
   meeting: { findFirst: vi.fn(), findFirstOrThrow: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
@@ -23,6 +24,9 @@ const matcher = vi.hoisted(() => ({
   attachMeetingMatchInTx: vi.fn(),
 }))
 vi.mock('../../lib/crmMatch.js', () => matcher)
+
+const unmatchedHold = vi.hoisted(() => ({ holdUnmatchedEmailInTx: vi.fn() }))
+vi.mock('../mailRematch.js', () => ({ holdUnmatchedEmailInTx: unmatchedHold.holdUnmatchedEmailInTx }))
 
 const queue = vi.hoisted(() => ({ scheduleJob: vi.fn(), sendJob: vi.fn(), workJob: vi.fn() }))
 vi.mock('../queue.js', () => ({
@@ -79,6 +83,7 @@ beforeEach(() => {
   matcher.resolveParticipantsToCrm.mockResolvedValue({ excluded: false, personIds: [], companyIds: [], personIdByAddress: {}, primaryPersonId: null, primaryCompanyId: null, dealId: null })
   matcher.attachEmailMatchInTx.mockResolvedValue(false)
   matcher.attachMeetingMatchInTx.mockResolvedValue(false)
+  unmatchedHold.holdUnmatchedEmailInTx.mockResolvedValue(undefined)
   PAGE_PROVIDER.listMessagesSince.mockResolvedValue({ messages: [], nextCursor: 'history-new' })
   PAGE_PROVIDER.listEventsSince.mockResolvedValue({ events: [], nextCursor: 'calendar-new' })
   provider.getMailProvider.mockResolvedValue(PAGE_PROVIDER)
@@ -112,7 +117,10 @@ describe('syncMailAccount', () => {
     })
   })
 
-  it('persists incoming mail and meetings before sending their participants through the shared matcher', async () => {
+  it('persists matching mail and meetings through the shared matcher', async () => {
+    matcher.resolveParticipantsToCrm
+      .mockResolvedValueOnce({ excluded: false, personIds: ['person_1'], companyIds: [], personIdByAddress: {}, primaryPersonId: 'person_1', primaryCompanyId: null, dealId: null })
+      .mockResolvedValueOnce({ excluded: false, personIds: [], companyIds: [], personIdByAddress: {}, primaryPersonId: null, primaryCompanyId: null, dealId: null })
     PAGE_PROVIDER.listMessagesSince.mockResolvedValue({
       messages: [{
         providerMsgId: 'message_1', threadId: 'thread_1', from: { email: 'seller@example.test' }, to: [{ email: 'buyer@customer.test' }], cc: [],
@@ -139,6 +147,29 @@ describe('syncMailAccount', () => {
     expect(matcher.resolveParticipantsToCrm).toHaveBeenCalledTimes(2)
     expect(matcher.attachEmailMatchInTx).toHaveBeenCalledTimes(1)
     expect(matcher.attachMeetingMatchInTx).toHaveBeenCalledTimes(1)
+  })
+
+  it('holds a zero-match message instead of creating an Email record', async () => {
+    PAGE_PROVIDER.listMessagesSince.mockResolvedValue({
+      messages: [{
+        providerMsgId: 'unmatched_1', threadId: 'thread_1', from: { email: 'seller@example.test' }, to: [{ email: 'unknown@customer.test' }], cc: [],
+        subject: 'No CRM match', bodyHtml: '<p>Hello</p>', bodyText: 'Hello', sentAt: new Date('2026-08-23T12:00:00.000Z'), isOutbound: false,
+      }],
+      nextCursor: 'history-new',
+    })
+
+    await syncMailAccount(ACCOUNT.id)
+
+    expect(unmatchedHold.holdUnmatchedEmailInTx).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        orgId: ACCOUNT.orgId,
+        sourceKey: `${ACCOUNT.id}:unmatched_1`,
+        participants: expect.arrayContaining([expect.objectContaining({ address: 'unknown@customer.test' })]),
+      }),
+    )
+    expect(db.email.create).not.toHaveBeenCalled()
+    expect(matcher.attachEmailMatchInTx).not.toHaveBeenCalled()
   })
 
   it('updates a replayed provider message instead of creating a duplicate', async () => {
