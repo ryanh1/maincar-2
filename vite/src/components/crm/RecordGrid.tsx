@@ -1329,6 +1329,8 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           config={config}
           rows={kanbanRows}
           onRecordMove={kanbanGroupAttribute?.isReadOnly ? undefined : moveKanbanRecord}
+          selectedRecordIds={rowSelection.selectedIds}
+          onToggleRecordSelection={rowSelection.toggle}
         />
       </div>
     )

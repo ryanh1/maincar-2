@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import type { AttributeDef, RecordRow } from '@/lib/crmTypes'
 import { renderWithProviders } from '@/test/utils'
@@ -63,5 +64,61 @@ describe('KanbanBoard', () => {
 
     expect(screen.getByText('Northstar')).toBeInTheDocument()
     expect(screen.getAllByText('Amount')).toHaveLength(3)
+  })
+
+  it('moves a focused card through a type-ahead picker without a pointer', async () => {
+    const user = userEvent.setup()
+    const onRecordMove = vi.fn()
+    const config = {
+      ...createViewConfig(attributes),
+      kanban: { groupAttributeId: 'stage', visibleOptionValues: ['discovery', 'proposal', 'closed'], cardAttributeIds: [] },
+    }
+
+    renderWithProviders(<KanbanBoard attributes={attributes} config={config} rows={rows} onRecordMove={onRecordMove} />)
+
+    const card = screen.getByText('Northstar').closest('[role="button"]')
+    expect(card).not.toBeNull()
+    card?.focus()
+    await user.keyboard('p{Enter}')
+
+    expect(onRecordMove).toHaveBeenCalledWith(rows[0], 'proposal')
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+  })
+
+  it('confirms the field and target before moving multiple selected cards', async () => {
+    const user = userEvent.setup()
+    const onRecordMove = vi.fn()
+    const config = {
+      ...createViewConfig(attributes),
+      kanban: { groupAttributeId: 'stage', visibleOptionValues: ['discovery', 'proposal', 'closed'], cardAttributeIds: [] },
+    }
+    const selectedRows = rows.slice(0, 2)
+
+    renderWithProviders(
+      <KanbanBoard
+        attributes={attributes}
+        config={config}
+        rows={selectedRows}
+        onRecordMove={onRecordMove}
+        selectedRecordIds={new Set(selectedRows.map((row) => row.id))}
+      />,
+    )
+
+    const card = screen.getByText('Northstar').closest('[role="button"]')
+    card?.focus()
+    await user.keyboard('c')
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    await user.keyboard('{ArrowDown}')
+    await user.keyboard('{Enter}')
+
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeInTheDocument())
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Stage')
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Closed')
+    expect(onRecordMove).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Move cards' }))
+    expect(onRecordMove).toHaveBeenCalledTimes(2)
+    expect(onRecordMove).toHaveBeenNthCalledWith(1, selectedRows[0], 'closed')
+    expect(onRecordMove).toHaveBeenNthCalledWith(2, selectedRows[1], 'closed')
   })
 })

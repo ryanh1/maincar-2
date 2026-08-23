@@ -1,8 +1,9 @@
 import { closestCorners, DndContext, KeyboardSensor, PointerSensor, useDroppable, useSensor, useSensors } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { useState, type CSSProperties } from 'react'
+import { useCallback, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import type { AttributeDef, RecordRow } from '@/lib/crmTypes'
 
 import { KanbanCard } from './KanbanCard'
@@ -16,6 +17,10 @@ interface KanbanBoardProps {
   rows: RecordRow[]
   /** Writes a cross-column drop through the grid's existing optimistic update path. */
   onRecordMove?: (record: RecordRow, value: string | null) => void
+  /** Uses the grid's selection when the board is rendered inside RecordGrid. */
+  selectedRecordIds?: ReadonlySet<string>
+  /** Keeps Kanban selection changes in the grid's existing selection model. */
+  onToggleRecordSelection?: (recordId: string, extendRange?: boolean) => void
 }
 
 type KanbanDragData = { type: 'card'; recordId: string; columnKey: string } | { type: 'column'; columnKey: string }
@@ -66,13 +71,140 @@ function dragData(value: unknown): KanbanDragData | null {
   return null
 }
 
-function SortableKanbanCard({ record, columnKey, titleAttribute, fields }: { record: RecordRow; columnKey: string; titleAttribute: AttributeDef; fields: AttributeDef[] }) {
+type MovePickerState = { recordId: string; query: string; activeIndex: number }
+type PendingMove = { records: RecordRow[]; targetValue: string | null; targetLabel: string }
+
+function SortableKanbanCard({
+  record,
+  columnKey,
+  titleAttribute,
+  fields,
+  selected,
+  onToggleSelection,
+  onKeyDown,
+  onCardRef,
+  movePicker,
+  options,
+  onQueryChange,
+  onActiveIndexChange,
+  onChooseOption,
+  onCancel,
+}: {
+  record: RecordRow
+  columnKey: string
+  titleAttribute: AttributeDef
+  fields: AttributeDef[]
+  selected: boolean
+  onToggleSelection: (event: ChangeEvent<HTMLInputElement>) => void
+  onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void
+  onCardRef: (element: HTMLDivElement | null) => void
+  movePicker: MovePickerState | null
+  options: Array<{ value: string; label: string }>
+  onQueryChange: (query: string) => void
+  onActiveIndexChange: (index: number) => void
+  onChooseOption: (option: { value: string; label: string }) => void
+  onCancel: () => void
+}) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: cardDndId(record.id), data: { type: 'card', recordId: record.id, columnKey } satisfies KanbanDragData })
   const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition }
-  return <div ref={setNodeRef} style={style} {...attributes} {...listeners}><KanbanCard record={record} titleAttribute={titleAttribute} fields={fields} /></div>
+  const setRefs = (element: HTMLDivElement | null) => {
+    setNodeRef(element)
+    onCardRef(element)
+  }
+
+  return (
+    <div ref={setRefs} style={style} className="relative" {...attributes} {...listeners} onKeyDown={onKeyDown}>
+      <div className="absolute right-2 top-2 z-10 rounded bg-bg/80 p-0.5">
+        <input
+          type="checkbox"
+          aria-label={`Select ${record[titleAttribute.slug] || 'Untitled record'}`}
+          checked={selected}
+          onChange={onToggleSelection}
+          onClick={(event) => event.stopPropagation()}
+        />
+      </div>
+      <KanbanCard record={record} titleAttribute={titleAttribute} fields={fields} />
+      {movePicker && (
+        <div className="absolute left-0 top-full z-20 mt-1 w-full min-w-56 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md" role="listbox" aria-label={`Move ${record[titleAttribute.slug] || 'Untitled record'}`}>
+          <input
+            autoFocus
+            value={movePicker.query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault()
+                onActiveIndexChange(Math.min(movePicker.activeIndex + 1, options.length - 1))
+              } else if (event.key === 'ArrowUp') {
+                event.preventDefault()
+                onActiveIndexChange(Math.max(movePicker.activeIndex - 1, 0))
+              } else if (event.key === 'Enter') {
+                event.preventDefault()
+                const option = options[movePicker.activeIndex]
+                if (option) onChooseOption(option)
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                onCancel()
+              }
+            }}
+            placeholder="Move to stage…"
+            aria-label="Move to stage"
+            className="h-8 w-full rounded border border-border bg-bg px-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+          <div className="mt-1 max-h-40 overflow-y-auto" role="presentation">
+            {options.length === 0
+              ? <p className="px-2 py-2 text-xs text-text-muted">No matching stages.</p>
+              : options.map((option, index) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  aria-selected={index === movePicker.activeIndex}
+                  className={`flex h-8 w-full items-center rounded px-2 text-left text-sm ${index === movePicker.activeIndex ? 'bg-accent text-accent-foreground' : ''}`}
+                  onMouseEnter={() => onActiveIndexChange(index)}
+                  onClick={() => onChooseOption(option)}
+                >
+                  {option.label}
+                </button>
+              ))}
+          </div>
+          <p className="px-2 pb-1 pt-1 text-[11px] text-text-muted">Enter to move · Esc to cancel</p>
+        </div>
+      )}
+    </div>
+  )
 }
 
-function KanbanColumnView({ column, titleAttribute, fields, orderedRows }: { column: KanbanColumn; titleAttribute: AttributeDef; fields: AttributeDef[]; orderedRows: RecordRow[] }) {
+function KanbanColumnView({
+  column,
+  titleAttribute,
+  fields,
+  orderedRows,
+  selectedRecordIds,
+  onToggleSelection,
+  onCardKeyDown,
+  onCardRef,
+  movePicker,
+  moveOptions,
+  onQueryChange,
+  onActiveIndexChange,
+  onChooseOption,
+  onCancel,
+}: {
+  column: KanbanColumn
+  titleAttribute: AttributeDef
+  fields: AttributeDef[]
+  orderedRows: RecordRow[]
+  selectedRecordIds: ReadonlySet<string>
+  onToggleSelection: (recordId: string, event: ChangeEvent<HTMLInputElement>) => void
+  onCardKeyDown: (record: RecordRow, event: ReactKeyboardEvent<HTMLDivElement>) => void
+  onCardRef: (recordId: string, element: HTMLDivElement | null) => void
+  movePicker: MovePickerState | null
+  moveOptions: Map<string, Array<{ value: string; label: string }>>
+  onQueryChange: (query: string) => void
+  onActiveIndexChange: (index: number) => void
+  onChooseOption: (option: { value: string; label: string }) => void
+  onCancel: () => void
+}) {
   const { setNodeRef } = useDroppable({ id: columnDndId(column.key), data: { type: 'column', columnKey: column.key } satisfies KanbanDragData })
   return (
     <section className="flex w-72 shrink-0 flex-col rounded-md border border-border bg-surface-2">
@@ -84,7 +216,25 @@ function KanbanColumnView({ column, titleAttribute, fields, orderedRows }: { col
       </header>
       <SortableContext items={orderedRows.map((row) => cardDndId(row.id))} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} aria-label={`${column.label} cards`} className="flex min-h-20 flex-1 flex-col gap-2 overflow-y-auto p-2">
-          {orderedRows.map((row) => <SortableKanbanCard key={row.id} record={row} columnKey={column.key} titleAttribute={titleAttribute} fields={fields} />)}
+          {orderedRows.map((row) => (
+            <SortableKanbanCard
+              key={row.id}
+              record={row}
+              columnKey={column.key}
+              titleAttribute={titleAttribute}
+              fields={fields}
+              selected={selectedRecordIds.has(row.id)}
+              onToggleSelection={(event) => onToggleSelection(row.id, event)}
+              onKeyDown={(event) => onCardKeyDown(row, event)}
+              onCardRef={(element) => onCardRef(row.id, element)}
+              movePicker={movePicker?.recordId === row.id ? movePicker : null}
+              options={moveOptions.get(row.id) ?? []}
+              onQueryChange={onQueryChange}
+              onActiveIndexChange={onActiveIndexChange}
+              onChooseOption={onChooseOption}
+              onCancel={onCancel}
+            />
+          ))}
         </div>
       </SortableContext>
     </section>
@@ -92,13 +242,97 @@ function KanbanColumnView({ column, titleAttribute, fields, orderedRows }: { col
 }
 
 /** A saved-view Kanban board. Cards can be reordered, while column drops update the grouping field. */
-export function KanbanBoard({ attributes, config, rows, onRecordMove }: KanbanBoardProps) {
+export function KanbanBoard({ attributes, config, rows, onRecordMove, selectedRecordIds, onToggleRecordSelection }: KanbanBoardProps) {
   const groupAttribute = attributes.find((attribute) => attribute.id === config.kanban?.groupAttributeId && (attribute.type === 'select' || attribute.type === 'status'))
   const titleAttribute = attributes.find((attribute) => attribute.isIdentity) ?? attributes[0]
   const configuredFieldIds = config.kanban?.cardAttributeIds
   const cardFields = (configuredFieldIds ? attributes.filter((attribute) => configuredFieldIds.includes(attribute.id)) : attributes.filter((attribute) => attribute.id !== titleAttribute?.id && attribute.id !== groupAttribute?.id && config.columns.find((column) => column.attributeId === attribute.id)?.visible !== false).slice(0, 3)).filter((attribute) => attribute.id !== titleAttribute?.id)
   const [manualOrder, setManualOrder] = useState<Record<string, string[]>>({})
+  const [localSelectedRecordIds, setLocalSelectedRecordIds] = useState<Set<string>>(new Set())
+  const [movePicker, setMovePicker] = useState<MovePickerState | null>(null)
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null)
+  const cardRefs = useRef(new Map<string, HTMLDivElement>())
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
+  const selectedIds = selectedRecordIds ?? localSelectedRecordIds
+
+  const stageOptions = useMemo(() => {
+    if (!groupAttribute) return []
+    const visible = new Set(config.kanban?.visibleOptionValues ?? [])
+    const hidden = new Set(config.kanban?.hiddenTerminalOptionValues ?? [])
+    return [
+      ...selectOptions(groupAttribute)
+        .filter((option) => visible.has(option.value) && !hidden.has(option.value))
+        .map(({ value, label }) => ({ value, label })),
+      { value: '__no-value__', label: 'No value' },
+    ]
+  }, [config.kanban?.hiddenTerminalOptionValues, config.kanban?.visibleOptionValues, groupAttribute])
+
+  const filteredMoveOptions = useMemo(() => {
+    if (!movePicker) return []
+    const query = movePicker.query.trim().toLocaleLowerCase()
+    return stageOptions.filter((option) => !query || option.label.toLocaleLowerCase().includes(query) || option.value.toLocaleLowerCase().includes(query))
+  }, [movePicker, stageOptions])
+
+  const renderMovePicker = useMemo(() => {
+    if (!movePicker || filteredMoveOptions.length === 0 || movePicker.activeIndex < filteredMoveOptions.length) return movePicker
+    return { ...movePicker, activeIndex: filteredMoveOptions.length - 1 }
+  }, [filteredMoveOptions.length, movePicker])
+
+  const closeMovePicker = useCallback((recordId = movePicker?.recordId) => {
+    setMovePicker(null)
+    if (recordId) window.requestAnimationFrame(() => cardRefs.current.get(recordId)?.focus())
+  }, [movePicker?.recordId])
+
+  const toggleSelection = useCallback((recordId: string, event: ChangeEvent<HTMLInputElement>) => {
+    const extendRange = event.nativeEvent instanceof MouseEvent && event.nativeEvent.shiftKey
+    if (onToggleRecordSelection) {
+      onToggleRecordSelection(recordId, extendRange)
+      return
+    }
+    setLocalSelectedRecordIds((current) => {
+      const next = new Set(current)
+      if (next.has(recordId)) next.delete(recordId)
+      else next.add(recordId)
+      return next
+    })
+  }, [onToggleRecordSelection])
+
+  const openMovePicker = useCallback((record: RecordRow, initialQuery: string) => {
+    if (!onRecordMove) return
+    setMovePicker({ recordId: record.id, query: initialQuery, activeIndex: 0 })
+  }, [onRecordMove])
+
+  const onCardKeyDown = useCallback((record: RecordRow, event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+    if (event.target instanceof HTMLInputElement) return
+    if (event.key.length !== 1 || !onRecordMove) return
+    event.preventDefault()
+    event.stopPropagation()
+    openMovePicker(record, event.key)
+  }, [onRecordMove, openMovePicker])
+
+  const chooseMoveOption = useCallback((option: { value: string; label: string }) => {
+    if (!movePicker || !groupAttribute || !onRecordMove) return
+    const focusedRecord = rows.find((record) => record.id === movePicker.recordId)
+    if (!focusedRecord) return
+    const selectedRecordIdsForMove = selectedIds.has(focusedRecord.id) ? [...selectedIds] : [focusedRecord.id]
+    const records = rows.filter((record) => selectedRecordIdsForMove.includes(record.id))
+    const targetValue = option.value === '__no-value__' ? null : option.value
+    const recordsToMove = records.filter((record) => !Object.is(record[groupAttribute.slug], targetValue))
+    closeMovePicker(focusedRecord.id)
+    if (recordsToMove.length === 0) return
+    if (recordsToMove.length > 1) {
+      setPendingMove({ records: recordsToMove, targetValue, targetLabel: option.label })
+      return
+    }
+    onRecordMove(recordsToMove[0], targetValue)
+  }, [closeMovePicker, groupAttribute, movePicker, onRecordMove, rows, selectedIds])
+
+  const confirmPendingMove = useCallback(() => {
+    if (!pendingMove || !onRecordMove) return
+    for (const record of pendingMove.records) onRecordMove(record, pendingMove.targetValue)
+    setPendingMove(null)
+  }, [onRecordMove, pendingMove])
 
   if (!groupAttribute || !titleAttribute) return <div className="flex h-full items-center justify-center text-sm text-text-muted">Choose a select or status field to group this board.</div>
 
@@ -129,7 +363,8 @@ export function KanbanBoard({ attributes, config, rows, onRecordMove }: KanbanBo
   }
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={({ active, over }) => {
+    <>
+      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={({ active, over }) => {
       const activeData = dragData(active.data.current)
       const overData = dragData(over?.data.current)
       if (!activeData || activeData.type !== 'card' || !overData) return
@@ -140,10 +375,46 @@ export function KanbanBoard({ attributes, config, rows, onRecordMove }: KanbanBo
         const record = rows.find((candidate) => candidate.id === activeData.recordId)
         if (record) onRecordMove?.(record, targetColumnKey === '__no-value__' ? null : targetColumnKey)
       }
-    }}>
-      <div className="min-h-0 flex-1 overflow-x-auto bg-surface p-3"><div className="flex min-h-full min-w-max gap-3">
-        {columns.map((column) => <KanbanColumnView key={column.key} column={column} titleAttribute={titleAttribute} fields={cardFields} orderedRows={rowsForColumn(column)} />)}
-      </div></div>
-    </DndContext>
+      }}>
+        <div className="min-h-0 flex-1 overflow-x-auto bg-surface p-3"><div className="flex min-h-full min-w-max gap-3">
+          {columns.map((column) => (
+            <KanbanColumnView
+              key={column.key}
+              column={column}
+              titleAttribute={titleAttribute}
+              fields={cardFields}
+              orderedRows={rowsForColumn(column)}
+              selectedRecordIds={selectedIds}
+              onToggleSelection={toggleSelection}
+              onCardKeyDown={onCardKeyDown}
+              onCardRef={(recordId, element) => {
+                if (element) cardRefs.current.set(recordId, element)
+                else cardRefs.current.delete(recordId)
+              }}
+              movePicker={renderMovePicker}
+              moveOptions={new Map(renderMovePicker ? [[renderMovePicker.recordId, filteredMoveOptions]] : [])}
+              onQueryChange={(query) => setMovePicker((current) => current ? { ...current, query, activeIndex: 0 } : current)}
+              onActiveIndexChange={(activeIndex) => setMovePicker((current) => current ? { ...current, activeIndex } : current)}
+              onChooseOption={chooseMoveOption}
+              onCancel={() => closeMovePicker()}
+            />
+          ))}
+        </div></div>
+      </DndContext>
+      <AlertDialog open={pendingMove !== null} onOpenChange={(open) => { if (!open) setPendingMove(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Move {pendingMove?.records.length ?? 0} cards?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Move {pendingMove?.records.length ?? 0} selected cards by <strong>{groupAttribute.name}</strong> to <strong>{pendingMove?.targetLabel}</strong>?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmPendingMove}>Move cards</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
