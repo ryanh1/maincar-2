@@ -57,8 +57,12 @@ export async function mailBackfillJob({ mailAccountId }: MailBackfillPayload): P
 
   const provider = await getMailProvider(account.id, account.orgId)
   const since = twelveMonthsAgo()
-  const page = await provider.listBackfillMessages(backfill.cursor, MAIL_BACKFILL_PAGE_SIZE, since)
-  const eventPage = await provider.listBackfillEvents(backfill.eventCursor, MAIL_BACKFILL_PAGE_SIZE, since)
+  const page = backfill.messagesComplete
+    ? { messages: [], nextCursor: null }
+    : await provider.listBackfillMessages(backfill.cursor, MAIL_BACKFILL_PAGE_SIZE, since)
+  const eventPage = backfill.eventsComplete
+    ? { events: [], nextCursor: null }
+    : await provider.listBackfillEvents(backfill.eventCursor, MAIL_BACKFILL_PAGE_SIZE, since)
   let matchedCount = 0
   let meetingsMatchedCount = 0
 
@@ -155,12 +159,16 @@ export async function mailBackfillJob({ mailAccountId }: MailBackfillPayload): P
       if (await attachMeetingMatchInTx(tx, meeting, match)) meetingsMatchedCount += 1
     }
 
-    const complete = page.nextCursor === null && eventPage.nextCursor === null
+    const messagesComplete = backfill.messagesComplete || page.nextCursor === null
+    const eventsComplete = backfill.eventsComplete || eventPage.nextCursor === null
+    const complete = messagesComplete && eventsComplete
     await tx.mailBackfill.updateMany({
       where: { mailAccountId },
       data: {
         cursor: page.nextCursor,
         eventCursor: eventPage.nextCursor,
+        messagesComplete,
+        eventsComplete,
         scannedCount: { increment: page.messages.length },
         matchedCount: { increment: matchedCount },
         eventsScannedCount: { increment: eventPage.events.length },

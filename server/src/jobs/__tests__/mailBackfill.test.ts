@@ -118,6 +118,19 @@ describe('mailBackfillJob', () => {
       eventsScannedCount: { increment: 1 }, meetingsMatchedCount: { increment: 1 }, status: 'complete',
     }) }))
   })
+
+  it('does not restart message paging while only calendar pages remain', async () => {
+    db.backfillUpsert.mockResolvedValue({ cursor: null, eventCursor: 'events-2', messagesComplete: true, eventsComplete: false })
+    provider.listBackfillEvents.mockResolvedValue({ events: [], nextCursor: null })
+
+    await mailBackfillJob({ mailAccountId: 'mailbox-1' })
+
+    expect(provider.listBackfillMessages).not.toHaveBeenCalled()
+    expect(provider.listBackfillEvents).toHaveBeenCalledWith('events-2', 500, expect.any(Date))
+    expect(db.backfillUpdateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      messagesComplete: true, eventsComplete: true, status: 'complete',
+    }) }))
+  })
 })
 
 describe('mail backfill queue wiring', () => {

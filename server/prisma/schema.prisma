@@ -1180,6 +1180,8 @@ model MailBackfill {
   status String @default("running")
   cursor String?
   eventCursor String?
+  messagesComplete Boolean @default(false)
+  eventsComplete Boolean @default(false)
   scannedCount Int @default(0)
   matchedCount Int @default(0)
   eventsScannedCount Int @default(0)
