@@ -131,7 +131,7 @@ export function Records_SavedViewControls({
       )}
 
       <Dialog open={isNewViewDialogOpen} onOpenChange={(open) => { if (!open) closeNewViewDialog() }}>
-        <ViewDialogContent size="sm">
+        <ViewDialogContent className="max-w-sm">
           <ViewDialogHeader>
             <ViewDialogTitle>Save as new view</ViewDialogTitle>
             <ViewDialogDescription>This saves the current arrangement as a new Personal view.</ViewDialogDescription>
