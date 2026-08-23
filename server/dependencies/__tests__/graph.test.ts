@@ -77,6 +77,18 @@ describe('graphClient happy path', () => {
     expect(urlOf(fetchMock.mock.calls[1])).toBe(deltaLink)
   })
 
+  it('lists folders and starts a delta in the requested folder', async () => {
+    fetchMock.mockImplementation(async () => graphResponse(200, { value: [] }))
+    const c = graphClient('tok')
+    await c.listMailFolders!()
+    await c.listMessages({ folderId: 'sentitems' })
+
+    expect(urlOf(fetchMock.mock.calls[0])).toBe('https://graph.microsoft.com/v1.0/me/mailFolders')
+    expect(urlOf(fetchMock.mock.calls[1])).toBe(
+      'https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages/delta',
+    )
+  })
+
   it('createEvent POSTs to /me/events and returns the stored event', async () => {
     fetchMock.mockResolvedValue(graphResponse(201, { id: 'ev-1', subject: 'Demo' }))
     const ev = await graphClient('tok').createEvent({ subject: 'Demo' })

@@ -1124,6 +1124,13 @@ model MailAccount {
   // Exactly one per (orgId, userId) is true. Moved atomically in mailAccounts.ts.
   isPrimary Boolean @default(false)
 
+  // Opaque provider cursors for the live mailbox and calendar delta polls. Google
+  // stores its historyId / syncToken and Microsoft stores its complete deltaLink;
+  // neither is parsed or exposed outside the sync worker.
+  mailSyncCursor     String?
+  calendarSyncCursor String?
+  lastSyncedAt       DateTime?
+
   // The synced messages that came from this mailbox (Email.mailAccountId →
   // MailAccount). ADDITIVE ONLY (MAI-137 T9): nothing else on this model changes,
   // and no credential, token, or scope ever leaves it. The FK on the Email side is

@@ -166,6 +166,10 @@ const GraphMessagesDeltaSchema = z.object({
   '@odata.deltaLink': z.string().nullish(),
 })
 
+const GraphMailFoldersSchema = z.object({
+  value: z.array(z.object({ id: z.string() })).nullish(),
+})
+
 // Graph's `POST /me/sendMail` returns 202 with no body; the composed transport that
 // backs this seam surfaces the created message so `sentAt` is the PROVIDER's send
 // instant, read back here rather than computed locally (SPEC AC 8).
@@ -404,22 +408,38 @@ export function microsoftMail(
       cursor: string | null,
       _limit: number,
     ): Promise<{ messages: InboundMessage[]; nextCursor: string | null }> {
-      // The cursor IS Graph's opaque delta/next URL. A null cursor opens a fresh
-      // inbox delta; a stored one is replayed verbatim. Graph decides the page size
-      // and hands back the next URL, so `limit` is advisory here (contrast Gmail,
-      // which pages by maxResults).
-      const raw = await guardDelta(() =>
-        client().then((c) => c.listMessages(cursor === null ? {} : { deltaLink: cursor })),
-      )
-      const page = parseOrThrow(GraphMessagesDeltaSchema, raw, 'a message delta page')
-      const messages = oldestFirst(
-        (page.value ?? []).map((m) => toInboundMessage(m, account.emailAddress)),
-      )
-      // A page carrying more results has a nextLink; the final page has a deltaLink to
-      // replay later. Either is the next cursor; when neither is present the sweep has
-      // no continuation.
-      const nextCursor = page['@odata.nextLink'] ?? page['@odata.deltaLink'] ?? null
-      return { messages, nextCursor }
+      // Every Graph folder owns a distinct deltaLink. Store their complete cursor
+      // map as one opaque value so moving mail between Inbox, Sent, and user folders
+      // never turns the mailbox into an Inbox-only projection. Older bare deltaLinks
+      // remain readable as a single Inbox cursor during rollout.
+      type CursorMap = Record<string, string | null>
+      const decode = (value: string | null): CursorMap => {
+        if (value === null) return {}
+        try {
+          const parsed = JSON.parse(value) as { folders?: CursorMap }
+          if (parsed && parsed.folders && typeof parsed.folders === 'object') return parsed.folders
+        } catch { /* A pre-MAI-438 cursor is an Inbox deltaLink. */ }
+        return { inbox: value }
+      }
+      const encode = (folders: CursorMap): string => JSON.stringify({ folders })
+      const stored = decode(cursor)
+      const graph = await client()
+      let folderIds = Object.keys(stored)
+      if (graph.listMailFolders) {
+        const rawFolders = await guardDelta(() => graph.listMailFolders!())
+        folderIds = parseOrThrow(GraphMailFoldersSchema, rawFolders, 'mail folders').value?.map((folder) => folder.id) ?? []
+      }
+      if (folderIds.length === 0) folderIds = ['inbox']
+
+      const next: CursorMap = { ...stored }
+      const messages: InboundMessage[] = []
+      for (const folderId of folderIds) {
+        const raw = await guardDelta(() => graph.listMessages(stored[folderId] ? { deltaLink: stored[folderId]! } : { folderId }))
+        const page = parseOrThrow(GraphMessagesDeltaSchema, raw, 'a message delta page')
+        messages.push(...(page.value ?? []).map((m) => toInboundMessage(m, account.emailAddress)))
+        next[folderId] = page['@odata.nextLink'] ?? page['@odata.deltaLink'] ?? null
+      }
+      return { messages: oldestFirst(messages), nextCursor: encode(next) }
     },
 
     async getMessage(providerMsgId: string): Promise<InboundMessage> {
