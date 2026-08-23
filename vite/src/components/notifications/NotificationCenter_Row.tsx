@@ -1,6 +1,7 @@
-import { MoreHorizontal } from 'lucide-react'
+import { BellRing, MoreHorizontal } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -32,7 +33,7 @@ export function NotificationRow({
   onAction: (action: NotificationAction) => void
 }) {
   const sourcePath = sourcePathFor(notification)
-  const title = sourcePath ? <Link to={sourcePath} className="font-medium text-primary underline-offset-4 hover:underline">{notification.source.title}</Link> : notification.source.title
+  const sourceLabel = sourceLabelFor(notification.source.type)
 
   return (
     <article role="listitem" className="flex gap-3 border-b border-border px-4 py-3 last:border-0">
@@ -42,11 +43,13 @@ export function NotificationRow({
         className="mt-1"
         onCheckedChange={(checked) => onSelect(checked === true)}
       />
+      <NotificationActor actor={notification.actor} />
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-2">
-          <p className="min-w-0 flex-1 truncate text-sm">{title}</p>
+          <p className="min-w-0 flex-1 text-sm">{notification.source.title}</p>
           {!notification.readAt && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
         </div>
+        {sourcePath && <Link to={sourcePath} className="mt-1 inline-block text-xs font-medium text-primary underline-offset-4 hover:underline">Open {sourceLabel}</Link>}
         {notification.source.preview && <p className="mt-1 line-clamp-2 text-sm text-text-muted">{notification.source.preview}</p>}
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted">
           <span className="tabular-nums">{formatDateTime(notification.createdAt, timeZone)}</span>
@@ -57,6 +60,19 @@ export function NotificationRow({
       <RowActions notification={notification} view={view} pending={pending} onAction={onAction} />
     </article>
   )
+}
+
+function NotificationActor({ actor }: { actor: Notification['actor'] }) {
+  if (actor) {
+    return <span aria-label={`Notification from ${actor.name}`}><Avatar name={actor.name} src={actor.imageUrl} /></span>
+  }
+  return <span role="img" aria-label="System notification" className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-text-muted"><BellRing size={16} aria-hidden /></span>
+}
+
+function sourceLabelFor(type: string): string {
+  if (type === 'call') return 'call'
+  if (type === 'note') return 'record'
+  return 'item'
 }
 
 export function BulkActions({ count, view, pending, onAction }: { count: number; view: NotificationView; pending: boolean; onAction: (action: NotificationAction) => void }) {

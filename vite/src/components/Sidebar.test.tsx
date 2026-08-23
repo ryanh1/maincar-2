@@ -40,8 +40,9 @@ function brokenConnection(n: number): BrokenConnection {
 
 const ORG = { id: 'org-1', name: 'Acme' }
 
-function renderSidebar() {
-  renderWithProviders(<Sidebar open={false} onClose={vi.fn()} />)
+function renderSidebar(onClose = vi.fn()) {
+  renderWithProviders(<Sidebar open={false} onClose={onClose} />)
+  return onClose
 }
 
 beforeEach(() => {
@@ -68,6 +69,16 @@ describe('Sidebar', () => {
     renderSidebar()
 
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inbox' })).toBeInTheDocument()
+  })
+
+  it('closes the mobile navigation when the rep opens Inbox', async () => {
+    const onClose = renderSidebar()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Inbox' }))
+
+    expect(onClose).toHaveBeenCalledOnce()
   })
 
   it('lists only visible, supported objects and active lists as keyboard-reachable grid links', async () => {
