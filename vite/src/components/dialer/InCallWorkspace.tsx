@@ -18,6 +18,7 @@ export interface InCallWorkspaceProps {
   /** The linked company from the live call's response, if the number matched a person. */
   companyId?: string | null
   recording?: boolean
+  onNoteTextChange?: (noteText: string) => void
 }
 
 function personName(person: { firstName: string | null; lastName: string | null; preferredFirstName: string | null } | null) {
@@ -26,7 +27,7 @@ function personName(person: { firstName: string | null; lastName: string | null;
 }
 
 /** The live-call view: CRM context, durable notes, an on-demand DTMF keypad, and controls. */
-export function InCallWorkspace({ orgId, callId, toE164, companyId, recording = false }: InCallWorkspaceProps) {
+export function InCallWorkspace({ orgId, callId, toE164, companyId, recording = false, onNoteTextChange }: InCallWorkspaceProps) {
   const { phase } = useDialer()
   const detailQuery = useGetCallDetail(orgId, callId)
   const saveNote = useSaveCallNote(orgId, callId)
@@ -79,6 +80,7 @@ export function InCallWorkspace({ orgId, callId, toE164, companyId, recording = 
           onChange={(event) => {
             setDirty(true)
             setNoteText(event.target.value)
+            onNoteTextChange?.(event.target.value)
           }}
         />
         {keypadOpen ? (

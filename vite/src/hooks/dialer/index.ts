@@ -7,6 +7,7 @@ export { isAdoptableInFlightCallError, useCreateCall } from './useCreateCall'
 export { useEndCall } from './useEndCall'
 export { useLogCallDisposition } from './useLogCallDisposition'
 export { useSaveCallNote } from './useSaveCallNote'
+export { useCompleteCall } from './useCompleteCall'
 
 // What each mutation is called with. These are hook shapes, not API shapes, so
 // they live beside the hook rather than in lib/callTypes.ts — that file mirrors
@@ -30,6 +31,8 @@ export type {
   GetCallsResponse,
   CreateCallResponse,
   CallDetailResponse,
+  CompleteCallInput,
+  CompleteCallResponse,
   VoiceTokenResponse,
 } from '@/lib/callTypes'
 export { CALL_SORT_COLUMNS } from '@/lib/callTypes'

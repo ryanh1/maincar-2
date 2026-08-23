@@ -102,6 +102,17 @@ describe('InCallWorkspace', () => {
     expect(saveNoteMock).toHaveBeenCalledWith({ noteText: 'Asked for a demo.' })
   })
 
+  it('shares the current note with the post-call action before its debounce settles', () => {
+    const onNoteTextChange = vi.fn()
+    render(
+      <InCallWorkspace orgId="org-1" callId="call-1" toE164="+12025550123" recording={false} onNoteTextChange={onNoteTextChange} />,
+    )
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Call notes' }), { target: { value: 'Call back after lunch.' } })
+
+    expect(onNoteTextChange).toHaveBeenCalledWith('Call back after lunch.')
+  })
+
   it('opens the keypad over notes while leaving call controls available', () => {
     render(<InCallWorkspace orgId="org-1" callId="call-1" toE164="+12025550123" recording={false} />)
 

@@ -6,6 +6,9 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import type { Prisma } from '../generated/prisma/client.js'
+import { activityFromTask, recordActivityInTx } from '../crm/activityFeed.js'
+import { mapTaskToApi, rollUpSpineLinks, type LinkTarget } from '../crm/taskNote.js'
+import { syncWorkLinks } from '../crm/workLinks.js'
 
 const router = Router({ mergeParams: true })
 
@@ -59,6 +62,12 @@ const saveCallNextStepsSchema = z.object({
     context.addIssue({ code: 'custom', message: 'Choose each next-step type only once.' })
   }
 })
+
+const completeCallSchema = z.object({
+  dispositionId: z.string().trim().min(1).max(128),
+  noteText: z.string().trim().max(5_000).nullable().optional(),
+  nextSteps: saveCallNextStepsSchema.shape.nextSteps,
+}).strict()
 
 function mapType(type: {
   id: string; value: string; label: string; color: string; icon: string | null; isPinned: boolean; pinOrder: number | null; sortOrder: number; isOverflow: boolean; requiresDateTime: boolean; createsTask: boolean; isArchived: boolean; createdAt: Date; updatedAt: Date
@@ -311,6 +320,100 @@ callNextStepsRouter.put('/', wrapRoute('PUT /api/orgs/:orgId/calls/:callId/next-
 
   // --- Return response ---
   res.json({ nextSteps: nextSteps.map(mapCallNextStep) })
+}))
+
+// The post-call action is one transaction: a rep who clicks Save & Next either
+// gets the outcome, note, follow-ups, and resulting tasks together, or remains
+// on the completed call with the draft still present to retry.
+export const callCompletionRouter = Router({ mergeParams: true })
+
+callCompletionRouter.use(requireAuth)
+
+callCompletionRouter.post('/', wrapRoute('POST /api/orgs/:orgId/calls/:callId/complete', async (req, res) => {
+  const authReq = req as AuthenticatedRequest
+  const orgId = String(req.params.orgId)
+  const callId = String(req.params.callId)
+  const userId = authReq.user!.id
+  const membership = await requireMembership(authReq, res, orgId)
+  if (!membership) return
+
+  // --- Parse & validate params ---
+  const parsed = completeCallSchema.safeParse(req.body ?? {})
+  if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
+
+  // --- Verify ownership ---
+  const [call, disposition] = await Promise.all([
+    prisma.call.findFirst({ where: { id: callId, orgId }, select: { id: true, personId: true, companyId: true, dealId: true, toE164: true } }),
+    prisma.dispositionDef.findFirst({ where: { id: parsed.data.dispositionId, orgId, isArchived: false }, select: { id: true } }),
+  ])
+  if (!call) return void res.status(404).json({ error: 'Call not found' })
+  if (!disposition) return void res.status(400).json({ error: 'Choose an active disposition from this organization.' })
+
+  const typeIds = parsed.data.nextSteps.map((nextStep) => nextStep.nextStepTypeId)
+  const types = await prisma.nextStepType.findMany({
+    where: { id: { in: typeIds }, orgId, isArchived: false },
+    select: { id: true, value: true, label: true, requiresDateTime: true, createsTask: true },
+  })
+  if (types.length !== typeIds.length) return void res.status(400).json({ error: 'Choose active next-step types from this organization.' })
+  const typesById = new Map(types.map((type) => [type.id, type]))
+  const dateRequired = parsed.data.nextSteps.find((nextStep) => typesById.get(nextStep.nextStepTypeId)?.requiresDateTime && !nextStep.scheduledAt)
+  if (dateRequired) return void res.status(400).json({ error: 'Choose a date and time for every date-required next step.' })
+
+  const targets: LinkTarget[] = [
+    ...(call.personId ? [{ object: 'person', id: call.personId }] : []),
+    ...(call.companyId ? [{ object: 'company', id: call.companyId }] : []),
+    ...(call.dealId ? [{ object: 'deal', id: call.dealId }] : []),
+  ]
+
+  // --- Execute query ---
+  const tasks = await prisma.$transaction(async (tx) => {
+    const result = await tx.call.updateMany({
+      where: { id: callId, orgId },
+      data: { dispositionId: disposition.id, ...(parsed.data.noteText === undefined ? {} : { noteText: parsed.data.noteText?.trim() || null }) },
+    })
+    if (result.count === 0) throw new Error('Call disappeared while saving.')
+
+    await tx.callNextStep.deleteMany({ where: { callId, orgId } })
+    if (parsed.data.nextSteps.length > 0) {
+      await tx.callNextStep.createMany({
+        data: parsed.data.nextSteps.map((nextStep, sortOrder) => ({
+          orgId, callId, nextStepTypeId: nextStep.nextStepTypeId, scheduledAt: nextStep.scheduledAt ?? null, sortOrder,
+        })),
+      })
+    }
+
+    const created = []
+    for (const nextStep of parsed.data.nextSteps) {
+      const type = typesById.get(nextStep.nextStepTypeId)
+      if (!type?.createsTask) continue
+      const task = await tx.task.create({
+        data: {
+          orgId,
+          title: `${type.label}: ${call.toE164}`,
+          type: type.value === 'callback' ? 'call' : 'todo',
+          priority: 'med',
+          commitment: 'soft',
+          assigneeUserId: userId,
+          dueAt: nextStep.scheduledAt ?? null,
+          remindAt: nextStep.scheduledAt ?? null,
+          origin: 'manual',
+        },
+      })
+      await syncWorkLinks(tx, { orgId, source: 'task', sourceId: task.id, targets })
+      await recordActivityInTx(tx, activityFromTask(task, 'created', rollUpSpineLinks(targets), userId))
+      created.push(task)
+    }
+    return created
+  })
+
+  const nextSteps = await prisma.callNextStep.findMany({
+    where: { callId, orgId },
+    orderBy: { sortOrder: 'asc' },
+    include: { nextStepType: { select: { id: true, value: true, label: true, color: true, icon: true, requiresDateTime: true, createsTask: true } } },
+  })
+
+  // --- Return response ---
+  res.json({ nextSteps: nextSteps.map(mapCallNextStep), tasks: tasks.map(mapTaskToApi) })
 }))
 
 export default router

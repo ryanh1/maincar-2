@@ -35,6 +35,9 @@ vi.mock('@/components/dialer/DialerDispositionBar', () => ({
     <div data-testid="disposition-bar" data-org={props.orgId} data-call={props.callId} data-terminal-status={props.terminalStatus ?? ''} />
   ),
 }))
+vi.mock('@/components/dialer/DialerPostCallActions', () => ({
+  DialerPostCallActions: () => <div data-testid="post-call-actions" />,
+}))
 
 function setDialer(overrides: Partial<DialerContextValue> = {}): DialerContextValue {
   const value: DialerContextValue = {

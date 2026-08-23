@@ -15,7 +15,7 @@ import companiesRouter from './routes/companies.js'
 import dealsRouter from './routes/deals.js'
 import detailLayoutsRouter from './routes/detailLayouts.js'
 import dispositionsRouter from './routes/dispositions.js'
-import nextStepsRouter, { callNextStepsRouter } from './routes/nextSteps.js'
+import nextStepsRouter, { callCompletionRouter, callNextStepsRouter } from './routes/nextSteps.js'
 import emailRouter from './routes/email.js'
 import emailsRouter from './routes/emails.js'
 import fieldHistoryRouter from './routes/fieldHistory.js'
@@ -97,6 +97,7 @@ app.use('/api/email', emailRouter)
 app.use('/api/orgs/:orgId/phone-numbers', phoneNumbersRouter)
 app.use('/api/orgs/:orgId/calls', callsRouter)
 app.use('/api/orgs/:orgId/calls/:callId/next-steps', callNextStepsRouter)
+app.use('/api/orgs/:orgId/calls/:callId/complete', callCompletionRouter)
 app.use('/api/orgs/:orgId/calls/:callId/comments', callCommentsRouter)
 app.use('/api/orgs/:orgId/dispositions', dispositionsRouter)
 app.use('/api/orgs/:orgId/next-steps', nextStepsRouter)
