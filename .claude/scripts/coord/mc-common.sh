@@ -93,9 +93,9 @@ mc_sync_dependencies() {
   done
 }
 
-# Every issue clone owns its dependency trees.  Bootstrap each committed npm
-# package root independently so a clone never borrows node_modules from the
-# runnable primary checkout.
+# Every issue clone gets usable dependencies for each committed npm package
+# root. A clone may reuse the primary tree only when both manifests match;
+# otherwise npm ci creates a clone-local tree from its committed lockfile.
 mc_issue_clone_dependency_roots() {
   local checkout="$1" root
   for root in . server vite firebase; do
@@ -103,14 +103,44 @@ mc_issue_clone_dependency_roots() {
   done
 }
 
+mc_can_reuse_primary_dependencies() {
+  local checkout="$1" root="$2" clone_root primary_root
+  clone_root="$checkout/$root"
+  primary_root="$PRIMARY_CHECKOUT/$root"
+  [ -d "$primary_root/node_modules" ] &&
+    [ -f "$clone_root/package.json" ] &&
+    [ -f "$clone_root/package-lock.json" ] &&
+    [ -f "$primary_root/package.json" ] &&
+    [ -f "$primary_root/package-lock.json" ] &&
+    cmp -s "$clone_root/package.json" "$primary_root/package.json" &&
+    cmp -s "$clone_root/package-lock.json" "$primary_root/package-lock.json"
+}
+
 mc_bootstrap_issue_clone() {
-  local checkout="$1" roots
+  local checkout="$1" roots root clone_root primary_root
   roots="$(mc_issue_clone_dependency_roots "$checkout")"
   [ -n "$roots" ] || {
     echo "mc-bootstrap: no committed package locks found in $checkout" >&2
     return 1
   }
-  printf '%s\n' "$roots" | mc_sync_dependencies "$checkout"
+  while IFS= read -r root; do
+    clone_root="$checkout/$root"
+    primary_root="$PRIMARY_CHECKOUT/$root"
+    if [ ! -e "$clone_root/node_modules" ] && [ ! -L "$clone_root/node_modules" ] && mc_can_reuse_primary_dependencies "$checkout" "$root"; then
+      ln -s "$primary_root/node_modules" "$clone_root/node_modules"
+    elif [ -L "$clone_root/node_modules" ] &&
+      mc_can_reuse_primary_dependencies "$checkout" "$root" &&
+      [ "$(readlink "$clone_root/node_modules")" = "$primary_root/node_modules" ]; then
+      :
+    else
+      [ ! -L "$clone_root/node_modules" ] || rm "$clone_root/node_modules"
+      if [ "$root" = '.' ]; then
+        (cd "$checkout" && npm ci) || return 1
+      else
+        (cd "$clone_root" && npm ci) || return 1
+      fi
+    fi
+  done <<< "$roots"
 }
 
 mc_first_missing_issue_clone_dependency_root() {

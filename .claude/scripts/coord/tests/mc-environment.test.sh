@@ -45,6 +45,12 @@ test_env=(
 )
 (cd "$SANDBOX/primary" && env "${test_env[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" sync)
 
+for package_root in . server vite firebase; do
+  package_dir="$SANDBOX/primary/$package_root"
+  mkdir -p "$package_dir/node_modules"
+  touch "$package_dir/node_modules/.mc-primary-dependency"
+done
+
 mkdir -p "$SANDBOX/bin"
 cat > "$SANDBOX/bin/npm" <<'EOF'
 #!/usr/bin/env bash
@@ -59,17 +65,52 @@ EOF
 chmod +x "$SANDBOX/bin/npm"
 
 clone_env=("${test_env[@]}" MC_FAKE_NPM_LOG="$SANDBOX/npm.log" PATH="$SANDBOX/bin:$PATH")
+: > "$SANDBOX/npm.log"
 env "${clone_env[@]}" "$CLONE" "$SANDBOX/issue-clone"
 test -f "$SANDBOX/issue-clone/.env"
 test ! -L "$SANDBOX/issue-clone/.env"
 cmp -s "$SANDBOX/primary/.env" "$SANDBOX/issue-clone/.env"
 for package_root in . server vite firebase; do
-  test -f "$SANDBOX/issue-clone/$package_root/node_modules/.mc-bootstrap-installed"
+  primary_package_dir="$SANDBOX/primary/$package_root"
+  clone_package_dir="$SANDBOX/issue-clone/$package_root"
+  test -L "$clone_package_dir/node_modules"
+  test "$(readlink "$clone_package_dir/node_modules")" = "$primary_package_dir/node_modules"
+  test -f "$clone_package_dir/node_modules/.mc-primary-dependency"
 done
+if grep -F '|ci' "$SANDBOX/npm.log" >/dev/null; then
+  echo 'mc-clone reinstalled dependencies despite matching package manifests' >&2
+  exit 1
+fi
 if ! (cd "$SANDBOX/issue-clone" && env "${clone_env[@]}" "$ROOT/.claude/scripts/coord/mc-gate" --focused -- npm --prefix server exec vitest run src/example.test.ts); then
   echo 'mc-clone did not provision the dependencies needed for Prisma generation' >&2
   exit 1
 fi
+
+git clone "$SANDBOX/upstream.git" "$SANDBOX/manifest-updater" --quiet
+git -C "$SANDBOX/manifest-updater" config user.name 'Environment test'
+git -C "$SANDBOX/manifest-updater" config user.email 'environment-test@example.test'
+git -C "$SANDBOX/manifest-updater" checkout main --quiet
+printf '{"name":"server","lockfileVersion":3,"requires":true,"packages":{"":{"version":"2.0.0"}}}\n' > "$SANDBOX/manifest-updater/server/package-lock.json"
+git -C "$SANDBOX/manifest-updater" add server/package-lock.json
+git -C "$SANDBOX/manifest-updater" commit -m 'Change server package lock' --quiet
+git -C "$SANDBOX/manifest-updater" push origin main --quiet
+(cd "$SANDBOX/primary" && env "${test_env[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" sync)
+
+: > "$SANDBOX/npm.log"
+env "${clone_env[@]}" "$CLONE" "$SANDBOX/changed-lock-clone"
+test ! -L "$SANDBOX/changed-lock-clone/server/node_modules"
+test -f "$SANDBOX/changed-lock-clone/server/node_modules/.mc-bootstrap-installed"
+test "$(grep -Fc '|ci' "$SANDBOX/npm.log")" -eq 1
+for package_root in . vite firebase; do
+  primary_package_dir="$SANDBOX/primary/$package_root"
+  clone_package_dir="$SANDBOX/changed-lock-clone/$package_root"
+  test -L "$clone_package_dir/node_modules"
+  test "$(readlink "$clone_package_dir/node_modules")" = "$primary_package_dir/node_modules"
+done
+
+: > "$SANDBOX/npm.log"
+(cd "$SANDBOX/changed-lock-clone" && env "${clone_env[@]}" ./.claude/scripts/coord/mc-bootstrap)
+test "$(grep -Fc '|ci' "$SANDBOX/npm.log")" -eq 1
 
 rm -rf "$SANDBOX/issue-clone/server/node_modules"
 : > "$SANDBOX/npm.log"

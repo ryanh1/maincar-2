@@ -30,9 +30,10 @@ npm run hooks:install
 ```
 
 `mc-clone` syncs the local mirror, copies the primary checkout's ignored `.env`, and
-runs `npm ci` in each committed package root (`.`, `server`, `vite`, and `firebase`)
-before declaring the clone ready. The clone owns those dependency trees and its `.env`:
-neither is a symlink or relies on the runnable primary checkout. If a clone was
+provisions each committed package root (`.`, `server`, `vite`, and `firebase`) before
+declaring the clone ready. Matching package manifests reuse the primary dependency tree;
+a mismatch runs `npm ci` from the clone's committed lockfile. The clone owns its `.env`,
+which is neither a symlink nor reliant on the runnable primary checkout. If a clone was
 created without bootstrap or its dependencies are incomplete, run
 `./.claude/scripts/coord/mc-bootstrap` from that clone before using `mc-gate`. Use one
 clone per issue. Never edit or commit in the normal `maincar-2` folder.
