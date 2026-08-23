@@ -126,6 +126,7 @@ model Org {
   // its feed rows away — the same onDelete: Cascade the rest of the CRM spine
   // already uses.
   activityEntries ActivityEntry[]
+  activityLinks   ActivityLink[]
 
   // Work objects (MAI-141 T13). Back-relations so a deleted org cascades its
   // tasks and notes away — the same onDelete: Cascade the rest of the CRM spine
@@ -1324,6 +1325,8 @@ model Company {
   attentionReason String?
   callbackDate    DateTime?
   source          String? // manual | import | enrichment | inbound_call | ...
+  // Maintained by CRM activity writers; avoids an expensive timeline count on every list row.
+  activityCount   Int     @default(0)
 
   customJson Json @default("{}")
 
@@ -1412,6 +1415,8 @@ model Person {
 
   source          String? // manual | import | enrichment | inbound_call | ...
   lastContactedAt DateTime?
+  // Maintained by CRM activity writers; the count includes every attached activity.
+  activityCount   Int       @default(0)
 
   nameAudioUrl String? // clip of them saying their own name, played pre-ring — PHASE 2 fill
 
@@ -1704,6 +1709,8 @@ model Deal {
   lostReason String? // a user picklist; free text for now
 
   ownerUserId String?
+  // Maintained by CRM activity writers; the count includes every attached activity.
+  activityCount Int @default(0)
 
   customJson Json @default("{}")
 
@@ -2161,6 +2168,8 @@ model Email {
   company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
   dealId    String?
   deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  // A user-chosen association is authoritative; automatic rematching never replaces it.
+  manualAttach Boolean @default(false)
 
   // WHICH SYNCED MAILBOX this row came from — not "the sender", which is an
   // EmailParticipant with role "from". MailAccount is the mailbox model owned by
@@ -2475,6 +2484,8 @@ model Meeting {
   company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
   dealId    String?
   deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  // A user-chosen association is authoritative; automatic rematching never replaces it.
+  manualAttach Boolean @default(false)
 
   title       String
   description String?
@@ -2624,6 +2635,34 @@ model MeetingAttendee {
   // The match path: "which unlinked attendees have this address?"
   @@index([orgId, email])
   @@index([personId])
+}
+
+// -----------------------------------------------------------------------------
+// ActivityLink — every CRM record an email or meeting is attached to (MAI-435).
+//
+// Email.companyId / Meeting.companyId and dealId retain the primary display links
+// for fast timeline reads. This table carries all additional matched People,
+// Companies, and the chosen Deal so a multi-customer message never loses a valid
+// association. targetType + targetId are intentionally polymorphic rather than
+// foreign keys: one attachment can point at three typed CRM tables.
+model ActivityLink {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  sourceType String // email | meeting
+  sourceId   String
+  targetType String // person | company | deal
+  targetId   String
+  isPrimary  Boolean @default(false)
+  manualAttach Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, sourceType, sourceId, targetType, targetId])
+  @@index([orgId, targetType, targetId])
+  @@index([orgId, sourceType, sourceId])
 }
 
 // -----------------------------------------------------------------------------

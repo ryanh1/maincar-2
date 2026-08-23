@@ -32,6 +32,7 @@ function emailRow(overrides: Partial<Email> = {}): Email {
     orgId: 'org-a',
     companyId: null,
     dealId: null,
+    manualAttach: false,
     mailAccountId: 'mba-1',
     direction: 'outbound',
     subject: 'Following up',
