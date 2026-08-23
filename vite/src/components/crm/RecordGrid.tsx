@@ -1183,6 +1183,8 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
         ref={dataEditorRef}
         columns={gridColumns}
         getCellContent={getCellContent}
+        getCellsForSelection
+        onPaste
         onCellEdited={onCellEdited}
         validateCell={validateCell}
         fillHandle

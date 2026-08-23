@@ -96,6 +96,74 @@ test('creates a Company from its grid after a recoverable validation error', asy
   expect(consoleErrors).toEqual([])
 })
 
+test('copies a multi-cell Company selection as TSV and pastes it into another range', async ({ page }) => {
+  const consoleErrors: string[] = []
+  const updates: Array<{ id: string; body: Record<string, unknown> }> = []
+  const rows = [
+    { id: 'company-1', name: 'Ada', domain: 'ada.example' },
+    { id: 'company-2', name: 'Grace', domain: 'grace.example' },
+    { id: 'company-3', name: null, domain: null },
+    { id: 'company-4', name: null, domain: null },
+  ]
+
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+
+  await page.route('**/api/orgs/org-fixture/objects**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects')) {
+      return route.fulfill({ json: { objects: [companyObject] } })
+    }
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects/company')) {
+      return route.fulfill({ json: { object: { ...companyObject, attributes: [nameAttribute, domainAttribute] } } })
+    }
+    if (route.request().method() === 'POST' && pathname.endsWith('/objects/company/list')) {
+      return route.fulfill({ json: { rows, nextCursor: null, totalCount: rows.length } })
+    }
+    return route.fallback()
+  })
+  await page.route('**/api/orgs/org-fixture/companies/*', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    updates.push({
+      id: route.request().url().split('/').at(-1)!,
+      body: route.request().postDataJSON() as Record<string, unknown>,
+    })
+    return route.fulfill({ json: {} })
+  })
+  await page.route('**/api/orgs/org-fixture/saved-views**', (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { views: [] } })
+    return route.fallback()
+  })
+
+  await page.goto('/__fixtures/records/company')
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(page.url()).origin })
+
+  const canvas = page.getByTestId('data-grid-canvas')
+  await expect(canvas).toBeVisible()
+  const bounds = await canvas.boundingBox()
+  expect(bounds).not.toBeNull()
+  if (!bounds) throw new Error('The record grid canvas was not measurable.')
+
+  const rowCenter = (row: number) => bounds.y + 32 + (row * 34) + 17
+  await page.mouse.click(bounds.x + 80, rowCenter(0))
+  await page.keyboard.down('Shift')
+  await page.mouse.click(bounds.x + 300, rowCenter(1))
+  await page.keyboard.up('Shift')
+  await page.keyboard.press('ControlOrMeta+c')
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('Ada\tada.example\nGrace\tgrace.example')
+  await page.mouse.click(bounds.x + 80, rowCenter(2))
+  await page.keyboard.press('ControlOrMeta+v')
+
+  await expect.poll(() => updates).toEqual(expect.arrayContaining([
+    { id: 'company-3', body: { name: 'Ada' } },
+    { id: 'company-3', body: { domain: 'ada.example' } },
+    { id: 'company-4', body: { name: 'Grace' } },
+    { id: 'company-4', body: { domain: 'grace.example' } },
+  ]))
+  expect(consoleErrors).toEqual([])
+})
+
 test('keeps an unsupported direct object URL out of the grid and list API', async ({ page }) => {
   const consoleErrors: string[] = []
   const listRequests: string[] = []

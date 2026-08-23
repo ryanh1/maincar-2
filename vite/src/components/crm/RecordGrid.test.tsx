@@ -340,6 +340,37 @@ describe('RecordGrid', () => {
     expect(props.rows).toBe(1)
   })
 
+  it('enables multi-cell copy and paste as TSV', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [
+        { id: 'r1', firstName: 'Ada', lastName: 'Lovelace' },
+        { id: 'r2', firstName: 'Grace', lastName: 'Hopper' },
+      ],
+      totalCount: 2,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+
+    const props = dataEditorProps.current!
+    expect(props.getCellsForSelection).toBe(true)
+    expect(props.onPaste).toBe(true)
+
+    // Glide uses getCellContent for `getCellsForSelection={true}`. This mirrors
+    // its row-major range copy so the selected cells prove out as spreadsheet TSV.
+    const getCellContent = props.getCellContent as (item: [number, number]) => { data: string; displayData?: string }
+    const tsv = [0, 1]
+      .map((row) => [0, 1].map((col) => getCellContent([col, row]).displayData ?? getCellContent([col, row]).data).join('\t'))
+      .join('\n')
+
+    expect(tsv).toBe('Ada\tLovelace\nGrace\tHopper')
+  })
+
   it('uses the shared config to show ordered columns, widths, frozen rows, and frozen columns', () => {
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
