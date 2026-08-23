@@ -47,13 +47,13 @@ export function Records() {
   const [layoutOverride, setLayoutOverride] = useState<'grid' | 'kanban' | null>(null)
   const [optimisticallySelectedView, setOptimisticallySelectedView] = useState<SavedView | null>(null)
   const defaultView = views.find((view) => view.isDefault) ?? null
-  const requestedViewId = searchParams.get('viewId')
+  const requestedViewId = searchParams.get('view') ?? searchParams.get('viewId')
   const requestedView = requestedViewId ? views.find((view) => view.id === requestedViewId) ?? null : null
   const selectedView = requestedView ?? optimisticallySelectedView ?? defaultView
   const fallbackConfig = useMemo(() => createViewConfig(detail?.attributes ?? []), [detail?.attributes])
   const baselineConfig = selectedView?.config ?? fallbackConfig
   const layout = layoutOverride ?? (selectedView?.layout === 'kanban' ? 'kanban' : 'grid')
-  const [viewConfig, setViewConfig, resetViewConfig] = useViewConfig(detail?.attributes ?? [], baselineConfig)
+  const [viewConfig, setViewConfig, resetViewConfig, clearLocalViewConfig] = useViewConfig(detail?.attributes ?? [], baselineConfig)
   const hasUnsavedChanges = !sameViewConfig(viewConfig, baselineConfig)
   const saveView = useSaveView()
   const updateView = useUpdateView()
@@ -75,6 +75,7 @@ export function Records() {
     setSearchParams((current) => {
       const next = new URLSearchParams(current)
       next.delete('viewId')
+      next.delete('view')
       return next
     }, { replace: true })
   }, [optimisticallySelectedView, requestedView, requestedViewId, setSearchParams, viewsQuery.isSuccess])
@@ -85,14 +86,16 @@ export function Records() {
     if (detail) void viewsQuery.refetch()
   }
 
-  function selectView(viewId: string | null, optimisticView: SavedView | null = null) {
+  function selectView(viewId: string | null, optimisticView: SavedView | null = null, clearOverlay = false) {
     setLayoutOverride(null)
     setOptimisticallySelectedView(optimisticView)
-    resetViewConfig()
+    clearLocalViewConfig()
     setSearchParams((current) => {
       const next = new URLSearchParams(current)
-      if (viewId) next.set('viewId', viewId)
-      else next.delete('viewId')
+      next.delete('viewId')
+      if (clearOverlay) next.delete('v')
+      if (viewId) next.set('view', viewId)
+      else next.delete('view')
       return next
     }, { replace: true })
   }
@@ -101,10 +104,12 @@ export function Records() {
     if (!orgId || !detail) return
     try {
       if (selectedView) {
-        await updateView.mutateAsync({ orgId, viewId: selectedView.id, config: viewConfig, layout })
+        const result = await updateView.mutateAsync({ orgId, viewId: selectedView.id, config: viewConfig, layout })
+        setOptimisticallySelectedView(result.view)
+        resetViewConfig()
       } else {
         const result = await saveView.mutateAsync({ orgId, objectId: detail.id, name: 'Default view', config: viewConfig, layout })
-        selectView(result.view.id, result.view)
+        selectView(result.view.id, result.view, true)
         setLayoutOverride(null)
       }
     } catch (error) {
