@@ -53,6 +53,7 @@ import prisma from '../db.js'
 import { queueUploadRecording } from '../jobs/uploadRecording.js'
 import { queueUploadVoicemail } from '../jobs/uploadVoicemail.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
+import { matchInboundCallerToCrm } from '../lib/callMatch.js'
 import { automaticDispositionValue, TERMINAL_CALL_STATUSES, TWILIO_TO_CALL_STATUS } from '../lib/callStatus.js'
 
 const router = Router()
@@ -133,17 +134,22 @@ async function handleInboundCall(
   // idempotency key for Twilio's at-least-once webhook delivery. A held but
   // unassigned number remains voicemail-only until an admin assigns it.
   if (phoneNumber.assignedUserId) {
+    // The called number owns the tenant boundary. A caller number can belong to
+    // more than one contact, so the matcher deliberately returns null links
+    // unless exactly one phone in THIS organization owns its normalized E.164.
+    const crmLinks = await matchInboundCallerToCrm(prisma, phoneNumber.orgId, fromE164 ?? '')
     const call = await prisma.call.upsert({
       where: { twilioCallSid: callSid },
       create: {
         orgId: phoneNumber.orgId,
         userId: phoneNumber.assignedUserId,
-        fromE164: fromE164 ?? '',
+        fromE164: fromE164?.trim() ?? '',
         toE164,
         direction: 'inbound',
         status: 'ringing',
         twilioCallSid: callSid,
         startedAt: new Date(),
+        ...crmLinks,
       },
       update: {},
     })

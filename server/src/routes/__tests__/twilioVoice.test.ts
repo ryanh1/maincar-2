@@ -34,6 +34,9 @@ const {
     phoneNumber: {
       findFirst: vi.fn(),
     },
+    personPhone: {
+      findMany: vi.fn(),
+    },
     voicemailGreeting: {
       findFirst: vi.fn(),
     },
@@ -149,6 +152,7 @@ beforeEach(() => {
   // No recognized number and no voicemail by default; the inbound-voicemail
   // tests override these to prove the recognized-number path.
   prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
+  prismaMock.personPhone.findMany.mockResolvedValue([])
   prismaMock.voicemailGreeting.findFirst.mockResolvedValue(null)
   prismaMock.voicemail.findFirst.mockResolvedValue(null)
   prismaMock.voicemail.upsert.mockResolvedValue({ id: 'voicemail-1' })
@@ -453,6 +457,22 @@ describe('inbound browser delivery', () => {
       update: {},
     })
     expect(prismaMock.voicemail.upsert).not.toHaveBeenCalled()
+  })
+
+  it('links a unique caller phone match in the called number’s organization', async () => {
+    prismaMock.personPhone.findMany.mockResolvedValue([
+      { person: { id: 'person-1', companyId: 'company-1' } },
+    ])
+
+    await post({ From: ' +12025550123 ' })
+
+    expect(prismaMock.personPhone.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { orgId: 'org-a', e164: '+12025550123' },
+      take: 2,
+    }))
+    expect(prismaMock.call.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ personId: 'person-1', companyId: 'company-1' }),
+    }))
   })
 })
 

@@ -194,6 +194,8 @@ type CallReviewRecord = CallWithDisposition & {
     lastName: string | null
     preferredFirstName: string | null
     title: string | null
+    persona: string | null
+    lastContactedAt: Date | null
   } | null
   company: { id: string; name: string | null } | null
   deal: { id: string; name: string; status: string } | null
@@ -298,7 +300,12 @@ function mapCallReviewApi(call: CallReviewRecord, source: SignedAudioSource | nu
 
   return {
     crm: {
-      person: call.person ?? null,
+      person: call.person
+        ? {
+            ...call.person,
+            lastContactedAt: call.person.lastContactedAt?.toISOString() ?? null,
+          }
+        : null,
       company: call.company ?? null,
       deal: call.deal ?? null,
     },
@@ -328,7 +335,17 @@ const callReviewInclude = {
     },
     orderBy: { sortOrder: 'asc' },
   },
-  person: { select: { id: true, firstName: true, lastName: true, preferredFirstName: true, title: true } },
+  person: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      preferredFirstName: true,
+      title: true,
+      persona: true,
+      lastContactedAt: true,
+    },
+  },
   company: { select: { id: true, name: true } },
   deal: { select: { id: true, name: true, status: true } },
   finalTranscript: {

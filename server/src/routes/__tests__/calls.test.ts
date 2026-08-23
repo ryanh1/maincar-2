@@ -157,7 +157,10 @@ function authAs(membership: ReturnType<typeof membershipRow> | null = membership
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  // The voice-token failure case gives this mock a throwing implementation.
+  // Reset implementations too, so it cannot leak into the following tenant
+  // boundary case and mask the route's intended 404.
+  vi.resetAllMocks()
   resetCallCreationRateLimitForTests()
   // A matched person is checked against their local calling hours. Freeze only
   // Date at a permitted instant so these route tests do not turn red after 9 PM
@@ -491,7 +494,10 @@ describe('GET /api/orgs/:orgId/calls/:id', () => {
         recordingUrl: 'recordings/call-review.mp3',
         transcriptStatus: 'done',
         transcript: 'Legacy compatibility text.',
-        person: { id: 'person-1', firstName: 'Jordan', lastName: 'Lee', preferredFirstName: null, title: 'VP Sales' },
+        person: {
+          id: 'person-1', firstName: 'Jordan', lastName: 'Lee', preferredFirstName: null, title: 'VP Sales',
+          persona: 'champion', lastContactedAt: NOW,
+        },
         company: { id: 'company-1', name: 'Acme' },
         deal: { id: 'deal-1', name: 'Renewal', status: 'open' },
         finalTranscript: {
@@ -529,9 +535,17 @@ describe('GET /api/orgs/:orgId/calls/:id', () => {
     const res = await request(app).get(`${URL_A}/call-review`).set('Authorization', AUTH)
 
     expect(res.status).toBe(200)
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        person: { select: expect.objectContaining({ persona: true, lastContactedAt: true }) },
+      }),
+    }))
     expect(res.body.call.review).toMatchObject({
       crm: {
-        person: { id: 'person-1', firstName: 'Jordan', lastName: 'Lee', title: 'VP Sales' },
+        person: {
+          id: 'person-1', firstName: 'Jordan', lastName: 'Lee', title: 'VP Sales',
+          persona: 'champion', lastContactedAt: NOW.toISOString(),
+        },
         company: { id: 'company-1', name: 'Acme' },
         deal: { id: 'deal-1', name: 'Renewal', status: 'open' },
       },

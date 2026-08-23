@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 
 import type { DialerContextValue } from './dialerContext'
 import { DialerDock } from './DialerDock'
@@ -11,8 +12,10 @@ import { DialerDock } from './DialerDock'
  * and which child it shows — and never about a keypad's network or a call's
  * hang-up.
  */
-const { useDialerMock } = vi.hoisted(() => ({ useDialerMock: vi.fn() }))
+const { useDialerMock, useGetCallDetailMock } = vi.hoisted(() => ({ useDialerMock: vi.fn(), useGetCallDetailMock: vi.fn() }))
 vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }))
+vi.mock('@/hooks/dialer', () => ({ useGetCallDetail: useGetCallDetailMock }))
+vi.mock('@/providers/useAuth', () => ({ useAuth: () => ({ user: { timeZone: 'America/New_York' } }) }))
 vi.mock('@/components/dialer/NumericKeypad', () => ({
   NumericKeypad: () => <div data-testid="keypad" />,
 }))
@@ -64,6 +67,7 @@ function titleBar(): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useGetCallDetailMock.mockReturnValue({ data: undefined })
 })
 
 describe('DialerDock', () => {
@@ -164,6 +168,36 @@ describe('DialerDock', () => {
     expect(dialer.acceptIncomingCall).toHaveBeenCalledOnce()
     expect(dialer.rejectIncomingCall).toHaveBeenCalledOnce()
     expect(screen.queryByTestId('in-call')).not.toBeInTheDocument()
+  })
+
+  it('screen-pops a known inbound caller with CRM context and one accessible person link before answer', () => {
+    useGetCallDetailMock.mockReturnValue({
+      data: {
+        call: {
+          review: {
+            crm: {
+              person: {
+                id: 'person-9', firstName: 'Jordan', lastName: 'Lee', preferredFirstName: null,
+                persona: 'champion', lastContactedAt: '2026-08-22T19:00:00.000Z',
+              },
+              company: { id: 'company-9', name: 'Acme' },
+            },
+          },
+        },
+      },
+    })
+    setDialer({
+      view: 'expanded', mode: 'call', phase: 'ringing',
+      activeCall: { orgId: 'org-9', callId: 'call-9', toE164: '+12025550123', direction: 'inbound', recording: false },
+    })
+
+    render(<MemoryRouter><DialerDock /></MemoryRouter>)
+
+    expect(screen.getByRole('link', { name: 'Open Jordan Lee' })).toBeInTheDocument()
+    expect(screen.getByText('Acme')).toBeInTheDocument()
+    expect(screen.getByText('Champion')).toBeInTheDocument()
+    expect(screen.getByText(/Last touch Aug 22, 2026, 3:00 PM EDT/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open Jordan Lee' })).toHaveAttribute('href', '/records/person/person-9')
   })
 
   it('keeps the disposition bar in the dock after a terminal call ends', () => {
