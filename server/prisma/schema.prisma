@@ -163,6 +163,11 @@ model Org {
   voicemails         Voicemail[]
   voicemailGreetings VoicemailGreeting[]
   voicemailDrops     VoicemailDrop[]
+
+  // Email/calendar capture policy (MAI-436, doc 5 §5.2f). One settings row per
+  // org, plus the per-user opt-out rows that let a rep exclude their own mailbox.
+  captureSettings    CaptureSettings?
+  mailCaptureOptOuts  MailCaptureOptOut[]
 }
 
 model User {
@@ -236,6 +241,10 @@ model User {
   // person's private inbox row.
   notificationObjectsAuthored NotificationObject[] @relation("NotificationActor")
   notificationsReceived       Notification[]       @relation("NotificationRecipient")
+
+  // Per-user capture opt-out rows (MAI-436, doc 5 §5.2f). Cascade on delete: a
+  // removed user's opt-out row is meaningless without the user.
+  mailCaptureOptOuts MailCaptureOptOut[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3115,4 +3124,61 @@ model ListEntry {
   @@index([orgId, listId, position])
   // "Which lists is this record on" — the record page's Lists panel.
   @@index([orgId, objectSlug, targetId])
+}
+
+// The org-wide email/calendar capture policy (MAI-436, doc 5 §5.2f). One row per
+// org, created lazily on first read/write. Every field feeds the exclusion
+// evaluator (server/src/lib/captureExclusions.ts) the matcher calls at step 2.
+model CaptureSettings {
+  id    String @id @default(cuid())
+  orgId String @unique
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // All participants on these domains → internal-only → excluded. Also drives
+  // internal/external meeting detection (doc 5 §5.11).
+  internalDomains String[] @default([])
+
+  // Non-empty allowDomains restricts capture to ONLY these domains; excludeDomains
+  // drops those domains. Both are applied after internal-domains.
+  allowDomains   String[] @default([])
+  excludeDomains String[] @default([])
+
+  // Specific addresses never captured. Pre-seeded with role addresses.
+  excludeAddresses String[] @default([])
+
+  // Drops help@, no-reply@, noreply@, billing@, etc. via a pattern list.
+  excludeRoleAddresses Boolean @default(true)
+
+  // A message with more than bulkInboundMax non-CRM recipients is a blast.
+  dropBulkInbound Boolean @default(true)
+  bulkInboundMax  Int     @default(15)
+
+  // Case-insensitive subject phrases; a quoted phrase is an exact match.
+  subjectExcludes String[] @default([])
+
+  // Which activity types the matcher stores. email | meetings | both.
+  logActivityTypes String @default("both")
+
+  // First-connect history depth in months (doc 5 §5.2a). 3 | 6 | 12.
+  backfillMonths Int @default(12)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// The per-user opt-out from doc 5 §5.2f. A ROW MEANS OPTED OUT — no boolean, so
+// there is only one way to say "capture me", and deleting the row opts back in.
+model MailCaptureOptOut {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, userId])
+  @@index([orgId])
 }

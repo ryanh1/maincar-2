@@ -37,6 +37,23 @@ import { OAUTH_MESSAGE_TYPE } from '@/hooks/integrations'
 const ORG = { id: 'org-1', name: 'Acme' }
 const LIST_URL = '/api/integrations/orgs/org-1'
 const GOOGLE_AUTHORIZE_URL = '/api/integrations/orgs/org-1/google/authorize'
+const CAPTURE_URL = '/api/orgs/org-1/settings/capture'
+
+const CAPTURE_RESPONSE = {
+  captureSettings: {
+    internalDomains: [],
+    allowDomains: [],
+    excludeDomains: [],
+    excludeAddresses: [],
+    excludeRoleAddresses: true,
+    dropBulkInbound: true,
+    bulkInboundMax: 15,
+    subjectExcludes: [],
+    logActivityTypes: 'both',
+    backfillMonths: 12,
+  },
+  optedOut: false,
+}
 
 function card(provider: 'google' | 'microsoft', label: string, shortName: string): IntegrationCard {
   return {
@@ -66,6 +83,7 @@ function routeFetch(handlers: {
     if (input === GOOGLE_AUTHORIZE_URL) {
       return (handlers.authorize ?? (() => Promise.resolve({ url: 'https://consent.example' })))()
     }
+    if (input === CAPTURE_URL) return Promise.resolve(CAPTURE_RESPONSE)
     return Promise.resolve(undefined)
   })
 }

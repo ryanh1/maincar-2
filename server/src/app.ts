@@ -33,6 +33,7 @@ import peopleRouter from './routes/people.js'
 import phoneNumbersRouter from './routes/phoneNumbers.js'
 import recordsRouter from './routes/records.js'
 import recordingSettingsRouter from './routes/recordingSettings.js'
+import captureSettingsRouter from './routes/captureSettings.js'
 import reportsRouter from './routes/reports.js'
 import savedViewsRouter from './routes/savedViews.js'
 import objectViewsRouter from './routes/objectViews.js'
@@ -103,6 +104,7 @@ app.use('/api/orgs/:orgId/reports', reportsRouter)
 app.use('/api/orgs/:orgId/members', membersRouter)
 app.use('/api/orgs/:orgId/teams', teamsRouter)
 app.use('/api/orgs/:orgId/settings/recording', recordingSettingsRouter)
+app.use('/api/orgs/:orgId/settings/capture', captureSettingsRouter)
 
 // Logged email activity (MAI-137 T9). READ ONLY: composing and mailbox sync are a
 // later spec. Distinct from /api/email above, which is the COMPOSER (drafts and

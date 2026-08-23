@@ -68,6 +68,7 @@ export const queryKeys = {
     voiceToken: (orgId: string) => ['calls', 'voiceToken', orgId] as const,
   },
   recordingPolicy: (orgId: string) => ['recordingPolicy', orgId] as const,
+  captureSettings: (orgId: string) => ['captureSettings', orgId] as const,
   dispositions: (orgId: string) => ['dispositions', orgId] as const,
   nextSteps: {
     all: (orgId: string) => ['nextSteps', orgId] as const,
