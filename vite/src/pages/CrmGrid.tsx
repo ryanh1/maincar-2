@@ -1,12 +1,30 @@
 import { Table2 } from 'lucide-react'
+import { useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/PageHeader'
 import { ListEntryGrid } from '@/components/crm/ListEntryGrid'
 import { RecordCount } from '@/components/crm/RecordCount'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { useGetList, useGetListEntries, useGetObject, useGetObjects } from '@/hooks/crm'
+import { useGetList, useGetListEntries, useGetObject, useGetObjects, useRemoveListEntry } from '@/hooks/crm'
+import type { CrmListEntry } from '@/lib/crmTypes'
 import { useAuth } from '@/providers/useAuth'
+
+function entryName(entry: CrmListEntry): string | null {
+  const value = entry.target?.name
+  return typeof value === 'string' && value.trim() ? value : null
+}
 
 function ListGridRoute({ listId }: { listId: string }) {
   const { org } = useAuth()
@@ -19,6 +37,8 @@ function ListGridRoute({ listId }: { listId: string }) {
   const objectQuery = useGetObject(orgId, object?.id ?? null)
   const entries = entriesQuery.data?.pages.flatMap((page) => page.entries) ?? []
   const total = entriesQuery.data?.pages.at(-1)?.total ?? 0
+  const removeListEntry = useRemoveListEntry()
+  const [entryToRemove, setEntryToRemove] = useState<CrmListEntry | null>(null)
   const isPending = listQuery.isPending || entriesQuery.isPending || objectsQuery.isPending || (object !== null && objectQuery.isPending)
   const isError = listQuery.isError || entriesQuery.isError || objectsQuery.isError || objectQuery.isError
 
@@ -29,7 +49,18 @@ function ListGridRoute({ listId }: { listId: string }) {
     if (object) void objectQuery.refetch()
   }
 
-  return <div className="flex h-[calc(100vh-8rem)] min-h-0 flex-col"><PageHeader icon={Table2} title={list?.name ?? 'List'} count={isPending ? undefined : total} /><div className="min-h-0 flex-1 pt-4">{isPending && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading…</div>}{!isPending && isError && <div className="flex h-full flex-col items-center justify-center gap-3"><p className="text-sm text-destructive">Could not load this list.</p><Button variant="secondary" size="sm" onClick={retry}>Try again</Button></div>}{!isPending && !isError && !list && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">This list is unavailable.</div>}{!isPending && !isError && list && !object && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">This list’s object is unavailable.</div>}{!isPending && !isError && list && objectQuery.data && total === 0 && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">No records are in this list.</div>}{!isPending && !isError && list && objectQuery.data && total > 0 && <div className="flex h-full min-h-0 flex-col gap-2"><div className="self-end"><RecordCount filteredCount={total} isFiltered={false} totalCount={total} /></div><div className="min-h-0 flex-1"><ListEntryGrid attributes={objectQuery.data.object.attributes} entries={entries} totalCount={total} hasNextPage={entriesQuery.hasNextPage ?? false} isFetchingNextPage={entriesQuery.isFetchingNextPage} fetchNextPage={entriesQuery.fetchNextPage} /></div></div>}</div></div>
+  async function confirmRemoval() {
+    if (!orgId || !entryToRemove) return
+    try {
+      await removeListEntry.mutateAsync({ orgId, listId, entryId: entryToRemove.id })
+      setEntryToRemove(null)
+    } catch (error) {
+      toast.error(error instanceof Error && error.message ? error.message : 'Could not remove this record from the list.')
+    }
+  }
+
+  const name = entryToRemove ? entryName(entryToRemove) : null
+  return <div className="flex h-[calc(100vh-8rem)] min-h-0 flex-col"><PageHeader icon={Table2} title={list?.name ?? 'List'} count={isPending ? undefined : total} /><div className="min-h-0 flex-1 pt-4">{isPending && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading…</div>}{!isPending && isError && <div className="flex h-full flex-col items-center justify-center gap-3"><p className="text-sm text-destructive">Could not load this list.</p><Button variant="secondary" size="sm" onClick={retry}>Try again</Button></div>}{!isPending && !isError && !list && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">This list is unavailable.</div>}{!isPending && !isError && list && !object && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">This list’s object is unavailable.</div>}{!isPending && !isError && list && objectQuery.data && total === 0 && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">No records are in this list.</div>}{!isPending && !isError && list && objectQuery.data && total > 0 && <div className="flex h-full min-h-0 flex-col gap-2"><div className="self-end"><RecordCount filteredCount={total} isFiltered={false} totalCount={total} /></div><div className="min-h-0 flex-1"><ListEntryGrid attributes={objectQuery.data.object.attributes} entries={entries} totalCount={total} hasNextPage={entriesQuery.hasNextPage ?? false} isFetchingNextPage={entriesQuery.isFetchingNextPage} fetchNextPage={entriesQuery.fetchNextPage} onRemoveEntry={setEntryToRemove} /></div></div>}</div><AlertDialog open={entryToRemove !== null} onOpenChange={(open) => { if (!open && !removeListEntry.isPending) setEntryToRemove(null) }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{name ? `Remove ${name} from this list?` : 'Remove this record from the list?'}</AlertDialogTitle><AlertDialogDescription>{name ? `${name}’s record will stay unchanged.` : 'The record will stay unchanged.'}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel size="sm" disabled={removeListEntry.isPending}>Cancel</AlertDialogCancel><AlertDialogAction size="sm" variant="destructive" disabled={removeListEntry.isPending} onClick={(event) => { event.preventDefault(); void confirmRemoval() }}>{removeListEntry.isPending ? 'Removing…' : 'Remove from list'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div>
 }
 
 /** The legacy object placeholder plus MAI-285's live saved-list route. */

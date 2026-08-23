@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { Route, Routes } from 'react-router-dom'
 
 import { renderWithProviders } from '@/test/utils'
+
+const { getListEntriesMock, removeListEntryMock } = vi.hoisted(() => ({
+  getListEntriesMock: vi.fn(),
+  removeListEntryMock: vi.fn(),
+}))
 
 vi.mock('@/providers/useAuth', () => ({
   useAuth: () => ({ org: { id: 'org-1' } }),
@@ -21,15 +27,8 @@ vi.mock('@/hooks/crm', () => ({
     isError: false,
     refetch: vi.fn(),
   }),
-  useGetListEntries: () => ({
-    data: { pages: [{ entries: [], total: 0 }] },
-    isPending: false,
-    isError: false,
-    hasNextPage: false,
-    isFetchingNextPage: false,
-    fetchNextPage: vi.fn(),
-    refetch: vi.fn(),
-  }),
+  useGetListEntries: () => getListEntriesMock(),
+  useRemoveListEntry: () => ({ mutateAsync: removeListEntryMock, isPending: false }),
   useGetObject: () => ({
     data: { object: { attributes: [] } },
     isPending: false,
@@ -38,7 +37,26 @@ vi.mock('@/hooks/crm', () => ({
   }),
 }))
 
+vi.mock('@/components/crm/ListEntryGrid', () => ({
+  ListEntryGrid: ({ entries, onRemoveEntry }: { entries: Array<{ id: string; target: Record<string, unknown> | null }>; onRemoveEntry: (entry: { id: string; target: Record<string, unknown> | null }) => void }) => (
+    <button type="button" onClick={() => onRemoveEntry(entries[0]!)}>Remove Ada Lovelace from list</button>
+  ),
+}))
+
 import { CrmGrid } from '@/pages/CrmGrid'
+
+beforeEach(() => {
+  getListEntriesMock.mockReturnValue({
+    data: { pages: [{ entries: [], total: 0 }] },
+    isPending: false,
+    isError: false,
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
+    refetch: vi.fn(),
+  })
+  removeListEntryMock.mockReset()
+})
 
 describe('CrmGrid', () => {
   it('renders the selected object as a grid', () => {
@@ -63,5 +81,32 @@ describe('CrmGrid', () => {
 
     expect(screen.getByRole('heading', { name: 'Q3 targets' })).toBeInTheDocument()
     expect(screen.getByText('No records are in this list.')).toBeInTheDocument()
+  })
+
+  it('confirms a member removal and leaves the target record intact', async () => {
+    getListEntriesMock.mockReturnValue({
+      data: { pages: [{ entries: [{ id: 'entry-1', target: { id: 'person-1', name: 'Ada Lovelace' } }], total: 1 }] },
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const user = userEvent.setup()
+    renderWithProviders(
+      <Routes>
+        <Route path="/lists/:listId" element={<CrmGrid />} />
+      </Routes>,
+      { initialEntries: ['/lists/list-1'] },
+    )
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Ada Lovelace from list' }))
+
+    expect(screen.getByRole('heading', { name: 'Remove Ada Lovelace from this list?' })).toBeInTheDocument()
+    expect(screen.getByText('Ada Lovelace’s record will stay unchanged.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove from list' }))
+
+    expect(removeListEntryMock).toHaveBeenCalledWith({ orgId: 'org-1', listId: 'list-1', entryId: 'entry-1' })
   })
 })
