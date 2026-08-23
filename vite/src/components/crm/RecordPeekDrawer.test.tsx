@@ -26,6 +26,15 @@ function attribute(overrides: Partial<AttributeDef>): AttributeDef {
 }
 
 describe('RecordPeekDrawer', () => {
+  it('offers a full-page record view', () => {
+    const onOpenFullPage = vi.fn()
+    render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={{ id: 'person-1', name: 'Ada', createdAt: '', updatedAt: '' }} timeZone="America/New_York" position={null} onEdit={vi.fn()} onOpenFullPage={onOpenFullPage} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand to full page' }))
+
+    expect(onOpenFullPage).toHaveBeenCalledOnce()
+  })
+
   it('saves a field and focuses the next editable field when Tab is pressed', () => {
     const onEdit = vi.fn()
     const attributes = [

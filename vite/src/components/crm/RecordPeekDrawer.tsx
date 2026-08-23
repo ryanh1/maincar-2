@@ -32,6 +32,7 @@ interface RecordPeekDrawerProps {
   /** 1-based position and total, for the breadcrumb ("3 of 128"). */
   position: { index: number; total: number } | null
   onEdit: (attribute: AttributeDef, value: unknown) => void
+  onOpenFullPage?: () => void
 }
 
 /**
@@ -53,6 +54,7 @@ export function RecordPeekDrawer({
   timeZone,
   position,
   onEdit,
+  onOpenFullPage,
 }: RecordPeekDrawerProps) {
   const identityAttr = attributes.find((attr) => attr.isIdentity) ?? attributes[0] ?? null
   const identityValue = identityAttr && record ? formatCellValue(record[identityAttr.slug], identityAttr.type, timeZone) : ''
@@ -78,6 +80,11 @@ export function RecordPeekDrawer({
           </p>
           <SheetTitle className="text-base">{title}</SheetTitle>
           <SheetDescription className="sr-only">Record details. Click a field value to edit it.</SheetDescription>
+          {onOpenFullPage && (
+            <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" onClick={onOpenFullPage}>
+              Expand to full page
+            </Button>
+          )}
         </SheetHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
