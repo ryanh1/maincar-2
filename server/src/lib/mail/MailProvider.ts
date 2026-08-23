@@ -106,6 +106,12 @@ export interface MailProvider {
     limit: number,
   ): Promise<{ messages: InboundMessage[]; nextCursor: string | null }>
   getMessage(providerMsgId: string): Promise<InboundMessage>
+  /** A filtered historical page used only by the first-connect import. */
+  listBackfillMessages(
+    cursor: string | null,
+    limit: number,
+    since: Date,
+  ): Promise<{ messages: InboundMessage[]; nextCursor: string | null }>
   listEventsSince(
     cursor: string | null,
     limit: number,

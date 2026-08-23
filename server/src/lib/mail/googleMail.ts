@@ -504,6 +504,16 @@ export function googleMail(
       return fetchMessage(providerMsgId)
     },
 
+    async listBackfillMessages(cursor, limit, since) {
+      const months = Math.max(1, Math.ceil((Date.now() - since.getTime()) / (30 * 24 * 60 * 60 * 1000)))
+      const raw = await guard(() =>
+        client().then((c) => c.listMessages({ maxResults: limit, pageToken: cursor ?? undefined, q: `newer_than:${months}m` })),
+      )
+      const page = parseOrThrow(GmailListMessagesSchema, raw, 'a historical message list')
+      const messages = oldestFirst(await Promise.all((page.messages ?? []).map((message) => fetchMessage(message.id))))
+      return { messages, nextCursor: page.nextPageToken ?? null }
+    },
+
     async listEventsSince(
       cursor: string | null,
       limit: number,

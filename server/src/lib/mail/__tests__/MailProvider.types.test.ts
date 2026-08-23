@@ -48,6 +48,12 @@ const stubProvider = {
       isOutbound: false,
     }
   },
+  async listBackfillMessages(cursor: string | null, limit: number, since: Date) {
+    void cursor
+    void limit
+    void since
+    return { messages: [] as InboundMessage[], nextCursor: null }
+  },
   async listEventsSince(cursor: string | null, limit: number) {
     void cursor
     void limit
@@ -76,6 +82,7 @@ describe('MailProvider — the published contract', () => {
       'sendEmail',
       'listMessagesSince',
       'getMessage',
+      'listBackfillMessages',
       'listEventsSince',
       'createEvent',
     ] as const) {

@@ -73,6 +73,8 @@ export interface GraphClient {
   listMailFolders?(): Promise<unknown>
   /** A page of one folder's messages, or the next page when `deltaLink` is supplied. */
   listMessages(opts?: { deltaLink?: string; folderId?: string }): Promise<unknown>
+  /** Historical messages, filtered by receivedDateTime for the initial import. */
+  listBackfillMessages(opts: { cursor?: string; receivedAfter: string; limit: number }): Promise<unknown>
   /** One full message by id. */
   getMessage(id: string): Promise<unknown>
   /** Send a message. `saveToSentItems` defaults to true, matching Graph's own default. */
@@ -155,6 +157,17 @@ export function graphClient(accessToken: string): GraphCalendarClient {
       // Follow an existing cursor if given; otherwise open a fresh folder delta.
       const resource = opts.deltaLink ?? `/me/mailFolders/${encodeURIComponent(opts.folderId ?? 'inbox')}/messages/delta`
       return run(() => client.api(resource).get())
+    },
+
+    listBackfillMessages({ cursor, receivedAfter, limit }) {
+      if (cursor) return run(() => client.api(cursor).get())
+      return run(() =>
+        client
+          .api('/me/messages')
+          .filter(`receivedDateTime ge ${receivedAfter}`)
+          .top(limit)
+          .get(),
+      )
     },
 
     getMessage(id) {

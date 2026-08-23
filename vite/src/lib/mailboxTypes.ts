@@ -31,6 +31,12 @@ export interface Mailbox {
   lastValidatedAt: string | null
   connectionId: string
   connectedAt: string
+  backfill: {
+    status: 'running' | 'complete' | 'failed'
+    scannedCount: number
+    matchedCount: number
+    completedAt: string | null
+  } | null
 }
 
 /** What GET /api/mailboxes/orgs/:orgId returns: this rep's mailboxes, oldest first. */

@@ -25,6 +25,7 @@ const {
   disconnectConnectionMock,
   testConnectionMock,
   getMailProviderMock,
+  queueMailBackfillForConnectionMock,
 } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
@@ -61,6 +62,7 @@ const {
   // which are proven in connectionTest.test.ts against a fake provider.
   testConnectionMock: vi.fn(),
   getMailProviderMock: vi.fn(),
+  queueMailBackfillForConnectionMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
@@ -86,6 +88,7 @@ vi.mock('../../lib/mail/oauthConnections.js', async (importOriginal) => {
 })
 vi.mock('../../lib/mail/connectionTest.js', () => ({ testConnection: testConnectionMock }))
 vi.mock('../../lib/mail/getMailProvider.js', () => ({ getMailProvider: getMailProviderMock }))
+vi.mock('../../jobs/mailBackfill.js', () => ({ queueMailBackfillForConnection: queueMailBackfillForConnectionMock }))
 
 import { googleOAuth } from '../../../dependencies/googleOAuth.js'
 import { microsoftOAuth } from '../../../dependencies/microsoftOAuth.js'
@@ -854,6 +857,16 @@ describe('GET /api/integrations/:provider/callback', () => {
     expect(msg).toMatchObject({ type: 'maincar:oauth-result', provider: 'google', ok: true, status: 'connected', emailAddress: 'rep@acme.com' })
     // The exchange used the PKCE verifier derived from THIS state, not the raw code alone.
     expect(googleOAuth.exchangeCode).toHaveBeenCalledWith(expect.objectContaining({ code: 'the-code', codeVerifier: expect.any(String) }))
+  })
+
+  it('starts the durable mailbox backfill after a successful OAuth connect', async () => {
+    vi.spyOn(googleOAuth, 'exchangeCode').mockResolvedValue(grant())
+    vi.spyOn(googleOAuth, 'fetchIdentity').mockResolvedValue({ providerAccountId: 'sub-1', emailAddress: 'rep@acme.com' })
+    saveConnectionMock.mockResolvedValue(serializedConn())
+    queueMailBackfillForConnectionMock.mockResolvedValue(undefined)
+
+    await request(app).get(CB('google')).query({ code: 'the-code', state: state() })
+    await vi.waitFor(() => expect(queueMailBackfillForConnectionMock).toHaveBeenCalledWith('conn-1', ORG_A))
   })
 
   it('renders limited when the provider granted only some scopes', async () => {

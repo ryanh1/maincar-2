@@ -44,6 +44,7 @@ const connectedMailbox: Mailbox = {
   lastValidatedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
   connectionId: 'conn-1',
   connectedAt: '2026-08-21T00:00:00Z',
+  backfill: null,
 }
 
 const secondMailbox: Mailbox = {
@@ -57,6 +58,7 @@ const secondMailbox: Mailbox = {
   statusDetail: '',
   connectionId: 'conn-2',
   connectedAt: '2026-08-21T01:00:00Z',
+  backfill: null,
 }
 
 const needsReconnect: Mailbox = {
@@ -72,6 +74,7 @@ const needsReconnect: Mailbox = {
   lastValidatedAt: null,
   connectionId: 'conn-3',
   connectedAt: '2026-08-21T02:00:00Z',
+  backfill: null,
 }
 
 describe('Settings_Integrations_MailboxRow', () => {
@@ -155,6 +158,26 @@ describe('Settings_Integrations_MailboxRow', () => {
         />,
       )
       expect(screen.getByText('Connected')).toBeInTheDocument()
+    })
+
+    it('shows honest running import counts on the connected mailbox card', () => {
+      renderWithProviders(
+        <Settings_Integrations_MailboxRow
+          mailbox={{
+            ...connectedMailbox,
+            backfill: { status: 'running', scannedCount: 320, matchedCount: 45, completedAt: null },
+          }}
+          orgId={mockOrgId}
+          onOpenSettings={mockOnOpenSettings}
+          onReconnect={mockOnReconnect}
+        />,
+      )
+
+      expect(screen.getByText('Importing your email and calendar…')).toBeInTheDocument()
+      expect(screen.getByRole('progressbar', { name: 'Import progress' })).toHaveAttribute(
+        'aria-valuetext',
+        'Checked 320 messages and matched 45 activities so far',
+      )
     })
 
     it('shows the verification time within this mailbox sub-card', () => {

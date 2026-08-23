@@ -446,6 +446,23 @@ export function microsoftMail(
       return fetchMessage(providerMsgId)
     },
 
+    async listBackfillMessages(cursor, limit, since) {
+      const raw = await guard(() =>
+        client().then((c) => c.listBackfillMessages({
+          ...(cursor ? { cursor } : {}),
+          receivedAfter: since.toISOString(),
+          limit,
+        })),
+      )
+      const page = parseOrThrow(GraphMessagesDeltaSchema, raw, 'a historical message page')
+      return {
+        // List responses are intentionally skinny; hydrate each id so the matcher
+        // and persisted activity see the full provider message, not a preview.
+        messages: oldestFirst(await Promise.all((page.value ?? []).map((message) => fetchMessage(message.id)))),
+        nextCursor: page['@odata.nextLink'] ?? null,
+      }
+    },
+
     async listEventsSince(
       cursor: string | null,
       _limit: number,

@@ -109,6 +109,7 @@ model Org {
   emails            Email[]
   emailParticipants EmailParticipant[]
   emailAttachments  EmailAttachment[]
+  mailBackfills     MailBackfill[]
 
   // Text activity (MAI-138 T10). Back-relations so a deleted org cascades its
   // messages and their MMS media away — the same onDelete: Cascade the rest of
@@ -1147,6 +1148,10 @@ model MailAccount {
   // messages rather than destroying the org's message history.
   emails Email[]
 
+  // The durable first-connect import state. One connected mailbox has one
+  // resumable backfill; pg-boss may deliver the job more than once.
+  backfill MailBackfill?
+
   // The half-written emails queued to go out on this mailbox (MAI-188). Same
   // SetNull reasoning as emails above: disconnecting a mailbox orphans a rep's
   // drafts, never deletes them.
@@ -1158,6 +1163,31 @@ model MailAccount {
   // One mailbox per address per org. Re-connecting updates rather than duplicates.
   @@unique([orgId, emailAddress])
   @@index([orgId, userId])
+}
+
+// First-connect CRM activity import. The row makes progress visible after the
+// user leaves Settings and gives a retry a cursor to resume from.
+model MailBackfill {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  mailAccountId String      @unique
+  mailAccount   MailAccount @relation(fields: [mailAccountId], references: [id], onDelete: Cascade)
+
+  // running | complete | failed
+  status String @default("running")
+  cursor String?
+  scannedCount Int @default(0)
+  matchedCount Int @default(0)
+  errorMessage String?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, status])
 }
 
 // -----------------------------------------------------------------------------

@@ -56,6 +56,12 @@ export interface Mailbox {
   lastValidatedAt: string | null
   connectionId: string
   connectedAt: string
+  backfill: {
+    status: 'running' | 'complete' | 'failed'
+    scannedCount: number
+    matchedCount: number
+    completedAt: string | null
+  } | null
 }
 
 /** A display name is the rep's private label; capped so a runaway value is rejected. */
@@ -81,6 +87,9 @@ const MAILBOX_PUBLIC_SELECT = {
   createdAt: true,
   connection: {
     select: { status: true, statusDetail: true, errorCode: true, lastValidatedAt: true, scopes: true },
+  },
+  backfill: {
+    select: { status: true, scannedCount: true, matchedCount: true, completedAt: true },
   },
 } satisfies Prisma.MailAccountSelect
 
@@ -108,6 +117,14 @@ function serializeMailbox(row: MailboxRow): Mailbox {
     lastValidatedAt: row.connection?.lastValidatedAt?.toISOString() ?? null,
     connectionId: row.connectionId,
     connectedAt: row.createdAt.toISOString(),
+    backfill: row.backfill
+      ? {
+          status: row.backfill.status as 'running' | 'complete' | 'failed',
+          scannedCount: row.backfill.scannedCount,
+          matchedCount: row.backfill.matchedCount,
+          completedAt: row.backfill.completedAt?.toISOString() ?? null,
+        }
+      : null,
   }
 }
 
