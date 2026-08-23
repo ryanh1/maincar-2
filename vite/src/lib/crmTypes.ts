@@ -122,6 +122,20 @@ export interface GetObjectResponse {
   object: ObjectDefWithAttributes
 }
 
+export interface RelatedRecordGroup {
+  id: string
+  label: string
+  direction: 'inbound' | 'outbound' | 'context'
+  object: ObjectDefWithAttributes
+  attributeName: string | null
+  count: number
+  records: RecordRow[]
+}
+
+export interface GetRelatedRecordsResponse {
+  related: RelatedRecordGroup[]
+}
+
 // A row from the list endpoint: system fields plus one key per readable
 // attribute slug. Values are whatever the server sent — coercion into a
 // displayable string happens where the grid renders the cell.

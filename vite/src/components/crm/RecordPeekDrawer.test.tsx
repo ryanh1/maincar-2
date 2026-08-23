@@ -1,10 +1,15 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { vi } from 'vitest'
 
-import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
+import type { AttributeDef, ObjectDef, RecordRow, RelatedRecordGroup } from '@/lib/crmTypes'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 
-vi.mock('@/hooks/crm', () => ({ useGetActivity: () => ({ isPending: false, isError: false, data: undefined }) }))
+const useGetRelatedRecords = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: { related: [] as RelatedRecordGroup[] } })))
+
+vi.mock('@/hooks/crm', () => ({
+  useGetActivity: () => ({ isPending: false, isError: false, data: undefined }),
+  useGetRelatedRecords,
+}))
 vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => null }))
 
 const object: ObjectDef = {
@@ -56,5 +61,49 @@ describe('RecordPeekDrawer', () => {
 
     expect(onEdit).toHaveBeenCalledWith(expect.objectContaining({ slug: 'role' }), 'Manager')
     expect(screen.getByRole('button', { name: 'London' })).toHaveFocus()
+  })
+
+  it('opens related records in a stack, exposes a breadcrumb, and previews on hover', () => {
+    const company: ObjectDef = {
+      ...object,
+      id: 'companies', slug: 'company', name: 'Company', namePlural: 'Companies',
+      attributes: [attribute({ slug: 'name', name: 'Name', isIdentity: true })],
+    }
+    const deal: ObjectDef = {
+      ...object,
+      id: 'deals', slug: 'deal', name: 'Deal', namePlural: 'Deals',
+      attributes: [attribute({ slug: 'name', name: 'Name', isIdentity: true })],
+    }
+    const companyGroup: RelatedRecordGroup = {
+      id: 'outbound:company', label: 'Company', direction: 'outbound', object: company,
+      attributeName: 'Company', count: 1,
+      records: [{ id: 'company-1', name: 'Acme', createdAt: '', updatedAt: '' }],
+    }
+    const dealGroup: RelatedRecordGroup = {
+      id: 'outbound:deal', label: 'Deal', direction: 'outbound', object: deal,
+      attributeName: 'Deal', count: 1,
+      records: [{ id: 'deal-1', name: 'Renewal', createdAt: '', updatedAt: '' }],
+    }
+    useGetRelatedRecords.mockImplementation((_orgId, objectId) => ({
+      isPending: false,
+      isError: false,
+      data: { related: objectId === 'people' ? [companyGroup] : objectId === 'companies' ? [dealGroup] : [] },
+    }))
+    const person: RecordRow = { id: 'person-1', name: 'Dana', createdAt: '', updatedAt: '' }
+    render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={person} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
+
+    const related = screen.getByRole('button', { name: 'Open Acme' })
+    fireEvent.mouseEnter(related)
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Acme')
+    fireEvent.click(related)
+
+    expect(screen.getByRole('heading', { name: 'Acme' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Record path' })).toHaveTextContent('Dana›Acme')
+    fireEvent.click(screen.getByRole('button', { name: 'Open Renewal' }))
+    expect(screen.getByRole('heading', { name: 'Renewal' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('heading', { name: 'Renewal' }), { key: 'Escape' })
+    expect(screen.getByRole('heading', { name: 'Acme' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('heading', { name: 'Acme' }), { key: 'Escape' })
+    expect(screen.getByRole('heading', { name: 'Dana' })).toBeInTheDocument()
   })
 })

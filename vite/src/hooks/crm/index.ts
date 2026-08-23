@@ -15,6 +15,7 @@ export type { ReorderListEntriesInput } from './useReorderListEntries'
 // (frontend.md → Frontend data fetching).
 export { useGetObjects } from './useGetObjects'
 export { useGetObject } from './useGetObject'
+export { useGetRelatedRecords } from './useGetRelatedRecords'
 export { useListRecords } from './useListRecords'
 export type { UseListRecordsParams } from './useListRecords'
 export { useRecordWindow } from './useRecordWindow'

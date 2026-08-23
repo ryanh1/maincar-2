@@ -166,6 +166,8 @@ export const queryKeys = {
     listAll: (orgId: string, objectId: string) => ['records', 'list', orgId, objectId] as const,
     fieldChanges: (orgId: string, objectId: string, days: number) =>
       ['records', 'fieldChanges', orgId, objectId, days] as const,
+    related: (orgId: string, objectId: string, recordId: string) =>
+      ['records', 'related', orgId, objectId, recordId] as const,
     fieldHistory: (orgId: string, recordId: string, attribute: string) =>
       ['records', 'fieldHistory', orgId, recordId, attribute] as const,
   },

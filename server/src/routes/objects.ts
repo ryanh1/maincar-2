@@ -31,7 +31,7 @@ import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { getObjectSurfaceCapabilities } from '../crm/objectCapabilities.js'
 import { diffFieldValues, listFieldChangesInWindow, recordFieldHistoryInTx } from '../crm/fieldHistory.js'
-import { isRecordGridCreateSupported, listRecords, ListQueryError, type ListQuery } from '../crm/recordList.js'
+import { isRecordGridCreateSupported, listRecords, ListQueryError, TABLE_STORAGE_TABLES, type ListQuery } from '../crm/recordList.js'
 import { checkValueShape } from '../crm/valuesValidator.js'
 import { Prisma } from '../generated/prisma/client.js'
 import type { ObjectDef, AttributeDef, PrismaClient } from '../generated/prisma/client.js'
@@ -64,12 +64,16 @@ function mapObjectToApi(object: ObjectDef & { attributes?: AttributeDef[] }) {
     capabilities: getObjectSurfaceCapabilities(object),
     isHidden: object.isHidden,
     isArchived: object.isArchived,
-    createdAt: object.createdAt.toISOString(),
-    updatedAt: object.updatedAt.toISOString(),
+    createdAt: formatApiDate(object.createdAt),
+    updatedAt: formatApiDate(object.updatedAt),
     ...(object.attributes
       ? { attributes: object.attributes.map(mapAttributeToApi) }
       : {}),
   }
+}
+
+function formatApiDate(value: Date | string | null | undefined): string {
+  return value instanceof Date ? value.toISOString() : typeof value === 'string' ? value : ''
 }
 
 // A trimmed AttributeDef → API shape, kept here so an object read can embed its
@@ -97,9 +101,63 @@ function mapAttributeToApi(attr: AttributeDef) {
     defaultJson: attr.defaultJson,
     sortOrder: attr.sortOrder,
     isArchived: attr.isArchived,
-    createdAt: attr.createdAt.toISOString(),
-    updatedAt: attr.updatedAt.toISOString(),
+    createdAt: formatApiDate(attr.createdAt),
+    updatedAt: formatApiDate(attr.updatedAt),
   }
+}
+
+const RELATED_RECORD_LIMIT = 50
+const SAFE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+
+type RelatedDirection = 'inbound' | 'outbound' | 'context'
+
+interface RelatedRecordGroup {
+  id: string
+  label: string
+  direction: RelatedDirection
+  object: ReturnType<typeof mapObjectToApi>
+  attributeName: string | null
+  count: number
+  records: Record<string, unknown>[]
+}
+
+async function relatedIdsFromTable(
+  orgId: string,
+  source: Pick<ObjectDef, 'slug'>,
+  attribute: Pick<AttributeDef, 'slug'>,
+  targetId: string,
+): Promise<string[]> {
+  const tableName = TABLE_STORAGE_TABLES[source.slug]
+  if (!tableName || !SAFE_IDENTIFIER.test(attribute.slug)) return []
+  const table = Prisma.raw(`"${tableName}"`)
+  const field = Prisma.raw(`"${attribute.slug}"`)
+  const rows = await prisma.$queryRaw<{ id: string }[]>(Prisma.sql`
+    SELECT "id" FROM ${table}
+    WHERE "orgId" = ${orgId} AND "deletedAt" IS NULL AND ${field} = ${targetId}
+  `)
+  return rows.map((row) => row.id)
+}
+
+async function relatedIdsFromSource(
+  orgId: string,
+  source: Pick<ObjectDef, 'id' | 'slug' | 'storage'>,
+  attribute: Pick<AttributeDef, 'slug'>,
+  target: Pick<ObjectDef, 'slug'>,
+  targetId: string,
+): Promise<string[]> {
+  if (source.storage === 'record') {
+    const links = await prisma.recordLink.findMany({
+      where: { orgId, fromObject: 'record', attribute: attribute.slug, toObject: target.slug, toId: targetId },
+      select: { fromId: true },
+    })
+    if (links.length === 0) return []
+    const sourceRows = await prisma.record.findMany({
+      where: { orgId, objectId: source.id, id: { in: links.map((link) => link.fromId) }, deletedAt: null },
+      select: { id: true },
+    })
+    return sourceRows.map((row) => row.id)
+  }
+  return relatedIdsFromTable(orgId, source, attribute, targetId)
 }
 
 // --- Normalization: empty → absent (spec §5.11) ---
@@ -331,6 +389,114 @@ router.get(
 
     // --- Return response ---
     res.json({ object: mapObjectToApi(object) })
+  }),
+)
+
+// ============================================================
+// GET /api/orgs/:orgId/objects/:id/records/:recordId/related — bounded related rail
+// ============================================================
+// Related navigation is a read-only projection over the existing reference fields
+// and RecordLink edges. It deliberately returns the object schema with each rail so
+// the peek drawer can move to a related record without refetching the root grid.
+router.get(
+  '/:id/records/:recordId/related',
+  wrapRoute('GET /api/orgs/:orgId/objects/:id/records/:recordId/related', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const objectId = String(req.params.id)
+    const recordId = String(req.params.recordId)
+
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    const [rootObject, objects] = await Promise.all([
+      prisma.objectDef.findFirst({
+        where: { id: objectId, orgId, deletedAt: null },
+        include: { attributes: { where: { deletedAt: null, isArchived: false }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } },
+      }),
+      prisma.objectDef.findMany({
+        where: { orgId, deletedAt: null, isArchived: false },
+        include: { attributes: { where: { deletedAt: null, isArchived: false }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } },
+      }),
+    ])
+    if (!rootObject) return void res.status(404).json({ error: 'Object not found' })
+
+    const rootResult = await listRecords(prisma, {
+      orgId,
+      object: rootObject,
+      attributes: rootObject.attributes,
+      query: { filter: { type: 'condition', field: 'id', operator: 'eq', value: recordId }, limit: 50 },
+    })
+    const rootRow = rootResult.rows[0]
+    if (!rootRow) return void res.status(404).json({ error: 'Record not found' })
+
+    const objectsById = new Map(objects.map((object) => [object.id, object]))
+    const groups: Array<{
+      sourceObject: typeof objects[number]
+      targetObject: typeof objects[number]
+      direction: RelatedDirection
+      attribute: AttributeDef | null
+      ids: string[]
+    }> = []
+
+    for (const attribute of rootObject.attributes.filter((candidate) => candidate.type === 'record_reference' && candidate.refObjectId)) {
+      const targetObject = objectsById.get(attribute.refObjectId!)
+      const value = rootRow[attribute.slug]
+      if (!targetObject || value === null || value === undefined) continue
+      const ids = (Array.isArray(value) ? value : [value]).filter((id): id is string => typeof id === 'string' && id.length > 0)
+      if (ids.length > 0) groups.push({ sourceObject: rootObject, targetObject, direction: 'outbound', attribute, ids })
+    }
+
+    for (const sourceObject of objects) {
+      for (const attribute of sourceObject.attributes.filter((candidate) => candidate.type === 'record_reference' && candidate.refObjectId === rootObject.id)) {
+        const ids = await relatedIdsFromSource(orgId, sourceObject, attribute, rootObject, recordId)
+        if (ids.length > 0) groups.push({ sourceObject, targetObject: sourceObject, direction: 'inbound', attribute, ids })
+      }
+    }
+
+    // A person's company is the account context for its deals. This keeps the
+    // journey Company → Person → Deal one click away without storing a second edge.
+    const companyReference = rootObject.slug === 'person'
+      ? rootObject.attributes.find((attribute) => attribute.type === 'record_reference' && attribute.refObjectId && objectsById.get(attribute.refObjectId)?.slug === 'company')
+      : undefined
+    const companyId = companyReference ? rootRow[companyReference.slug] : undefined
+    if (rootObject.slug === 'person' && typeof companyId === 'string') {
+      const dealObject = objects.find((candidate) => candidate.slug === 'deal')
+      const companyObject = objects.find((candidate) => candidate.slug === 'company')
+      const companyAttribute = dealObject?.attributes.find((attribute) => attribute.type === 'record_reference' && attribute.refObjectId === companyObject?.id)
+      if (dealObject && companyAttribute) {
+        const ids = await relatedIdsFromSource(orgId, dealObject, companyAttribute, objectsById.get(companyAttribute.refObjectId!) ?? rootObject, companyId)
+        if (ids.length > 0) groups.push({ sourceObject: dealObject, targetObject: dealObject, direction: 'context', attribute: companyAttribute, ids })
+      }
+    }
+
+    const related = [] as RelatedRecordGroup[]
+    for (const group of groups) {
+      const uniqueIds = [...new Set(group.ids)]
+      const rows = await listRecords(prisma, {
+        orgId,
+        object: group.targetObject,
+        attributes: group.targetObject.attributes,
+        query: {
+          filter: { type: 'condition', field: 'id', operator: 'in', value: uniqueIds },
+          limit: RELATED_RECORD_LIMIT,
+        },
+      })
+      if (rows.rows.length === 0) continue
+      related.push({
+        id: `${group.direction}:${group.sourceObject.id}:${group.attribute?.slug ?? 'related'}`,
+        label: group.direction === 'outbound' && uniqueIds.length === 1
+          ? group.targetObject.name
+          : group.targetObject.namePlural,
+        direction: group.direction,
+        object: mapObjectToApi(group.targetObject),
+        attributeName: group.attribute?.name ?? null,
+        count: uniqueIds.length,
+        records: rows.rows,
+      })
+    }
+
+    res.json({ related })
   }),
 )
 
