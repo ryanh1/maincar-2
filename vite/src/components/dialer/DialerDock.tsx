@@ -6,6 +6,7 @@ import { formatElapsed } from '@/lib/duration'
 import { InCallWorkspace } from '@/components/dialer/InCallWorkspace'
 import { DialerDispositionBar } from '@/components/dialer/DialerDispositionBar'
 import { NumericKeypad } from '@/components/dialer/NumericKeypad'
+import { Button } from '@/components/ui/button'
 import { useDialer } from '@/components/dialer/dialerContext'
 
 /** Ties the title-bar toggle to the body it opens for assistive tech. */
@@ -30,9 +31,13 @@ const BODY_ID = 'dialer-dock-body'
  * corner's width so the two never overlap.
  */
 export function DialerDock() {
-  const { view, mode, phase, elapsedSeconds, activeCall, terminalStatus, prefilledNumber, toggleView, collapseDialer } = useDialer()
+  const {
+    view, mode, phase, elapsedSeconds, activeCall, terminalStatus, prefilledNumber,
+    toggleView, collapseDialer, acceptIncomingCall, rejectIncomingCall,
+  } = useDialer()
   const expanded = view === 'expanded'
   const inCall = mode === 'call'
+  const incoming = phase === 'ringing' && activeCall?.direction === 'inbound'
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -72,7 +77,22 @@ export function DialerDock() {
       </button>
 
       <div id={BODY_ID} className="border-t border-border p-3">
-        {inCall && activeCall ? (
+        {incoming && activeCall ? (
+          <div className="flex flex-col gap-3">
+            <div>
+              <p className="text-xs text-text-muted">Incoming call</p>
+              <p className="text-sm font-medium tabular-nums">{activeCall.toE164}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button type="button" size="sm" variant="success" className="flex-1" onClick={acceptIncomingCall}>
+                Accept call
+              </Button>
+              <Button type="button" size="sm" variant="outline" className="flex-1" onClick={rejectIncomingCall}>
+                Reject call
+              </Button>
+            </div>
+          </div>
+        ) : inCall && activeCall ? (
           <InCallWorkspace
             key={activeCall.callId}
             orgId={activeCall.orgId}

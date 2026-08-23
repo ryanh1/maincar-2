@@ -101,6 +101,10 @@ export function DialerProvider({ children }: { children: ReactNode }) {
   // reach it directly (MAI-195). Set once `device.connect()` resolves; cleared by
   // endCall and reset, which run on every path off a live call.
   const callRef = useRef<TwilioVoiceCall | null>(null)
+  // The incoming call remains here only until the rep accepts or rejects it. It
+  // is separate from callRef so a caller cancel before answer can clear the
+  // dialer without issuing a DELETE that would overwrite Twilio's own result.
+  const incomingCallRef = useRef<TwilioVoiceCall | null>(null)
   // End can land between startCall and Device.connect resolving. This flag must
   // survive reset: the pending promise checks it before it can create a browser
   // leg and ring the callee. Only a fresh call is allowed to clear it.
@@ -219,6 +223,71 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     callRef.current = null
     setCanControlAudio(false)
   }, [])
+
+  const clearIncomingCall = useCallback((call: TwilioVoiceCall) => {
+    if (callRef.current !== call) return
+    incomingCallRef.current = null
+    reset()
+  }, [reset])
+
+  const acceptIncomingCall = useCallback(() => {
+    const call = incomingCallRef.current
+    if (!call || callRef.current !== call) return
+    // Drop the pending marker before accepting so a double-click cannot issue a
+    // second accept. callRef keeps the Call available for its accept event.
+    incomingCallRef.current = null
+    call.accept()
+  }, [])
+
+  const rejectIncomingCall = useCallback(() => {
+    const call = incomingCallRef.current
+    if (!call || callRef.current !== call) return
+    call.reject()
+    clearIncomingCall(call)
+  }, [clearIncomingCall])
+
+  const receiveIncomingCall = useCallback((call: TwilioVoiceCall) => {
+    const callId = call.parameters.callId
+    if (!callId || !org) {
+      // An incoming browser leg without the server-issued record id cannot be
+      // reconciled to an organization-scoped Call row, so do not show a control
+      // that could update the wrong call.
+      call.reject()
+      return
+    }
+
+    incomingCallRef.current = call
+    callRef.current = call
+    startCall({
+      orgId: org.id,
+      callId,
+      toE164: call.parameters.From ?? '',
+      direction: 'inbound',
+      recording: false,
+    })
+    call.on('accept', () => {
+      if (callRef.current !== call) return
+      incomingCallRef.current = null
+      setCanControlAudio(true)
+      connectCall()
+    })
+    call.on('cancel', () => clearIncomingCall(call))
+    call.on('reject', () => clearIncomingCall(call))
+    call.on('disconnect', () => {
+      if (incomingCallRef.current === call) {
+        clearIncomingCall(call)
+      } else if (callRef.current === call) {
+        finishCall()
+      }
+    })
+    call.on('error', () => {
+      if (incomingCallRef.current === call) {
+        clearIncomingCall(call)
+      } else if (callRef.current === call) {
+        finishCall('dropped')
+      }
+    })
+  }, [clearIncomingCall, connectCall, finishCall, org, startCall])
 
   // A same-tab refresh loses React state but not sessionStorage. Restore only a
   // live call from the active organization, then let the normal detail poll
@@ -340,8 +409,12 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     device.on('error', (error: { message?: string }) => {
       toast.error(error.message ?? 'The dialer lost its connection. Reload the page and try again.')
     })
+    device.on('incoming', receiveIncomingCall)
+    void device.register().catch(() => {
+      toast.error('The dialer could not receive calls. Reload the page and try again.')
+    })
     deviceRef.current = device
-  }, [voiceToken, refetchVoiceToken])
+  }, [voiceToken, refetchVoiceToken, receiveIncomingCall])
 
   // Torn down on unmount only — the Device outlives any one call.
   useEffect(
@@ -413,6 +486,8 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       connectCall,
       endCall,
       cancelCall,
+      acceptIncomingCall,
+      rejectIncomingCall,
       reset,
       placeDeviceCall,
       muteCall,
@@ -436,6 +511,8 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       connectCall,
       endCall,
       cancelCall,
+      acceptIncomingCall,
+      rejectIncomingCall,
       reset,
       placeDeviceCall,
       muteCall,

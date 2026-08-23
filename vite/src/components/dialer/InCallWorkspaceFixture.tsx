@@ -54,7 +54,8 @@ const dialer: DialerContextValue = {
   canControlAudio: false,
   expandDialer: () => undefined, collapseDialer: () => undefined, toggleView: () => undefined,
   startCall: () => undefined, adoptCall: () => undefined, connectCall: () => undefined, endCall: () => undefined,
-  cancelCall: () => undefined, reset: () => undefined, placeDeviceCall: async () => undefined,
+  cancelCall: () => undefined, acceptIncomingCall: () => undefined, rejectIncomingCall: () => undefined,
+  reset: () => undefined, placeDeviceCall: async () => undefined,
   muteCall: () => undefined, sendDigits: () => undefined,
 }
 

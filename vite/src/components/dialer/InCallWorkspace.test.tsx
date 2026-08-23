@@ -62,6 +62,17 @@ describe('InCallWorkspace', () => {
     expect(screen.getByText('Acme')).toBeInTheDocument()
   })
 
+  it('keeps the caller number visible after the inbound call detail loads', () => {
+    useGetCallDetailMock.mockReturnValue({
+      data: detail({ direction: 'inbound', fromE164: '+12025550123', toE164: '+14155550100' }),
+    })
+
+    render(<InCallWorkspace orgId="org-1" callId="call-1" toE164="+12025550123" recording={false} />)
+
+    expect(screen.getByText('+12025550123')).toBeInTheDocument()
+    expect(screen.queryByText('+14155550100')).not.toBeInTheDocument()
+  })
+
   it('focuses notes when the call becomes live, not while it rings', () => {
     const { rerender } = render(
       <InCallWorkspace orgId="org-1" callId="call-1" toE164="+12025550123" recording={false} />,

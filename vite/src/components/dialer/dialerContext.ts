@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { CallStatus } from '@/lib/callTypes'
+import type { CallDirection, CallStatus } from '@/lib/callTypes'
 
 /**
  * Kept apart from `DialerProvider.tsx` for the same reason `useAuth.ts` is kept
@@ -40,8 +40,10 @@ export interface ActiveCall {
   orgId: string
   /** The live call's id. */
   callId: string
-  /** The number being called, available before the detail read resolves. */
+  /** The other party’s number, available before the detail read resolves. */
   toE164?: string
+  /** Whether the other party called the rep or the rep called them. */
+  direction?: CallDirection
   /** Whether the call is being recorded, driving the in-call recording dot. */
   recording: boolean
 }
@@ -118,6 +120,10 @@ export interface DialerContextValue {
    * the server mutation still settles the Call row.
    */
   cancelCall: () => void
+  /** Accept the pending inbound Voice SDK call. No-op unless one is ringing. */
+  acceptIncomingCall: () => void
+  /** Reject the pending inbound Voice SDK call without changing its server-owned state. */
+  rejectIncomingCall: () => void
   /** Back to the rest state: `idle`, not dialing, timer at 0, ready for the next call. */
   reset: () => void
 

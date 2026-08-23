@@ -49,6 +49,8 @@ function setDialer(overrides: Partial<DialerContextValue> = {}): DialerContextVa
     adoptCall: vi.fn(),
     connectCall: vi.fn(),
     endCall: vi.fn(),
+    acceptIncomingCall: vi.fn(),
+    rejectIncomingCall: vi.fn(),
     reset: vi.fn(),
     ...overrides,
   }
@@ -144,6 +146,24 @@ describe('DialerDock', () => {
     expect(controls).toHaveAttribute('data-recording', 'true')
     expect(screen.queryByTestId('keypad')).not.toBeInTheDocument()
     expect(screen.getByTestId('disposition-bar')).toHaveAttribute('data-call', 'call-9')
+  })
+
+  it('shows the raw caller number with explicit accept and reject actions while an inbound call rings', () => {
+    const dialer = setDialer({
+      view: 'expanded',
+      mode: 'call',
+      phase: 'ringing',
+      activeCall: { orgId: 'org-9', callId: 'call-9', toE164: '+12025550123', direction: 'inbound', recording: false },
+    })
+    render(<DialerDock />)
+
+    expect(screen.getByText('+12025550123')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Accept call' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reject call' }))
+
+    expect(dialer.acceptIncomingCall).toHaveBeenCalledOnce()
+    expect(dialer.rejectIncomingCall).toHaveBeenCalledOnce()
+    expect(screen.queryByTestId('in-call')).not.toBeInTheDocument()
   })
 
   it('keeps the disposition bar in the dock after a terminal call ends', () => {
