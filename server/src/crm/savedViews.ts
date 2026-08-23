@@ -172,23 +172,6 @@ export function repairSavedViewConfig(raw: unknown, attributes: ViewAttribute[])
   }
 }
 
-/** A policy seam for this release: any active workspace member can edit a shared view. */
-export function canViewSavedView(view: { ownerUserId: string; isShared: boolean }, userId: string): boolean {
-  return view.ownerUserId === userId || view.isShared
-}
-
-export function canEditSharedView(_view: { ownerUserId: string; isShared: boolean }, _userId: string): boolean {
-  return true
-}
-
-export function canEditSavedView(view: { ownerUserId: string; isShared: boolean }, userId: string): boolean {
-  return view.ownerUserId === userId || (view.isShared && canEditSharedView(view, userId))
-}
-
-export function canShareSavedView(view: { ownerUserId: string; isShared: boolean }, userId: string): boolean {
-  return canEditSavedView(view, userId)
-}
-
 /** Decode a URL overlay without ever accepting CRM values, free text, or PII. */
 export function decodeUrlViewOverlay(encoded: string | undefined, attributes: ViewAttribute[]): UrlViewOverlay | undefined {
   if (!encoded || encoded.length > 8_192 || !/^[A-Za-z0-9_-]+$/.test(encoded)) return undefined

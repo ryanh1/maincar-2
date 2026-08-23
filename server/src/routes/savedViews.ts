@@ -5,11 +5,9 @@ import prisma from '../db.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
+import { canEditSavedView, canShareSavedView, canViewSavedView } from '../crm/savedViewPolicy.js'
 import {
   applyUrlViewOverlay,
-  canEditSavedView,
-  canShareSavedView,
-  canViewSavedView,
   decodeUrlViewOverlay,
   repairSavedViewConfig,
   type ViewLayout,
@@ -100,10 +98,10 @@ router.get('/', wrapRoute('GET /api/orgs/:orgId/saved-views', async (req, res) =
   const loaded = await loadObjectAndAttributes(orgId, objectId)
   if (!loaded) return void res.status(404).json({ error: 'Object not found' })
   const views = await prisma.savedView.findMany({
-    where: { orgId, objectId, deletedAt: null, OR: [{ ownerUserId: authReq.user!.id }, { isShared: true }] },
+    where: { orgId, objectId, deletedAt: null },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   })
-  res.json({ views: views.map((view) => mapSavedView(view, loaded.attributes)) })
+  res.json({ views: views.filter((view) => canViewSavedView(view, authReq.user!.id)).map((view) => mapSavedView(view, loaded.attributes)) })
 }))
 
 // GET /resolve is deliberately before /:id. It composes an optional safe URL overlay;
@@ -120,10 +118,10 @@ router.get('/resolve', wrapRoute('GET /api/orgs/:orgId/saved-views/resolve', asy
   const userId = authReq.user!.id
   const view = parsed.data.viewId
     ? await findVisibleView(orgId, parsed.data.viewId, userId)
-    : await prisma.savedView.findFirst({
-      where: { orgId, objectId: loaded.object.id, deletedAt: null, isDefault: true, OR: [{ ownerUserId: userId }, { isShared: true }] },
+    : (await prisma.savedView.findMany({
+      where: { orgId, objectId: loaded.object.id, deletedAt: null, isDefault: true },
       orderBy: [{ isShared: 'asc' }, { updatedAt: 'desc' }],
-    })
+    })).find((candidate) => canViewSavedView(candidate, userId))
   if (parsed.data.viewId && (!view || view.objectId !== loaded.object.id)) {
     return void res.status(404).json({ error: 'Saved view not found' })
   }
@@ -175,20 +173,15 @@ router.post('/reorder', wrapRoute('POST /api/orgs/:orgId/saved-views/reorder', a
   const loaded = await loadObjectAndAttributes(orgId, parsed.data.objectId)
   if (!loaded) return void res.status(422).json({ error: 'Object not found in this organization.' })
   const userId = authReq.user!.id
-  const visibleWhere = {
-    orgId,
-    objectId: loaded.object.id,
-    deletedAt: null,
-    OR: [{ ownerUserId: userId }, { isShared: true }],
-  }
-  const visibleViews = await prisma.savedView.findMany({ where: visibleWhere, select: { id: true } })
-  const visibleIds = new Set(visibleViews.map((view) => view.id))
+  const editableWhere = { orgId, objectId: loaded.object.id, deletedAt: null }
+  const editableViews = await prisma.savedView.findMany({ where: editableWhere, select: { id: true, ownerUserId: true, isShared: true } })
+  const editableIds = new Set(editableViews.filter((view) => canEditSavedView(view, userId)).map((view) => view.id))
   const submittedIds = new Set(parsed.data.viewIds)
   if (
-    visibleIds.size !== submittedIds.size
-    || parsed.data.viewIds.some((viewId) => !visibleIds.has(viewId))
+    editableIds.size !== submittedIds.size
+    || parsed.data.viewIds.some((viewId) => !editableIds.has(viewId))
   ) {
-    return void res.status(422).json({ error: 'The order must contain every visible saved view for this object.' })
+    return void res.status(422).json({ error: 'The order must contain every editable saved view for this object.' })
   }
 
   try {
@@ -198,7 +191,7 @@ router.post('/reorder', wrapRoute('POST /api/orgs/:orgId/saved-views/reorder', a
       await tx.$queryRaw`SELECT id FROM "ObjectDef" WHERE id = ${loaded.object.id} AND "orgId" = ${orgId} FOR UPDATE`
       for (const [sortOrder, id] of parsed.data.viewIds.entries()) {
         const updated = await tx.savedView.updateMany({
-          where: { id, ...visibleWhere },
+          where: { id, ...editableWhere },
           data: { sortOrder },
         })
         if (updated.count !== 1) throw new SavedViewReorderConflict()
