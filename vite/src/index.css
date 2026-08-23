@@ -105,6 +105,17 @@
   --accent-brand: #f59e0b; /* amber-500 */
   --accent-2: #fbbf24; /* amber-400 */
 
+  /* Stored disposition/CRM option colors. Components receive the token name,
+     never a persisted hex, so the same choice remains legible in dark mode. */
+  --option-1: #0e7490;
+  --option-2: #0369a1;
+  --option-3: #4f46e5;
+  --option-4: #7e22ce;
+  --option-5: #be123c;
+  --option-6: #b45309;
+  --option-7: #0f766e;
+  --option-8: #475569;
+
   /* Dark sidebar in both themes — the anchor a pale light UI needs. It makes the
      white content area read brighter by contrast. */
   --sidebar: #0f172a; /* slate-900 */
@@ -155,6 +166,15 @@
 
   --accent-brand: #f59e0b;
   --accent-2: #fbbf24;
+
+  --option-1: #22d3ee;
+  --option-2: #38bdf8;
+  --option-3: #818cf8;
+  --option-4: #c084fc;
+  --option-5: #fb7185;
+  --option-6: #fbbf24;
+  --option-7: #2dd4bf;
+  --option-8: #94a3b8;
 
   --sidebar: #0b1120;
   --sidebar-foreground: #cbd5e1;
