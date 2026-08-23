@@ -3,12 +3,15 @@ import { Check, Copy, Download, Phone } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { AudioPlayer, type AudioMediaSource } from '@/components/call-review/AudioPlayer'
+import type { SpeakerRibbonSpeaker } from '@/components/call-review/SpeakerRibbon'
 import { Button } from '@/components/ui/button'
 import type { CallDetail } from '@/hooks/dialer'
 import { getCallDirectionLabel, getCallStatusLabel } from '@/lib/callLabels'
 import { formatDateTime } from '@/lib/datetime'
 import { formatElapsed } from '@/lib/duration'
 import { getStoredCallReviewLayout, saveCallReviewLayout, type CallReviewLayout, type CallReviewLayoutPreset } from '@/lib/callReviewLayout'
+import { getSpeakerColorToken } from '@/lib/speakerRibbon'
+import { resolveOptionColor } from '@/lib/optionPalette'
 import { cn } from '@/lib/utils'
 
 type Pane = 'playback' | 'comments'
@@ -23,6 +26,14 @@ function getPersonName(call: CallDetail): string | null {
   const person = call.review?.crm.person
   if (!person) return null
   return person.preferredFirstName ?? ([person.firstName, person.lastName].filter(Boolean).join(' ') || null)
+}
+
+function getSpeakerLabel(speakerKey: string, speaker: NonNullable<CallDetail['review']>['speakers'][number] | undefined, unknownNumber: number): string {
+  if (speaker?.displayName) return speaker.displayName
+  const personName = speaker?.person?.preferredFirstName ?? ([speaker?.person?.firstName, speaker?.person?.lastName].filter(Boolean).join(' ') || null)
+  if (personName) return personName
+  if (speakerKey === 'rep') return 'You'
+  return `Person ${unknownNumber}`
 }
 
 /** The call-review frame keeps both panes mounted across responsive navigation. */
@@ -109,11 +120,21 @@ function PlaybackPane({ call, timeZone }: { call: CallDetail; timeZone: string |
     : call.recordingUrl ? { kind: 'audio' as const, url: call.recordingUrl, expiresAt: '' } : null
   const transcript = review?.transcript.pass?.plainText ?? (call.transcriptStatus === 'done' ? call.transcript : null)
   const segments = review?.transcript.pass?.segments ?? []
+  const speakerKeys = [...new Set([...(review?.speakers ?? []).map((speaker) => speaker.speakerKey), ...segments.map((segment) => segment.speakerKey)])]
+  let unknownSpeakerNumber = 1
+  const speakerLabels = new Map<string, string>()
+  for (const speakerKey of speakerKeys) {
+    const speaker = review?.speakers.find((candidate) => candidate.speakerKey === speakerKey)
+    const label = getSpeakerLabel(speakerKey, speaker, unknownSpeakerNumber)
+    if (label.startsWith('Person ')) unknownSpeakerNumber += 1
+    speakerLabels.set(speakerKey, label)
+  }
+  const ribbonSpeakers: SpeakerRibbonSpeaker[] = speakerKeys.map((speakerKey) => ({ speakerKey, label: speakerLabels.get(speakerKey) ?? speakerKey }))
   return <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
     <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">Playback</h2></div>
-    <section aria-labelledby="recording-title" className="border border-border bg-surface p-3"><h3 id="recording-title" className="text-sm font-semibold">Recording</h3>{source ? <div className="mt-3 flex flex-col gap-3"><AudioPlayer source={source} recordingState={review?.recording.state ?? 'ready'} callLabel={call.toE164} /><div><Button asChild variant="secondary" size="sm"><a href={source.url} download><Download size={16} aria-hidden />Download</a></Button></div></div> : <p className="mt-3 text-sm text-text-muted">{recordingMessage(call)}</p>}</section>
+    <section aria-labelledby="recording-title" className="border border-border bg-surface p-3"><h3 id="recording-title" className="text-sm font-semibold">Recording</h3>{source ? <div className="mt-3 flex flex-col gap-3"><AudioPlayer source={source} recordingState={review?.recording.state ?? 'ready'} callLabel={call.toE164} segments={segments} speakers={ribbonSpeakers} /><div><Button asChild variant="secondary" size="sm"><a href={source.url} download><Download size={16} aria-hidden />Download</a></Button></div></div> : <p className="mt-3 text-sm text-text-muted">{recordingMessage(call)}</p>}</section>
     <CallFacts call={call} timeZone={timeZone} />
-    <section aria-labelledby="transcript-title" className="min-h-0 flex-1 border border-border p-3"><div className="flex items-center justify-between gap-2"><h3 id="transcript-title" className="text-sm font-semibold">Transcript</h3>{transcript?.trim() && <CopyTranscriptButton text={transcript} />}</div><div className="mt-3 flex flex-col gap-3">{segments.length > 0 ? segments.map((segment) => <p key={segment.id} className="text-sm whitespace-pre-wrap"><span className="mr-2 text-xs text-text-muted tabular-nums">{formatElapsed(segment.startMs / 1000)}</span>{segment.text}</p>) : transcript?.trim() ? <p className="text-sm whitespace-pre-wrap">{transcript}</p> : <p className="text-sm text-text-muted">{transcriptMessage(call)}</p>}</div></section>
+    <section aria-labelledby="transcript-title" className="min-h-0 flex-1 border border-border p-3"><div className="flex items-center justify-between gap-2"><h3 id="transcript-title" className="text-sm font-semibold">Transcript</h3>{transcript?.trim() && <CopyTranscriptButton text={transcript} />}</div><div className="mt-3 flex flex-col gap-3">{segments.length > 0 ? segments.map((segment) => <p key={segment.id} className="text-sm whitespace-pre-wrap"><span className="mr-2 text-xs text-text-muted tabular-nums">{formatElapsed(segment.startMs / 1000)}</span><span className="mr-2 text-xs font-medium" style={{ color: resolveOptionColor(getSpeakerColorToken(segment.speakerKey, speakerKeys)) }}>{speakerLabels.get(segment.speakerKey) ?? segment.speakerKey}</span>{segment.text}</p>) : transcript?.trim() ? <p className="text-sm whitespace-pre-wrap">{transcript}</p> : <p className="text-sm text-text-muted">{transcriptMessage(call)}</p>}</div></section>
   </div>
 }
 

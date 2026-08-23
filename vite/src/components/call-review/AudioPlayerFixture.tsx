@@ -36,7 +36,7 @@ export function AudioPlayerFixture() {
     <main className="flex min-h-dvh items-center justify-center bg-bg p-6">
       <section aria-labelledby="audio-fixture-title" className="w-full max-w-md border border-border bg-surface p-4">
         <h1 id="audio-fixture-title" className="text-base font-semibold">Audio player fixture</h1>
-        <div className="mt-4"><AudioPlayer source={{ kind: 'audio', url: sourceUrl, expiresAt: '2026-08-22T00:00:00.000Z' }} recordingState="ready" callLabel="Audio fixture" /></div>
+        <div className="mt-4"><AudioPlayer source={{ kind: 'audio', url: sourceUrl, expiresAt: '2026-08-22T00:00:00.000Z' }} recordingState="ready" callLabel="Audio fixture" segments={[{ speakerKey: 'rep', startMs: 0, endMs: 1_500 }, { speakerKey: 'buyer', startMs: 2_000, endMs: 4_500 }]} speakers={[{ speakerKey: 'rep', label: 'You' }, { speakerKey: 'buyer', label: 'Buyer' }]} /></div>
       </section>
     </main>
   )

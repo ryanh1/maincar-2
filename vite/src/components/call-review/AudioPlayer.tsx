@@ -6,6 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider'
 import { formatElapsed } from '@/lib/duration'
 import type { CallMediaSource, ReviewLifecycleState } from '@/lib/callTypes'
+import { SpeakerRibbon, type SpeakerRibbonCommentPin, type SpeakerRibbonSearchTick, type SpeakerRibbonSpeaker, type SpeakerRibbonTimeRange } from '@/components/call-review/SpeakerRibbon'
+import type { SpeakerRibbonSegment } from '@/lib/speakerRibbon'
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 3.5] as const
 const SEEK_SECONDS = 15
@@ -14,10 +16,16 @@ export type AudioMediaSource = CallMediaSource & { kind: 'audio' }
 
 type PlayerStatus = 'loading' | 'ready' | 'buffering' | 'error'
 
-interface AudioPlayerProps {
+export interface AudioPlayerProps {
   source: AudioMediaSource
   recordingState: ReviewLifecycleState
   callLabel: string
+  segments?: readonly SpeakerRibbonSegment[]
+  speakers?: readonly SpeakerRibbonSpeaker[]
+  selectionRange?: SpeakerRibbonTimeRange | null
+  searchTicks?: readonly SpeakerRibbonSearchTick[]
+  commentPins?: readonly SpeakerRibbonCommentPin[]
+  onSeek?: (time: number) => void
 }
 
 function isEditorFocused(): boolean {
@@ -34,8 +42,15 @@ function rateLabel(rate: number): string {
   return `${rate}×`
 }
 
+function readBufferedRanges(audio: HTMLAudioElement): SpeakerRibbonTimeRange[] {
+  return Array.from({ length: audio.buffered.length }, (_, index) => ({
+    start: audio.buffered.start(index),
+    end: audio.buffered.end(index),
+  }))
+}
+
 /** Compact audio-only playback controls; the source contract intentionally leaves room for later video. */
-export function AudioPlayer({ source, recordingState, callLabel }: AudioPlayerProps) {
+export function AudioPlayer({ source, recordingState, callLabel, segments = [], speakers = [], selectionRange = null, searchTicks = [], commentPins = [], onSeek }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -44,6 +59,7 @@ export function AudioPlayer({ source, recordingState, callLabel }: AudioPlayerPr
   const [volume, setVolume] = useState(1)
   const [playbackRate, setPlaybackRate] = useState<number>(1)
   const [status, setStatus] = useState<PlayerStatus>('loading')
+  const [bufferedRanges, setBufferedRanges] = useState<SpeakerRibbonTimeRange[]>([])
 
   const setTime = useCallback((nextTime: number) => {
     const audio = audioRef.current
@@ -52,7 +68,8 @@ export function AudioPlayer({ source, recordingState, callLabel }: AudioPlayerPr
     const safeTime = clamp(nextTime, 0, Math.max(0, max))
     audio.currentTime = safeTime
     setCurrentTime(safeTime)
-  }, [duration])
+    onSeek?.(safeTime)
+  }, [duration, onSeek])
 
   const seekBy = useCallback((seconds: number) => setTime((audioRef.current?.currentTime ?? currentTime) + seconds), [currentTime, setTime])
 
@@ -107,6 +124,7 @@ export function AudioPlayer({ source, recordingState, callLabel }: AudioPlayerPr
     setCurrentTime(0)
     setDuration(0)
     setIsPlaying(false)
+    setBufferedRanges([])
   }, [source.url])
 
   useEffect(() => {
@@ -169,13 +187,19 @@ export function AudioPlayer({ source, recordingState, callLabel }: AudioPlayerPr
         onLoadedMetadata={(event) => {
           const nextDuration = event.currentTarget.duration
           if (Number.isFinite(nextDuration)) setDuration(nextDuration)
+          setBufferedRanges(readBufferedRanges(event.currentTarget))
           setStatus('ready')
         }}
         onDurationChange={(event) => {
           const nextDuration = event.currentTarget.duration
           if (Number.isFinite(nextDuration)) setDuration(nextDuration)
+          setBufferedRanges(readBufferedRanges(event.currentTarget))
         }}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onTimeUpdate={(event) => {
+          setCurrentTime(event.currentTarget.currentTime)
+          setBufferedRanges(readBufferedRanges(event.currentTarget))
+        }}
+        onProgress={(event) => setBufferedRanges(readBufferedRanges(event.currentTarget))}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onPlaying={() => { setIsPlaying(true); setStatus('ready') }}
@@ -209,6 +233,18 @@ export function AudioPlayer({ source, recordingState, callLabel }: AudioPlayerPr
         {status === 'buffering' && 'Buffering recording…'}
         {status === 'error' && 'Recording could not play. Refresh the call and try again.'}
       </p>
+      <SpeakerRibbon
+        duration={maximum}
+        currentTime={currentTime}
+        segments={segments}
+        speakers={speakers}
+        bufferedRanges={bufferedRanges}
+        playedRanges={currentTime > 0 ? [{ start: 0, end: currentTime }] : []}
+        selectionRange={selectionRange}
+        searchTicks={searchTicks}
+        commentPins={commentPins}
+        onSeek={setTime}
+      />
     </div>
   )
 }

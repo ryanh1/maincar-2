@@ -1,3 +1,5 @@
+import { OPTION_TOKENS, type OptionToken } from '@/lib/optionPalette'
+
 export interface SpeakerRibbonSegment {
   speakerKey: string
   startMs: number
@@ -53,6 +55,13 @@ export interface BuildSpeakerRibbonGeometryInput {
   selectionRange?: SpeakerRibbonRange | null
   markers?: readonly SpeakerRibbonMarker[]
   currentTimeMs?: number
+}
+
+/** Stable by speaker key so the same speaker keeps the same semantic color. */
+export function getSpeakerColorToken(speakerKey: string, speakerKeys: readonly string[]): OptionToken {
+  const orderedKeys = [...new Set(speakerKeys)].sort()
+  const index = Math.max(0, orderedKeys.indexOf(speakerKey))
+  return OPTION_TOKENS[index % OPTION_TOKENS.length] ?? OPTION_TOKENS[0]
 }
 
 function normalizeDuration(durationMs: number): number {
