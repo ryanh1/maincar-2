@@ -208,6 +208,7 @@ router.get(
 
     const where: Prisma.MeetingWhereInput = {
       orgId,
+      deletedAt: null,
       ...(companyId ? { companyId } : {}),
       ...(dealId ? { dealId } : {}),
       ...(recurringEventId ? { recurringEventId } : {}),
@@ -289,7 +290,7 @@ router.get(
     // below. Org isolation lives in the where clause, not in a check bolted on
     // after the read.
     const meeting = await prisma.meeting.findFirst({
-      where: { id, orgId },
+      where: { id, orgId, deletedAt: null },
       // Organizer first, then by address — a stable order, so the attendee list
       // does not reshuffle between requests.
       include: {

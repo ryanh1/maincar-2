@@ -16,4 +16,5 @@ export interface CaptureSettings {
 export interface CaptureSettingsResponse {
   captureSettings: CaptureSettings
   optedOut: boolean
+  purgeQueued?: boolean
 }

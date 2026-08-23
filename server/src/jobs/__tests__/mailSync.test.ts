@@ -4,6 +4,8 @@ const db = vi.hoisted(() => ({
   mailAccount: { findFirst: vi.fn(), updateMany: vi.fn() },
   membership: { findFirst: vi.fn() },
   unmatchedActivity: { upsert: vi.fn() },
+  captureSettings: { findUnique: vi.fn() },
+  mailCaptureOptOut: { findUnique: vi.fn() },
   email: { findFirst: vi.fn(), findFirstOrThrow: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
   emailParticipant: { deleteMany: vi.fn(), createMany: vi.fn() },
   meeting: { findFirst: vi.fn(), findFirstOrThrow: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
@@ -65,6 +67,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   db.mailAccount.findFirst.mockResolvedValue(ACCOUNT)
   db.membership.findFirst.mockResolvedValue({ id: 'membership_1' })
+  db.captureSettings.findUnique.mockResolvedValue(null)
+  db.mailCaptureOptOut.findUnique.mockResolvedValue(null)
   db.$transaction.mockImplementation(async (callback) => callback(db))
   db.email.findFirst.mockResolvedValue(null)
   db.email.create.mockResolvedValue({
@@ -189,6 +193,51 @@ describe('syncMailAccount', () => {
       where: { id: 'email_existing', orgId: ACCOUNT.orgId },
       data: expect.objectContaining({ providerMessageId: 'message_1', subject: 'Updated subject' }),
     }))
+  })
+
+  it('does not store mail that the current capture exclusions reject', async () => {
+    db.captureSettings.findUnique.mockResolvedValue({
+      internalDomains: [], allowDomains: [], excludeDomains: [], excludeAddresses: ['support@ourco.com'],
+      excludeRoleAddresses: true, dropBulkInbound: true, bulkInboundMax: 15,
+      subjectExcludes: [], logActivityTypes: 'both',
+    })
+    matcher.resolveParticipantsToCrm.mockResolvedValue({
+      excluded: true, exclusion: 'address_excluded', personIds: [], companyIds: [], personIdByAddress: {}, primaryPersonId: null, primaryCompanyId: null, dealId: null,
+    })
+    PAGE_PROVIDER.listMessagesSince.mockResolvedValue({
+      messages: [{
+        providerMsgId: 'message_1', threadId: 'thread_1', from: { email: 'support@ourco.com' }, to: [{ email: 'buyer@customer.test' }], cc: [],
+        subject: 'Ticket update', bodyHtml: '<p>Hello</p>', bodyText: 'Hello', sentAt: new Date('2026-08-23T12:00:00.000Z'), isOutbound: false,
+      }],
+      nextCursor: 'history-new',
+    })
+
+    await syncMailAccount(ACCOUNT.id)
+
+    expect(matcher.resolveParticipantsToCrm).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      captureSettings: expect.objectContaining({ excludeAddresses: ['support@ourco.com'] }),
+      subject: 'Ticket update',
+      activityType: 'email',
+    }))
+    expect(db.email.create).not.toHaveBeenCalled()
+    expect(matcher.attachEmailMatchInTx).not.toHaveBeenCalled()
+  })
+
+  it('does not resurrect an activity that was purged after an exclusion is removed', async () => {
+    db.email.findFirst.mockResolvedValue({ id: 'email_purged', deletedAt: new Date('2026-08-23T13:00:00.000Z') })
+    PAGE_PROVIDER.listMessagesSince.mockResolvedValue({
+      messages: [{
+        providerMsgId: 'message_1', threadId: 'thread_1', from: { email: 'support@ourco.com' }, to: [{ email: 'buyer@customer.test' }], cc: [],
+        subject: 'Ticket update', bodyHtml: '<p>Hello</p>', bodyText: 'Hello', sentAt: new Date('2026-08-23T12:00:00.000Z'), isOutbound: false,
+      }],
+      nextCursor: 'history-new',
+    })
+
+    await syncMailAccount(ACCOUNT.id)
+
+    expect(db.email.create).not.toHaveBeenCalled()
+    expect(db.email.updateMany).not.toHaveBeenCalled()
+    expect(matcher.attachEmailMatchInTx).not.toHaveBeenCalled()
   })
 })
 

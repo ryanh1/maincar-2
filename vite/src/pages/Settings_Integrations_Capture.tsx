@@ -6,6 +6,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { TagInput } from '@/components/ui/tag-input'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { useGetCaptureSettings, useSetCaptureOptOut, useUpdateCaptureSettings } from '@/hooks/captureSettings'
 import type { CaptureSettings, LogActivityType } from '@/lib/captureSettingsTypes'
@@ -95,6 +105,7 @@ export function Settings_Integrations_Capture() {
 
   const [form, setForm] = useState<CaptureSettings | null>(null)
   const [loadedFrom, setLoadedFrom] = useState<CaptureSettings | null>(null)
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false)
 
   // Initialize the editable form from the server settings once they arrive, and
   // re-sync after a save. Adjusting state during render (guarded by the identity
@@ -119,8 +130,11 @@ export function Settings_Integrations_Capture() {
   async function save(): Promise<void> {
     if (!form) return
     try {
-      await update.mutateAsync(form)
-      toast.success('Capture settings saved.')
+      const result = await update.mutateAsync(form)
+      setSaveDialogOpen(false)
+      toast.success(result.purgeQueued
+        ? 'Capture settings saved. Previously captured matching activity will be removed.'
+        : 'Capture settings saved.')
     } catch {
       toast.error('Could not save capture settings. Check the fields and try again.')
     }
@@ -265,7 +279,7 @@ export function Settings_Integrations_Capture() {
 
       {isAdmin && (
         <div className="flex justify-end">
-          <Button type="button" size="sm" disabled={update.isPending} onClick={() => void save()}>
+          <Button type="button" size="sm" disabled={update.isPending} onClick={() => setSaveDialogOpen(true)}>
             {update.isPending ? 'Saving' : 'Save capture settings'}
           </Button>
         </div>
@@ -281,6 +295,23 @@ export function Settings_Integrations_Capture() {
           onCheckedChange={(next) => void toggleOptOut(next)}
         />
       </div>
+
+      <AlertDialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Save capture settings</AlertDialogTitle>
+            <AlertDialogDescription>
+              New exclusions remove matching activity already captured. Removing an exclusion resumes capture going forward but does not re-import activity that was removed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+            <AlertDialogAction size="sm" disabled={update.isPending} onClick={() => void save()}>
+              Save changes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   )
 }

@@ -11,12 +11,15 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   verifyTokenMock: vi.fn(),
 }))
 
+const queueMock = vi.hoisted(() => ({ sendJob: vi.fn() }))
+
 vi.mock('../../db.js', () => ({ default: prismaMock }))
 vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   verifyFirebaseIdToken: verifyTokenMock,
   setFirebaseUserDisabled: vi.fn(),
   deleteFirebaseUser: vi.fn(),
 }))
+vi.mock('../../jobs/queue.js', () => ({ JOB_CAPTURE_PURGE: 'capture-purge', sendJob: queueMock.sendJob }))
 
 import app from '../../app.js'
 
@@ -141,6 +144,36 @@ describe('capture settings', () => {
       update: FULL_SETTINGS,
     })
     expect(response.body.captureSettings.bulkInboundMax).toBe(20)
+  })
+
+  it('queues a versioned purge when an admin adds an exclusion, so previously captured matches are removed', async () => {
+    prismaMock.captureSettings.findUnique.mockResolvedValue(settingsRow({ excludeAddresses: [] }))
+    prismaMock.captureSettings.upsert.mockResolvedValue(settingsRow({
+      ...FULL_SETTINGS,
+      id: 'settings-a',
+      updatedAt: new Date('2026-08-23T20:00:00.000Z'),
+    }))
+
+    const response = await request(app).patch(URL).set('Authorization', AUTH).send(FULL_SETTINGS)
+
+    expect(response.status).toBe(200)
+    expect(queueMock.sendJob).toHaveBeenCalledWith(
+      'capture-purge',
+      expect.objectContaining({ orgId: ORG_ID, actorId: 'user-a', ruleId: 'settings-a:2026-08-23T20:00:00.000Z' }),
+      expect.objectContaining({ singletonKey: 'settings-a:2026-08-23T20:00:00.000Z', retryLimit: 3 }),
+    )
+    expect(response.body).toEqual(expect.objectContaining({ purgeQueued: true }))
+  })
+
+  it('does not queue a purge when an admin removes an exclusion, so history is never re-imported', async () => {
+    prismaMock.captureSettings.findUnique.mockResolvedValue(settingsRow({ ...FULL_SETTINGS, excludeAddresses: ['jane@ourco.com'] }))
+    prismaMock.captureSettings.upsert.mockResolvedValue(settingsRow({ ...FULL_SETTINGS, excludeAddresses: [] }))
+
+    const response = await request(app).patch(URL).set('Authorization', AUTH).send({ ...FULL_SETTINGS, excludeAddresses: [] })
+
+    expect(response.status).toBe(200)
+    expect(queueMock.sendJob).not.toHaveBeenCalled()
+    expect(response.body).toEqual(expect.objectContaining({ purgeQueued: false }))
   })
 
   it('rejects an invalid back-fill window', async () => {

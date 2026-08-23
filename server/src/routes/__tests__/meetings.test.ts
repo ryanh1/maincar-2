@@ -334,6 +334,7 @@ describe('GET /api/orgs/:orgId/meetings/:id', () => {
     expect(prismaMock.meeting.findFirst.mock.calls[0][0].where).toEqual({
       id: 'mtg-1',
       orgId: ORG_A,
+      deletedAt: null,
     })
   })
 

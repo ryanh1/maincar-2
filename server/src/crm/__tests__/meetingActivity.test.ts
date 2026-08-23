@@ -62,6 +62,7 @@ function meetingRow(overrides: Partial<Meeting> = {}): Meeting {
     recordingProvider: null,
     transcriptStatus: null,
     externalRecordingId: null,
+    deletedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,

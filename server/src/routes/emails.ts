@@ -146,6 +146,7 @@ router.get(
 
     const where: Prisma.EmailWhereInput = {
       orgId,
+      deletedAt: null,
       ...(companyId ? { companyId } : {}),
       ...(dealId ? { dealId } : {}),
       ...(mailAccountId ? { mailAccountId } : {}),
@@ -223,7 +224,7 @@ router.get(
     // below. Org isolation lives in the where clause, not in a check bolted on
     // after the read.
     const email = await prisma.email.findFirst({
-      where: { id, orgId },
+      where: { id, orgId, deletedAt: null },
       include: {
         participants: { orderBy: [{ role: 'asc' }, { createdAt: 'asc' }] },
         attachments: { orderBy: [{ createdAt: 'asc' }] },
