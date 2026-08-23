@@ -3,7 +3,7 @@ import { ChevronDown, Phone } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { formatElapsed } from '@/lib/duration'
-import { InCallControls } from '@/components/dialer/InCallControls'
+import { InCallWorkspace } from '@/components/dialer/InCallWorkspace'
 import { NumericKeypad } from '@/components/dialer/NumericKeypad'
 import { useDialer } from '@/components/dialer/dialerContext'
 
@@ -72,9 +72,11 @@ export function DialerDock() {
 
       <div id={BODY_ID} className="border-t border-border p-3">
         {inCall && activeCall ? (
-          <InCallControls
+          <InCallWorkspace
+            key={activeCall.callId}
             orgId={activeCall.orgId}
             callId={activeCall.callId}
+            toE164={activeCall.toE164 ?? ''}
             recording={activeCall.recording}
           />
         ) : (

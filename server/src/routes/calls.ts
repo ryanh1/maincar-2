@@ -344,6 +344,10 @@ const logCallSchema = z.object({
   noteText: z.string().trim().max(5_000).nullable().optional(),
 }).strict()
 
+const saveCallNoteSchema = z.object({
+  noteText: z.string().trim().max(5_000),
+}).strict()
+
 // --- List input ---
 
 export const LIST_DEFAULT_LIMIT = 25
@@ -502,6 +506,40 @@ router.get(
 )
 
 // ============================================================
+// PATCH /api/orgs/:orgId/calls/:id/note — save the live-call scratchpad
+// ============================================================
+router.patch(
+  '/:id/note',
+  wrapRoute('PATCH /api/orgs/:orgId/calls/:id/note', async (req, res) => {
+    const authReq = req as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = saveCallNoteSchema.safeParse(req.body ?? {})
+    if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
+
+    // --- Execute query ---
+    const result = await prisma.call.updateMany({
+      where: { id, orgId },
+      data: { noteText: parsed.data.noteText || null },
+    })
+    if (result.count === 0) return void res.status(404).json({ error: 'Call not found' })
+
+    const call = await prisma.call.findFirst({ where: { id, orgId }, include: callReviewInclude })
+    if (!call) return void res.status(404).json({ error: 'Call not found' })
+    const source = await signReviewAudioSource(call)
+
+    // --- Return response ---
+    res.json({ call: { ...mapCallToDetailApi(call, source?.url ?? null), review: mapCallReviewApi(call, source) } })
+  }),
+)
+
+// ============================================================
 // PATCH /api/orgs/:orgId/calls/:id/disposition — log a rep outcome
 // ============================================================
 // `status` stays the dialer's technical lifecycle. This endpoint records the
@@ -534,7 +572,7 @@ router.patch(
       where: { id, orgId },
       data: {
         dispositionId: disposition.id,
-        noteText: parsed.data.noteText?.trim() || null,
+        ...(parsed.data.noteText === undefined ? {} : { noteText: parsed.data.noteText?.trim() || null }),
       },
     })
     if (result.count === 0) return void res.status(404).json({ error: 'Call not found' })

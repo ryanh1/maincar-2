@@ -7,6 +7,7 @@ import App from './App'
 import { AudioPlayerFixture } from './components/call-review/AudioPlayerFixture'
 import { AccountTimelineFixture } from './components/account-timeline/AccountTimelineFixture'
 import { InCallControlsFixture } from './components/dialer/InCallControlsFixture'
+import { InCallWorkspaceFixture } from './components/dialer/InCallWorkspaceFixture'
 import { TooltipProvider } from './components/ui/tooltip'
 import { DatePickerFixture } from './components/ui/DatePickerFixture'
 import { ReportsFixture } from './pages/ReportsFixture'
@@ -36,6 +37,8 @@ createRoot(document.getElementById('root')!).render(
       <DatePickerFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/in-call-controls' ? (
       <InCallControlsFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/in-call-workspace' ? (
+      <InCallWorkspaceFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/account-timeline' ? (
       <AccountTimelineFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/reports' ? (
