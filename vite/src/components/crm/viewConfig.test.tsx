@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import type { ReactNode } from 'react'
 
 import type { AttributeDef } from '@/lib/crmTypes'
-import { createViewConfig, reorderColumnGroup, toRecordListQuery, useViewConfig } from './viewConfig'
+import { clampZoom, createViewConfig, relationSourceHue, reorderColumnGroup, resolveHeaderColor, setColumnHeaderColor, stepZoom, toRecordListQuery, useViewConfig } from './viewConfig'
 import { encodeViewState } from './viewStateCodec'
 
 const attributes = [
@@ -231,5 +231,49 @@ describe('viewConfig', () => {
       { attributeId: 'first-name', visible: true, order: 2, group: 'Name', collapsed: false },
       { attributeId: 'title', visible: true, order: 3, group: 'Name', collapsed: false },
     ])
+  })
+
+  it('clamps and steps zoom within the Sheets-style preset range', () => {
+    expect(clampZoom(100)).toBe(100)
+    expect(clampZoom(80)).toBe(80)
+    expect(clampZoom(10)).toBe(50)
+    expect(clampZoom(500)).toBe(200)
+    expect(clampZoom(Number.NaN)).toBe(100)
+
+    expect(stepZoom(100, 1)).toBe(125)
+    expect(stepZoom(100, -1)).toBe(90)
+    expect(stepZoom(80, 1)).toBe(90)
+    expect(stepZoom(80, -1)).toBe(75)
+    expect(stepZoom(200, 1)).toBe(200)
+    expect(stepZoom(50, -1)).toBe(50)
+  })
+
+  it('derives a stable automatic hue from a relation source object id', () => {
+    const first = relationSourceHue('company')
+    const second = relationSourceHue('company')
+    expect(first).toBe(second)
+    expect(first).toMatch(/^option-[1-8]$/)
+    expect(relationSourceHue(null)).toBeUndefined()
+  })
+
+  it('resolves a header colour as manual token, then relation hue, then neutral', () => {
+    const relation = { id: 'owner', type: 'user_reference', refObjectId: 'user' } as AttributeDef
+    const plain = { id: 'name', type: 'text', refObjectId: null } as AttributeDef
+
+    expect(resolveHeaderColor(relation, [])).toBe(relationSourceHue('user'))
+    expect(resolveHeaderColor(plain, [])).toBeUndefined()
+    expect(resolveHeaderColor(relation, [{ attributeId: 'owner', headerColor: 'option-3' }])).toBe('option-3')
+    expect(resolveHeaderColor(plain, [{ attributeId: 'name', headerColor: 'option-5' }])).toBe('option-5')
+  })
+
+  it('sets and clears a manual header colour without touching other columns', () => {
+    const styles = [{ attributeId: 'owner', headerColor: 'option-1' }]
+    expect(setColumnHeaderColor(styles, 'name', 'option-2')).toEqual([
+      { attributeId: 'owner', headerColor: 'option-1' },
+      { attributeId: 'name', headerColor: 'option-2' },
+    ])
+    expect(setColumnHeaderColor(styles, 'owner', 'option-4')).toEqual([{ attributeId: 'owner', headerColor: 'option-4' }])
+    expect(setColumnHeaderColor(styles, 'owner', undefined)).toEqual([])
+    expect(setColumnHeaderColor([], 'name', undefined)).toEqual([])
   })
 })

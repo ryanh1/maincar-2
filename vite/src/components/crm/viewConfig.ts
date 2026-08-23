@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import type { AttributeDef } from '@/lib/crmTypes'
+import { PAINT_TOKENS } from '@/lib/paintTokens'
 import { decodeViewState, encodeViewState, type ViewStateOverlay } from './viewStateCodec'
 
 export type ViewSort = {
@@ -58,6 +59,59 @@ export type KanbanConfig = {
   visibleOptionValues: string[]
   cardAttributeIds: string[]
   hiddenTerminalOptionValues?: string[]
+}
+
+/** Sheets-style zoom presets (journey 4b.10.1). Custom values clamp to this range. */
+export const ZOOM_PRESETS = [50, 75, 90, 100, 125, 150, 200] as const
+export const ZOOM_MIN = 50
+export const ZOOM_MAX = 200
+
+export function clampZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) return 100
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(zoom)))
+}
+
+/** Step to the nearest preset above (1) or below (-1) the current zoom. */
+export function stepZoom(current: number, direction: 1 | -1): number {
+  if (direction === 1) {
+    return ZOOM_PRESETS.find((preset) => preset > current) ?? ZOOM_MAX
+  }
+  return [...ZOOM_PRESETS].reverse().find((preset) => preset < current) ?? ZOOM_MIN
+}
+
+/** A relation column's stable automatic hue, derived from its source object id. */
+export function relationSourceHue(refObjectId: string | null): string | undefined {
+  if (!refObjectId) return undefined
+  let hash = 0
+  for (let index = 0; index < refObjectId.length; index += 1) {
+    hash = (hash * 31 + refObjectId.charCodeAt(index)) >>> 0
+  }
+  return PAINT_TOKENS[hash % PAINT_TOKENS.length]
+}
+
+/**
+ * Resolve a column header's colour (SPEC-CHUNK-2 J2.5 §B): a manual token wins,
+ * then a relation column's automatic source hue, then neutral (undefined).
+ */
+export function resolveHeaderColor(attribute: AttributeDef, columnStyles: ViewConfig['columnStyles']): string | undefined {
+  const style = columnStyles.find((candidate) => candidate.attributeId === attribute.id)
+  if (style?.headerColor) return style.headerColor
+  if (attribute.type === 'record_reference' || attribute.type === 'user_reference') {
+    return relationSourceHue(attribute.refObjectId)
+  }
+  return undefined
+}
+
+/** Set or clear a column's manual header colour, dropping the entry when cleared. */
+export function setColumnHeaderColor(columnStyles: ViewConfig['columnStyles'], attributeId: string, headerColor: string | undefined): ViewConfig['columnStyles'] {
+  const existing = columnStyles.find((candidate) => candidate.attributeId === attributeId)
+  if (!headerColor) {
+    return existing ? columnStyles.filter((candidate) => candidate.attributeId !== attributeId) : columnStyles
+  }
+  if (existing) {
+    return columnStyles.map((candidate) => candidate.attributeId === attributeId ? { ...candidate, headerColor } : candidate)
+  }
+  return [...columnStyles, { attributeId, headerColor }]
 }
 
 /**

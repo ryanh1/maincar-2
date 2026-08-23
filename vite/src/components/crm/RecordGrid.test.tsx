@@ -1164,6 +1164,96 @@ describe('RecordGrid', () => {
     expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ value: 'Ada' }))
   })
 
+  it('scales row height, header height, column widths, and font size by the per-view zoom', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }], totalCount: 1,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    const config = { ...createViewConfig(ATTRIBUTES), zoom: 150, rowHeight: 'comfortable' as const }
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={vi.fn()} />)
+
+    const props = dataEditorProps.current!
+    expect(props.rowHeight).toBe(66)
+    expect(props.headerHeight).toBe(54)
+    expect((props.columns as { id: string; width: number }[])[0].width).toBe(330)
+    expect((props.theme as { baseFontStyle: string; headerFontStyle: string }).baseFontStyle).toBe('20px')
+    expect((props.theme as { headerFontStyle: string }).headerFontStyle).toBe('600 20px')
+  })
+
+  it('leaves sizes untouched at 100% zoom', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }], totalCount: 1,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    const config = { ...createViewConfig(ATTRIBUTES), zoom: 100, rowHeight: 'comfortable' as const }
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={vi.fn()} />)
+
+    const props = dataEditorProps.current!
+    expect(props.rowHeight).toBe(44)
+    expect(props.headerHeight).toBe(36)
+    expect((props.columns as { id: string; width: number }[])[0].width).toBe(220)
+  })
+
+  it('steps zoom with Cmd/Ctrl +/–/0 through the shared config', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada' }], totalCount: 1,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    const config = createViewConfig(ATTRIBUTES)
+    const onViewConfigChange = vi.fn()
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={onViewConfigChange} />)
+
+    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: '=', metaKey: true, bubbles: true, cancelable: true })))
+    const zoomIn = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(zoomIn(config).zoom).toBe(125)
+
+    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: '-', metaKey: true, bubbles: true, cancelable: true })))
+    const zoomOut = onViewConfigChange.mock.calls[1][0] as (current: typeof config) => typeof config
+    expect(zoomOut(config).zoom).toBe(90)
+
+    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: '0', metaKey: true, bubbles: true, cancelable: true })))
+    const zoomReset = onViewConfigChange.mock.calls[2][0] as (current: typeof config) => typeof config
+    expect(zoomReset(config).zoom).toBe(100)
+  })
+
+  it('tints a relation column header automatically and lets a manual token win', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', owner: 'user-1' }], totalCount: 1,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    const relationAttrs = [
+      attribute({ slug: 'owner', name: 'Owner', type: 'user_reference', refObjectId: 'user', sortOrder: 0 }),
+      attribute({ slug: 'name', name: 'Name', sortOrder: 1 }),
+    ]
+    const config = createViewConfig(relationAttrs)
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={relationAttrs} viewConfig={config} onViewConfigChange={vi.fn()} />)
+
+    const columns = dataEditorProps.current!.columns as { id: string; themeOverride?: { bgHeader?: string } }[]
+    expect(columns[0].themeOverride?.bgHeader).toBeTruthy()
+    expect(columns[1].themeOverride).toBeUndefined()
+  })
+
+  it('shows the zoom control in the bottom status bar and writes a preset', async () => {
+    const user = userEvent.setup()
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada' }], totalCount: 1,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    const config = createViewConfig(ATTRIBUTES)
+    const onViewConfigChange = vi.fn()
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={onViewConfigChange} />)
+
+    await user.click(screen.getByRole('button', { name: /100%/ }))
+    await user.click(await screen.findByRole('menuitem', { name: '125%' }))
+    const update = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(update(config).zoom).toBe(125)
+  })
+
   describe('the peek drawer (MAI-167)', () => {
     function focusRow(row: number) {
       const onGridSelectionChange = dataEditorProps.current!.onGridSelectionChange as (

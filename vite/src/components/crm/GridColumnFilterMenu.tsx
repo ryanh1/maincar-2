@@ -1,7 +1,10 @@
+import { Check, X } from 'lucide-react'
+
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent, PopoverHeader, PopoverTitle } from '@/components/ui/popover'
 import type { AttributeDef } from '@/lib/crmTypes'
-import type { ViewConfig } from './viewConfig'
+import { PAINT_TOKENS } from '@/lib/paintTokens'
+import { setColumnHeaderColor, type ViewConfig } from './viewConfig'
 import type { GridMenuAnchor } from './gridFilterMenu'
 
 interface GridColumnFilterMenuProps {
@@ -22,7 +25,9 @@ interface GridColumnFilterMenuProps {
 }
 
 /** Header menus retain freezing and text wrapping; multi-level sorting lives in GridSortPopover. */
-export function GridColumnFilterMenu({ attribute, anchor, freezeActions, onOpenChange, onToggleWrap, open, wrap = false }: GridColumnFilterMenuProps) {
+export function GridColumnFilterMenu({ attribute, anchor, config, freezeActions, onConfigChange, onOpenChange, onToggleWrap, open, wrap = false }: GridColumnFilterMenuProps) {
+  const headerColor = config.columnStyles.find((style) => style.attributeId === attribute.id)?.headerColor
+
   function closeMenu() {
     onOpenChange(false)
   }
@@ -35,6 +40,10 @@ export function GridColumnFilterMenu({ attribute, anchor, freezeActions, onOpenC
   function unfreezeColumns() {
     freezeActions?.onUnfreeze()
     closeMenu()
+  }
+
+  function setHeaderColor(token: string | undefined) {
+    onConfigChange((current) => ({ ...current, columnStyles: setColumnHeaderColor(current.columnStyles, attribute.id, token) }))
   }
 
   return (
@@ -52,6 +61,32 @@ export function GridColumnFilterMenu({ attribute, anchor, freezeActions, onOpenC
               {onToggleWrap && <Button size="sm" variant="secondary" className="w-full justify-start" onClick={() => { onToggleWrap(); closeMenu() }}>{wrap ? 'Clip text' : 'Wrap text'}</Button>}
             </div>
           )}
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-medium text-text-muted">Header colour</p>
+            <div className="flex flex-wrap gap-1">
+              {PAINT_TOKENS.map((token) => (
+                <button
+                  key={token}
+                  type="button"
+                  aria-label={`Header colour ${token}`}
+                  aria-pressed={headerColor === token}
+                  className="flex size-6 items-center justify-center rounded-md border border-border"
+                  style={{ backgroundColor: `var(--${token})` }}
+                  onClick={() => setHeaderColor(token)}
+                >
+                  {headerColor === token && <Check className="size-3 text-white" />}
+                </button>
+              ))}
+              <button
+                type="button"
+                aria-label="Clear header colour"
+                className="flex size-6 items-center justify-center rounded-md border border-border text-text-muted"
+                onClick={() => setHeaderColor(undefined)}
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          </div>
         </div>
       </PopoverContent>
     </Popover>
