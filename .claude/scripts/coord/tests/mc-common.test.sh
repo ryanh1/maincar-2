@@ -4,6 +4,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+
+# A full gate can saturate this machine on its own. Keep the safe default
+# serial, even though callers can deliberately opt into more workers.
+if ! grep -Fx 'MAX="${MC_MAX_JOBS:-1}"' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null; then
+  echo 'mc-gate default concurrency must be one' >&2
+  exit 1
+fi
+
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/mc-common-test-XXXXXX")"
 trap 'rm -rf "$SANDBOX"' EXIT
 
