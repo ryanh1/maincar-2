@@ -139,15 +139,32 @@ export interface ListQuery {
   filter?: FilterNode | null
   /** A single sort remains supported for existing callers; new callers send priority-ordered specs. */
   sort?: SortSpec | SortSpec[] | null
+  /** One or two field slugs whose full filtered result set is returned as grouped section descriptors. */
+  groupBy?: string[] | null
   teamScope?: TeamScope
   cursor?: string | null
   limit?: number
+}
+
+export interface GroupDescriptor {
+  /** A stable JSON-encoded path of raw grouping values, suitable for collapse state. */
+  key: string
+  /** The final grouping value in this section, or the explicit label for an empty value. */
+  value: string
+  count: number
+  /** Exact decimal strings, keyed by number/currency attribute slug. */
+  sum?: Record<string, string>
+  /** Exact decimal strings, keyed by number/currency attribute slug. */
+  avg?: Record<string, string>
+  children?: GroupDescriptor[]
 }
 
 export interface ListResult {
   rows: Record<string, unknown>[]
   nextCursor: string | null
   totalCount: number
+  /** Present only for a grouped request; aggregates are over the complete filtered set, not this page. */
+  groups?: GroupDescriptor[]
 }
 
 const DEFAULT_LIMIT = 150
@@ -251,6 +268,29 @@ function resolveField(ctx: FieldContext, field: string): CompiledField | null {
   }
   const base = Prisma.raw(`"${ctx.jsonColumnName}"->>'${attr.slug}'`)
   return { sqlIdent: castJsonText(base, valueKind), valueKind }
+}
+
+// Grouping deliberately accepts scalar reference fields too. They are excluded
+// from filtering and sorting until their comparison semantics are designed, but
+// grouping a stored reference id is unambiguous and powers views such as People
+// by Company and Companies by Parent company.
+function resolveGroupField(ctx: FieldContext, field: string): CompiledField | null {
+  const systemKind = SYSTEM_FIELDS[field]
+  if (systemKind) {
+    const sqlIdent = Prisma.raw(`"${field}"`)
+    return { sqlIdent: systemKind === 'text' ? Prisma.sql`NULLIF(${sqlIdent}, '')` : sqlIdent, valueKind: systemKind }
+  }
+  const attr = ctx.attrsBySlug.get(field)
+  if (!attr || attr.storage === 'list' || attr.isMulti || !SAFE_IDENTIFIER.test(attr.slug)) return null
+
+  const valueKind = valueKindForType(attr.type)
+  if (attr.storage === 'column') {
+    const sqlIdent = Prisma.raw(`"${attr.slug}"`)
+    return { sqlIdent: valueKind === 'text' ? Prisma.sql`NULLIF(${sqlIdent}, '')` : sqlIdent, valueKind }
+  }
+  const base = Prisma.raw(`"${ctx.jsonColumnName}"->>'${attr.slug}'`)
+  const sqlIdent = castJsonText(base, valueKind)
+  return { sqlIdent: valueKind === 'text' ? Prisma.sql`NULLIF(${sqlIdent}, '')` : sqlIdent, valueKind }
 }
 
 // Escapes ILIKE wildcard characters in a user-supplied substring so `%`/`_` in the
@@ -451,6 +491,102 @@ function mapRow(
   return out
 }
 
+function normaliseGroupValue(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null
+  if (value instanceof Date) return value.toISOString()
+  if (typeof value === 'bigint') return value.toString()
+  return String(value)
+}
+
+function normaliseAggregateValue(value: unknown): string {
+  const text = String(value)
+  return text.includes('.') ? text.replace(/\.0+$/, '').replace(/(\.\d*?[1-9])0+$/, '$1') : text
+}
+
+function numericAggregateMap(row: Record<string, unknown>, prefix: '__sum' | '__avg', fields: string[]): Record<string, string> | undefined {
+  const entries = fields.flatMap((field, index) => {
+    const value = row[`${prefix}${index}`]
+    return value === null || value === undefined ? [] : [[field, normaliseAggregateValue(value)] as const]
+  })
+  return entries.length ? Object.fromEntries(entries) : undefined
+}
+
+/**
+ * Turns raw GROUPING SETS rows into the nested section contract. The SQL returns
+ * one row for each requested level (parent before child), never the underlying
+ * record rows; this function only arranges those descriptors for the grid.
+ */
+export function mapGroupRows(rows: Record<string, unknown>[], numericFields: string[]): GroupDescriptor[] {
+  const roots: GroupDescriptor[] = []
+  const descriptorsByKey = new Map<string, GroupDescriptor>()
+
+  for (const row of rows) {
+    const depth = Number(row.__groupDepth)
+    const values = Array.from({ length: depth }, (_, index) => normaliseGroupValue(row[`__groupKey${index}`]))
+    const key = JSON.stringify(values)
+    const descriptor: GroupDescriptor = {
+      key,
+      value: values[values.length - 1] ?? '(No value)',
+      count: Number(row.__groupCount ?? 0),
+    }
+    const sum = numericAggregateMap(row, '__sum', numericFields)
+    const avg = numericAggregateMap(row, '__avg', numericFields)
+    if (sum) descriptor.sum = sum
+    if (avg) descriptor.avg = avg
+
+    descriptorsByKey.set(key, descriptor)
+    if (depth === 1) {
+      roots.push(descriptor)
+      continue
+    }
+
+    const parent = descriptorsByKey.get(JSON.stringify(values.slice(0, -1)))
+    if (!parent) throw new Error('Grouped query returned a child before its parent.')
+    ;(parent.children ??= []).push(descriptor)
+  }
+
+  return roots
+}
+
+function buildGroupedSectionsQuery(
+  fromTable: Prisma.Sql,
+  countWhereSql: Prisma.Sql,
+  groupFields: CompiledField[],
+  aggregateFields: CompiledField[],
+): Prisma.Sql {
+  const groupSelects = groupFields.map((field, index) =>
+    Prisma.sql`${field.sqlIdent} AS ${Prisma.raw(`"__groupKey${index}"`)}`,
+  )
+  const aggregateSelects: Prisma.Sql[] = [Prisma.sql`COUNT(*)::text AS "__groupCount"`]
+  for (const [index, field] of aggregateFields.entries()) {
+    aggregateSelects.push(Prisma.sql`SUM(${field.sqlIdent})::text AS ${Prisma.raw(`"__sum${index}"`)}`)
+    aggregateSelects.push(Prisma.sql`AVG(${field.sqlIdent})::text AS ${Prisma.raw(`"__avg${index}"`)}`)
+  }
+
+  if (groupFields.length === 1) {
+    return Prisma.sql`
+      SELECT ${Prisma.join([...groupSelects, Prisma.sql`1 AS "__groupDepth"`, ...aggregateSelects], ', ')}
+      FROM ${fromTable}
+      WHERE ${countWhereSql}
+      GROUP BY ${groupFields[0].sqlIdent}
+      ORDER BY ${groupFields[0].sqlIdent} ASC NULLS LAST
+    `
+  }
+
+  const [first, second] = groupFields
+  return Prisma.sql`
+    SELECT ${Prisma.join([
+      ...groupSelects,
+      Prisma.sql`CASE WHEN GROUPING(${second.sqlIdent}) = 1 THEN 1 ELSE 2 END AS "__groupDepth"`,
+      ...aggregateSelects,
+    ], ', ')}
+    FROM ${fromTable}
+    WHERE ${countWhereSql}
+    GROUP BY GROUPING SETS ((${first.sqlIdent}), (${first.sqlIdent}, ${second.sqlIdent}))
+    ORDER BY ${first.sqlIdent} ASC NULLS LAST, GROUPING(${second.sqlIdent}) DESC, ${second.sqlIdent} ASC NULLS LAST
+  `
+}
+
 export interface ListRecordsArgs {
   orgId: string
   object: Pick<ObjectDef, 'id' | 'slug' | 'storage'>
@@ -484,6 +620,25 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
     const sortField = resolveField(ctx, sortSpec.field)
     if (!sortField) throw new ListQueryError(`Unknown or unsortable field: "${sortSpec.field}".`)
     return sortField
+  })
+
+  const groupBy = query.groupBy ?? []
+  if (groupBy.length > 2) throw new ListQueryError('At most two grouping fields are supported.')
+  const seenGroupFields = new Set<string>()
+  const groupFields = groupBy.map((field) => {
+    if (seenGroupFields.has(field)) throw new ListQueryError(`Grouping field "${field}" appears more than once.`)
+    seenGroupFields.add(field)
+    const groupField = resolveGroupField(ctx, field)
+    if (!groupField) throw new ListQueryError(`Unknown or ungroupable field: "${field}".`)
+    return groupField
+  })
+  const numericAggregateAttributes = attributes.filter(
+    (attribute) => !attribute.isMulti && attribute.storage !== 'list' && (attribute.type === 'number' || attribute.type === 'currency'),
+  )
+  const numericAggregateFields = numericAggregateAttributes.map((attribute) => {
+    const field = resolveField(ctx, attribute.slug)
+    if (!field) throw new ListQueryError(`Numeric field "${attribute.slug}" cannot be aggregated.`)
+    return field
   })
 
   const limit = clampLimit(query.limit)
@@ -535,9 +690,14 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
     WHERE ${countWhereSql}
   `
 
-  const [rawRows, countRows] = await Promise.all([
+  const groupQuery = groupFields.length
+    ? buildGroupedSectionsQuery(fromTable, countWhereSql, groupFields, numericAggregateFields)
+    : null
+
+  const [rawRows, countRows, groupRows] = await Promise.all([
     prisma.$queryRaw<Record<string, unknown>[]>(rowsQuery),
     prisma.$queryRaw<{ count: string }[]>(countQuery),
+    groupQuery ? prisma.$queryRaw<Record<string, unknown>[]>(groupQuery) : Promise.resolve(null),
   ])
 
   const hasMore = rawRows.length > limit
@@ -551,5 +711,6 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
     rows: pageRows.map((row) => mapRow(mode, attributes, jsonColumnName, row)),
     nextCursor,
     totalCount: Number(countRows[0]?.count ?? 0),
+    ...(groupRows ? { groups: mapGroupRows(groupRows, numericAggregateAttributes.map((attribute) => attribute.slug)) } : {}),
   }
 }

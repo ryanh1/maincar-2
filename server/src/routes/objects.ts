@@ -120,7 +120,8 @@ function blankToNull(value: unknown): unknown {
 }
 
 // The body for POST /:id/list (MAI-163, MAI-326). A recursive filter tree,
-// priority-ordered sort keys, an opaque cursor, and a chunk size — see
+// priority-ordered sort keys, optional one/two-level grouping, an opaque cursor,
+// and a chunk size — see
 // recordList.ts for the compiler.
 const filterConditionSchema = z.object({
   type: z.literal('condition'),
@@ -164,6 +165,7 @@ const listBodySchema = z.object({
   filter: filterNodeSchema.nullish(),
   // Accept the MAI-163 shape while callers move to MAI-326's ordered sort array.
   sort: z.union([sortSpecSchema, z.array(sortSpecSchema).min(1)]).nullish(),
+  groupBy: z.array(z.string().min(1)).min(1).max(2).nullish(),
   teamScope: teamScopeSchema.optional(),
   cursor: z.string().nullish(),
   limit: z.number().int().positive().optional(),
@@ -411,7 +413,8 @@ router.get(
 // One endpoint the grid calls for every window of rows, whichever storage the
 // object uses (recordList.ts picks the real table vs. the generic Record table).
 // The query is a body, not a query-string, because the filter tree nests
-// arbitrarily. Response is exactly { rows, nextCursor, totalCount } per spec.
+// arbitrarily. A grouped request additionally includes full-set section
+// descriptors, while rows remain a cursor window.
 router.post(
   '/:id/list',
   wrapRoute('POST /api/orgs/:orgId/objects/:id/list', async (req, res) => {

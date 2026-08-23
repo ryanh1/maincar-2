@@ -173,6 +173,24 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
       })
     expect(anded.status).toBe(200)
     expect(anded.body.totalCount).toBe(100)
+
+    // --- grouped descriptors are aggregated in Postgres over the full filtered
+    // set, while the row window stays at the requested page size ---
+    const grouped = await request(app)
+      .post(`/api/orgs/${orgId}/objects/${objectId}/list`)
+      .set('Authorization', as(adminFirebaseUid))
+      .send({
+        groupBy: ['status'],
+        filter: { type: 'condition', field: 'rank', operator: 'lt', value: 1_100 },
+        sort: { field: 'rank', direction: 'desc' },
+        limit: 50,
+      })
+    expect(grouped.status).toBe(200)
+    expect(grouped.body.rows).toHaveLength(50)
+    expect(grouped.body.totalCount).toBe(1_100)
+    expect(grouped.body.groups).toEqual([
+      { key: '["active"]', value: 'active', count: 1_100, sum: { rank: '604450' }, avg: { rank: '549.5' } },
+    ])
   }, 60_000)
 
   it('rejects an unknown filter field and an unsupported operator with 400', async () => {
@@ -190,6 +208,29 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
       .set('Authorization', as(adminFirebaseUid))
       .send({ filter: { type: 'condition', field: 'rank', operator: 'contains', value: '1' } })
     expect(badOperator.status).toBe(400)
+  })
+
+  it('combines absent and empty text values into one no-value section', async () => {
+    const { orgId, adminFirebaseUid } = await seedOrgWithAdmin(prisma)
+    const objectId = await seedWidgetObject(orgId)
+    await prisma.record.createMany({
+      data: [
+        { orgId, objectId, valuesJson: { name: 'Present', status: 'active' } as unknown as Prisma.InputJsonValue },
+        { orgId, objectId, valuesJson: { name: 'Empty', status: '' } as unknown as Prisma.InputJsonValue },
+        { orgId, objectId, valuesJson: { name: 'Absent' } as unknown as Prisma.InputJsonValue },
+      ],
+    })
+
+    const res = await request(app)
+      .post(`/api/orgs/${orgId}/objects/${objectId}/list`)
+      .set('Authorization', as(adminFirebaseUid))
+      .send({ groupBy: ['status'] })
+
+    expect(res.status).toBe(200)
+    expect(res.body.groups).toEqual([
+      { key: '["active"]', value: 'active', count: 1 },
+      { key: '[null]', value: '(No value)', count: 2 },
+    ])
   })
 
   it('orders by every sort level and keeps the next cursor stable across a page boundary', async () => {
@@ -272,6 +313,17 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
     expect(ownerFiltered.body.totalCount).toBe(2)
     expect(ownerFiltered.body.rows.map((row: { firstName: string }) => row.firstName).sort()).toEqual(['Alice', 'Carol'])
 
+    // Grouping is allowed on a scalar record reference even though filtering it
+    // remains deliberately unsupported, and absent values have a visible section.
+    const groupedByCompany = await request(app)
+      .post(`/api/orgs/${orgId}/objects/${personObject.id}/list`)
+      .set('Authorization', as(adminFirebaseUid))
+      .send({ groupBy: ['companyId'], sort: { field: 'firstName', direction: 'asc' } })
+    expect(groupedByCompany.status).toBe(200)
+    expect(groupedByCompany.body.groups).toEqual([
+      { key: '[null]', value: '(No value)', count: 3 },
+    ])
+
     // A field the compiler deliberately excludes (record_reference) is a clean 400,
     // not a silently-wrong match over its serialized JSON.
     const unfilterable = await request(app)
@@ -279,6 +331,44 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
       .set('Authorization', as(adminFirebaseUid))
       .send({ filter: { type: 'condition', field: 'companyId', operator: 'eq', value: 'x' } })
     expect(unfilterable.status).toBe(400)
+  })
+
+  it('groups table-storage Deals by Stage, returning exact currency aggregates and a second level', async () => {
+    const { orgId, adminFirebaseUid } = await seedOrgWithAdmin(prisma, { seed: true })
+    const dealObject = await prisma.objectDef.findFirstOrThrow({ where: { orgId, slug: 'deal' } })
+    const pipeline = await prisma.pipeline.create({ data: { orgId, name: 'New Business', isDefault: true } })
+    const [discovery, proposal] = await Promise.all([
+      prisma.pipelineStage.create({ data: { orgId, pipelineId: pipeline.id, name: 'Discovery', sortOrder: 1 } }),
+      prisma.pipelineStage.create({ data: { orgId, pipelineId: pipeline.id, name: 'Proposal', sortOrder: 2 } }),
+    ])
+    await prisma.deal.createMany({
+      data: [
+        { orgId, name: 'Alpha', pipelineId: pipeline.id, stageId: discovery.id, amountMinor: 180_000n },
+        { orgId, name: 'Bravo', pipelineId: pipeline.id, stageId: discovery.id, amountMinor: 300_000n },
+        { orgId, name: 'Charlie', pipelineId: pipeline.id, stageId: proposal.id, amountMinor: 100_000n },
+      ],
+    })
+
+    const res = await request(app)
+      .post(`/api/orgs/${orgId}/objects/${dealObject.id}/list`)
+      .set('Authorization', as(adminFirebaseUid))
+      .send({ groupBy: ['status', 'stageId'], sort: { field: 'name', direction: 'asc' }, limit: 50 })
+
+    expect(res.status).toBe(200)
+    expect(res.body.rows).toHaveLength(3)
+    expect(res.body.groups).toMatchObject([
+      {
+        key: '["open"]',
+        value: 'open',
+        count: 3,
+        sum: { amountMinor: '580000' },
+        avg: { amountMinor: '193333.333333333333' },
+      },
+    ])
+    expect(res.body.groups[0].children).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: `["open","${discovery.id}"]`, count: 2, sum: { amountMinor: '480000' } }),
+      expect.objectContaining({ key: `["open","${proposal.id}"]`, count: 1, sum: { amountMinor: '100000' } }),
+    ]))
   })
 
   it('works over Call, which also has the table-storage customJson bag', async () => {
