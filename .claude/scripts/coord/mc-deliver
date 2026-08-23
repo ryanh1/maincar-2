@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# Delivers one committed issue at a time. It merges that issue onto newest main,
+# runs only static checks and named tests, then pushes the exact checked tree.
+set -euo pipefail
+source "$(dirname "$0")/mc-common.sh"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+DELIVER_HOME="$STATE/deliver"
+READY="$DELIVER_HOME/ready"
+FAILED="$DELIVER_HOME/failed"
+SUPERSEDED="$DELIVER_HOME/superseded"
+DELIVERY_TMP=""
+mkdir -p "$READY" "$FAILED" "$SUPERSEDED"
+
+die() { echo "mc-deliver: $*" >&2; exit 2; }
+
+validate_text() {
+  local label="$1" value="$2"
+  [ -n "$value" ] || die "$label is required"
+  case "$value" in *$'\t'*|*$'\n'*|*$'\r'*|*$'\037'*) die "$label must be one line" ;; esac
+}
+
+validate_test_spec() {
+  local spec="$1" kind path
+  case "$spec" in *,*|*$'\t'*|*$'\n'*|*$'\r'*|*$'\037'*) die 'test names cannot contain separators' ;; esac
+  kind="${spec%%:*}"
+  path="${spec#*:}"
+  [ "$path" != "$spec" ] || die "invalid test: $spec"
+  [[ "$path" != /* && "$path" != *..* ]] || die "invalid test path: $path"
+  case "$kind" in
+    server|vite) [[ "$path" = *.test.* || "$path" = *.spec.* ]] || die "invalid Vitest file: $path" ;;
+    integration) [[ "$path" = *.integration.test.* ]] || die "invalid integration test: $path" ;;
+    shell) [[ "$path" = *.sh ]] || die "invalid shell test: $path" ;;
+    *) die "unknown test kind: $kind" ;;
+  esac
+}
+
+join_tests() {
+  local joined="" item
+  for item in "$@"; do
+    [ -n "$item" ] || continue
+    joined="${joined:+$joined,}$item"
+  done
+  printf '%s\n' "$joined"
+}
+
+read_entry() {
+  local file="$1"
+  IFS=$'\037' read -r E_SEQ E_AT E_ISSUE E_CLONE E_HEAD E_BASE E_BRANCH E_TESTS < "$file"
+  case "$E_SEQ" in ''|*[!0-9]*) die "invalid queue number in $file" ;; esac
+  validate_text timestamp "$E_AT"
+  [[ "$E_ISSUE" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] || die "invalid issue in $file"
+  validate_text clone "$E_CLONE"
+  [ "${#E_HEAD}" -eq 40 ] && [[ "$E_HEAD" != *[!0-9a-f]* ]] || die "invalid commit in $file"
+  [ "${#E_BASE}" -eq 40 ] && [[ "$E_BASE" != *[!0-9a-f]* ]] || die "invalid base in $file"
+  validate_text branch "$E_BRANCH"
+  while IFS= read -r spec; do [ -z "$spec" ] || validate_test_spec "$spec"; done < <(printf '%s\n' "$E_TESTS" | tr ',' '\n')
+}
+
+test_exists_at_head() {
+  local spec="$1" kind path repo_path
+  kind="${spec%%:*}"
+  path="${spec#*:}"
+  case "$kind" in
+    server|integration) repo_path="server/$path" ;;
+    vite) repo_path="vite/$path" ;;
+    shell) repo_path="$path" ;;
+  esac
+  git cat-file -e "HEAD:$repo_path" 2>/dev/null || die "named test is not committed: $repo_path"
+}
+
+enqueue() {
+  mc_assert_ticket_checkout || exit 2
+  local branch head base issue seq_file seq queue_file tmp existing spec
+  local tests=("")
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --test) validate_test_spec "${2:-}"; tests+=("$2"); shift 2 ;;
+      *) die "unknown enqueue option: $1" ;;
+    esac
+  done
+  cd "$(mc_worktree)"
+  [ -z "$(git status --porcelain)" ] || die 'enqueue requires a clean committed issue clone'
+  branch="$(mc_branch)"
+  [ "$branch" != main ] || die 'enqueue from an issue branch, not main'
+  mc_fetch_local_main --quiet
+  head="$(git rev-parse HEAD)"
+  base="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+  [ -n "$base" ] || die 'could not find the shared main base'
+  [ -n "$(git diff --name-only "$base"..HEAD)" ] || die 'issue branch has no committed change'
+  issue="$(mc_issue_key_from_text "$branch" || true)"
+  [ -n "$issue" ] || die 'branch name must contain an issue key'
+  for spec in "${tests[@]}"; do [ -z "$spec" ] || test_exists_at_head "$spec"; done
+
+  mc_lock_acquire "$STATE/locks/deliver-queue.lock" 60 || die 'could not lock the ready queue'
+  for existing in "$READY"/*.tsv; do
+    [ -f "$existing" ] || continue
+    read_entry "$existing"
+    if [ "$E_HEAD" = "$head" ]; then
+      mc_lock_release "$STATE/locks/deliver-queue.lock"
+      echo "[mc-deliver] already ready: $issue at ${head:0:8}"
+      return 0
+    fi
+    if [ "$E_ISSUE" = "$issue" ]; then mv "$existing" "$SUPERSEDED/$(basename "$existing")"; fi
+  done
+  seq_file="$DELIVER_HOME/next-sequence"
+  seq="$(cat "$seq_file" 2>/dev/null || echo 0)"
+  case "$seq" in ''|*[!0-9]*) seq=0 ;; esac
+  seq=$((seq + 1))
+  printf '%s\n' "$seq" > "$seq_file"
+  queue_file="$READY/$(printf '%09d' "$seq")-$issue.tsv"
+  tmp="$(mktemp "$READY/.${issue}.XXXXXX")"
+  printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+    "$seq" "$(mc_now)" "$issue" "$(pwd -P)" "$head" "$base" "$branch" "$(join_tests "${tests[@]}")" > "$tmp"
+  mv "$tmp" "$queue_file"
+  mc_lock_release "$STATE/locks/deliver-queue.lock"
+  echo "[mc-deliver] ready #$seq: $issue ${head:0:8}"
+}
+
+status() {
+  local count=0 file
+  for file in "$READY"/*.tsv; do [ -f "$file" ] && count=$((count + 1)); done
+  if [ "${2:-}" = --count ]; then printf '%s\n' "$count"; return; fi
+  echo "ready issues: $count"
+  for file in "$READY"/*.tsv; do
+    [ -f "$file" ] || continue
+    read_entry "$file"
+    printf '#%s %s %s %s\n' "$E_SEQ" "$E_ISSUE" "${E_HEAD:0:8}" "$E_BRANCH"
+  done
+}
+
+prepare_dependencies() {
+  local repo="$1" source="$2" base="$3" head="$4" root target source_root primary_root changed
+  for root in . server vite firebase; do
+    target="$repo"
+    source_root="$source"
+    primary_root="$PRIMARY_CHECKOUT"
+    [ "$root" = . ] || { target="$repo/$root"; source_root="$source/$root"; primary_root="$PRIMARY_CHECKOUT/$root"; }
+    [ -f "$target/package.json" ] || continue
+    changed=0
+    case "$root" in
+      .) git -C "$repo" diff --quiet "$base" "$head" -- package.json package-lock.json || changed=1 ;;
+      *) git -C "$repo" diff --quiet "$base" "$head" -- "$root/package.json" "$root/package-lock.json" || changed=1 ;;
+    esac
+    if [ "$changed" -eq 0 ] && [ -d "$source_root/node_modules" ]; then
+      ln -s "$source_root/node_modules" "$target/node_modules"
+    elif [ "$changed" -eq 0 ] && [ -d "$primary_root/node_modules" ]; then
+      ln -s "$primary_root/node_modules" "$target/node_modules"
+    else
+      (cd "$target" && npm ci) || return 1
+    fi
+  done
+}
+
+prepare_test_env() {
+  local repo="$1" source="$2" env_source=""
+  if [ -f "$source/.env" ]; then env_source="$(cd "$source" && pwd -P)/.env"
+  elif [ -f "$PRIMARY_CHECKOUT/.env" ]; then env_source="$(cd "$PRIMARY_CHECKOUT" && pwd -P)/.env"
+  fi
+  [ -z "$env_source" ] || ln -s "$env_source" "$repo/.env"
+}
+
+fail_entry() {
+  local file="$1" reason="$2" id destination
+  read_entry "$file"
+  id="$(date -u +%Y%m%dT%H%M%SZ)-$E_SEQ-$E_ISSUE"
+  destination="$FAILED/$id.tsv"
+  mv "$file" "$destination"
+  printf 'issue=%s\ncommit=%s\nreason=%s\nrecorded=%s\n' "$E_ISSUE" "$E_HEAD" "$reason" "$(mc_now)" > "$FAILED/$id.txt"
+  echo "[mc-deliver] $E_ISSUE returned to its agent: $reason" >&2
+}
+
+run_delivery() {
+  mc_assert_ticket_checkout || exit 2
+  mc_lock_acquire "$STATE/locks/deliver-conductor.lock" 3600 || die 'another delivery is already running'
+  cleanup_delivery() {
+    if [ -n "$DELIVERY_TMP" ]; then
+      case "$DELIVERY_TMP" in "${TMPDIR:-/tmp}"/mc-deliver-*) rm -rf "$DELIVERY_TMP" ;; esac
+    fi
+    mc_lock_release "$STATE/locks/deliver-conductor.lock"
+  }
+  trap cleanup_delivery EXIT
+
+  mc_sync_local_main
+  local upstream file current_head current_branch run_id repo base merged_head merge_lock current_base tests_args=("") spec
+  upstream="$(mc_canonical_upstream_url)" || die 'could not find the GitHub repository'
+  file="$(find "$READY" -maxdepth 1 -type f -name '*.tsv' -print 2>/dev/null | sort | head -1)"
+  [ -n "$file" ] || { echo '[mc-deliver] no ready issues'; return 0; }
+  read_entry "$file"
+  current_head="$(git -C "$E_CLONE" rev-parse HEAD 2>/dev/null || true)"
+  current_branch="$(git -C "$E_CLONE" branch --show-current 2>/dev/null || true)"
+  if [ "$current_head" != "$E_HEAD" ] || [ "$current_branch" != "$E_BRANCH" ]; then
+    mv "$file" "$SUPERSEDED/$(basename "$file")"
+    echo "[mc-deliver] superseded: $E_ISSUE no longer points at ${E_HEAD:0:8}" >&2
+    return 1
+  fi
+
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  DELIVERY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/mc-deliver-XXXXXX")"
+  repo="$DELIVERY_TMP/repo"
+  git clone "$LOCAL_MAIN_REPO" "$repo" --quiet
+  git -C "$repo" config user.name 'Maincar Delivery'
+  git -C "$repo" config user.email 'delivery@maincar.local'
+  base="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" fetch --quiet "$E_CLONE" "$E_HEAD"
+  if ! git -C "$repo" merge --no-ff -m "Deliver $E_ISSUE" FETCH_HEAD; then
+    git -C "$repo" merge --abort >/dev/null 2>&1 || true
+    fail_entry "$file" 'merge conflict with newest main'
+    return 1
+  fi
+  merged_head="$(git -C "$repo" rev-parse HEAD)"
+  prepare_test_env "$repo" "$E_CLONE"
+  if ! prepare_dependencies "$repo" "$E_CLONE" "$base" "$merged_head"; then
+    fail_entry "$file" 'dependency preparation failed'
+    return 1
+  fi
+  while IFS= read -r spec; do [ -z "$spec" ] || tests_args+=(--test "$spec"); done < <(printf '%s\n' "$E_TESTS" | tr ',' '\n')
+  if ! (cd "$repo" && "$SCRIPT_DIR/mc-gate" --delivery "${tests_args[@]:1}"); then
+    fail_entry "$file" 'a required static or named test failed'
+    return 1
+  fi
+  if [ "$(git -C "$repo" rev-parse HEAD)" != "$merged_head" ] || ! git -C "$repo" diff --quiet || ! git -C "$repo" diff --cached --quiet; then
+    fail_entry "$file" 'checked files changed during delivery'
+    return 1
+  fi
+
+  merge_lock="$STATE/locks/merge.lock"
+  mc_lock_acquire "$merge_lock" 1800 || die 'the short GitHub update slot stayed busy'
+  git -C "$LOCAL_MAIN_REPO" fetch upstream --prune '+refs/heads/main:refs/heads/main' >/dev/null
+  current_base="$(git -C "$LOCAL_MAIN_REPO" rev-parse main)"
+  if [ "$current_base" != "$base" ]; then
+    mc_lock_release "$merge_lock"
+    echo "[mc-deliver] GitHub main changed; $E_ISSUE remains ready for a fresh check." >&2
+    return 1
+  fi
+  git -C "$repo" push "$upstream" HEAD:main
+  mc_lock_release "$merge_lock"
+
+  mc_sync_local_main
+  MC_PRIMARY_ALLOW_DEPENDENCY_REFRESH=1 mc_refresh_primary_checkout
+  local delivered_main
+  delivered_main="$(git -C "$LOCAL_MAIN_REPO" rev-parse main)"
+  mc_record_delivery "$E_BRANCH" "$delivered_main" "$upstream"
+  rm -f "$file"
+  echo "[mc-deliver] delivered $E_ISSUE as ${delivered_main:0:8}"
+}
+
+case "${1:-}" in
+  enqueue) enqueue "$@" ;;
+  run) run_delivery ;;
+  status) status "$@" ;;
+  *) echo 'usage: mc-deliver enqueue [--test kind:path] | run | status [--count]' >&2; exit 2 ;;
+esac

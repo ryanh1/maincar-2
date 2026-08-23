@@ -18,8 +18,8 @@
 #   * typecheck and lint failures name a file. If none of the named files are in
 #     the commit, the failure belongs to another session: warn loudly, record it,
 #     and let the commit through.
-# Unit and integration tests run only on the combined tree through `mc-train`,
-# where they use the bounded worker scheduler and produce one train receipt.
+# This helper is kept only for old hook regression fixtures. Current issue
+# clones are independent, so the live pre-commit hook uses `mc-gate --static`.
 #
 # `--no-verify` stays for genuine emergencies rather than for Tuesdays.
 

@@ -54,7 +54,7 @@ mc_sync_local_main() {
   install -m 755 "$COORD_SCRIPTS_DIR/hooks/primary-pre-commit" "$COORD/primary-hooks/pre-commit"
   install -m 755 "$COORD_SCRIPTS_DIR/hooks/primary-pre-push" "$COORD/primary-hooks/pre-push"
   # This must be worktree-local. A normal local config is shared by every linked
-  # worktree, which would block the issue clone while enqueueing for mc-train.
+  # worktree, which would block the issue clone while enqueueing for delivery.
   git -C "$PRIMARY_CHECKOUT" config --local --unset-all core.hooksPath 2>/dev/null || true
   git -C "$PRIMARY_CHECKOUT" config --worktree core.hooksPath "$COORD/primary-hooks"
   git -C "$LOCAL_MAIN_REPO" remote remove origin 2>/dev/null || true
@@ -303,7 +303,7 @@ mc_record_delivery() {
 }
 
 # Legacy per-branch receipt helpers remain only for the isolated pre-train merge
-# regression fixture. Production delivery receipts are written by mc-train.
+# regression fixture. Production delivery records are written by mc-deliver.
 mc_delivery_receipt_file() {
   local head="$1"
   printf '%s\n' "$STATE/delivery-gates/$head.tsv"
@@ -393,79 +393,3 @@ mc_lock_acquire() {
   done
 }
 mc_lock_release() { rm -rf "$1" 2>/dev/null; }
-
-# --- delivery-train risk and scope classifiers --------------------------------
-# These are conservative, auditable floors. The enqueue command records both
-# the declared risk and this path-derived suggestion. A person may explicitly
-# classify a contained client/server change as low, but no declaration can
-# lower a high-risk floor (dependencies, data, auth, permissions, billing,
-# scheduling, shared coordination, concurrency, or a cross-system change).
-mc_scope_for_files() {
-  local has_full=0 has_server=0 has_web=0 any=0 f
-  while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    any=1
-    case "$f" in
-      server/prisma/schema.prisma|server/prisma/migrations/*) has_full=1 ;;
-      package.json|package-lock.json|*/package.json|*/package-lock.json) has_full=1 ;;
-      tsconfig*.json|*/tsconfig*.json) has_full=1 ;;
-      server/*) has_server=1 ;;
-      vite/*) has_web=1 ;;
-      docs/*|*.md) ;;
-      *) has_full=1 ;;
-    esac
-  done
-  if [ "$any" -eq 0 ]; then echo full; return; fi
-  if [ "$has_full" -eq 1 ]; then echo full; return; fi
-  if [ "$has_server" -eq 1 ] && [ "$has_web" -eq 1 ]; then echo full; return; fi
-  if [ "$has_server" -eq 1 ]; then echo server; return; fi
-  if [ "$has_web" -eq 1 ]; then echo web; return; fi
-  echo docs
-}
-
-mc_risk_for_files() {
-  local scope f lower sensitive=0
-  # Read once because both the sensitivity scan and scope classifier need the
-  # exact same immutable list.
-  local files
-  files="$(cat)"
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    lower="$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')"
-    case "$lower" in
-      package.json|package-lock.json|*/package.json|*/package-lock.json|\
-      agents.md|claude.md|server/prisma/*|.githooks/*|.claude/rules/*|.claude/scripts/coord/*|\
-      *auth*|*permission*|*billing*|*schedule*|*concurren*|*infrastructure*)
-        sensitive=1
-        ;;
-    esac
-  done <<< "$files"
-  [ "$sensitive" -eq 1 ] && { echo high; return; }
-  scope="$(printf '%s\n' "$files" | mc_scope_for_files)"
-  case "$scope" in
-    docs) echo low ;;
-    server|web) echo normal ;;
-    *) echo high ;;
-  esac
-}
-
-# Backward-compatible name for callers that only need suite scope.
-mc_classify_files() { mc_scope_for_files; }
-
-# Print the set of files that differ from the merge base with origin/main, UNION
-# the working-tree changes (staged, unstaged, and untracked). The union is what
-# makes classification safe: uncommitted code cannot hide from the gate. Prints
-# nothing and returns 1 if the merge base cannot be determined or we are on main —
-# the caller must then treat that as `full`.
-mc_changed_files() {
-  local base
-  [ "$(mc_branch)" = "main" ] && return 1
-  base="$(git merge-base HEAD origin/main 2>/dev/null || true)"
-  [ -z "$base" ] && return 1
-  {
-    git diff --name-only "$base"..HEAD 2>/dev/null
-    git diff --name-only HEAD 2>/dev/null           # unstaged tracked edits
-    git diff --name-only --cached 2>/dev/null       # staged edits
-    git ls-files --others --exclude-standard 2>/dev/null  # untracked new files
-  } | sort -u
-}

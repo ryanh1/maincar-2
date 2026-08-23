@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 # The local bare mirror is a fetch source, never a delivery destination.
-echo "local main mirror: push rejected — enqueue the committed head and deliver it through mc-train." >&2
+echo "local main mirror: push rejected — enqueue the committed issue and deliver it through mc-deliver." >&2
 exit 1

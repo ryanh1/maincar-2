@@ -2,6 +2,6 @@
 # Compatibility shim with no delivery behavior. The historical implementation
 # lives under tests/fixtures so no environment variable can revive it here.
 set -euo pipefail
-echo "mc-merge: the per-session merge path was replaced by mc-train." >&2
-echo "  Enqueue the committed change with mc-train enqueue, then run mc-train run." >&2
+echo "mc-merge has been replaced by mc-deliver." >&2
+echo "  Use mc-deliver enqueue, then mc-deliver run." >&2
 exit 2
