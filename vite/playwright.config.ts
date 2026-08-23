@@ -6,8 +6,6 @@ const baseURL = `http://127.0.0.1:${port}`
 export default defineConfig({
   testDir: './src',
   testMatch: '**/*.browser.spec.ts',
-  // Delivery gates set this to two; the scheduler's global budget includes it.
-  workers: Number(process.env.PLAYWRIGHT_WORKERS ?? 2),
   use: {
     baseURL,
     browserName: 'chromium',

@@ -7,12 +7,10 @@ path-gated rule file goes unread on work that touches neither `server/**` nor
 ## The gate
 
 ```bash
-./.claude/scripts/coord/mc-gate --delivery
+npm run verify
 ```
 
-Four checks: `typecheck`, `lint`, `test`, `test:integration`. This full suite
-must enter the delivery lane; do not run `npm run verify` directly while sharing
-the machine with other sessions.
+Four checks: `typecheck`, `lint`, `test`, `test:integration`.
 
 **The integration suite is part of the gate, not an extra.** `npm test` does not
 include it, and it holds the only tests that prove the concurrency guardrails —
@@ -29,7 +27,7 @@ per clone:
 npm run hooks:install
 ```
 
-Running the delivery gate by hand first is still the habit. The hook is the
+Running `npm run verify` by hand first is still the habit. The hook is the
 backstop, not the plan — it is the thing that catches you, not the thing that
 does the checking for you.
 
