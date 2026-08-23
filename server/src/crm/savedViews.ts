@@ -164,7 +164,13 @@ function repairKanban(
   if (!groupAttribute || (groupAttribute.type !== 'select' && groupAttribute.type !== 'status')) return undefined
   const validOptionValues = new Set(activeOptionValues(groupAttribute))
   if (validOptionValues.size === 0) return undefined
-  const visibleOptionValues = uniqueStrings(source.visibleOptionValues).filter((value) => validOptionValues.has(value))
+  const requestedVisibleOptionValues = uniqueStrings(source.visibleOptionValues).filter((value) => validOptionValues.has(value))
+  // A field can outlive an older saved config whose option keys were removed or
+  // renamed. Keep the board usable instead of rendering every record into an
+  // empty set of columns until the user manually reconfigures it.
+  const visibleOptionValues = requestedVisibleOptionValues.length > 0
+    ? requestedVisibleOptionValues
+    : [...validOptionValues]
   const cardAttributeIds = uniqueStrings(source.cardAttributeIds).filter((id) => knownIds.has(id))
   const hiddenTerminalOptionValues = uniqueStrings(source.hiddenTerminalOptionValues ?? [])
     .filter((value) => validOptionValues.has(value) && visibleOptionValues.includes(value))
