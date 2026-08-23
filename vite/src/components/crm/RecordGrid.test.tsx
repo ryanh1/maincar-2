@@ -28,7 +28,7 @@ const useGetCellStyles = vi.hoisted(() => vi.fn(() => ({ isPending: false, isErr
 const setCellStyleMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 const useSetCellStyle = vi.hoisted(() => vi.fn(() => ({ mutateAsync: setCellStyleMutateAsync })))
 const useGetColorRules = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: { colorRules: [] } })))
-vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetFieldChanges, useGetActivity, useUpdateRecordValue, useCreateRecord }))
+vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetFieldChanges, useGetActivity, useGetRelatedRecords: () => ({ isPending: false, isError: false, data: { related: [] } }), useUpdateRecordValue, useCreateRecord }))
 vi.mock('@/hooks/cellStyles', () => ({ useGetCellStyles, useSetCellStyle }))
 vi.mock('@/hooks/colorRules', () => ({ useGetColorRules }))
 vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => <div data-testid="record-note-composer" /> }))

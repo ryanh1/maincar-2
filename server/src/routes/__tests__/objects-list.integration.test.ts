@@ -193,6 +193,48 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
     ])
   }, 60_000)
 
+  it('returns counted related rails without changing the root record query', async () => {
+    const { orgId, adminFirebaseUid } = await seedOrgWithAdmin(prisma)
+    const objects = await Promise.all([
+      prisma.objectDef.create({ data: { orgId, slug: 'company', name: 'Company', namePlural: 'Companies', storage: 'record', isStandard: false } }),
+      prisma.objectDef.create({ data: { orgId, slug: 'person', name: 'Person', namePlural: 'People', storage: 'record', isStandard: false } }),
+      prisma.objectDef.create({ data: { orgId, slug: 'deal', name: 'Deal', namePlural: 'Deals', storage: 'record', isStandard: false } }),
+    ])
+    const [company, person, deal] = objects
+    const personCompany = await prisma.attributeDef.create({ data: { orgId, objectId: person.id, slug: 'company', name: 'Company', type: 'record_reference', storage: 'custom', refObjectId: company.id } })
+    const dealCompany = await prisma.attributeDef.create({ data: { orgId, objectId: deal.id, slug: 'company', name: 'Company', type: 'record_reference', storage: 'custom', refObjectId: company.id } })
+    await Promise.all([
+      prisma.attributeDef.create({ data: { orgId, objectId: company.id, slug: 'name', name: 'Name', type: 'text', storage: 'custom', isIdentity: true } }),
+      prisma.attributeDef.create({ data: { orgId, objectId: person.id, slug: 'name', name: 'Name', type: 'text', storage: 'custom', isIdentity: true } }),
+      prisma.attributeDef.create({ data: { orgId, objectId: deal.id, slug: 'name', name: 'Name', type: 'text', storage: 'custom', isIdentity: true } }),
+    ])
+    const companyRecord = await prisma.record.create({ data: { orgId, objectId: company.id, valuesJson: { name: 'Acme' } } })
+    const personRecord = await prisma.record.create({ data: { orgId, objectId: person.id, valuesJson: { name: 'Dana', company: companyRecord.id } } })
+    const dealRecord = await prisma.record.create({ data: { orgId, objectId: deal.id, valuesJson: { name: 'Renewal', company: companyRecord.id } } })
+    await prisma.recordLink.createMany({ data: [
+      { orgId, fromObject: 'record', fromId: personRecord.id, attribute: personCompany.slug, toObject: 'company', toId: companyRecord.id },
+      { orgId, fromObject: 'record', fromId: dealRecord.id, attribute: dealCompany.slug, toObject: 'company', toId: companyRecord.id },
+    ] })
+
+    const companyRail = await request(app)
+      .get(`/api/orgs/${orgId}/objects/${company.id}/records/${companyRecord.id}/related`)
+      .set('Authorization', as(adminFirebaseUid))
+    expect(companyRail.status).toBe(200)
+    expect(companyRail.body.related).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'People', count: 1, records: [expect.objectContaining({ id: personRecord.id })] }),
+      expect.objectContaining({ label: 'Deals', count: 1, records: [expect.objectContaining({ id: dealRecord.id })] }),
+    ]))
+
+    const personRail = await request(app)
+      .get(`/api/orgs/${orgId}/objects/${person.id}/records/${personRecord.id}/related`)
+      .set('Authorization', as(adminFirebaseUid))
+    expect(personRail.status).toBe(200)
+    expect(personRail.body.related).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Company', count: 1 }),
+      expect.objectContaining({ label: 'Deals', count: 1, records: [expect.objectContaining({ id: dealRecord.id })] }),
+    ]))
+  })
+
   it('rejects an unknown filter field and an unsupported operator with 400', async () => {
     const { orgId, adminFirebaseUid } = await seedOrgWithAdmin(prisma)
     const objectId = await seedWidgetObject(orgId)

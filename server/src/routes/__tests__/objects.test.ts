@@ -672,3 +672,44 @@ describe('DELETE /api/orgs/:orgId/objects/:id', () => {
     expect(res.body.error).toBe('Object not found')
   })
 })
+
+// ============================================================
+// GET — related peek rails (MAI-184)
+// ============================================================
+describe('GET /api/orgs/:orgId/objects/:id/records/:recordId/related', () => {
+  it('returns correctly shaped inbound People and Deals rails for a Company', async () => {
+    const companyAttributes = [attributeRow({ objectId: 'obj-company', slug: 'name', name: 'Name', storage: 'column' })]
+    const personAttributes = [
+      attributeRow({ objectId: 'obj-person', slug: 'firstName', name: 'First name', storage: 'column', isIdentity: true }),
+      attributeRow({ objectId: 'obj-person', slug: 'companyId', name: 'Company', storage: 'column', type: 'record_reference', refObjectId: 'obj-company' }),
+    ]
+    const dealAttributes = [
+      attributeRow({ objectId: 'obj-deal', slug: 'name', name: 'Name', storage: 'column', isIdentity: true }),
+      attributeRow({ objectId: 'obj-deal', slug: 'companyId', name: 'Company', storage: 'column', type: 'record_reference', refObjectId: 'obj-company' }),
+    ]
+    const company = objectRow({ id: 'obj-company', slug: 'company', name: 'Company', namePlural: 'Companies', storage: 'table', isStandard: true, attributes: companyAttributes })
+    const person = objectRow({ id: 'obj-person', slug: 'person', name: 'Person', namePlural: 'People', storage: 'table', isStandard: true, attributes: personAttributes })
+    const deal = objectRow({ id: 'obj-deal', slug: 'deal', name: 'Deal', namePlural: 'Deals', storage: 'table', isStandard: true, attributes: dealAttributes })
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(company)
+    prismaMock.objectDef.findMany.mockResolvedValueOnce([company, person, deal])
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([{ id: 'company-1', createdAt: NOW, updatedAt: NOW, name: 'Acme', customJson: {}, __sortKey0: NOW }])
+      .mockResolvedValueOnce([{ count: '1' }])
+      .mockResolvedValueOnce([{ id: 'person-1' }])
+      .mockResolvedValueOnce([{ id: 'deal-1' }])
+      .mockResolvedValueOnce([{ id: 'person-1', createdAt: NOW, updatedAt: NOW, firstName: 'Dana', customJson: {}, __sortKey0: NOW }])
+      .mockResolvedValueOnce([{ count: '1' }])
+      .mockResolvedValueOnce([{ id: 'deal-1', createdAt: NOW, updatedAt: NOW, name: 'Expansion', customJson: {}, __sortKey0: NOW }])
+      .mockResolvedValueOnce([{ count: '1' }])
+
+    const res = await request(app)
+      .get(`${URL_A}/obj-company/records/company-1/related`)
+      .set('Authorization', AUTH)
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(res.body.related).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'People', count: 1, object: expect.objectContaining({ slug: 'person' }), records: [expect.objectContaining({ id: 'person-1', firstName: 'Dana' })] }),
+      expect.objectContaining({ label: 'Deals', count: 1, object: expect.objectContaining({ slug: 'deal' }), records: [expect.objectContaining({ id: 'deal-1', name: 'Expansion' })] }),
+    ]))
+  })
+})
