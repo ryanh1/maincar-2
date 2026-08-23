@@ -120,7 +120,7 @@ git -C "$SANDBOX/upstream.git" cat-file -e main:docs/delivery.md
 git -C "$SANDBOX/upstream.git" cat-file -e main:server/src/change.ts
 test "$(grep -cF '|run typecheck|' "$SANDBOX/npm.log")" -eq 1
 test "$(grep -cF '|run lint|' "$SANDBOX/npm.log")" -eq 1
-if [ "$(grep -cF '|--prefix server exec vitest run src/example.test.ts|' "$SANDBOX/npm.log" || true)" -ne 1 ]; then
+if [ "$(grep -Ec '/mc-train-run-.*/repo/server\|exec vitest run src/example\.test\.ts\|' "$SANDBOX/npm.log" || true)" -ne 1 ]; then
   echo 'combined train did not run the focused server test exactly once:' >&2
   sed 's/^/  /' "$SANDBOX/npm.log" >&2
   find "$SANDBOX/state/state/train/runs" -name receipt.tsv -exec sed 's/^/  receipt: /' {} \; >&2
