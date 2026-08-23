@@ -290,5 +290,5 @@ function FieldValue({ attribute, rawValue, timeZone, currencyCode }: { attribute
       return <OptionChip key={String(value)} label={option?.label ?? String(value)} color={option?.color} />
     })}</span>
   }
-  return <span>{formatCellValue(rawValue, attribute.type, timeZone, currencyCode, attribute.slug === 'amountMinor')}</span>
+  return <span>{formatCellValue(rawValue, attribute.type, timeZone, currencyCode, attribute.slug === 'amountMinor', attribute.formatJson)}</span>
 }

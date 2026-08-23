@@ -37,4 +37,19 @@ describe('formatCellValue', () => {
     expect(formatCellValue('Ada', 'person_name', null)).toBe('Ada')
     expect(formatCellValue(42, 'number', null)).toBe('42')
   })
+
+  it('applies a number formatJson preset without changing the stored value', () => {
+    expect(formatCellValue(0.5, 'number', null, 'USD', false, { number: { style: 'percent' } })).toBe('50%')
+    expect(formatCellValue(42.5, 'currency', null, 'USD', false, { number: { style: 'currency', currency: 'EUR' } })).toBe('€42.50')
+    expect(formatCellValue(3.14159, 'number', null, 'USD', false, { number: { maximumFractionDigits: 2 } })).toBe('3.14')
+  })
+
+  it('applies a date formatJson preset', () => {
+    expect(formatCellValue('2026-06-24', 'date', 'UTC', 'USD', false, { date: { preset: 'long' } })).toBe('June 24, 2026')
+  })
+
+  it('ignores a malformed formatJson', () => {
+    expect(formatCellValue(42, 'number', null, 'USD', false, 'not-an-object')).toBe('42')
+    expect(formatCellValue(42, 'number', null, 'USD', false, { number: { style: 'bogus' } })).toBe('42')
+  })
 })

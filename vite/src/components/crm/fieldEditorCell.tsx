@@ -22,7 +22,7 @@ export const fieldEditorCellRenderer: CustomRenderer<FieldEditorCell> = {
   isMatch: (cell): cell is FieldEditorCell => (cell.data as { kind?: unknown })?.kind === 'field-editor-cell',
   draw: ({ ctx, rect, theme }, cell) => {
     const { attribute, value, timeZone, currencyCode } = cell.data
-    const display = formatCellValue(value, attribute.type, timeZone, currencyCode, attribute.slug === 'amountMinor')
+    const display = formatCellValue(value, attribute.type, timeZone, currencyCode, attribute.slug === 'amountMinor', attribute.formatJson)
     ctx.font = theme.baseFontStyle
     ctx.fillStyle = theme.textDark
     ctx.textBaseline = 'middle'
