@@ -1175,6 +1175,11 @@ model MailAccount {
   // resumable backfill; pg-boss may deliver the job more than once.
   backfill MailBackfill?
 
+  // Provider push subscriptions are short-lived and provider-owned. This durable
+  // row set records their opaque ids, expiry, and callback proof so the daily
+  // renewal job and unauthenticated webhook can both stay tenant-safe.
+  pushSubscriptions MailPushSubscription[]
+
   // The half-written emails queued to go out on this mailbox (MAI-188). Same
   // SetNull reasoning as emails above: disconnecting a mailbox orphans a rep's
   // drafts, never deletes them.
@@ -1186,6 +1191,31 @@ model MailAccount {
   // One mailbox per address per org. Re-connecting updates rather than duplicates.
   @@unique([orgId, emailAddress])
   @@index([orgId, userId])
+}
+
+// One remote push subscription per mailbox and resource kind. `remoteId` is a
+// Google Calendar channel id or Microsoft Graph subscription id; Gmail mailbox
+// watches use the mailbox address in their Pub/Sub payload and therefore keep no
+// remote id row. `verificationToken` is never an OAuth credential: it is a random
+// callback proof which the provider echoes verbatim.
+model MailPushSubscription {
+  id String @id @default(cuid())
+
+  mailAccountId String
+  mailAccount   MailAccount @relation(fields: [mailAccountId], references: [id], onDelete: Cascade)
+
+  // google_calendar | microsoft_mail | microsoft_calendar
+  kind String
+  remoteId String @unique
+  verificationToken String
+  expiresAt DateTime
+  resourceId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([mailAccountId, kind])
+  @@index([expiresAt])
 }
 
 // First-connect CRM activity import. The row makes progress visible after the
