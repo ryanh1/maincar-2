@@ -1,7 +1,7 @@
 # Maincar schema
 
 > AUTO-GENERATED — DO NOT EDIT BY HAND.
-> Generated at: 2026-08-23T19:10:29.955Z
+> Generated at: 2026-08-23T19:41:47.730Z
 > Dynamic-object source: seeded standard-object definitions.
 > Journey: [4.S4 — Generate a Prisma-style schema markdown](../journeys/4-crm-data-and-views.md#journey-4s4--generate-a-prisma-style-schema-markdown-for-every-object-internal-engineering-tool).
 
@@ -183,6 +183,9 @@ model Org {
   emailTemplates           EmailTemplate[]
   oauthConnections         OAuthConnection[]
   mailAccounts             MailAccount[]
+  calendarSources          CalendarSource[]
+  calendarEvents           CalendarEvent[]
+  calendarAttendees        CalendarEventAttendee[]
   companies                Company[]
   people                   Person[]
   personPhones             PersonPhone[]
@@ -196,6 +199,7 @@ model Org {
   savedViews               SavedView[]
   detailLayouts            DetailLayout[]
   cellStyles               CellStyle[]
+  colorRules               ColorRule[]
   records                  Record[]
   recordLinks              RecordLink[]
   fieldHistory             FieldHistory[]
@@ -208,6 +212,7 @@ model Org {
   meetings                 Meeting[]
   meetingAttendees         MeetingAttendee[]
   activityEntries          ActivityEntry[]
+  activityLinks            ActivityLink[]
   tasks                    Task[]
   notes                    Note[]
   lists                    List[]
@@ -256,6 +261,9 @@ model User {
   emailSignatures          EmailSignature[]
   oauthConnections         OAuthConnection[]
   mailAccounts             MailAccount[]
+  calendarSources          CalendarSource[]
+  calendarEvents           CalendarEvent[]
+  calendarAttendees        CalendarEventAttendee[]
   reportsOwned             Report[] // relation: ReportOwner
   reportsDeleted           Report[] // relation: ReportDeletedBy
   smsMessages              SmsMessage[] // relation: SmsMailbox
@@ -785,6 +793,9 @@ model OAuthConnection {
   lastValidatedAt          DateTime?
   lastRefreshAt            DateTime?
   mailAccount              MailAccount?
+  calendarSources          CalendarSource[]
+  calendarEvents           CalendarEvent[]
+  calendarAttendees        CalendarEventAttendee[]
   createdAt                DateTime // default: "now()"
   updatedAt                DateTime // updatedAt
 }
@@ -809,6 +820,99 @@ model MailAccount {
   isPrimary                Boolean // default: "false"
   emails                   Email[]
   emailDrafts              EmailDraft[]
+  createdAt                DateTime // default: "now()"
+  updatedAt                DateTime // updatedAt
+}
+```
+
+### CalendarSource
+
+Storage kind: **real Prisma table**.
+
+```prisma
+model CalendarSource {
+  id                       String // id; default: "cuid()"
+  org                      Org
+  orgId                    String
+  user                     User
+  userId                   String
+  connection               OAuthConnection
+  connectionId             String
+  provider                 String
+  providerCalendarId       String
+  name                     String
+  description              String?
+  timeZone                 String?
+  accessRole               String
+  isPrimary                Boolean // default: "false"
+  isSelected               Boolean // default: "false"
+  syncCursor               String?
+  lastSyncedAt             DateTime?
+  events                   CalendarEvent[]
+  createdAt                DateTime // default: "now()"
+  updatedAt                DateTime // updatedAt
+}
+```
+
+### CalendarEvent
+
+Storage kind: **real Prisma table**.
+
+```prisma
+model CalendarEvent {
+  id                       String // id; default: "cuid()"
+  org                      Org
+  orgId                    String
+  user                     User
+  userId                   String
+  connection               OAuthConnection
+  connectionId             String
+  source                   CalendarSource
+  sourceId                 String
+  providerEventId          String
+  providerVersion          String?
+  iCalUid                  String?
+  title                    String?
+  description              String?
+  location                 String?
+  webLink                  String?
+  kind                     String
+  startsAt                 DateTime
+  endsAt                   DateTime
+  timeZone                 String?
+  status                   String // default: "\"confirmed\""
+  cancelledAt              DateTime?
+  recurrenceKind           String // default: "\"none\""
+  providerSeriesId         String?
+  recurrenceRule           String?
+  originalStartAt          DateTime?
+  originalStartDate        String?
+  attendees                CalendarEventAttendee[]
+  createdAt                DateTime // default: "now()"
+  updatedAt                DateTime // updatedAt
+}
+```
+
+### CalendarEventAttendee
+
+Storage kind: **real Prisma table**.
+
+```prisma
+model CalendarEventAttendee {
+  id                       String // id; default: "cuid()"
+  org                      Org
+  orgId                    String
+  user                     User
+  userId                   String
+  connection               OAuthConnection
+  connectionId             String
+  event                    CalendarEvent
+  eventId                  String
+  email                    String
+  name                     String?
+  isOptional               Boolean // default: "false"
+  isResource               Boolean // default: "false"
+  response                 String // default: "\"needs-action\""
   createdAt                DateTime // default: "now()"
   updatedAt                DateTime // updatedAt
 }
@@ -842,6 +946,7 @@ model Company {
   attentionReason          String?
   callbackDate             DateTime?
   source                   String?
+  activityCount            Int // default: "0"
   customJson               Json // default: "\"{}\""
   isArchived               Boolean // default: "false"
   deletedAt                DateTime?
@@ -881,6 +986,7 @@ model Person {
   callbackDate             DateTime?
   source                   String?
   lastContactedAt          DateTime?
+  activityCount            Int // default: "0"
   nameAudioUrl             String?
   customJson               Json // default: "\"{}\""
   mergedIntoId             String?
@@ -1064,6 +1170,7 @@ model Deal {
   status                   String // default: "\"open\""
   lostReason               String?
   ownerUserId              String?
+  activityCount            Int // default: "0"
   customJson               Json // default: "\"{}\""
   mergedIntoId             String?
   deletedById              String?
@@ -1185,6 +1292,7 @@ model SavedView {
   sortOrder                Int // default: "0"
   deletedAt                DateTime?
   cellStyles               CellStyle[]
+  colorRules               ColorRule[]
   createdAt                DateTime // default: "now()"
   updatedAt                DateTime // updatedAt
 }
@@ -1205,6 +1313,30 @@ model CellStyle {
   fieldId                  String
   backgroundToken          String?
   textToken                String?
+  createdAt                DateTime // default: "now()"
+  updatedAt                DateTime // updatedAt
+}
+```
+
+### ColorRule
+
+Storage kind: **real Prisma table**.
+
+```prisma
+model ColorRule {
+  id                       String // id; default: "cuid()"
+  orgId                    String
+  org                      Org
+  viewId                   String
+  view                     SavedView
+  attribute                String
+  predicate                Json
+  target                   String
+  scope                    String // default: "\"cell\""
+  color                    String
+  sortOrder                Int // default: "0"
+  isDefault                Boolean // default: "false"
+  enabled                  Boolean // default: "true"
   createdAt                DateTime // default: "now()"
   updatedAt                DateTime // updatedAt
 }
@@ -1333,6 +1465,7 @@ model Email {
   company                  Company?
   dealId                   String?
   deal                     Deal?
+  manualAttach             Boolean // default: "false"
   mailAccountId            String?
   mailAccount              MailAccount?
   direction                String
@@ -1481,6 +1614,7 @@ model Meeting {
   company                  Company?
   dealId                   String?
   deal                     Deal?
+  manualAttach             Boolean // default: "false"
   title                    String
   description              String?
   location                 String?
@@ -1529,6 +1663,26 @@ model MeetingAttendee {
   isOrganizer              Boolean // default: "false"
   isOptional               Boolean // default: "false"
   isResource               Boolean // default: "false"
+  createdAt                DateTime // default: "now()"
+  updatedAt                DateTime // updatedAt
+}
+```
+
+### ActivityLink
+
+Storage kind: **real Prisma table**.
+
+```prisma
+model ActivityLink {
+  id                       String // id; default: "cuid()"
+  orgId                    String
+  org                      Org
+  sourceType               String
+  sourceId                 String
+  targetType               String
+  targetId                 String
+  isPrimary                Boolean // default: "false"
+  manualAttach             Boolean // default: "false"
   createdAt                DateTime // default: "now()"
   updatedAt                DateTime // updatedAt
 }
