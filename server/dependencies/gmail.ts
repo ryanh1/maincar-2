@@ -98,12 +98,47 @@ export interface GmailClient {
 }
 
 /**
+ * The Google Calendar calls used by the provider-neutral calendar adapter. Keeping
+ * this separate from `GmailClient` lets the mail seam retain its deliberately small
+ * surface while both adapters share one token-bound Google SDK wrapper.
+ */
+export interface GoogleCalendarClient {
+  readonly provider: 'google'
+  listCalendarList(
+    params?: calendar_v3.Params$Resource$Calendarlist$List,
+  ): Promise<calendar_v3.Schema$CalendarList>
+  getCalendarListEntry(calendarId: string): Promise<calendar_v3.Schema$CalendarListEntry>
+  listCalendarEvents(
+    params: calendar_v3.Params$Resource$Events$List | undefined,
+    calendarId: string,
+  ): Promise<calendar_v3.Schema$Events>
+  getEvent(calendarId: string, eventId: string): Promise<calendar_v3.Schema$Event>
+  createCalendarEvent(requestBody: calendar_v3.Schema$Event, calendarId: string): Promise<calendar_v3.Schema$Event>
+  patchEvent(
+    calendarId: string,
+    eventId: string,
+    requestBody: calendar_v3.Schema$Event,
+    expectedVersion?: string,
+  ): Promise<calendar_v3.Schema$Event>
+  updateEvent(
+    calendarId: string,
+    eventId: string,
+    requestBody: calendar_v3.Schema$Event,
+    expectedVersion?: string,
+  ): Promise<calendar_v3.Schema$Event>
+  deleteEvent(calendarId: string, eventId: string, expectedVersion?: string): Promise<void>
+  queryFreeBusy(requestBody: calendar_v3.Schema$FreeBusyRequest): Promise<calendar_v3.Schema$FreeBusyResponse>
+}
+
+export type GoogleClient = GmailClient & GoogleCalendarClient
+
+/**
  * Build a Gmail + Calendar client bound to one access token. Construction is the
  * only place a googleapis client comes into being in the whole repo. The token is
  * set on a bare OAuth2 client purely as a credential — no client id/secret, because
  * this wrapper neither obtains nor refreshes tokens.
  */
-export function gmailClient(accessToken: string): GmailClient {
+export function gmailClient(accessToken: string): GoogleClient {
   const auth = new google.auth.OAuth2()
   auth.setCredentials({ access_token: accessToken })
   const gmail = google.gmail({ version: 'v1', auth })
@@ -142,6 +177,57 @@ export function gmailClient(accessToken: string): GmailClient {
       return run(() =>
         calendar.events.insert({ calendarId: PRIMARY, ...params, requestBody }, NO_RETRY),
       )
+    },
+
+    listCalendarList(params = {}) {
+      return run(() => calendar.calendarList.list(params, NO_RETRY))
+    },
+
+    getCalendarListEntry(calendarId) {
+      return run(() => calendar.calendarList.get({ calendarId }, NO_RETRY))
+    },
+
+    listCalendarEvents(params, calendarId) {
+      return run(() => calendar.events.list({ calendarId, ...params }, NO_RETRY))
+    },
+
+    createCalendarEvent(requestBody, calendarId) {
+      return run(() => calendar.events.insert({ calendarId, requestBody }, NO_RETRY))
+    },
+
+    getEvent(calendarId, eventId) {
+      return run(() => calendar.events.get({ calendarId, eventId }, NO_RETRY))
+    },
+
+    patchEvent(calendarId, eventId, requestBody, expectedVersion) {
+      return run(() =>
+        calendar.events.patch(
+          { calendarId, eventId, requestBody },
+          { ...NO_RETRY, headers: expectedVersion ? { 'If-Match': expectedVersion } : undefined },
+        ),
+      )
+    },
+
+    updateEvent(calendarId, eventId, requestBody, expectedVersion) {
+      return run(() =>
+        calendar.events.update(
+          { calendarId, eventId, requestBody },
+          { ...NO_RETRY, headers: expectedVersion ? { 'If-Match': expectedVersion } : undefined },
+        ),
+      )
+    },
+
+    async deleteEvent(calendarId, eventId, expectedVersion) {
+      await run(() =>
+        calendar.events.delete(
+          { calendarId, eventId },
+          { ...NO_RETRY, headers: expectedVersion ? { 'If-Match': expectedVersion } : undefined },
+        ),
+      )
+    },
+
+    queryFreeBusy(requestBody) {
+      return run(() => calendar.freebusy.query({ requestBody }, NO_RETRY))
     },
   }
 }
