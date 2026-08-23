@@ -18,7 +18,7 @@ import {
   seedPerson,
   seedPersonPhone,
 } from '../../test/integration/testPrisma.js'
-import { matchCallToCrm } from '../callMatch.js'
+import { matchCallToCrm, matchInboundCallerToCrm } from '../callMatch.js'
 
 describe('matchCallToCrm (integration, real Postgres)', () => {
   let prisma: PrismaClient
@@ -90,6 +90,46 @@ describe('matchCallToCrm (integration, real Postgres)', () => {
     const links = await matchCallToCrm(prisma, org.orgId, e164)
 
     expect(links.personId).toBe(primary.id)
+  })
+})
+
+describe('matchInboundCallerToCrm (integration, real Postgres)', () => {
+  let prisma: PrismaClient
+
+  beforeAll(() => {
+    prisma = createTestPrisma()
+  })
+
+  afterAll(async () => {
+    await prisma.$disconnect()
+  })
+
+  it('normalizes a unique inbound number and keeps the lookup inside the called organization', async () => {
+    const orgA = await seedOrgWithAdmin(prisma)
+    const orgB = await seedOrgWithAdmin(prisma)
+    const company = await seedCompany(prisma, { orgId: orgA.orgId, name: 'Acme' })
+    const personA = await seedPerson(prisma, { orgId: orgA.orgId, companyId: company.id })
+    const personB = await seedPerson(prisma, { orgId: orgB.orgId })
+    const e164 = '+13035551315'
+    await seedPersonPhone(prisma, { orgId: orgA.orgId, personId: personA.id, e164 })
+    await seedPersonPhone(prisma, { orgId: orgB.orgId, personId: personB.id, e164 })
+
+    await expect(matchInboundCallerToCrm(prisma, orgA.orgId, ` ${e164} `))
+      .resolves.toEqual({ personId: personA.id, companyId: company.id, dealId: null })
+  })
+
+  it('leaves an unknown or ambiguous inbound caller unlinked', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const first = await seedPerson(prisma, { orgId: org.orgId })
+    const second = await seedPerson(prisma, { orgId: org.orgId })
+    const e164 = '+13035551316'
+    await seedPersonPhone(prisma, { orgId: org.orgId, personId: first.id, e164 })
+    await seedPersonPhone(prisma, { orgId: org.orgId, personId: second.id, e164 })
+
+    await expect(matchInboundCallerToCrm(prisma, org.orgId, '+19998887777'))
+      .resolves.toEqual({ personId: null, companyId: null, dealId: null })
+    await expect(matchInboundCallerToCrm(prisma, org.orgId, e164))
+      .resolves.toEqual({ personId: null, companyId: null, dealId: null })
   })
 })
 

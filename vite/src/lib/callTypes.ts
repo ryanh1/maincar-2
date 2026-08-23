@@ -64,6 +64,10 @@ export interface CallReviewPerson {
   lastName: string | null
   preferredFirstName: string | null
   title?: string | null
+  /** CRM role classification, when the contact has one. */
+  persona?: string | null
+  /** Most recent CRM activity with this contact, as an ISO instant. */
+  lastContactedAt?: string | null
 }
 
 export interface CallReviewCompany {

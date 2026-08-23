@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { ChevronDown, Phone } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
 import { formatElapsed } from '@/lib/duration'
@@ -8,6 +9,9 @@ import { DialerDispositionBar } from '@/components/dialer/DialerDispositionBar'
 import { NumericKeypad } from '@/components/dialer/NumericKeypad'
 import { Button } from '@/components/ui/button'
 import { useDialer } from '@/components/dialer/dialerContext'
+import { useGetCallDetail } from '@/hooks/dialer'
+import { formatDateTime } from '@/lib/datetime'
+import { useAuth } from '@/providers/useAuth'
 
 /** Ties the title-bar toggle to the body it opens for assistive tech. */
 const BODY_ID = 'dialer-dock-body'
@@ -31,6 +35,7 @@ const BODY_ID = 'dialer-dock-body'
  * corner's width so the two never overlap.
  */
 export function DialerDock() {
+  const { user } = useAuth()
   const {
     view, mode, phase, elapsedSeconds, activeCall, terminalStatus, prefilledNumber,
     toggleView, collapseDialer, acceptIncomingCall, rejectIncomingCall,
@@ -38,6 +43,16 @@ export function DialerDock() {
   const expanded = view === 'expanded'
   const inCall = mode === 'call'
   const incoming = phase === 'ringing' && activeCall?.direction === 'inbound'
+  const detailQuery = useGetCallDetail(
+    incoming ? activeCall?.orgId : null,
+    incoming ? activeCall?.callId : null,
+  )
+  const caller = incoming ? detailQuery.data?.call.review?.crm.person : null
+  const account = incoming ? detailQuery.data?.call.review?.crm.company : null
+  const callerName = caller
+    ? caller.preferredFirstName ?? ([caller.firstName, caller.lastName].filter(Boolean).join(' ') || null)
+    : null
+  const persona = caller?.persona ? caller.persona.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) : null
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -82,6 +97,16 @@ export function DialerDock() {
             <div>
               <p className="text-xs text-text-muted">Incoming call</p>
               <p className="text-sm font-medium tabular-nums">{activeCall.toE164}</p>
+              {caller && callerName ? (
+                <div className="mt-2 flex flex-col gap-1 text-xs text-text-muted">
+                  <Link to={`/records/person/${caller.id}`} className="w-fit text-sm font-medium text-primary underline-offset-4 hover:underline">
+                    Open {callerName}
+                  </Link>
+                  {account?.name ? <p>{account.name}</p> : null}
+                  {persona ? <p>{persona}</p> : null}
+                  {caller.lastContactedAt ? <p>Last touch {formatDateTime(caller.lastContactedAt, user?.timeZone)}</p> : null}
+                </div>
+              ) : null}
             </div>
             <div className="flex gap-2">
               <Button type="button" size="sm" variant="success" className="flex-1" onClick={acceptIncomingCall}>

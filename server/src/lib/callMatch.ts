@@ -129,3 +129,32 @@ export async function matchCallToCrm(
 ): Promise<CallCrmLinks> {
   return crmLinksFromTarget(await resolveDialTarget(db, orgId, counterpartyE164))
 }
+
+/**
+ * Resolve an inbound caller only when one CRM phone owns the normalized number.
+ *
+ * An inbound screen-pop must never guess between two contacts that share a
+ * number. Unlike outbound dialing, where a primary phone is a deliberate
+ * selection rule, this leaves an ambiguous caller unlinked until a person
+ * resolves it in the CRM.
+ */
+export async function matchInboundCallerToCrm(
+  db: Prisma.TransactionClient,
+  orgId: string,
+  inboundE164: string,
+): Promise<CallCrmLinks> {
+  const e164 = inboundE164.trim()
+  if (!e164) return NO_MATCH
+
+  const phones = await db.personPhone.findMany({
+    where: { orgId, e164 },
+    take: 2,
+    select: { person: { select: { id: true, companyId: true } } },
+  })
+  if (phones.length !== 1) return NO_MATCH
+
+  const person = phones[0]?.person
+  return person
+    ? { personId: person.id, companyId: person.companyId, dealId: null }
+    : NO_MATCH
+}

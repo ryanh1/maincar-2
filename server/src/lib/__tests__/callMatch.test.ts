@@ -7,11 +7,15 @@
 // callMatch.integration.test.ts.
 import { describe, expect, it, vi } from 'vitest'
 
-import { matchCallToCrm } from '../callMatch.js'
+import { matchCallToCrm, matchInboundCallerToCrm } from '../callMatch.js'
 
 /** A stub Prisma/transaction client exposing only what the helper reads. */
 function dbWith(findFirst: ReturnType<typeof vi.fn>) {
   return { personPhone: { findFirst } } as unknown as Parameters<typeof matchCallToCrm>[0]
+}
+
+function inboundDbWith(findMany: ReturnType<typeof vi.fn>) {
+  return { personPhone: { findMany } } as unknown as Parameters<typeof matchInboundCallerToCrm>[0]
 }
 
 describe('matchCallToCrm', () => {
@@ -66,5 +70,33 @@ describe('matchCallToCrm', () => {
     const links = await matchCallToCrm(dbWith(findFirst), 'org-1', '+13035550199')
 
     expect(links.dealId).toBeNull()
+  })
+})
+
+describe('matchInboundCallerToCrm', () => {
+  it('links a normalized unique inbound number only within the called number’s organization', async () => {
+    const findMany = vi.fn().mockResolvedValue([{ person: { id: 'person-1', companyId: 'company-1' } }])
+
+    const links = await matchInboundCallerToCrm(inboundDbWith(findMany), 'org-1', ' +13035550199 ')
+
+    expect(links).toEqual({ personId: 'person-1', companyId: 'company-1', dealId: null })
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { orgId: 'org-1', e164: '+13035550199' },
+      take: 2,
+    }))
+  })
+
+  it('keeps an inbound call unlinked when the number has no match or more than one match', async () => {
+    const findMany = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { person: { id: 'person-1', companyId: 'company-1' } },
+        { person: { id: 'person-2', companyId: 'company-2' } },
+      ])
+
+    await expect(matchInboundCallerToCrm(inboundDbWith(findMany), 'org-1', '+13035550199'))
+      .resolves.toEqual({ personId: null, companyId: null, dealId: null })
+    await expect(matchInboundCallerToCrm(inboundDbWith(findMany), 'org-1', '+13035550199'))
+      .resolves.toEqual({ personId: null, companyId: null, dealId: null })
   })
 })
