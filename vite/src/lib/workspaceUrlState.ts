@@ -10,6 +10,7 @@ export const SETTINGS_SECTIONS = [
   'teams',
   'numbers',
   'call-recordings',
+  'inbound',
   'dispositions',
   'next-steps',
   'voicemail-greeting',

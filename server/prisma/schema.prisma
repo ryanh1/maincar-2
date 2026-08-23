@@ -264,6 +264,27 @@ model User {
   @@index([currentOrgId])
 }
 
+// One rep-owned forwarding preference per organization. `mobileE164` may stay
+// stored while disabled, but only an enabled row with a validated E.164 value
+// is eligible to create a mobile inbound leg.
+model InboundForwarding {
+  id String @id @default(cuid())
+
+  orgId  String
+  userId String
+
+  enabled    Boolean @default(false)
+  mobileE164 String?
+  // Allowed values: "simultaneous", "browser_fallback".
+  strategy String @default("simultaneous")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, userId])
+  @@index([orgId, userId, enabled])
+}
+
 // A user-owned override for a keyboard action. Actions and their default keys
 // live in code so new actions do not require rows for every existing user.
 model KeyboardBinding {
