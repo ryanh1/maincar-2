@@ -79,4 +79,26 @@ describe('ListEntryGrid', () => {
 
     expect(document.body).toHaveTextContent('This list’s object has no fields yet.')
   })
+
+  it('writes a list field through the membership callback without changing the target record', () => {
+    const onUpdateEntry = vi.fn()
+    render(
+      <ListEntryGrid
+        orgId="org-1"
+        attributes={[attribute({ slug: 'name', name: 'Name' }), attribute({ id: 'priority', slug: 'priority', name: 'Priority', storage: 'list', sortOrder: 1 })]}
+        entries={[entry]}
+        totalCount={1}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        fetchNextPage={vi.fn()}
+        onRemoveEntry={vi.fn()}
+        onUpdateEntry={onUpdateEntry}
+      />,
+    )
+
+    const props = dataEditorProps.current as { onCellEdited: (cell: readonly [number, number], value: { kind: string; data: string }) => void }
+    props.onCellEdited([1, 0], { kind: 'text', data: 'Urgent' })
+
+    expect(onUpdateEntry).toHaveBeenCalledWith(entry, { priority: 'Urgent' })
+  })
 })

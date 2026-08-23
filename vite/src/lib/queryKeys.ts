@@ -143,6 +143,8 @@ export const queryKeys = {
     lists: (orgId: string) => ['crm', orgId, 'lists'] as const,
     list: (orgId: string, listId: string) => ['crm', orgId, 'lists', listId] as const,
     listEntries: (orgId: string, listId: string) => ['crm', orgId, 'lists', listId, 'entries'] as const,
+    listEntriesWithSort: (orgId: string, listId: string, sort: 'position' | 'createdAt' | 'updatedAt') =>
+      ['crm', orgId, 'lists', listId, 'entries', sort] as const,
   },
   objects: {
     all: ['objects'] as const,
