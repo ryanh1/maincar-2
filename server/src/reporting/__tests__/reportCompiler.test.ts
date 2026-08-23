@@ -16,6 +16,27 @@ const DAY_BUCKETED_REPORT = {
 } as ReportConfig
 
 describe('compileReport', () => {
+  it.each([
+    { name: 'Deal count', value: { field: 'id', aggregation: 'count' }, sql: 'COUNT(*)::text AS "value"' },
+    { name: 'Average amount', value: { field: 'amountMinor', aggregation: 'average' }, sql: 'AVG("deal"."amountMinor")' },
+    { name: 'Distinct amounts', value: { field: 'amountMinor', aggregation: 'distinctCount' }, sql: 'COUNT(DISTINCT "deal"."amountMinor")::text AS "value"' },
+    { name: 'Median amount', value: { field: 'amountMinor', aggregation: 'median' }, sql: "percentile_cont(0.5) WITHIN GROUP" },
+    { name: '90th percentile amount', value: { field: 'amountMinor', aggregation: 'percentile' }, sql: "percentile_cont(0.9) WITHIN GROUP" },
+  ] as const)('compiles the allowlisted $name measure through the Deals registry', ({ value, sql }) => {
+    const query = compileReport({
+      baseObject: 'deal',
+      rows: [{ field: 'stage' }],
+      columns: [],
+      values: [value],
+      timeZone: { mode: 'viewer' },
+    }, 'org-a', { viewerTimeZone: 'America/New_York' })
+
+    expect(query.sql).toContain(sql)
+    expect(query.sql).toContain('GROUP BY CUBE')
+    expect(query.sql).toContain('GROUPING("stage"."id")')
+    expect(query.values).toEqual(['org-a'])
+  })
+
   it('compiles the first Deals report through the registry and injects the org boundary', () => {
     const query = compileReport(DEAL_STAGE_AMOUNT_REPORT, 'org-a')
 
@@ -23,7 +44,7 @@ describe('compileReport', () => {
     expect(query.sql).toContain('INNER JOIN "PipelineStage" AS "stage"')
     expect(query.sql).toContain('"deal"."orgId" = ?')
     expect(query.sql).toContain('SUM("deal"."amountMinor")')
-    expect(query.sql).toContain('GROUP BY "stage"."id", "stage"."name"')
+    expect(query.sql).toContain('GROUP BY CUBE (("stage"."id", "stage"."name"))')
     expect(query.values).toEqual(['org-a'])
   })
 
@@ -48,7 +69,7 @@ describe('compileReport', () => {
 
     expect(query.sql).toContain('LEFT JOIN "User" AS "owner"')
     expect(query.sql).toContain('INNER JOIN "PipelineStage" AS "stage"')
-    expect(query.sql).toContain('GROUP BY COALESCE("owner"."id", \'unassigned\')')
+    expect(query.sql).toContain('GROUP BY CUBE ((COALESCE("owner"."id", \'unassigned\')')
     expect(query.sql).toContain('"stage"."id", "stage"."name"')
     expect(query.values).toEqual(['org-a'])
   })
@@ -64,7 +85,7 @@ describe('compileReport', () => {
 
     expect(query.sql).toContain('"deal"."customJson" ->> \'segment\'')
     expect(query.sql).toContain("'Unspecified') AS \"segmentName\"")
-    expect(query.sql).toContain('GROUP BY')
+    expect(query.sql).toContain('GROUP BY CUBE ((COALESCE(NULLIF("deal"."customJson" ->> \'segment\', \'\'), \'unspecified\'), COALESCE(NULLIF("deal"."customJson" ->> \'segment\', \'\'), \'Unspecified\')))')
     expect(query.values).toEqual(['org-a'])
   })
 
@@ -84,7 +105,7 @@ describe('compileReport', () => {
     })
 
     expect(query.sql).toContain('date_trunc(\'day\', "deal"."createdAt" AT TIME ZONE \'UTC\' AT TIME ZONE ?)')
-    expect(query.sql).toContain('GROUP BY 1, "stage"."id", "stage"."name"')
+    expect(query.sql).toContain('GROUP BY 1, CUBE (("stage"."id", "stage"."name"))')
     expect(query.values).toEqual(['America/New_York', 'org-a'])
   })
 
@@ -99,7 +120,7 @@ describe('compileReport', () => {
     }, 'org-a', { viewerTimeZone: 'America/New_York' })
 
     expect(query.sql).toContain('AS "createdDay"')
-    expect(query.sql).toContain('GROUP BY 1, "stage"."id", "stage"."name"')
+    expect(query.sql).toContain('GROUP BY CUBE (1, ("stage"."id", "stage"."name"))')
   })
 
   it('requires a resolved zone instead of falling back to the server zone', () => {

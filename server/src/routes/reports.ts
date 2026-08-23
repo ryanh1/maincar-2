@@ -40,6 +40,12 @@ const pivotDimensionSchema = z.object({ field: z.enum(['owner', 'stage', 'segmen
 
 const pivotValueTransformSchema = z.enum(['none', 'percentOfGrandTotal', 'percentOfColumn', 'percentOfRow', 'percentOfParent', 'runningTotal', 'rankLargestToSmallest'])
 
+const dealPivotValueSchema = z.union([
+  z.object({ field: z.literal('id'), aggregation: z.literal('count') }).strict(),
+  z.object({ field: z.literal('amountMinor'), aggregation: z.literal('sum'), showAs: pivotValueTransformSchema.optional() }).strict(),
+  z.object({ field: z.literal('amountMinor'), aggregation: z.enum(['average', 'distinctCount', 'median', 'percentile']) }).strict(),
+])
+
 // Chart controls describe the presentation of the pivot response. They never
 // alter the symbolic query shape accepted by the reporting compiler.
 const reportChartSchema = z.object({
@@ -53,7 +59,7 @@ const dealReportConfigSchema = z.object({
   baseObject: z.literal('deal'),
   rows: z.array(pivotDimensionSchema).max(2),
   columns: z.array(pivotDimensionSchema).max(2).default([]),
-  values: z.tuple([z.object({ field: z.literal('amountMinor'), aggregation: z.literal('sum'), showAs: pivotValueTransformSchema.optional() }).strict()]),
+  values: z.tuple([dealPivotValueSchema]),
   timeZone: timeZoneSchema,
   timeBucket: z.object({ field: z.literal('createdAt'), grain: z.literal('day') }).strict().optional(),
   filters: dealReportFiltersSchema.optional(),
@@ -152,7 +158,32 @@ interface RawDealPivotRow {
   segmentName?: string
   stageId?: string
   stageName?: string
-  amountMinor: string | number | bigint
+  ownerGrouped?: string | number | bigint
+  segmentGrouped?: string | number | bigint
+  stageGrouped?: string | number | bigint
+  amountMinor?: string | number | bigint
+  value?: string | number | bigint
+}
+
+function isFullyGroupedDealPivotRow(row: RawDealPivotRow, config: Extract<ReportConfig, { baseObject: 'deal' }>): boolean {
+  return [...config.rows, ...config.columns].every((dimension) => {
+    if (dimension.field === 'createdAt') return row.createdDay !== undefined
+    const grouped = row[`${dimension.field}Grouped`]
+    return grouped === undefined || Number(grouped) === 0
+  })
+}
+
+function dealPivotValueResponse(row: RawDealPivotRow, aggregation: Extract<ReportConfig, { baseObject: 'deal' }>['values'][number]['aggregation']) {
+  return aggregation === 'sum' ? { amountMinor: String(row.amountMinor) } : { value: String(row.value) }
+}
+
+function dealPivotDimensionResponse(row: RawDealPivotRow) {
+  return {
+    ...(row.createdDay ? { createdDay: row.createdDay } : {}),
+    ...(row.ownerId && row.ownerName ? { ownerId: row.ownerId, ownerName: row.ownerName } : {}),
+    ...(row.segmentId && row.segmentName ? { segmentId: row.segmentId, segmentName: row.segmentName } : {}),
+    ...(row.stageId && row.stageName ? { stageId: row.stageId, stageName: row.stageName } : {}),
+  }
 }
 
 function savedReportResponse(report: Pick<Report, 'id' | 'name' | 'kind' | 'configJson' | 'createdAt' | 'updatedAt'>) {
@@ -289,17 +320,28 @@ router.post(
     const rows = await prisma.$queryRaw<RawDealPivotRow[]>(query)
 
     // --- Return response ---
+    const dealConfig = parsed.data.config as Extract<ReportConfig, { baseObject: 'deal' }>
+    const aggregation = dealConfig.values[0].aggregation
+    const rowsForGroups = rows.filter((row) => isFullyGroupedDealPivotRow(row, dealConfig))
+    const rollups = rows
+      .filter((row) => !isFullyGroupedDealPivotRow(row, dealConfig))
+      .map((row) => ({
+        ...dealPivotDimensionResponse(row),
+        groupedFields: [...dealConfig.rows, ...dealConfig.columns]
+          .filter((dimension) => dimension.field === 'createdAt'
+            ? row.createdDay !== undefined
+            : Number(row[`${dimension.field}Grouped`]) === 0)
+          .map((dimension) => dimension.field),
+        ...dealPivotValueResponse(row, aggregation),
+      }))
+
     return void res.json({
       report: {
-        rows: rows.map((row) => ({
-          ...(row.createdDay ? { createdDay: row.createdDay } : {}),
-          ...(row.ownerId && row.ownerName ? { ownerId: row.ownerId, ownerName: row.ownerName } : {}),
-          ...(row.segmentId && row.segmentName ? { segmentId: row.segmentId, segmentName: row.segmentName } : {}),
-          ...(row.stageId && row.stageName ? { stageId: row.stageId, stageName: row.stageName } : {}),
-          // PostgreSQL returns the aggregate as text, preserving exact minor
-          // units through JSON just like the Deals API does for one record.
-          amountMinor: String(row.amountMinor),
+        rows: rowsForGroups.map((row) => ({
+          ...dealPivotDimensionResponse(row),
+          ...dealPivotValueResponse(row, aggregation),
         })),
+        ...(aggregation === 'sum' ? {} : { rollups }),
       },
     })
   }),

@@ -1,8 +1,12 @@
 import { Prisma } from '../generated/prisma/client.js'
 
-import { ACTIVITY_EVENT_COUNT_FIELD_REGISTRY, DEAL_FIELD_REGISTRY } from './fieldRegistry.js'
+import { ACTIVITY_EVENT_COUNT_FIELD_REGISTRY, DEAL_FIELD_REGISTRY, DEAL_PIVOT_MEASURES } from './fieldRegistry.js'
 
 export type DealPivotDimension = 'owner' | 'stage' | 'segment' | 'createdAt'
+export type DealPivotValue =
+  | { field: 'id'; aggregation: 'count' }
+  | { field: 'amountMinor'; aggregation: 'sum'; showAs?: PivotValueTransform }
+  | { field: 'amountMinor'; aggregation: 'average' | 'distinctCount' | 'median' | 'percentile' }
 
 export interface ReportChartConfig {
   type: 'bar' | 'line' | 'area' | 'pie' | 'funnel' | 'heatmap' | 'scatter' | 'kpi'
@@ -15,7 +19,7 @@ export interface DealPivotReportConfig {
   baseObject: 'deal'
   rows: Array<{ field: DealPivotDimension }>
   columns: Array<{ field: DealPivotDimension }>
-  values: [{ field: 'amountMinor'; aggregation: 'sum'; showAs?: PivotValueTransform }]
+  values: [DealPivotValue]
   timeZone: ReportTimeZone
   timeBucket?: { field: 'createdAt'; grain: 'day' }
   filters?: { ownerTeam: OwnerTeamScope }
@@ -289,17 +293,18 @@ function compileDealStageAmountReport(
   orgId: string,
   context: ReportExecutionContext,
 ): Prisma.Sql {
-  const measure = DEAL_FIELD_REGISTRY.measures.amountMinor
+  const measure = DEAL_PIVOT_MEASURES.find((candidate) =>
+    candidate.field === config.values[0]?.field && candidate.aggregation === config.values[0]?.aggregation,
+  )
 
   if (
     config.baseObject !== 'deal' ||
     config.rows.length + config.columns.length === 0 ||
     config.rows.length + config.columns.length > 2 ||
     config.values.length !== 1 ||
-    config.values[0]?.field !== measure.field ||
-    config.values[0]?.aggregation !== measure.aggregation
+    !measure
   ) {
-    throw new InvalidReportConfigError('Add up to two unique Owner, Stage, or Segment groups and one Amount value.')
+    throw new InvalidReportConfigError('Add up to two unique Owner, Stage, Segment, or Created date groups and one supported measure.')
   }
 
   const selectedDimensions = [...config.rows, ...config.columns]
@@ -323,8 +328,18 @@ function compileDealStageAmountReport(
   const ownerTeamPredicate = compileOwnerTeamPredicate(context.ownerTeamUserIds)
   const select = dimensions.map((dimension) => dimension.select).join(', ')
   const joins = dimensions.map((dimension) => dimension.join).join('\n')
-  const groupBy = dimensions.map((dimension) => dimension.groupBy).join(', ')
+  // Each registry dimension can contain more than one SQL expression (for
+  // example, an id and its display label). Treat those expressions as one
+  // grouping element: CUBE(exprA, exprB) would otherwise emit invalid partial
+  // rows where an id survives but its label is grouped away.
+  const dimensionGroupBy = dimensions
+    .map((dimension) => dimension.groupBy.startsWith('(') ? dimension.groupBy : `(${dimension.groupBy})`)
+    .join(', ')
   const orderBy = dimensions.map((dimension) => dimension.orderBy).join(', ')
+  const grouping = dimensions.map((dimension) => `GROUPING(${dimension.grouping})::int AS "${dimension.field}Grouped"`).join(', ')
+  const timeBucketGroupBy = usesCreatedDate
+    ? `CUBE (1${dimensionGroupBy ? `, ${dimensionGroupBy}` : ''})`
+    : `1, CUBE (${dimensionGroupBy})`
 
   if (config.timeBucket) {
     return Prisma.sql([
@@ -333,7 +348,7 @@ function compileDealStageAmountReport(
       // resolved IANA zone before truncating. A single AT TIME ZONE would treat
       // the stored UTC wall clock as local and mis-bucket DST-boundary records.
       `SELECT date_trunc('day', "deal"."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE `,
-      `)::date::text AS "createdDay"${select ? `, ${select}` : ''}, ${measure.select}
+      `)::date::text AS "createdDay"${select ? `, ${select}` : ''}${grouping ? `, ${grouping}` : ''}, ${measure.select}
 FROM "${DEAL_FIELD_REGISTRY.table}" AS "deal"
 ${joins}
 WHERE "deal"."orgId" = `,
@@ -341,13 +356,13 @@ WHERE "deal"."orgId" = `,
   AND "deal"."deletedAt" IS NULL
 `,
       `
-GROUP BY 1${groupBy ? `, ${groupBy}` : ''}
+GROUP BY ${timeBucketGroupBy}
 ORDER BY "createdDay" ASC${orderBy ? `, ${orderBy}` : ''}`,
     ], timeZone, orgId, ownerTeamPredicate)
   }
 
   return Prisma.sql([
-    `SELECT ${select}, ${measure.select}
+    `SELECT ${select}, ${grouping}, ${measure.select}
 FROM "${DEAL_FIELD_REGISTRY.table}" AS "deal"
 ${joins}
 WHERE "deal"."orgId" = `,
@@ -355,7 +370,7 @@ WHERE "deal"."orgId" = `,
   AND "deal"."deletedAt" IS NULL
 `,
     `
-GROUP BY ${groupBy}
+GROUP BY CUBE (${dimensionGroupBy})
 ORDER BY ${orderBy}`,
   ], orgId, ownerTeamPredicate)
 }

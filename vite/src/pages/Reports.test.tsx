@@ -360,28 +360,33 @@ describe('Reports', () => {
   })
 
   it('adds Segment to the pivot and renders its Unspecified group', async () => {
-    useRunReportMock.mockReturnValue({
-      data: {
-        report: {
-          rows: [
-            { segmentId: 'Enterprise', segmentName: 'Enterprise', amountMinor: '3500' },
-            { segmentId: 'unspecified', segmentName: 'Unspecified', amountMinor: '1500' },
-          ],
-        },
-      },
-      isPending: false,
-      isError: false,
-    })
+    useRunReportMock.mockReturnValue({ data: { report: { rows: [
+      { segmentId: 'Enterprise', segmentName: 'Enterprise', amountMinor: '3500' },
+      { segmentId: 'unspecified', segmentName: 'Unspecified', amountMinor: '1500' },
+    ] } }, isPending: false, isError: false })
     const user = userEvent.setup()
     renderWithProviders(<Reports />)
-
     await user.click(screen.getByRole('button', { name: 'New report' }))
     dragFieldToZone('Segment', 'rows')
     dragFieldToZone('Amount', 'values')
-
     expect(screen.getByRole('columnheader', { name: 'Segment' })).toBeInTheDocument()
     expect(screen.getByRole('rowheader', { name: 'Enterprise' })).toBeInTheDocument()
     expect(screen.getByRole('rowheader', { name: 'Unspecified' })).toBeInTheDocument()
+  })
+
+  it('adds an average as a one-click measure and uses the server grand total', async () => {
+    useRunReportMock.mockReturnValue({ data: { report: {
+      rows: [{ stageId: 'stage-a', stageName: 'Discovery', value: '2300' }],
+      rollups: [{ groupedFields: [], value: '3700' }],
+    } }, isPending: false, isError: false })
+    const user = userEvent.setup()
+    renderWithProviders(<Reports />)
+    await user.click(screen.getByRole('button', { name: 'New report' }))
+    await user.click(screen.getByRole('button', { name: 'Stage', exact: true }))
+    await user.click(screen.getByRole('button', { name: 'Average amount', exact: true }))
+    expect(screen.getByTestId('drop-zone-values')).toHaveTextContent('Average amount')
+    expect(screen.getByText('$23.00')).toBeInTheDocument()
+    expect(screen.getByText('$37.00')).toBeInTheDocument()
   })
 
   it('adds a percent summary row only under the selected pivot row', async () => {

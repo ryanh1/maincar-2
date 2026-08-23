@@ -7,6 +7,10 @@ export interface OwnerTeamScope {
 export type DealPivotDimension = 'owner' | 'stage' | 'segment' | 'createdAt'
 export type PivotValueTransform = 'none' | 'percentOfGrandTotal' | 'percentOfColumn' | 'percentOfRow' | 'percentOfParent' | 'runningTotal' | 'rankLargestToSmallest'
 export type PeriodComparison = 'previousPeriod' | 'samePeriodLastYear'
+export type DealPivotValue =
+  | { field: 'id'; aggregation: 'count' }
+  | { field: 'amountMinor'; aggregation: 'sum'; showAs?: PivotValueTransform }
+  | { field: 'amountMinor'; aggregation: 'average' | 'distinctCount' | 'median' | 'percentile' }
 
 export type ReportChartType = 'bar' | 'line' | 'area' | 'pie' | 'funnel' | 'heatmap' | 'scatter' | 'kpi'
 export type ReportChartColor = 'chart-1' | 'chart-2' | 'chart-3' | 'chart-4'
@@ -36,7 +40,7 @@ export interface ReportConfig {
   baseObject: 'deal'
   rows: Array<{ field: DealPivotDimension }>
   columns: Array<{ field: DealPivotDimension }>
-  values: Array<{ field: 'amountMinor'; aggregation: 'sum'; showAs?: PivotValueTransform }>
+  values: DealPivotValue[]
   timeZone: { mode: 'viewer' }
   timeBucket?: { field: 'createdAt'; grain: 'day' }
   filters?: { ownerTeam: OwnerTeamScope }
@@ -76,7 +80,18 @@ export interface RunReportResponse {
       stageId?: string
       stageName?: string
       createdDay?: string
-      amountMinor: string
+      amountMinor?: string
+      value?: string
+    }>
+    rollups?: Array<{
+      ownerId?: string
+      ownerName?: string
+      stageId?: string
+      stageName?: string
+      createdDay?: string
+      groupedFields: DealPivotDimension[]
+      amountMinor?: string
+      value?: string
     }>
   }
 }

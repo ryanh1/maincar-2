@@ -42,19 +42,18 @@ const SEGMENT_CONFIG = {
   ...CONFIG,
   rows: [{ field: 'segment' }],
 }
+const MORE_MEASURE_CONFIGS = [
+  { name: 'Deal count', value: { field: 'id', aggregation: 'count' }, discovery: '3', proposal: '1', total: '4' },
+  { name: 'Average amount', value: { field: 'amountMinor', aggregation: 'average' }, discovery: '1933.3333333333333333', proposal: '9000', total: '3700' },
+  { name: 'Distinct amounts', value: { field: 'amountMinor', aggregation: 'distinctCount' }, discovery: '2', proposal: '1', total: '3' },
+  { name: 'Median amount', value: { field: 'amountMinor', aggregation: 'median' }, discovery: '2300', proposal: '9000', total: '2300' },
+  { name: '90th percentile amount', value: { field: 'amountMinor', aggregation: 'percentile' }, discovery: '2300', proposal: '9000', total: '6990' },
+] as const
 
 const VIEWER_DAY_CONFIG = {
   ...CONFIG,
   timeZone: { mode: 'viewer' },
   timeBucket: { field: 'createdAt', grain: 'day' },
-}
-
-const OWNER_BY_STAGE_CONFIG = {
-  baseObject: 'deal',
-  rows: [{ field: 'owner' }],
-  columns: [{ field: 'stage' }],
-  values: [{ field: 'amountMinor', aggregation: 'sum' }],
-  timeZone: { mode: 'pinned', displayZone: 'UTC' },
 }
 
 const ACTIVITY_GRID_CONFIG = {
@@ -138,41 +137,23 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
     const otherOwner = await seedMember(prisma, org.orgId)
     const dealObject = await prisma.objectDef.findFirstOrThrow({ where: { orgId: org.orgId, slug: 'deal' } })
     const { pipeline, discovery, proposal } = await createPipelineAndStages(org.orgId)
-    await prisma.deal.createMany({
-      data: [
-        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Discovery A', amountMinor: 1200n, ownerUserId: org.adminUserId },
-        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Discovery B', amountMinor: 2300n, ownerUserId: org.adminUserId },
-        { orgId: org.orgId, pipelineId: pipeline.id, stageId: proposal.id, name: 'Proposal', amountMinor: 9000n, ownerUserId: org.adminUserId },
-        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Other owner', amountMinor: 5000n, ownerUserId: otherOwner.userId },
-      ],
-    })
+    await prisma.deal.createMany({ data: [
+      { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Discovery A', amountMinor: 1200n, ownerUserId: org.adminUserId },
+      { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Discovery B', amountMinor: 2300n, ownerUserId: org.adminUserId },
+      { orgId: org.orgId, pipelineId: pipeline.id, stageId: proposal.id, name: 'Proposal', amountMinor: 9000n, ownerUserId: org.adminUserId },
+      { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'Other owner', amountMinor: 5000n, ownerUserId: otherOwner.userId },
+    ] })
 
-    const report = await request(app)
-      .post(`/api/orgs/${org.orgId}/reports/run`)
-      .set('Authorization', authorization(org.adminFirebaseUid))
-      .send({ config: OWNER_BY_STAGE_CONFIG })
+    const report = await request(app).post(`/api/orgs/${org.orgId}/reports/run`).set('Authorization', authorization(org.adminFirebaseUid)).send({ config: { ...CONFIG, rows: [{ field: 'owner' }], columns: [{ field: 'stage' }] } })
     expect(report.status).toBe(200)
     const clicked = report.body.report.rows.find((row: { ownerId: string; stageId: string }) => row.ownerId === org.adminUserId && row.stageId === discovery.id)
     expect(clicked).toMatchObject({ amountMinor: '3500' })
 
-    const drilled = await request(app)
-      .post(`/api/orgs/${org.orgId}/objects/${dealObject.id}/list`)
-      .set('Authorization', authorization(org.adminFirebaseUid))
-      .send({
-        filter: {
-          type: 'group', op: 'and', children: [
-            { type: 'condition', field: 'ownerUserId', operator: 'eq', value: org.adminUserId },
-            { type: 'condition', field: 'stageId', operator: 'eq', value: discovery.id },
-          ],
-        },
-      })
+    const drilled = await request(app).post(`/api/orgs/${org.orgId}/objects/${dealObject.id}/list`).set('Authorization', authorization(org.adminFirebaseUid)).send({ filter: { type: 'group', op: 'and', children: [{ type: 'condition', field: 'ownerUserId', operator: 'eq', value: org.adminUserId }, { type: 'condition', field: 'stageId', operator: 'eq', value: discovery.id }] } })
     expect(drilled.status).toBe(200)
     expect(drilled.body.rows.reduce((sum: bigint, row: { amountMinor: string }) => sum + BigInt(row.amountMinor), 0n)).toBe(3500n)
 
-    const widened = await request(app)
-      .post(`/api/orgs/${org.orgId}/objects/${dealObject.id}/list`)
-      .set('Authorization', authorization(org.adminFirebaseUid))
-      .send({ filter: { type: 'condition', field: 'ownerUserId', operator: 'eq', value: org.adminUserId } })
+    const widened = await request(app).post(`/api/orgs/${org.orgId}/objects/${dealObject.id}/list`).set('Authorization', authorization(org.adminFirebaseUid)).send({ filter: { type: 'condition', field: 'ownerUserId', operator: 'eq', value: org.adminUserId } })
     expect(widened.status).toBe(200)
     expect(widened.body.rows.map((row: { name: string }) => row.name).sort()).toEqual(['Discovery A', 'Discovery B', 'Proposal'])
   })
@@ -202,6 +183,33 @@ describe('POST /api/orgs/:orgId/reports/run (integration)', () => {
     expect(response.body.report.rows).toEqual([
       { segmentId: 'Enterprise', segmentName: 'Enterprise', amountMinor: '1200' },
       { segmentId: 'unspecified', segmentName: 'Unspecified', amountMinor: '2300' },
+    ])
+  })
+
+  it.each(MORE_MEASURE_CONFIGS)('returns hand-checked $name values and the exact grand total', async ({ value, discovery: expectedDiscovery, proposal: expectedProposal, total }) => {
+    const org = await seedOrgWithAdmin(prisma)
+    const { pipeline, discovery, proposal } = await createPipelineAndStages(org.orgId)
+    await prisma.deal.createMany({
+      data: [
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'A', amountMinor: 1200n },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'B', amountMinor: 2300n },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: discovery.id, name: 'C', amountMinor: 2300n },
+        { orgId: org.orgId, pipelineId: pipeline.id, stageId: proposal.id, name: 'D', amountMinor: 9000n },
+      ],
+    })
+
+    const response = await request(app)
+      .post(`/api/orgs/${org.orgId}/reports/run`)
+      .set('Authorization', authorization(org.adminFirebaseUid))
+      .send({ config: { ...CONFIG, values: [value] } })
+
+    expect(response.status).toBe(200)
+    expect(response.body.report.rows).toEqual([
+      { stageId: discovery.id, stageName: 'Discovery', value: expectedDiscovery },
+      { stageId: proposal.id, stageName: 'Proposal', value: expectedProposal },
+    ])
+    expect(response.body.report.rollups).toEqual([
+      { groupedFields: [], value: total },
     ])
   })
 
