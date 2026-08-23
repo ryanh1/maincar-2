@@ -274,6 +274,40 @@ mc_record_delivery() {
   mv "$tmp" "$STATE/deliveries/$issue.tsv"
 }
 
+# A delivery gate proves one immutable pair: the ticket HEAD it ran and the
+# origin/main tip that HEAD was rebased onto. The receipt is intentionally kept
+# outside every checkout so mc-merge can validate it after taking its short
+# global lock without trusting an uncommitted or branch-local marker.
+mc_delivery_receipt_file() {
+  local head="$1"
+  printf '%s\n' "$STATE/delivery-gates/$head.tsv"
+}
+
+mc_record_delivery_gate() {
+  local head="$1" base="$2" branch="$3" file tmp
+  mkdir -p "$STATE/delivery-gates"
+  file="$(mc_delivery_receipt_file "$head")"
+  tmp="$(mktemp "$STATE/delivery-gates/.${head}.XXXXXX")"
+  printf '%s\t%s\t%s\t%s\n' "$head" "$base" "$branch" "$(mc_now)" > "$tmp"
+  mv "$tmp" "$file"
+}
+
+mc_require_delivery_receipt() {
+  local head="$1" base="$2" branch="$3" file receipt_head receipt_base receipt_branch receipt_at
+  file="$(mc_delivery_receipt_file "$head")"
+  if [ ! -r "$file" ]; then
+    echo "mc-merge: no successful delivery-gate receipt for this branch head." >&2
+    echo "  Run: git fetch origin && git rebase origin/main && ./.claude/scripts/coord/mc-gate --delivery" >&2
+    return 1
+  fi
+  IFS=$'\t' read -r receipt_head receipt_base receipt_branch receipt_at < "$file" || true
+  if [ "$receipt_head" != "$head" ] || [ "$receipt_base" != "$base" ] || [ "$receipt_branch" != "$branch" ]; then
+    echo "mc-merge: delivery-gate receipt is stale for the current branch or main." >&2
+    echo "  Run: git fetch origin && git rebase origin/main && ./.claude/scripts/coord/mc-gate --delivery" >&2
+    return 1
+  fi
+}
+
 # Log every coordination event so the coordinator can see history.
 mc_log() { printf '%s\t%s\t%s\t%s\n' "$(mc_now)" "$$" "$(basename "$(mc_worktree)")" "$*" >> "$COORD/log/events.tsv"; }
 

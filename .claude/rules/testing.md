@@ -17,6 +17,7 @@ paths:
   in `vite/src/test/utils`.
 - **Coordination gates.** During development, run exactly one named test through
   `./.claude/scripts/coord/mc-gate --focused -- npm --prefix <server|vite> exec vitest run path/to/file.test.ts`.
-  Before committing or delivering, run `./.claude/scripts/coord/mc-gate --delivery`.
-  The focused lane never substitutes for the full gate; it rejects broad commands
-  instead of guessing their intent.
+  After committing and rebasing onto current `origin/main`, run
+  `./.claude/scripts/coord/mc-gate --delivery`. It records the exact verified
+  branch-head/main pair required by `mc-merge`; the focused lane never
+  substitutes for the full gate or guesses broad-command intent.

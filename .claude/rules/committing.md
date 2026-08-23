@@ -29,9 +29,10 @@ per clone:
 npm run hooks:install
 ```
 
-Running the delivery gate by hand first is still the habit. The hook is the
-backstop, not the plan — it is the thing that catches you, not the thing that
-does the checking for you.
+The hook is the immediate commit backstop. After committing, sync and rebase
+onto current `origin/main`, then run the delivery gate to create the receipt
+that authorizes `mc-merge`. A green pre-commit hook alone cannot authorize
+delivery because it ran before the final commit and rebase.
 
 ## Another session's red is not your red
 

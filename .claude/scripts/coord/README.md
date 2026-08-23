@@ -57,18 +57,21 @@ eval "$(./.claude/scripts/coord/mc-slot --env)"
 # Runs one named test with one Vitest and one Playwright worker available.
 ```
 
-Before committing or delivering, run the full delivery class:
+After committing and rebasing onto a freshly synced `main`, run the full delivery class:
 ```bash
+./.claude/scripts/coord/mc-local-main sync
+git fetch origin && git rebase origin/main
 ./.claude/scripts/coord/mc-gate --delivery
-# Runs the complete verify suite. At most two delivery gates run at once.
+# Runs the complete verify suite and records the exact head/main pair.
+# At most two delivery gates run at once.
 ```
 
 ### 4. Merge safely
 
 ```bash
-./.claude/scripts/coord/mc-merge --gate -m "MAI-123: Your commit message"
-# Takes the merge lock
-# Checks main hasn't moved since you last rebased
+./.claude/scripts/coord/mc-merge -m "MAI-123: Your commit message"
+# Takes a short merge lock
+# Rechecks that main has not moved since the receipt's delivery gate
 # Merges and pushes, refreshes the mirror, then refreshes the runnable checkout when safe
 ```
 
@@ -95,7 +98,7 @@ Before committing or delivering, run the full delivery class:
 | `mc-local-main` | Creates/refreshes the local bare `main` mirror; `refresh` also safely updates the runnable primary checkout and changed dependencies | Before creating ticket clones; use `refresh` after a dependency-changing delivery |
 | `mc-slot` | Assigns stable ports for your worktree | `eval "$(mc-slot --env)"` at the start |
 | `mc-gate` | Runs explicit focused or full delivery lanes under a bounded worker scheduler | During development and before every merge |
-| `mc-merge` | Merges your branch safely, with a lock | When work is done and tests pass |
+| `mc-merge` | Rechecks a delivery receipt and merges safely, with a short lock | After `mc-gate --delivery` passes |
 | `mc-closeout` | Proves GitHub delivery and clone cleanup | Immediately before Linear Done |
 | `mc-migrate` | Creates non-colliding database migrations | When you need a new migration |
 | `mc-doctor` | Shows system health | When something feels stuck |
@@ -121,16 +124,20 @@ git checkout -b mai-123-feature
 git add file.ts
 git commit -m "MAI-123: Feature description"
 
-# Run one named test while implementing, then the full delivery gate.
+# Run one named test while implementing.
 ./.claude/scripts/coord/mc-gate --focused -- npm --prefix vite exec vitest run src/pages/Records.test.tsx
+# Commit before the delivery gate: a receipt cannot prove an uncommitted tree.
+git commit -m "MAI-123: Feature description"
+./.claude/scripts/coord/mc-local-main sync
+git fetch origin && git rebase origin/main
 ./.claude/scripts/coord/mc-gate --delivery
 # [mc-gate] running (class delivery, slot slot-..., limit 2, vitest=4, playwright=2, global budget=12)
-# ... full verify runs ...
+# ... full verify runs and records the exact head/main pair ...
 
 # If tests pass, merge
-./.claude/scripts/coord/mc-merge --gate -m "MAI-123: Feature description"
-# [mc-merge] waiting for the merge lock...
-# [mc-merge] lock held. Merging mai-123-feature.
+./.claude/scripts/coord/mc-merge -m "MAI-123: Feature description"
+# [mc-merge] delivery receipt is current; waiting for the short merge lock...
+# [mc-merge] lock held. Rechecking the delivery receipt before merging mai-123-feature.
 # [mc-merge] merged and pushed. mai-123-feature is on main.
 ```
 
@@ -140,13 +147,13 @@ git commit -m "MAI-123: Feature description"
 Session A (MAI-123):
   mc-slot → slot 0 (API 3010, VITE 5183)
   mc-gate --delivery → delivery slot 1 (6 framework workers)
-  mc-gate → done
+  mc-gate → receipt recorded
   mc-merge → gets lock, merges, releases lock
 
 Session B (MAI-124):
   mc-slot → slot 1 (API 3020, VITE 5184)
   mc-gate --delivery → delivery slot 2 (6 framework workers)
-  mc-gate → done
+  mc-gate → receipt recorded
   mc-merge → waits for lock (Session A holds it)
            → gets lock after Session A releases it
            → merges
@@ -201,6 +208,11 @@ MC_STATE_HOME=~/my-coord-state mc-slot
 **"mc-merge: merge lock busy for 30 min"**
 → Another session is stuck. Run `mc-doctor` to see who holds it.
 
+**"mc-merge: delivery-gate receipt is stale"**
+→ `main` advanced after your suite started. Run `mc-local-main sync`, fetch and
+rebase `origin/main`, then run `mc-gate --delivery` again. The full suite stays
+outside the merge lock.
+
 **"mc-gate FAILED rc=X"**
 → Re-run the same named test through `--focused` to debug. Do not reclassify a
 broad suite as focused; delivery gates stay full by design.
@@ -215,11 +227,12 @@ broad suite as focused; delivery gates stay full by design.
 
 The coordination scripts are not optional for a feature branch's closeout:
 
-1. Run a named focused test during implementation, then
-   `./.claude/scripts/coord/mc-gate --delivery` before committing.
-2. Commit the feature with its tests.
-3. Run `./.claude/scripts/coord/mc-merge --gate -m "MAI-123: ..."`; it is the
-   only supported merge-and-push route to `main`.
+1. Run a named focused test during implementation, then commit the feature with
+   its tests.
+2. Run `mc-local-main sync`, fetch and rebase `origin/main`, then run
+   `./.claude/scripts/coord/mc-gate --delivery` to create the required receipt.
+3. Run `./.claude/scripts/coord/mc-merge -m "MAI-123: ..."`; it is the only
+   supported merge-and-push route to `main` and never tests under its lock.
 4. Confirm `main` and `origin/main` are at ahead/behind `0/0`.
 5. Delete the merged feature branch (including an existing remote branch), then
    remove the clean, exact feature worktree and confirm `git worktree list` is

@@ -172,6 +172,25 @@ mc_log "gate acquire $(basename "$SLOT_DIR") class=$CLASS workers=$GATE_WORKERS"
 
 cd "$(mc_worktree)"
 
+TESTED_HEAD=""
+TESTED_BASE=""
+TESTED_BRANCH=""
+if [ "$CLASS" = "delivery" ]; then
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "[mc-gate] delivery gates require a clean committed branch so their receipt identifies an exact tree." >&2
+    echo "  Commit your feature, then run: git fetch origin && git rebase origin/main && mc-gate --delivery" >&2
+    exit 2
+  fi
+  TESTED_HEAD="$(git rev-parse HEAD)"
+  TESTED_BASE="$(git rev-parse origin/main)"
+  TESTED_BRANCH="$(mc_branch)"
+  if [ "$(git merge-base HEAD origin/main)" != "$TESTED_BASE" ]; then
+    echo "[mc-gate] delivery gates require HEAD to be rebased onto the current origin/main." >&2
+    echo "  Run: git fetch origin && git rebase origin/main, then retry." >&2
+    exit 2
+  fi
+fi
+
 # Ensure Prisma client is in sync. Generation is mandatory and a failure stops
 # the gate immediately instead of becoming a misleading typecheck failure later.
 if ! mc_ensure_prisma_client; then
@@ -192,4 +211,12 @@ rc=$?
 set -e
 mc_log "gate release rc=$rc"
 [ "$rc" -ne 0 ] && echo "[mc-gate] FAILED rc=$rc — before you debug: does the failing file fail on its own? Under load it probably will not."
+if [ "$rc" -eq 0 ] && [ "$CLASS" = "delivery" ]; then
+  if [ -n "$(git status --porcelain)" ] || [ "$(git rev-parse HEAD)" != "$TESTED_HEAD" ]; then
+    echo "[mc-gate] delivery tree changed while verification ran; no receipt was recorded." >&2
+    exit 1
+  fi
+  mc_record_delivery_gate "$TESTED_HEAD" "$TESTED_BASE" "$TESTED_BRANCH"
+  echo "[mc-gate] delivery receipt recorded for $(git rev-parse --short "$TESTED_HEAD") on $(git rev-parse --short "$TESTED_BASE")"
+fi
 exit $rc
