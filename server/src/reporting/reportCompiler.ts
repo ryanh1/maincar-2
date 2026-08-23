@@ -328,12 +328,18 @@ function compileDealStageAmountReport(
   const ownerTeamPredicate = compileOwnerTeamPredicate(context.ownerTeamUserIds)
   const select = dimensions.map((dimension) => dimension.select).join(', ')
   const joins = dimensions.map((dimension) => dimension.join).join('\n')
-  const groupBy = dimensions.map((dimension) => dimension.groupBy).join(', ')
+  // Each registry dimension can contain more than one SQL expression (for
+  // example, an id and its display label). Treat those expressions as one
+  // grouping element: CUBE(exprA, exprB) would otherwise emit invalid partial
+  // rows where an id survives but its label is grouped away.
+  const dimensionGroupBy = dimensions
+    .map((dimension) => dimension.groupBy.startsWith('(') ? dimension.groupBy : `(${dimension.groupBy})`)
+    .join(', ')
   const orderBy = dimensions.map((dimension) => dimension.orderBy).join(', ')
   const grouping = dimensions.map((dimension) => `GROUPING(${dimension.grouping})::int AS "${dimension.field}Grouped"`).join(', ')
   const timeBucketGroupBy = usesCreatedDate
-    ? `CUBE (1${groupBy ? `, ${groupBy}` : ''})`
-    : `1, CUBE (${groupBy})`
+    ? `CUBE (1${dimensionGroupBy ? `, ${dimensionGroupBy}` : ''})`
+    : `1, CUBE (${dimensionGroupBy})`
 
   if (config.timeBucket) {
     return Prisma.sql([
@@ -364,7 +370,7 @@ WHERE "deal"."orgId" = `,
   AND "deal"."deletedAt" IS NULL
 `,
     `
-GROUP BY CUBE (${groupBy})
+GROUP BY CUBE (${dimensionGroupBy})
 ORDER BY ${orderBy}`,
   ], orgId, ownerTeamPredicate)
 }

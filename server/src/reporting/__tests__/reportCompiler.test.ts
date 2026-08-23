@@ -85,7 +85,7 @@ describe('compileReport', () => {
 
     expect(query.sql).toContain('"deal"."customJson" ->> \'segment\'')
     expect(query.sql).toContain("'Unspecified') AS \"segmentName\"")
-    expect(query.sql).toContain('GROUP BY')
+    expect(query.sql).toContain('GROUP BY CUBE ((COALESCE(NULLIF("deal"."customJson" ->> \'segment\', \'\'), \'unspecified\'), COALESCE(NULLIF("deal"."customJson" ->> \'segment\', \'\'), \'Unspecified\')))')
     expect(query.values).toEqual(['org-a'])
   })
 
