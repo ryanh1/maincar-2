@@ -39,7 +39,7 @@ import { GridRowFreezeMenu } from './GridRowFreezeMenu'
 import { CellExpandOverlay } from './CellExpandOverlay'
 import { formatCellValue } from './recordCellValue'
 import { ColumnGroupHeaders } from './ColumnGroupHeaders'
-import { createViewConfig, defaultKanbanGroupBy, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
+import { createKanbanConfig, createViewConfig, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
 import { parseGridCommand } from './gridCommands'
 import { coerceCurrency, coerceNumber } from './cellCoercion'
 import { KanbanBoard } from './KanbanBoard'
@@ -301,6 +301,9 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const groupAttribute = config.groupBy[0] ? columns.find((attribute) => attribute.id === config.groupBy[0]?.attributeId) : undefined
+  const kanbanGroupAttribute = config.kanban
+    ? columns.find((attribute) => attribute.id === config.kanban?.groupAttributeId)
+    : undefined
   const displayRows = useMemo<DisplayRow[]>(() => {
     if (!groupAttribute) return visibleRows.map((record) => ({ kind: 'record', record }))
 
@@ -480,9 +483,9 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
     [edits, visibleRows],
   )
   const moveKanbanRecord = useCallback((record: RecordRow, value: string | null) => {
-    if (!groupAttribute || groupAttribute.isReadOnly) return
-    commitValue(record, groupAttribute, value)
-  }, [commitValue, groupAttribute])
+    if (!kanbanGroupAttribute || kanbanGroupAttribute.isReadOnly) return
+    commitValue(record, kanbanGroupAttribute, value)
+  }, [commitValue, kanbanGroupAttribute])
 
   // Glide renders the fill handle but delegates the values to us. This keeps
   // fills on the same typed coercion and optimistic persistence path as edits,
@@ -1149,8 +1152,9 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   const peekBaseRecord = peekIndex !== null ? recordAtRow(peekIndex) : null
   const peekRecord = peekBaseRecord ? { ...peekBaseRecord, ...edits.get(peekBaseRecord.id) } : null
   const setLayout = (nextLayout: 'grid' | 'kanban') => {
-    if (nextLayout === 'kanban' && !columns.some((attribute) => attribute.id === config.groupBy[0]?.attributeId && (attribute.type === 'select' || attribute.type === 'status'))) {
-      onViewConfigChange?.((current) => ({ ...current, groupBy: defaultKanbanGroupBy(columns) }))
+    if (nextLayout === 'kanban' && !columns.some((attribute) => attribute.id === config.kanban?.groupAttributeId && (attribute.type === 'select' || attribute.type === 'status'))) {
+      const kanban = createKanbanConfig(columns)
+      onViewConfigChange?.((current) => kanban ? { ...current, kanban } : current)
     }
     onLayoutChange?.(nextLayout)
   }
@@ -1174,7 +1178,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
           attributes={columns}
           config={config}
           rows={kanbanRows}
-          onRecordMove={groupAttribute?.isReadOnly ? undefined : moveKanbanRecord}
+          onRecordMove={kanbanGroupAttribute?.isReadOnly ? undefined : moveKanbanRecord}
         />
       </div>
     )

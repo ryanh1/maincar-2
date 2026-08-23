@@ -5,6 +5,8 @@ export const VIEW_CONFIG_VERSION = 1
 export type ViewAttribute = {
   id: string
   sortOrder: number
+  type?: string
+  optionsJson?: unknown
   isArchived?: boolean
   deletedAt?: Date | null
   storage?: string
@@ -17,6 +19,12 @@ export type ViewFilter =
   | { type: 'condition'; attributeId: string; operator: FilterOperator; value?: unknown }
   | { type: 'group'; op: 'and' | 'or'; children: ViewFilter[] }
 export type TeamScope = { teamIds?: string[]; leadUserIds?: string[] }
+export type KanbanConfig = {
+  groupAttributeId: string
+  visibleOptionValues: string[]
+  cardAttributeIds: string[]
+  hiddenTerminalOptionValues?: string[]
+}
 
 type FilterOperator =
   | 'eq' | 'neq' | 'contains' | 'not_contains' | 'starts_with' | 'ends_with'
@@ -36,8 +44,7 @@ export type SavedViewConfig = {
   zoom: number
   columnWidths: Record<string, number>
   columnStyles: Array<{ attributeId: string; headerColor?: string; auto?: { kind: 'relation-source'; objectId: string } }>
-  kanbanCardFieldIds?: string[]
-  kanbanSummaryAttributeId?: string
+  kanban?: KanbanConfig
 }
 
 export type UrlViewOverlay = Partial<Pick<SavedViewConfig, 'columns' | 'sorts' | 'teamScope' | 'groupBy' | 'rowHeight' | 'gridLines' | 'frozenRows' | 'frozenCols' | 'zoom'>> & {
@@ -79,6 +86,14 @@ const configShape = z.object({
     headerColor: z.string().trim().min(1).max(64).optional(),
     auto: z.object({ kind: z.literal('relation-source'), objectId: z.string().min(1) }).optional(),
   })).optional(),
+  kanban: z.object({
+    groupAttributeId: z.string().min(1),
+    visibleOptionValues: z.array(z.string().min(1)).max(200),
+    cardAttributeIds: z.array(z.string().min(1)).max(50),
+    hiddenTerminalOptionValues: z.array(z.string().min(1)).max(200).optional(),
+  }).optional(),
+  // Read legacy MAI-336 fields once so persisted boards migrate without
+  // retaining the prohibited summary setting.
   kanbanCardFieldIds: z.array(z.string().min(1)).max(50).optional(),
   kanbanSummaryAttributeId: z.string().min(1).optional(),
 })
@@ -126,6 +141,41 @@ function repairTeamScope(scope: TeamScope | undefined): TeamScope | undefined {
     : undefined
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)]
+}
+
+function activeOptionValues(attribute: ViewAttribute): string[] {
+  if (!Array.isArray(attribute.optionsJson)) return []
+  return attribute.optionsJson.flatMap((option) => {
+    if (!option || typeof option !== 'object') return []
+    const candidate = option as { value?: unknown; isArchived?: unknown }
+    return typeof candidate.value === 'string' && !candidate.isArchived ? [candidate.value] : []
+  })
+}
+
+function repairKanban(
+  source: { groupAttributeId: string; visibleOptionValues: string[]; cardAttributeIds: string[]; hiddenTerminalOptionValues?: string[] } | undefined,
+  active: ViewAttribute[],
+  knownIds: Set<string>,
+): KanbanConfig | undefined {
+  if (!source) return undefined
+  const groupAttribute = active.find((attribute) => attribute.id === source.groupAttributeId)
+  if (!groupAttribute || (groupAttribute.type !== 'select' && groupAttribute.type !== 'status')) return undefined
+  const validOptionValues = new Set(activeOptionValues(groupAttribute))
+  if (validOptionValues.size === 0) return undefined
+  const visibleOptionValues = uniqueStrings(source.visibleOptionValues).filter((value) => validOptionValues.has(value))
+  const cardAttributeIds = uniqueStrings(source.cardAttributeIds).filter((id) => knownIds.has(id))
+  const hiddenTerminalOptionValues = uniqueStrings(source.hiddenTerminalOptionValues ?? [])
+    .filter((value) => validOptionValues.has(value) && visibleOptionValues.includes(value))
+  return {
+    groupAttributeId: groupAttribute.id,
+    visibleOptionValues,
+    cardAttributeIds,
+    ...(hiddenTerminalOptionValues.length ? { hiddenTerminalOptionValues } : {}),
+  }
+}
+
 /**
  * Migrates any prior config into the current schema and repairs references after
  * fields change. Unknown/stale state is discarded; newly visible attributes are
@@ -148,10 +198,18 @@ export function repairSavedViewConfig(raw: unknown, attributes: ViewAttribute[])
     })),
   ]
   const teamScope = repairTeamScope(source.teamScope)
-  const kanbanCardFieldIds = [...new Set(source.kanbanCardFieldIds ?? [])].filter((id) => knownIds.has(id))
-  const kanbanSummaryAttributeId = source.kanbanSummaryAttributeId && knownIds.has(source.kanbanSummaryAttributeId)
-    ? source.kanbanSummaryAttributeId
-    : undefined
+  const legacyGroupAttributeId = source.groupBy?.[0]?.attributeId
+  const kanban = repairKanban(
+    source.kanban ?? (legacyGroupAttributeId
+      ? {
+          groupAttributeId: legacyGroupAttributeId,
+          visibleOptionValues: activeOptionValues(active.find((attribute) => attribute.id === legacyGroupAttributeId) ?? { id: '', sortOrder: 0 }),
+          cardAttributeIds: source.kanbanCardFieldIds ?? [],
+        }
+      : undefined),
+    active,
+    knownIds,
+  )
 
   return {
     version: VIEW_CONFIG_VERSION,
@@ -167,8 +225,7 @@ export function repairSavedViewConfig(raw: unknown, attributes: ViewAttribute[])
     zoom: source.zoom ?? 100,
     columnWidths: Object.fromEntries(Object.entries(source.columnWidths ?? {}).filter(([id]) => knownIds.has(id))),
     columnStyles: uniqueByAttribute((source.columnStyles ?? []).filter((style) => knownIds.has(style.attributeId))),
-    ...(kanbanCardFieldIds.length ? { kanbanCardFieldIds } : {}),
-    ...(kanbanSummaryAttributeId ? { kanbanSummaryAttributeId } : {}),
+    ...(kanban ? { kanban } : {}),
   }
 }
 

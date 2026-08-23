@@ -6,7 +6,6 @@ import { useState, type CSSProperties } from 'react'
 import type { AttributeDef, RecordRow } from '@/lib/crmTypes'
 
 import { KanbanCard } from './KanbanCard'
-import { formatCellValue } from './recordCellValue'
 import type { ViewConfig } from './viewConfig'
 
 type KanbanColumn = { key: string; label: string; color?: string; rows: RecordRow[] }
@@ -39,26 +38,24 @@ function selectOptions(attribute: AttributeDef): Array<{ value: string; label: s
 }
 
 /** Builds Kanban columns from the field's configured option ordering, including blank values. */
-function buildKanbanColumns(groupAttribute: AttributeDef, rows: RecordRow[]): KanbanColumn[] {
+function buildKanbanColumns(groupAttribute: AttributeDef, rows: RecordRow[], visibleOptionValues: string[], hiddenOptionValues: string[]): KanbanColumn[] {
   const options = selectOptions(groupAttribute)
-  const columns = options.map((option) => ({ key: option.value, label: option.label, color: option.color, rows: [] as RecordRow[] }))
+  const visible = new Set(visibleOptionValues)
+  const hidden = new Set(hiddenOptionValues)
+  const columns = options
+    .filter((option) => visible.has(option.value) && !hidden.has(option.value))
+    .map((option) => ({ key: option.value, label: option.label, color: option.color, rows: [] as RecordRow[] }))
   const columnsByValue = new Map(columns.map((column) => [column.key, column]))
+  const validOptionValues = new Set(options.map((option) => option.value))
   const noValue: KanbanColumn = { key: '__no-value__', label: 'No value', rows: [] }
 
   for (const row of rows) {
     const value = row[groupAttribute.slug]
     const column = typeof value === 'string' ? columnsByValue.get(value) : undefined
     if (column) column.rows.push(row)
-    else noValue.rows.push(row)
+    else if (typeof value !== 'string' || !validOptionValues.has(value)) noValue.rows.push(row)
   }
   return [...columns, noValue]
-}
-
-function totalLabel(rows: RecordRow[], attribute: AttributeDef | undefined): string | null {
-  if (!attribute) return null
-  const values = rows.map((row) => row[attribute.slug]).map((value) => typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN).filter((value) => Number.isFinite(value))
-  if (values.length === 0) return null
-  return `Total ${formatCellValue(values.reduce((sum, value) => sum + value, 0), attribute.type, null)}`
 }
 
 function dragData(value: unknown): KanbanDragData | null {
@@ -75,16 +72,15 @@ function SortableKanbanCard({ record, columnKey, titleAttribute, fields }: { rec
   return <div ref={setNodeRef} style={style} {...attributes} {...listeners}><KanbanCard record={record} titleAttribute={titleAttribute} fields={fields} /></div>
 }
 
-function KanbanColumnView({ column, titleAttribute, fields, orderedRows, summary }: { column: KanbanColumn; titleAttribute: AttributeDef; fields: AttributeDef[]; orderedRows: RecordRow[]; summary: string | null }) {
+function KanbanColumnView({ column, titleAttribute, fields, orderedRows }: { column: KanbanColumn; titleAttribute: AttributeDef; fields: AttributeDef[]; orderedRows: RecordRow[] }) {
   const { setNodeRef } = useDroppable({ id: columnDndId(column.key), data: { type: 'column', columnKey: column.key } satisfies KanbanDragData })
   return (
     <section className="flex w-72 shrink-0 flex-col rounded-md border border-border bg-surface-2">
       <header className="border-b border-border px-3 py-2">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-text">
           {column.color?.startsWith('option-') && <span aria-hidden="true" className="size-2 rounded-full" style={{ backgroundColor: `var(--${column.color})` }} />}
-          {column.label} <span className="tabular-nums text-text-muted">{column.rows.length}</span>
+          {column.label} <span className="tabular-nums text-text-muted">{column.rows.length} records</span>
         </h2>
-        {summary && <p className="mt-1 text-xs tabular-nums text-text-muted">{summary}</p>}
       </header>
       <SortableContext items={orderedRows.map((row) => cardDndId(row.id))} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} aria-label={`${column.label} cards`} className="flex min-h-20 flex-1 flex-col gap-2 overflow-y-auto p-2">
@@ -97,17 +93,16 @@ function KanbanColumnView({ column, titleAttribute, fields, orderedRows, summary
 
 /** A saved-view Kanban board. Cards can be reordered, while column drops update the grouping field. */
 export function KanbanBoard({ attributes, config, rows, onRecordMove }: KanbanBoardProps) {
-  const groupAttribute = attributes.find((attribute) => attribute.id === config.groupBy[0]?.attributeId && (attribute.type === 'select' || attribute.type === 'status'))
+  const groupAttribute = attributes.find((attribute) => attribute.id === config.kanban?.groupAttributeId && (attribute.type === 'select' || attribute.type === 'status'))
   const titleAttribute = attributes.find((attribute) => attribute.isIdentity) ?? attributes[0]
-  const configuredFieldIds = config.kanbanCardFieldIds
+  const configuredFieldIds = config.kanban?.cardAttributeIds
   const cardFields = (configuredFieldIds ? attributes.filter((attribute) => configuredFieldIds.includes(attribute.id)) : attributes.filter((attribute) => attribute.id !== titleAttribute?.id && attribute.id !== groupAttribute?.id && config.columns.find((column) => column.attributeId === attribute.id)?.visible !== false).slice(0, 3)).filter((attribute) => attribute.id !== titleAttribute?.id)
-  const summaryAttribute = attributes.find((attribute) => attribute.id === config.kanbanSummaryAttributeId && (attribute.type === 'number' || attribute.type === 'currency'))
   const [manualOrder, setManualOrder] = useState<Record<string, string[]>>({})
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
 
   if (!groupAttribute || !titleAttribute) return <div className="flex h-full items-center justify-center text-sm text-text-muted">Choose a select or status field to group this board.</div>
 
-  const columns = buildKanbanColumns(groupAttribute, rows)
+  const columns = buildKanbanColumns(groupAttribute, rows, config.kanban?.visibleOptionValues ?? [], config.kanban?.hiddenTerminalOptionValues ?? [])
   const rowsForColumn = (column: KanbanColumn, ordering = manualOrder): RecordRow[] => {
     const positions = new Map((ordering[column.key] ?? []).map((recordId, index) => [recordId, index]))
     return column.rows.slice().sort((left, right) => (positions.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (positions.get(right.id) ?? Number.MAX_SAFE_INTEGER))
@@ -147,7 +142,7 @@ export function KanbanBoard({ attributes, config, rows, onRecordMove }: KanbanBo
       }
     }}>
       <div className="min-h-0 flex-1 overflow-x-auto bg-surface p-3"><div className="flex min-h-full min-w-max gap-3">
-        {columns.map((column) => <KanbanColumnView key={column.key} column={column} titleAttribute={titleAttribute} fields={cardFields} orderedRows={rowsForColumn(column)} summary={totalLabel(column.rows, summaryAttribute)} />)}
+        {columns.map((column) => <KanbanColumnView key={column.key} column={column} titleAttribute={titleAttribute} fields={cardFields} orderedRows={rowsForColumn(column)} />)}
       </div></div>
     </DndContext>
   )
