@@ -106,6 +106,24 @@ describe('FieldValueEditor', () => {
     expect(onCommit).toHaveBeenCalledWith('2026-08-25')
   })
 
+  it('parses an @date command into the real calendar date value', () => {
+    render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Renewal date', type: 'date' })} value={null} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+
+    const input = screen.getByRole('textbox', { name: 'Set Renewal date with @date' })
+    fireEvent.change(input, { target: { value: '@date tomorrow' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(onCommit).toHaveBeenCalledWith(expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/))
+  })
+
+  it('opens the status field’s own valid-options dropdown when @ is pressed', () => {
+    render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Stage', type: 'status', optionsJson: [{ value: 'open', label: 'Open' }] })} value={null} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Stage' }), { key: '@' })
+
+    expect(screen.getByRole('option', { name: 'Open' })).toBeInTheDocument()
+  })
+
   it('uses the date picker to commit a timestamp in the viewer time zone', () => {
     render(<FieldValueEditor orgId="org-1" attribute={attribute({ name: 'Scheduled at', type: 'timestamp' })} value={null} timeZone="America/New_York" onCommit={onCommit} onCancel={vi.fn()} />)
 

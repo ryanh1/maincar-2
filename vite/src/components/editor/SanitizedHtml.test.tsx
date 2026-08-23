@@ -6,6 +6,7 @@ import {
   SANITIZED_ALLOWED_SCHEMES,
   SANITIZED_ALLOWED_TAGS,
   SANITIZED_ANCHOR_ATTR,
+  SANITIZED_MENTION_ATTR,
   sanitizeStoredHtml,
 } from './sanitizeStoredHtml'
 
@@ -98,18 +99,20 @@ describe('sanitizeStoredHtml — the allow-list', () => {
       'em',
       'u',
       'a',
+      'span',
       'ul',
       'ol',
       'li',
     ])
     expect([...SANITIZED_ANCHOR_ATTR]).toEqual(['href', 'target', 'rel'])
+    expect([...SANITIZED_MENTION_ATTR]).toEqual(['data-type', 'data-id', 'data-label', 'data-mention-kind'])
     expect([...SANITIZED_ALLOWED_SCHEMES]).toEqual(['http', 'https', 'mailto'])
   })
 
   it('keeps every allowed tag', () => {
     const stored =
       '<p><strong>Bold</strong> <em>italic</em> <u>underline</u><br>and a ' +
-      '<a href="https://acme.com">link</a></p><ul><li>one</li></ul><ol><li>two</li></ol>'
+      '<a href="https://acme.com">link</a> <span data-type="mention" data-id="user-1" data-label="Ada" data-mention-kind="teammate">@Ada</span></p><ul><li>one</li></ul><ol><li>two</li></ol>'
 
     const out = renderStored(stored)
 
@@ -121,7 +124,7 @@ describe('sanitizeStoredHtml — the allow-list', () => {
     const out = renderStored('<div>Hello <span>there</span></div>')
 
     expect(out).toHaveTextContent('Hello there')
-    expect(tagsIn(out)).toEqual([])
+    expect(tagsIn(out)).toEqual(['span'])
   })
 
   it('is idempotent, because a draft round-trips on every autosave', () => {
@@ -216,6 +219,15 @@ describe('sanitizeStoredHtml — links', () => {
 
     expect(attrsIn(out)).toEqual([])
     expect(out).toHaveTextContent('Hi')
+  })
+
+  it('preserves only a complete, valid structured mention chip', () => {
+    const valid = sanitizeStoredHtml(
+      '<span data-type="mention" data-id="user-1" data-label="Ada" data-mention-kind="teammate">@Ada</span>',
+    )
+    expect(valid).toContain('data-type="mention"')
+    expect(valid).toContain('data-id="user-1"')
+    expect(sanitizeStoredHtml('<span data-id="user-1" data-mention-kind="teammate">@Ada</span>')).toBe('<span>@Ada</span>')
   })
 })
 

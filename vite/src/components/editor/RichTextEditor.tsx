@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { getMarkRange } from '@tiptap/core'
+import { getMarkRange, type JSONContent } from '@tiptap/core'
 import { EditorContent, useEditor } from '@tiptap/react'
 
 import { cn } from '@/lib/utils'
 import { buildEditorExtensions } from './editorExtensions'
 import { RichTextEditorToolbar } from './RichTextEditor_Toolbar'
+import type { MentionSuggestion } from './mentionResolver'
 import './richTextEditor.css'
 
 /**
@@ -45,6 +46,8 @@ export interface RichTextEditorActions {
   insertHtmlAtEnd: (html: string) => void
   /** Gives the message body focus with its caret at the beginning. */
   focusAtStart: () => void
+  /** Returns the editor's structured document for a server endpoint that owns TipTap JSON. */
+  getJSON: () => JSONContent
 }
 
 export interface RichTextEditorProps {
@@ -76,7 +79,24 @@ export interface RichTextEditorProps {
   onRequestLink?: (request: LinkRequest) => void
   /** Receives a small action surface after the editor mounts, then null on unmount. */
   onReady?: (actions: RichTextEditorActions | null) => void
+  /** Org-scoped, rename-safe @ targets. Omit it to keep this surface free of mentions. */
+  mentionItems?: MentionSuggestion[]
   className?: string
+}
+
+/** A tiny mutable bridge from React query results into a one-time TipTap extension. */
+class LiveMentionCatalog {
+  private items: MentionSuggestion[]
+
+  constructor(items: MentionSuggestion[]) {
+    this.items = items
+  }
+
+  read = (): MentionSuggestion[] => this.items
+
+  replace(items: MentionSuggestion[]): void {
+    this.items = items
+  }
 }
 
 /**
@@ -125,6 +145,7 @@ export function RichTextEditor({
   label,
   onRequestLink,
   onReady,
+  mentionItems = [],
   className,
 }: RichTextEditorProps) {
   // Rule 2. A `useState` initializer runs on the first render and never again,
@@ -139,9 +160,13 @@ export function RichTextEditor({
   // is safe here because nothing calls through this ref until the rep does
   // something, which is always after the commit that repointed it.
   const live = useRef({ onChange, onRequestLink })
+  // The extension is made once, so its picker reads this stable catalog rather
+  // than rebuilding the editor whenever query data arrives.
+  const [mentionCatalog] = useState(() => new LiveMentionCatalog(mentionItems))
   useEffect(() => {
     live.current = { onChange, onRequestLink }
-  })
+    mentionCatalog.replace(mentionItems)
+  }, [mentionCatalog, mentionItems, onChange, onRequestLink])
 
   // Rule 5. Once per mount, in dev only. The symptom of getting this wrong is a
   // caret that jumps every second or so, which does not look like a props
@@ -161,7 +186,7 @@ export function RichTextEditor({
 
   // Rule 3. Built once. A new array here is a new editor, and a new editor is a
   // lost caret.
-  const [extensions] = useState(() => buildEditorExtensions({ placeholder }))
+  const [extensions] = useState(() => buildEditorExtensions({ placeholder, getMentionItems: mentionCatalog.read }))
 
   const editor = useEditor(
     {
@@ -209,6 +234,7 @@ export function RichTextEditor({
       focusAtStart: () => {
         editor.chain().focus().setTextSelection(1).run()
       },
+      getJSON: () => editor.getJSON(),
     }
     onReady?.(actions)
     return () => onReady?.(null)

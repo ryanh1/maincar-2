@@ -98,6 +98,8 @@ interface RecordGridProps {
   orgId: string
   object: ObjectDef
   attributes: AttributeDef[]
+  /** Opens the named loaded record once, used by trusted inbox deep links. */
+  initialRecordId?: string | null
   viewConfig?: ViewConfig
   onViewConfigChange?: (update: (current: ViewConfig) => ViewConfig) => void
   toolbarLeading?: ReactNode
@@ -157,7 +159,7 @@ function createdRecordId(response: unknown, object: ObjectDef): string | null {
     : null
 }
 
-export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken }: RecordGridProps) {
+export function RecordGrid({ orgId, object, attributes, initialRecordId, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken }: RecordGridProps) {
   const { user } = useAuth()
   const { activeCall, dialing } = useDialer()
   const colors = useGridColors()
@@ -791,6 +793,23 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   )
 
   const closePeek = useCallback(() => setPeekIndex(null), [])
+
+  const openedInitialRecordRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!initialRecordId || openedInitialRecordRef.current === initialRecordId) return
+    const row = displayRows.findIndex(
+      (displayRow) => displayRow.kind === 'record' && displayRow.record.id === initialRecordId,
+    )
+    // The grid window may not have reached this row yet. Do not mark it handled
+    // until it is actually present, otherwise a deep link silently loses its
+    // drawer on the first loading render.
+    if (row < 0) return
+    openedInitialRecordRef.current = initialRecordId
+    // Let this render commit before asking the grid to select a row and open a
+    // sheet. This is an external deep-link synchronization, not derived state.
+    const timer = window.setTimeout(() => openPeek(row), 0)
+    return () => window.clearTimeout(timer)
+  }, [displayRows, initialRecordId, openPeek])
 
   const step = useCallback(
     (delta: 1 | -1) => {

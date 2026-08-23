@@ -37,6 +37,8 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { activityFromNote, recordActivityInTx } from '../crm/activityFeed.js'
+import { resolveNewTeammateMentions, resolveTeammateMentions } from '../crm/mentions.js'
+import { fanOutNotificationInTransaction } from '../crm/notifications.js'
 import {
   flattenTipTapText,
   mapLinksToApi,
@@ -136,6 +138,35 @@ async function writeNoteFeedRow(
   // person, and deal out of however many the note is attached to. The links stay
   // the truth; this is the cache (server/src/crm/activityFeed.ts).
   await recordActivityInTx(tx, activityFromNote(note, rollUpSpineLinks(targets)))
+}
+
+/**
+ * Write the durable inbox event beside the note it describes. The mention
+ * resolver has already confirmed every candidate against the note's org; the
+ * writer repeats the membership boundary in this same transaction so a member
+ * deactivated between validation and commit never receives a row.
+ */
+async function writeNoteMentionNotifications(
+  tx: Prisma.TransactionClient,
+  args: { orgId: string; noteId: string; actorUserId: string; bodyText: string; recipientUserIds: string[] },
+): Promise<void> {
+  if (args.recipientUserIds.length === 0) return
+
+  await fanOutNotificationInTransaction(tx, {
+    orgId: args.orgId,
+    eventKey: `note:${args.noteId}:mentions:v1`,
+    actorUserId: args.actorUserId,
+    verb: 'mentioned',
+    object: {
+      type: 'note',
+      id: args.noteId,
+      sourceSnapshot: {
+        title: 'You were mentioned in a note',
+        preview: args.bodyText.slice(0, 500) || 'A teammate mentioned you in a note.',
+      },
+    },
+    recipientUserIds: args.recipientUserIds,
+  })
 }
 
 router.use(requireAuth)
@@ -270,6 +301,10 @@ router.post(
     // together and cannot be derived from different inputs.
     const bodyJson = parsed.data.bodyJson
     const bodyText = flattenTipTapText(bodyJson)
+    const mentions = await resolveTeammateMentions(prisma, { orgId, content: bodyJson })
+    if (mentions.rejectedUserIds.length > 0) {
+      return void res.status(422).json({ error: 'A mentioned teammate is not an active member of this organization.' })
+    }
 
     // --- Execute the write atomically ---
     const created = await prisma.$transaction(async (tx) => {
@@ -287,6 +322,13 @@ router.post(
       // The feed row, in THIS transaction (rule 3). A note that rolls back cannot
       // leave a feed line claiming it was written.
       await writeNoteFeedRow(tx, note, targets)
+      await writeNoteMentionNotifications(tx, {
+        orgId,
+        noteId: note.id,
+        actorUserId: userId,
+        bodyText,
+        recipientUserIds: mentions.recipientUserIds,
+      })
       return note
     })
 
@@ -339,6 +381,17 @@ router.patch(
     // Re-flattened from the NEW document, through the same one function.
     const nextBodyText =
       body.bodyJson === undefined ? existing.bodyText : flattenTipTapText(body.bodyJson)
+    const newMentions =
+      body.bodyJson === undefined
+        ? { recipientUserIds: [], rejectedUserIds: [] }
+        : await resolveNewTeammateMentions(prisma, {
+            orgId,
+            previousContent: existing.bodyJson,
+            content: body.bodyJson,
+          })
+    if (newMentions.rejectedUserIds.length > 0) {
+      return void res.status(422).json({ error: 'A mentioned teammate is not an active member of this organization.' })
+    }
 
     // --- Execute the write atomically ---
     await prisma.$transaction(async (tx) => {
@@ -374,6 +427,13 @@ router.patch(
         },
         feedTargets,
       )
+      await writeNoteMentionNotifications(tx, {
+        orgId,
+        noteId: id,
+        actorUserId: userId,
+        bodyText: nextBodyText,
+        recipientUserIds: newMentions.recipientUserIds,
+      })
     })
 
     logger.info({ orgId, userId, noteId: id }, 'updated a note')

@@ -13,7 +13,7 @@ import request from 'supertest'
 const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
-    membership: { findFirst: vi.fn() },
+    membership: { findFirst: vi.fn(), findMany: vi.fn() },
     person: { findFirst: vi.fn() },
     company: { findFirst: vi.fn() },
     deal: { findFirst: vi.fn() },
@@ -30,6 +30,8 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     },
     recordLink: { findMany: vi.fn(), deleteMany: vi.fn(), createMany: vi.fn() },
     activityEntry: { upsert: vi.fn(), deleteMany: vi.fn() },
+    notificationObject: { upsert: vi.fn() },
+    notification: { createMany: vi.fn() },
     $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
@@ -54,6 +56,29 @@ const URL_A = `/api/orgs/${ORG_A}/notes`
 // A minimal TipTap document.
 function doc(text: string) {
   return { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }
+}
+
+function docWithTeammateMention(userId: string) {
+  return {
+    type: 'doc',
+    content: [{
+      type: 'paragraph',
+      content: [
+        { type: 'text', text: 'Please review this, ' },
+        { type: 'mention', attrs: { id: userId, label: 'Taylor Teammate', kind: 'teammate' } },
+      ],
+    }],
+  }
+}
+
+function docWithRecordMention(kind: 'contact' | 'company' | 'deal', id: string) {
+  return {
+    type: 'doc',
+    content: [{
+      type: 'paragraph',
+      content: [{ type: 'mention', attrs: { id, label: 'Acme', kind } }],
+    }],
+  }
 }
 
 function userRow(overrides: Record<string, unknown> = {}) {
@@ -107,6 +132,9 @@ beforeEach(() => {
   prismaMock.recordLink.createMany.mockResolvedValue({ count: 0 })
   prismaMock.activityEntry.upsert.mockResolvedValue({ id: 'feed-1' })
   prismaMock.activityEntry.deleteMany.mockResolvedValue({ count: 1 })
+  prismaMock.membership.findMany.mockResolvedValue([{ userId: 'user-a' }, { userId: 'user-b' }])
+  prismaMock.notificationObject.upsert.mockResolvedValue({ id: 'notification-object-1' })
+  prismaMock.notification.createMany.mockResolvedValue({ count: 1 })
 })
 
 // ============================================================
@@ -203,6 +231,53 @@ describe('POST /api/orgs/:orgId/notes', () => {
     expect(upsert.create.companyId).toBe('co-1')
     expect(upsert.create.personId).toBe('person-1')
     expect(upsert.create.dealId).toBeNull()
+  })
+
+  it('validates a structured teammate mention and fans one durable notification out atomically', async () => {
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ bodyJson: docWithTeammateMention('user-b') })
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(prismaMock.notificationObject.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { orgId_eventKey: { orgId: ORG_A, eventKey: 'note:note-new:mentions:v1' } },
+      create: expect.objectContaining({
+        actorUserId: 'user-a',
+        objectType: 'note',
+        objectId: 'note-new',
+        verb: 'mentioned',
+      }),
+    }))
+    expect(prismaMock.notification.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ recipientUserId: 'user-b', orgId: ORG_A })],
+      skipDuplicates: true,
+    })
+  })
+
+  it('rejects a forged, inactive, or foreign teammate mention before writing the note', async () => {
+    prismaMock.membership.findMany.mockResolvedValue([{ userId: 'user-a' }])
+
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ bodyJson: docWithTeammateMention('user-other-org') })
+
+    expect(res.status).toBe(422)
+    expect(prismaMock.note.create).not.toHaveBeenCalled()
+    expect(prismaMock.notificationObject.upsert).not.toHaveBeenCalled()
+  })
+
+  it('persists a linked record chip without trying to notify that record id as a user', async () => {
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ bodyJson: docWithRecordMention('company', 'co-1') })
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.note.create).toHaveBeenCalled()
+    expect(prismaMock.notificationObject.upsert).not.toHaveBeenCalled()
   })
 
   it('422s an attachment to a record that is not in this org, writing nothing', async () => {
@@ -357,6 +432,20 @@ describe('PATCH /api/orgs/:orgId/notes/:id', () => {
     // The note's own createdAt, not now: editing must not jump it to the top of a
     // history.
     expect(upsert.update.occurredAt).toEqual(WRITTEN)
+  })
+
+  it('notifies only newly added teammates when a note is edited', async () => {
+    prismaMock.note.findFirst.mockResolvedValue(noteRow({ bodyJson: doc('original') }))
+
+    const res = await request(app)
+      .patch(`${URL_A}/note-1`)
+      .set('Authorization', AUTH)
+      .send({ bodyJson: docWithTeammateMention('user-b') })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.notificationObject.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { orgId_eventKey: { orgId: ORG_A, eventKey: 'note:note-1:mentions:v1' } },
+    }))
   })
 
   it('replaces the whole attachment set when links are sent, and re-rolls the feed row', async () => {

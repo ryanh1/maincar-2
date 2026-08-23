@@ -5,6 +5,7 @@ import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 
 vi.mock('@/hooks/crm', () => ({ useGetActivity: () => ({ isPending: false, isError: false, data: undefined }) }))
+vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => null }))
 
 const object: ObjectDef = {
   id: 'people', slug: 'person', name: 'Person', namePlural: 'People', icon: null, iconColor: null,

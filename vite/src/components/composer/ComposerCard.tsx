@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { RichTextEditor, type LinkRequest, type RichTextEditorActions } from '@/components/editor/RichTextEditor'
 import { RichTextEditorUrlDialog } from '@/components/editor/RichTextEditor_UrlDialog'
 import { sanitizeStoredHtml } from '@/components/editor/sanitizeStoredHtml'
+import { useMentionSuggestions } from '@/components/editor/useMentionSuggestions'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -156,6 +157,7 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
   const { saveDraft, closeCard, discardDraft } = useComposer()
   const { org } = useAuth()
   const draftId = draft.id
+  const { items: mentionItems } = useMentionSuggestions(org?.id ?? null)
 
   // The insert menu deliberately keeps the rep's own templates as direct
   // actions. Organization templates are a second menu, so a shared library
@@ -558,6 +560,7 @@ export function ComposerCard({ draft, fullScreen = false, onDismiss }: ComposerC
         onChange={setBody}
         onRequestLink={setLinkRequest}
         onReady={handleEditorReady}
+        mentionItems={mentionItems}
         className="min-h-0 flex-1"
       />
 

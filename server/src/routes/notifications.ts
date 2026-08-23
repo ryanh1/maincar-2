@@ -165,13 +165,34 @@ router.get(
     const accessibleCallIds = new Set(
       (await prisma.call.findMany({ where: { orgId, id: { in: callIds } }, select: { id: true } })).map((call) => call.id),
     )
+    const noteIds = notifications
+      .filter((notification) => notification.notificationObject.objectType === 'note')
+      .map((notification) => notification.notificationObject.objectId)
+    const noteTargetById = new Map(
+      (await prisma.note.findMany({
+        where: { orgId, deletedAt: null, id: { in: noteIds } },
+        include: { links: { select: { toObject: true, toId: true } } },
+      })).flatMap((note) => {
+        const target = note.links[0]
+        return target ? [[note.id, target] as const] : []
+      }),
+    )
 
     // --- Return response ---
     res.json({
       notifications: notifications.map((notification) => {
         const object = notification.notificationObject
         const snapshot = snapshotFields(object.sourceSnapshot)
-        const available = object.objectType === 'call' && accessibleCallIds.has(object.objectId)
+        const noteTarget = noteTargetById.get(object.objectId)
+        const available =
+          (object.objectType === 'call' && accessibleCallIds.has(object.objectId)) ||
+          (object.objectType === 'note' && !!noteTarget)
+        const route =
+          object.objectType === 'call'
+            ? `/orgs/${orgId}/calls/${object.objectId}`
+            : object.objectType === 'note' && noteTarget
+              ? `/orgs/${orgId}/records/${encodeURIComponent(noteTarget.toObject)}?recordId=${encodeURIComponent(noteTarget.toId)}`
+              : undefined
         return {
           id: notification.id,
           readAt: notification.readAt?.toISOString() ?? null,
@@ -183,7 +204,9 @@ router.get(
             type: object.objectType,
             title: snapshot.title,
             preview: snapshot.preview,
-            ...(available ? { route: `/orgs/${orgId}/calls/${object.objectId}` } : {}),
+            // A stored object ID is not a navigable target. Emit the route only
+            // after the same existence check that marks the source available.
+            ...(available && route ? { route } : {}),
           },
         }
       }),

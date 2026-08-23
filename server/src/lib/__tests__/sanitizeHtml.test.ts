@@ -33,12 +33,15 @@ function clean(html: string): string {
 }
 
 describe('the allow-list itself', () => {
-  it('permits exactly the marks the composer toolbar can produce', () => {
-    expect(ALLOWED_TAGS).toEqual(['p', 'br', 'strong', 'em', 'u', 'a', 'ul', 'ol', 'li'])
+  it('permits exactly the marks and structured mention chip the editor can produce', () => {
+    expect(ALLOWED_TAGS).toEqual(['p', 'br', 'strong', 'em', 'u', 'a', 'span', 'ul', 'ol', 'li'])
   })
 
-  it('gives attributes to `a` and to nothing else', () => {
-    expect(ALLOWED_ATTR).toEqual({ a: ['href', 'target', 'rel'] })
+  it('gives attributes only to links and structured mention chips', () => {
+    expect(ALLOWED_ATTR).toEqual({
+      a: ['href', 'target', 'rel'],
+      span: ['data-type', 'data-id', 'data-label', 'data-mention-kind'],
+    })
   })
 
   it('permits only schemes that cannot execute', () => {
@@ -70,6 +73,13 @@ describe('what a rep actually writes', () => {
     // must not creep towards `&amp;amp;` one save at a time.
     const html = '<p>5 &lt; 6 &amp; 7 &gt; 2</p>'
     expect(clean(html)).toBe(html)
+  })
+
+  it('preserves a valid structured mention but strips non-mention span metadata', () => {
+    expect(clean('<p>Hi <span data-type="mention" data-id="user-1" data-label="Ada" data-mention-kind="teammate">@Ada</span></p>')).toBe(
+      '<p>Hi <span data-type="mention" data-id="user-1" data-label="Ada" data-mention-kind="teammate">@Ada</span></p>',
+    )
+    expect(clean('<span data-id="user-1" onclick="alert(1)">@Ada</span>')).toBe('<span>@Ada</span>')
   })
 
   it('closes markup the rep has not finished typing, without losing the text', () => {
@@ -235,7 +245,9 @@ describe('tags that are not on the list', () => {
     // line breaks arrives as a single run of text. The editor normalises to <p>
     // before it saves, so this is the shape a non-editor caller would send.
     expect(clean('<div>Hello</div><div>World</div>')).toBe('HelloWorld')
-    expect(clean('<span style="font-weight:bold">span text</span>')).toBe('span text')
+    // `span` is now the inert container for a structured mention. A pasted
+    // layout span remains text-only: style is gone and no metadata is retained.
+    expect(clean('<span style="font-weight:bold">span text</span>')).toBe('<span>span text</span>')
     expect(clean('<font color="red">font text</font>')).toBe('font text')
   })
 

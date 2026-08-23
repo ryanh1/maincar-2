@@ -157,6 +157,53 @@ describe('notification inbox API (integration, real Postgres)', () => {
     expect(snoozedRes.body.notifications[0].source).not.toHaveProperty('route')
   })
 
+  it('resolves a live note mention to the record link that gives it context', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const recipient = await seedMember(prisma, org.orgId)
+    const company = await prisma.company.create({ data: { orgId: org.orgId, name: 'Acme' } })
+    const note = await prisma.note.create({
+      data: {
+        orgId: org.orgId,
+        authorUserId: org.adminUserId,
+        bodyJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Please review.' }] }] },
+        bodyText: 'Please review.',
+      },
+    })
+    await prisma.recordLink.create({
+      data: {
+        orgId: org.orgId,
+        noteId: note.id,
+        fromObject: 'note',
+        fromId: note.id,
+        toObject: 'company',
+        toId: company.id,
+        attribute: null,
+      },
+    })
+    const notification = await createNotification({
+      orgId: org.orgId,
+      recipientUserId: recipient.userId,
+      objectType: 'note',
+      objectId: note.id,
+    })
+
+    const res = await request(app)
+      .get(`/api/orgs/${org.orgId}/notifications`)
+      .set('Authorization', as(recipient.firebaseUid))
+
+    expect(res.status).toBe(200)
+    expect(res.body.notifications).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: notification.id,
+        source: expect.objectContaining({
+          status: 'available',
+          type: 'note',
+          route: `/orgs/${org.orgId}/records/company?recordId=${company.id}`,
+        }),
+      }),
+    ]))
+  })
+
   it('applies every individual lifecycle action to the recipient row only', async () => {
     const org = await seedOrgWithAdmin(prisma)
     const recipient = await seedMember(prisma, org.orgId)

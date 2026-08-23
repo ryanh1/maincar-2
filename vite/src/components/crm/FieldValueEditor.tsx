@@ -13,6 +13,7 @@ import { formatTimeZoneName, zonedDateTimeParts, zonedDateTimeToIso } from '@/li
 import type { AttributeDef } from '@/lib/crmTypes'
 import { coerceCurrency, coerceNumber } from './cellCoercion'
 import { coerceForType, parseOptions } from './cellBuilder'
+import { parseGridCommand } from './gridCommands'
 
 interface FieldValueEditorProps {
   orgId: string
@@ -78,17 +79,7 @@ export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, 
   }
 
   if (attribute.type === 'select' || attribute.type === 'status') {
-    const options = parseOptions(attribute.optionsJson).filter((option) => !option.isArchived)
-    return (
-      <Select value={selectedValues[0] ?? ''} onValueChange={(next) => onCommit(next || null)}>
-        <SelectTrigger className="h-8 w-full" aria-label={attribute.name}>
-          <SelectValue placeholder={`Choose ${attribute.name}`} />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
-        </SelectContent>
-      </Select>
-    )
+    return <StatusEditor attribute={attribute} value={selectedValues[0] ?? ''} onCommit={onCommit} />
   }
 
   if (attribute.type === 'multiselect') {
@@ -216,6 +207,30 @@ export function FieldValueEditor({ orgId, attribute, value, timeZone, onCommit, 
   )
 }
 
+function StatusEditor({ attribute, value, onCommit }: Pick<FieldValueEditorProps, 'attribute' | 'onCommit'> & { value: string }) {
+  const [open, setOpen] = useState(false)
+  const options = parseOptions(attribute.optionsJson).filter((option) => !option.isArchived)
+  return (
+    <Select value={value} open={open} onOpenChange={setOpen} onValueChange={(next) => onCommit(next || null)}>
+      <SelectTrigger
+        className="h-8 w-full"
+        aria-label={attribute.name}
+        onKeyDown={(event) => {
+          if (event.key === '@') {
+            event.preventDefault()
+            setOpen(true)
+          }
+        }}
+      >
+        <SelectValue placeholder={`Choose ${attribute.name}`} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  )
+}
+
 function dateOnlyToLocal(value: string): Date | undefined {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
   if (!match) return undefined
@@ -227,14 +242,46 @@ function localDateOnly(value: Date): string {
 }
 
 function DateEditor({ attribute, value, onCommit }: Pick<FieldValueEditorProps, 'attribute' | 'onCommit'> & { value: string }) {
+  const [command, setCommand] = useState('')
+  const [error, setError] = useState<string | null>(null)
   const selected = dateOnlyToLocal(value)
+
+  function commitCommand() {
+    const result = parseGridCommand(command, { type: 'date' })
+    if (result.kind === 'value') {
+      setError(null)
+      onCommit(result.value)
+      return
+    }
+    setError('Use @date followed by a date, for example “@date next tue”.')
+  }
+
   return (
-    <DatePicker
-      value={selected}
-      onChange={(next) => onCommit(next ? localDateOnly(next) : null)}
-      ariaLabel={attribute.name}
-      placeholder={`Choose ${attribute.name}`}
-    />
+    <div className="flex flex-col gap-1">
+      <DatePicker
+        value={selected}
+        onChange={(next) => onCommit(next ? localDateOnly(next) : null)}
+        ariaLabel={attribute.name}
+        placeholder={`Choose ${attribute.name}`}
+      />
+      <Input
+        aria-label={`Set ${attribute.name} with @date`}
+        placeholder="@date tomorrow"
+        value={command}
+        onChange={(event) => {
+          setCommand(event.target.value)
+          setError(null)
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter') return
+          event.preventDefault()
+          commitCommand()
+        }}
+        className="h-8"
+        aria-invalid={error ? 'true' : undefined}
+      />
+      {error && <p role="alert" className="text-xs text-danger">{error}</p>}
+    </div>
   )
 }
 
