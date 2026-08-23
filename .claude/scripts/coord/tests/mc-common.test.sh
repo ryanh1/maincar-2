@@ -245,6 +245,7 @@ mkdir -p "$SANDBOX/issue-rebase-dependency/node_modules" \
   "$SANDBOX/issue-rebase-dependency/vite/node_modules"
 : > "$SANDBOX/rebase-npm.log"
 rebase_worktree="$(cd "$SANDBOX/issue-rebase-dependency" && pwd -P)"
+rebase_gate_events_before="$(grep -c $'\tgate acquire ' "$SANDBOX/state/log/events.tsv" 2>/dev/null || true)"
 (
   cd "$SANDBOX/issue-rebase-dependency"
   MC_NPM_LOG="$SANDBOX/rebase-npm.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" \
@@ -252,6 +253,11 @@ rebase_worktree="$(cd "$SANDBOX/issue-rebase-dependency" && pwd -P)"
 )
 if ! grep -Fx -- "--prefix $rebase_worktree/firebase ci" "$SANDBOX/rebase-npm.log" >/dev/null; then
   echo 'mc-merge --gate did not synchronize dependencies introduced by its rebase' >&2
+  exit 1
+fi
+rebase_gate_events_after="$(grep -c $'\tgate acquire ' "$SANDBOX/state/log/events.tsv" 2>/dev/null || true)"
+if [ "$rebase_gate_events_after" -le "$rebase_gate_events_before" ]; then
+  echo 'mc-merge --gate bypassed the shared gate semaphore' >&2
   exit 1
 fi
 

@@ -110,7 +110,10 @@ if [ "$GATE" = 1 ]; then
   fi
 
   echo "[mc-merge --gate] running the gates on the rebased tree"
-  if ! npm run verify; then
+  # This must enter the shared semaphore. Running `npm run verify` directly
+  # bypasses mc-gate's concurrency cap and lets the lock holder compete with
+  # four ordinary gates, causing machine-wide overload and flaky failures.
+  if ! MC_GATE_FULL=1 "$COORD_SCRIPTS_DIR/mc-gate"; then
     echo >&2
     echo "GATES FAILED on the rebased tree. Not merging." >&2
     exit 1
