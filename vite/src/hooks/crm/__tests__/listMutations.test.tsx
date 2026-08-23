@@ -61,4 +61,24 @@ describe('list mutations', () => {
     })
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['crm', 'org-1', 'lists', 'list-1', 'entries'] }))
   })
+
+  it('persists one moved membership between its neighbors', async () => {
+    jsonFetch.mockResolvedValue(undefined)
+    const { result, client } = renderMutation(useReorderListEntries)
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    await result.current.mutateAsync({
+      orgId: 'org-1',
+      listId: 'list-1',
+      entryId: 'entry-3',
+      beforeEntryId: 'entry-1',
+      afterEntryId: 'entry-2',
+    })
+
+    expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/lists/list-1/entries/reorder', {
+      method: 'PATCH',
+      body: JSON.stringify({ entryId: 'entry-3', beforeEntryId: 'entry-1', afterEntryId: 'entry-2' }),
+    })
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['crm', 'org-1', 'lists', 'list-1', 'entries'] }))
+  })
 })

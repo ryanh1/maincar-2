@@ -535,6 +535,31 @@ describe('PATCH /api/orgs/:orgId/lists/:id/entries/:entryId', () => {
 })
 
 describe('PATCH /api/orgs/:orgId/lists/:id/entries/reorder', () => {
+  it('moves one entry between sparse neighbors without rewriting the rest of the list', async () => {
+    prismaMock.$queryRaw.mockReset().mockResolvedValue([
+      { id: 'entry-1' },
+      { id: 'entry-2' },
+      { id: 'entry-3' },
+    ])
+    prismaMock.listEntry.findMany.mockResolvedValue([
+      entryRow({ id: 'entry-1', position: 0 }),
+      entryRow({ id: 'entry-2', position: 1_024 }),
+      entryRow({ id: 'entry-3', position: 2_048 }),
+    ])
+
+    const res = await request(app)
+      .patch(`${URL_A}/list-1/entries/reorder`)
+      .set('Authorization', AUTH)
+      .send({ entryId: 'entry-3', beforeEntryId: 'entry-1', afterEntryId: 'entry-2' })
+
+    expect(res.status).toBe(204)
+    expect(prismaMock.listEntry.updateMany).toHaveBeenCalledWith({
+      where: { id: 'entry-3', orgId: ORG_A, listId: 'list-1' },
+      data: { position: 512 },
+    })
+    expect(prismaMock.listEntry.updateMany).toHaveBeenCalledTimes(1)
+  })
+
   it('re-sequences every requested entry in one transaction, scoped to this list and org', async () => {
     const ordered = ['entry-5', 'entry-3', 'entry-1', 'entry-4', 'entry-2']
     prismaMock.$queryRaw.mockReset().mockResolvedValue(ordered.map((id) => ({ id })))

@@ -25,15 +25,18 @@ function SortableEntry({ entry }: { entry: CrmListEntry }) {
 }
 
 /** Keyboard- and pointer-draggable manual order for list memberships only. */
-export function ListEntryReorderDialog({ open, onOpenChange, entries, onSave }: { open: boolean; onOpenChange: (open: boolean) => void; entries: CrmListEntry[]; onSave: (entryIds: string[]) => Promise<void> }) {
+export function ListEntryReorderDialog({ open, onOpenChange, entries, onSave }: { open: boolean; onOpenChange: (open: boolean) => void; entries: CrmListEntry[]; onSave: (entryIds: string[], movedEntryId?: string) => Promise<void> }) {
   const [orderedEntries, setOrderedEntries] = useState(entries)
+  const [movedEntryId, setMovedEntryId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
 
   async function save() {
     setSaving(true)
     try {
-      await onSave(orderedEntries.map((entry) => entry.id))
+      const orderedIds = orderedEntries.map((entry) => entry.id)
+      if (movedEntryId) await onSave(orderedIds, movedEntryId)
+      else await onSave(orderedIds)
       onOpenChange(false)
     } finally {
       setSaving(false)
@@ -49,6 +52,7 @@ export function ListEntryReorderDialog({ open, onOpenChange, entries, onSave }: 
         </DialogHeader>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={({ active, over }) => {
           if (!over || active.id === over.id) return
+          setMovedEntryId(String(active.id))
           setOrderedEntries((current) => {
             const from = current.findIndex((entry) => entry.id === active.id)
             const to = current.findIndex((entry) => entry.id === over.id)
