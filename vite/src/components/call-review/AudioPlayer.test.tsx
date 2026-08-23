@@ -38,6 +38,19 @@ describe('AudioPlayer', () => {
     expect(screen.getByRole('combobox', { name: 'Playback speed' })).toHaveTextContent('1×')
   })
 
+  it('renders the synchronized speaker ribbon beneath the controls', () => {
+    renderPlayer({
+      segments: [{ speakerKey: 'rep', startMs: 0, endMs: 1_000 }],
+      speakers: [{ speakerKey: 'rep', label: 'You' }],
+    })
+    const audio = screen.getByLabelText('Recording of the call to +12015550111') as HTMLAudioElement
+    Object.defineProperty(audio, 'duration', { configurable: true, value: 10 })
+    fireEvent.loadedMetadata(audio)
+
+    expect(screen.getByRole('region', { name: 'Speaker activity' })).toBeInTheDocument()
+    expect(screen.getByText('You')).toBeInTheDocument()
+  })
+
   it('seeks, toggles playback, and supports keyboard navigation outside editors', async () => {
     const user = userEvent.setup()
     renderPlayer()
@@ -59,6 +72,24 @@ describe('AudioPlayer', () => {
 
     fireEvent.keyDown(window, { key: ' ' })
     expect(audio.play).toHaveBeenCalled()
+  })
+
+  it('routes a ribbon seek through the media controller once', () => {
+    const onSeek = vi.fn()
+    renderPlayer({ onSeek })
+    const audio = screen.getByLabelText('Recording of the call to +12015550111') as HTMLAudioElement
+    Object.defineProperty(audio, 'duration', { configurable: true, value: 120 })
+    fireEvent.loadedMetadata(audio)
+    const ribbon = screen.getByRole('slider', { name: 'Seek call recording' })
+    vi.spyOn(ribbon, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, top: 0, left: 0, right: 100, bottom: 20, width: 100, height: 20, toJSON: () => ({}),
+    })
+
+    fireEvent.pointerDown(ribbon, { clientX: 25, pointerId: 1 })
+
+    expect(audio.currentTime).toBe(30)
+    expect(onSeek).toHaveBeenCalledTimes(1)
+    expect(onSeek).toHaveBeenCalledWith(30)
   })
 
   it('does not capture shortcuts while an editor has focus', () => {

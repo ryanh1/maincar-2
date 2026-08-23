@@ -8,6 +8,7 @@ test('plays the deterministic audio fixture with compact controls and keyboard n
 
   await page.goto('/__fixtures/audio-player')
   await expect(page.getByRole('heading', { name: 'Audio player fixture' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Speaker activity' })).toBeVisible()
   await expect(page.getByRole('slider', { name: 'Seek recording' })).not.toHaveAttribute('aria-disabled', 'true')
 
   await page.getByRole('button', { name: 'Play recording' }).click()
