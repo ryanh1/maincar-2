@@ -526,6 +526,10 @@ model DispositionDef {
   // Allowed values: "connected", "not_connected".
   category String @default("not_connected")
   isStandard Boolean @default(false)
+  // Whether this active disposition appears in the fast call bar.
+  isPinned Boolean @default(false)
+  // Zero-based position in the fast call bar; null for unpinned dispositions.
+  pinOrder Int?
   sortOrder Int @default(0)
   isArchived Boolean @default(false)
 
@@ -536,6 +540,7 @@ model DispositionDef {
 
   @@unique([orgId, value])
   @@index([orgId, isArchived, sortOrder])
+  @@index([orgId, isArchived, isPinned, pinOrder])
 }
 
 // One canonical final pass for a call. Provider-owned text and timing live below

@@ -9,6 +9,8 @@ export interface Disposition {
   icon: string | null
   category: DispositionCategory
   isStandard: boolean
+  isPinned: boolean
+  pinOrder: number | null
   sortOrder: number
   isArchived: boolean
   createdAt: string
@@ -28,3 +30,7 @@ export interface CreateDispositionInput {
 }
 
 export type UpdateDispositionInput = Partial<Omit<CreateDispositionInput, 'value'>> & { isArchived?: boolean }
+
+export interface UpdateDispositionBarInput {
+  pinnedIds: string[]
+}
