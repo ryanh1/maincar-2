@@ -6,13 +6,11 @@ Layout: `vite/` is the React client, `server/` is the Express API, `firebase/` h
 
 ## Rules organized by file
 
-Claude Code auto-loads the rules for what you're touching.
-
 - **Frontend work** → [copy.md](.claude/rules/copy.md), [design-system.md](.claude/rules/design-system.md), [frontend.md](.claude/rules/frontend.md)
 - **Server work** → [server-routes.md](.claude/rules/server-routes.md), [database-and-prisma.md](.claude/rules/database-and-prisma.md), [dependencies-and-config.md](.claude/rules/dependencies-and-config.md)
 - **Testing** → [testing.md](.claude/rules/testing.md)
-- **Committing** → [committing.md](.claude/rules/committing.md) — the gate, the hook, bypasses
-- **Linear workflow** → [linear-workflow.md](.claude/rules/linear-workflow.md) — Issue status transitions, commit messages, branching
+- **Committing** → [committing.md](.claude/rules/committing.md)
+- **Linear workflow** → [linear-workflow.md](.claude/rules/linear-workflow.md)
 
 ## Dates & Times (Timezones)
 
@@ -21,125 +19,84 @@ Every time-of-day shown to a person MUST render in an explicit timezone and carr
 - **Timezone source**: each user has an IANA `timeZone` on the `User` record, captured at onboarding and defaulted from `Intl.DateTimeFormat().resolvedOptions().timeZone`.
 - **Client**: render in the **viewing user's** zone, through helpers in `vite/src/lib/datetime.ts`. Never call `toLocaleString` directly in a component.
 - **Server**: render in the **accountable user's** zone, with a documented fallback.
-- **Date-only values** (a calendar date with no time) render with no time and no zone.
-- **An LLM must never invent a timezone.** Hand it a pre-formatted string with the zone label already in it, and tell it to state that string verbatim.
+- **Date-only values** render with no time and no zone.
+- **An LLM must never invent a timezone.** Hand it a pre-formatted, zone-labeled string and tell it to state that string verbatim.
 
 ## AI drafting
 
-**Never let a model draft ahead of its data.** Any value a model states to a user must be known to it *before* it drafts — read from the input, or handed in via the prompt or a tool result. Never compute a user-facing value *after* the draft and store it without feeding the SAME value into the draft, or the text and the stored record disagree.
+**Never let a model draft ahead of its data.** Any value a model states to a user must be known before it drafts—read from the input or handed in through the prompt/tool result. Never compute a user-facing value after the draft and store it without feeding the same value into the draft.
 
-## Git and branching
+## Git workspaces
 
-**Use an issue clone per issue.** Multiple sessions work this repo at once. The
-primary checkout at `~/Documents/Coding/My Projects/maincar-2` is a reference
-checkout only: **never edit, stage, commit, change branches, merge, or push in
-it directly.** The sole exception is `mc-merge`'s automatic safe refresh after
-GitHub accepts delivery: it fast-forwards `main` from the refreshed bare mirror
-only when no local work would be overwritten. A hook and every other `mc-*`
-delivery command reject it. If it is dirty, do not clean, reset, or stash it:
-identify the owner and move that work into an issue clone. Run
-`./.claude/scripts/coord/mc-doctor` when something looks stale.
+**Use one issue clone per issue.** The primary checkout at `~/Documents/Coding/My Projects/maincar-2` is a runnable reference checkout only. Never edit, stage, commit, change branches, merge, or push there. Do not clean, reset, or stash another person's files.
 
-Ticket clones fetch from a local *bare* mirror, not the editable primary
-checkout. This keeps local fetches fast without allowing one session's WIP to
-block another session's delivery. The mirror rejects direct pushes, so
-`mc-merge` is the only normal delivery route.
+Ticket clones fetch from the local bare mirror. The mirror rejects direct pushes; the delivery train is the only production route to GitHub `main`.
 
 ```bash
-./.claude/scripts/coord/mc-local-main sync
+npm run gh-to-mirror
 cd ~/code/maincar-2-worktrees
 git clone ~/code/maincar-2-coord/local-main.git mai-123-short-title
 cd mai-123-short-title
-git checkout -b mai-123-short-title
+git checkout -b <Linear gitBranchName exactly>
+eval "$(./.claude/scripts/coord/mc-slot --env)"
 ```
 
-Then use the coordination scripts in [`.claude/scripts/coord/`](.claude/scripts/coord/README.md)
-(full picture in its README):
+Use the scripts documented in [`.claude/scripts/coord/README.md`](.claude/scripts/coord/README.md):
 
-- `eval "$(./.claude/scripts/coord/mc-slot --env)"` — stable ports for this worktree; no
-  collisions with other sessions' dev servers.
-- `./.claude/scripts/coord/mc-gate --focused -- npm --prefix vite exec vitest run path/to/file.test.tsx`
-  — run one named development test through the bounded focused lane. Arbitrary
-  commands and broad suites cannot claim this lane.
-- `./.claude/scripts/coord/mc-gate --delivery` — run the full delivery gate through
-  the shared scheduler instead of calling `npm run verify` directly. It runs the
-  same checks, caps framework workers, and is the only manual full-suite command.
-- `./.claude/scripts/coord/mc-merge -m "MAI-123: ..."` — after a fresh delivery
-  receipt exists, briefly locks, rechecks that exact branch-head/main pair, then
-  merges and pushes. It never runs tests while holding the merge lock.
-- `./.claude/scripts/coord/mc-doctor` — check machine health (stuck locks, load, leftover
-  test databases) if something feels stuck.
+- `mc-gate --focused` runs one named Vitest file through the four-job scheduler. It never runs or reserves Playwright.
+- `mc-gate --classify` shows the changed files, suggested risk, and suite scope.
+- `mc-train enqueue` records a clean committed head, declared risk, coverage intent, and focused tests in the ordered ready queue.
+- `mc-train run` builds compatible entries on the newest mirrored `main`, tests the exact combined tree once, and pushes that tree through a short merge slot.
+- `mc-doctor` reports locks, queue state, refresh blockers, and machine health.
 
-### Required issue completion flow
+`mc-merge` is retired from normal use. Do not manufacture legacy per-session receipts or call raw `git merge`/`git push` as a substitute.
 
-For every implementation branch, finish the whole sequence before reporting the
-issue done:
+## Risk-based delivery
 
-1. Run a named focused test while implementing. Focused checks never satisfy
-   the full delivery requirement.
-2. Commit only the feature's own files, using explicit pathspecs.
-3. Sync and rebase outside the merge lock, then create the full-gate receipt:
-   `./.claude/scripts/coord/mc-local-main sync && git fetch origin && git rebase origin/main && ./.claude/scripts/coord/mc-gate --delivery`.
-4. Run `./.claude/scripts/coord/mc-merge -m "MAI-123: ..."`. This is the only
-   permitted route to `main`: it rechecks the receipt under a short lock, then
-   creates the merge commit and pushes `main` to GitHub. If `main` moves, rebase
-   and rerun the delivery gate; never test while holding the merge lock.
-5. Confirm `main` and `origin/main` have ahead/behind `0/0` after the push.
-6. Delete the feature branch after its head is on `origin/main`. Delete a remote
-   feature branch if one exists, and delete its local branch. Then remove its
-   clean, exact worktree directory and confirm `git worktree list` has no stale
-   registrations. Never delete a dirty or unmerged worktree.
-7. From a surviving checkout, run
-   `./.claude/scripts/coord/mc-closeout MAI-123 --worktree /exact/removed/issue-clone`.
-   Update Linear to Done only when it prints `LINEAR_DONE_ALLOWED`; see
-   [linear-workflow.md](.claude/rules/linear-workflow.md).
+Every change declares one risk level when it enters the train:
 
-Do not call an issue complete after only committing, testing, or opening a PR.
-The merge, GitHub push, branch deletion, worktree deletion, and Linear update are
-all required closeout steps.
+- **Low**: documentation, isolated copy/styling, or a contained client change. The train runs typecheck, lint, and the union of declared focused tests. Non-doc low-risk work must name a focused test.
+- **Normal**: ordinary server or client behavior in one suite scope. The train runs typecheck, lint, focused tests, and the relevant server or web suite.
+- **High**: migrations, dependencies, auth, permissions, billing, scheduling, shared infrastructure, concurrency, unknown paths, or changes spanning systems. The train runs `npm run verify`, including integration tests, and the entry travels alone.
 
-There is no solo-main exception. If you started in the primary checkout, create
-an issue clone before editing. Preserve any existing primary-checkout files;
-never reset, stash, revert, commit, or "clean up" another session's work.
+Path classification is a conservative floor for high-risk work. It cannot be lowered. A contained client change may be explicitly declared low when its coverage note and focused test justify that decision. A group uses the highest declared risk of its members; incompatible suite scopes form separate groups.
 
-## Before you commit
+The scheduler admits four normal jobs by default, with three real Vitest workers per job inside the measured twelve-worker budget. It reserves no browser workers and the delivery train never runs Playwright.
 
-**Green delivery tests are the merge gate.** The pre-commit hook is only the
-immediate static-check backstop; it never starts full suites. After committing
-and rebasing, run this at the repo root to create the exact receipt required
-before every delivery:
+## Required issue completion flow
+
+1. Run named focused tests while implementing:
+   `./.claude/scripts/coord/mc-gate --focused -- npm --prefix <server|vite> exec vitest run <file>`.
+2. Commit only the issue's files with explicit pathspecs. The fast pre-commit hook runs attributable typecheck/lint checks; it is not final delivery proof.
+3. Inspect `mc-gate --classify`, choose the honest risk, and enqueue the clean commit. Example:
+   `./.claude/scripts/coord/mc-train enqueue --risk normal --coverage "company route behavior" --test server:src/routes/__tests__/companies.test.ts`.
+4. Run `./.claude/scripts/coord/mc-train run`. It may deliver other explicitly ready compatible entries too. A green train receipt proves the exact combined head, shared-main base, tests, coverage, risk, and members. If isolation reports a failing entry or interaction, fix/re-enqueue it; never push over red.
+5. Confirm the issue head is reachable from the refreshed local mirror's `main`, and mirror `main` matches upstream `main` at ahead/behind `0/0`.
+6. Delete an existing remote feature branch, detach the issue clone at delivered `origin/main`, delete the local feature branch, then remove the clean exact clone directory. Never delete a dirty or unmerged clone.
+7. From a surviving checkout, run `mc-closeout MAI-123 --worktree /exact/removed/issue-clone`. Move Linear to Done only when it prints `LINEAR_DONE_ALLOWED`.
+
+Do not call an issue complete after only committing, testing, enqueueing, or opening a PR. GitHub delivery, branch/clone cleanup, closeout proof, and Linear update are required.
+
+## Primary checkout refresh
+
+Every successful train attempts `GitHub → local mirror → primary checkout`. A clean, idle primary checkout fast-forwards automatically; changed package roots receive `npm ci`, and tracked Prisma migrations receive `prisma migrate deploy`.
+
+Any personal uncommitted/untracked work, non-`main` branch, divergent commit, or active Maincar process blocks the primary refresh without changing it. The blocker is durable and always records this exact recovery command:
 
 ```bash
-./.claude/scripts/coord/mc-gate --delivery
+npm run mirror-to-main
 ```
 
-That schedules `typecheck`, `lint`, `test`, and `test:integration` with at most
-two delivery gates and a 12-worker framework budget, reserving six workers for
-the system, and records the tested committed HEAD plus `origin/main` base. The
-merge script rejects a missing or stale receipt. **The integration suite is part
-of the gate, not an extra** — `npm test` does not include it, and it holds the
-only tests that prove the concurrency guardrails. It needs Postgres, so run
-`npm run docker:up` first.
+A later train checks the blocker before delivery and retries only the same safe refresh. Never overwrite or move a person's work automatically.
 
-- **Red static checks block the commit; red delivery tests block the merge.**
-  Fix it, or stop and report exactly what is broken. Never merge or push over a
-  red delivery gate.
-- **Another session's red is not your red.** The `pre-commit` hook already tells them apart, so you do not need `--no-verify` for a file you did not write. See [committing.md](.claude/rules/committing.md).
-- **Never skip, delete, or `.skip()` a test to reach green.** Change the code, or change the rule on purpose and say so.
-- **A feature commit carries its own tests**, committed together, never as a follow-up. **That holds even when the files you touched do not load [testing.md](.claude/rules/testing.md).**
-- **If you could not run the checks**, say so in your report and in the commit message body. Never let silence imply they passed.
+## Before commit and delivery
 
-Mechanics, the hook, and the `Verified-by:` trailer: [committing.md](.claude/rules/committing.md).
-
-## Verification before finishing
-
-- **After editing UI**, run `npm run typecheck` and `npm run lint` at the repo root. TypeScript does not always report an undefined JSX component; the build does.
-- **Run a named focused test** while implementing, then the full
-  `mc-gate --delivery` after the final commit and rebase — see [Before you commit](#before-you-commit).
-- **Walk the journey in a browser** for anything user-facing. Parts passing in isolation is not evidence the journey works. A route path is a string, so `tsc` cannot verify a rename — click it.
-- **Never leave a feature half-wired.** If a control cannot be finished, do not render it, or render it visibly disabled with an honest label. Never ship a live-looking control that does nothing.
-- **Report what you could not verify**, at the step where it applies.
+- **Red blocks the relevant step.** Static red blocks commit; train red blocks delivery.
+- **Never skip, delete, or `.skip()` a test to reach green.** Change the code or intentionally change the rule and say so.
+- **A feature commit carries its tests**, committed together.
+- **If checks could not run**, say so in the commit body and report; silence must never imply green.
+- **User-facing work requires a browser journey.** This coordination workflow itself never adds Playwright to delivery.
 
 ## Money
 
-Never spend the user's money — a paid API call, a purchased phone number, a deploy that bills — without asking **in the turn the spend would happen**. A plan that mentions a purchase is not consent, and approval does not carry across turns.
+Never spend the user's money—a paid API call, purchased number, or billed deploy—without asking in the turn the spend would happen. Approval does not carry across turns.

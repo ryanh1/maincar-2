@@ -1,0 +1,473 @@
+#!/usr/bin/env bash
+# Ordered local delivery train. Ready ticket heads are merged onto the newest
+# mirrored main, compatible entries are tested once as an exact combined tree,
+# and that already-tested tree is fast-forwarded under the short merge lock.
+set -euo pipefail
+source "$(dirname "$0")/mc-common.sh"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+TRAIN_HOME="$STATE/train"
+READY="$TRAIN_HOME/ready"
+RUNS="$TRAIN_HOME/runs"
+FAILED="$TRAIN_HOME/failed"
+SUPERSEDED="$TRAIN_HOME/superseded"
+TRAIN_TMP=""
+mkdir -p "$READY" "$RUNS" "$FAILED" "$SUPERSEDED"
+
+die() { echo "mc-train: $*" >&2; exit 2; }
+valid_risk() { case "$1" in low|normal|high) return 0 ;; *) return 1 ;; esac; }
+
+read_entry() {
+  local file="$1"
+  # Tab is IFS whitespace in Bash and collapses an empty trailing test field.
+  # Unit Separator is non-whitespace, so an optional field stays in its exact
+  # position without requiring eval, JSON tooling, or unsafe shell parsing.
+  IFS=$'\037' read -r E_SEQ E_AT E_ISSUE E_WORKTREE E_HEAD E_BASE E_BRANCH E_RISK E_SUGGESTED E_SCOPE E_COVERAGE E_TESTS < "$file"
+  validate_entry "$file"
+}
+
+validate_text() {
+  local label="$1" value="$2"
+  [ -n "$value" ] || die "$label is required"
+  case "$value" in *$'\t'*|*$'\n'*|*$'\r'*|*$'\037'*) die "$label must be one line without control separators" ;; esac
+}
+
+validate_test_spec() {
+  local test_spec="$1" workspace test_path
+  case "$test_spec" in *,*|*$'\t'*|*$'\n'*|*$'\r'*|*$'\037'*) die "test specs cannot contain delimiters or newlines" ;; esac
+  workspace="${test_spec%%:*}"
+  test_path="${test_spec#*:}"
+  if { [ "$workspace" != server ] && [ "$workspace" != vite ]; } || [ "$test_path" = "$test_spec" ] || [[ "$test_path" = /* || "$test_path" = *..* ]] || [[ "$test_path" != *.test.* && "$test_path" != *.spec.* ]]; then
+    die "tests must use server:path.test.* or vite:path.test.*"
+  fi
+}
+
+validate_entry() {
+  local file="$1" test_spec
+  case "$E_SEQ" in ''|*[!0-9]*) die "invalid queue sequence in $file" ;; esac
+  validate_text "queue timestamp" "$E_AT"
+  [[ "$E_ISSUE" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] || die "invalid issue key in $file"
+  validate_text "queue worktree" "$E_WORKTREE"
+  [ "${#E_HEAD}" -eq 40 ] && [[ "$E_HEAD" != *[!0-9a-f]* ]] || die "invalid queued head in $file"
+  [ "${#E_BASE}" -eq 40 ] && [[ "$E_BASE" != *[!0-9a-f]* ]] || die "invalid queued base in $file"
+  validate_text "queue branch" "$E_BRANCH"
+  valid_risk "$E_RISK" || die "invalid declared risk in $file"
+  valid_risk "$E_SUGGESTED" || die "invalid suggested risk in $file"
+  case "$E_SCOPE" in docs|server|web|full) ;; *) die "invalid scope in $file" ;; esac
+  validate_text "queue coverage" "$E_COVERAGE"
+  while IFS= read -r test_spec; do
+    if [ -n "$test_spec" ]; then validate_test_spec "$test_spec"; fi
+  done < <(printf '%s\n' "$E_TESTS" | tr ',' '\n')
+}
+
+join_tests() {
+  local joined="" item
+  shift 0
+  for item in "$@"; do
+    [ -n "$item" ] || continue
+    joined="${joined:+$joined,}$item"
+  done
+  printf '%s\n' "$joined"
+}
+
+tests_include() {
+  local csv="$1" wanted="$2"
+  case ",$csv," in *",$wanted,"*) return 0 ;; *) return 1 ;; esac
+}
+
+enqueue() {
+  mc_assert_ticket_checkout || exit 2
+  local declared="" coverage="" branch head base files suggested scope issue test_spec workspace test_path seq_file seq queue_file tmp existing
+  local tests=("")
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --risk) declared="${2:-}"; shift 2 ;;
+      --coverage) coverage="${2:-}"; shift 2 ;;
+      --test) tests+=("${2:-}"); shift 2 ;;
+      *) die "unknown enqueue option: $1" ;;
+    esac
+  done
+  valid_risk "$declared" || die "--risk must be low, normal, or high"
+  validate_text coverage "$coverage"
+  cd "$(mc_worktree)"
+  [ -z "$(git status --porcelain)" ] || die "enqueue requires a clean committed ticket branch"
+  branch="$(mc_branch)"
+  [ "$branch" != main ] || die "enqueue from an issue branch, not main"
+  mc_fetch_local_main --quiet
+  head="$(git rev-parse HEAD)"
+  base="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+  [ -n "$base" ] || die "could not find a merge base with mirrored main"
+  files="$(git diff --name-only "$base"..HEAD)"
+  [ -n "$files" ] || die "ticket branch has no change to enqueue"
+  suggested="$(printf '%s\n' "$files" | mc_risk_for_files)"
+  scope="$(printf '%s\n' "$files" | mc_scope_for_files)"
+  if [ "$suggested" = high ] && [ "$declared" != high ]; then
+    die "this change requires high risk; declared $declared"
+  fi
+  if [ "$suggested" = normal ] && [ "$declared" = low ] && [ "$scope" != web ]; then
+    die "ordinary server behavior requires normal risk; only contained client work may be explicitly lowered"
+  fi
+  if [ "$scope" = full ] && [ "$declared" != high ]; then
+    die "a change spanning systems requires high risk"
+  fi
+  if [ "$declared" = low ] && [ "$scope" != docs ] && [ "$(join_tests "${tests[@]}")" = "" ]; then
+    die "low-risk contained UI work requires at least one focused test"
+  fi
+  for test_spec in "${tests[@]}"; do
+    [ -n "$test_spec" ] || continue
+    validate_test_spec "$test_spec"
+    workspace="${test_spec%%:*}"
+    test_path="${test_spec#*:}"
+    git cat-file -e "HEAD:$workspace/$test_path" 2>/dev/null || die "focused test is not committed at $workspace/$test_path"
+  done
+  issue="$(mc_issue_key_from_text "$branch" || true)"
+  [ -n "$issue" ] || die "branch name must contain an issue key"
+
+  mc_lock_acquire "$STATE/locks/train-queue.lock" 60 || die "could not lock the ready queue"
+  for existing in "$READY"/*.tsv; do
+    [ -f "$existing" ] || continue
+    read_entry "$existing"
+    if [ "$E_HEAD" = "$head" ]; then
+      mc_lock_release "$STATE/locks/train-queue.lock"
+      echo "[mc-train] already ready: $issue at ${head:0:8}"
+      return 0
+    fi
+  done
+  seq_file="$TRAIN_HOME/next-sequence"
+  seq="$(cat "$seq_file" 2>/dev/null || echo 0)"
+  case "$seq" in ''|*[!0-9]*) seq=0 ;; esac
+  seq=$((seq + 1))
+  printf '%s\n' "$seq" > "$seq_file"
+  queue_file="$READY/$(printf '%09d' "$seq")-$issue.tsv"
+  tmp="$(mktemp "$READY/.${issue}.XXXXXX")"
+  printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+    "$seq" "$(mc_now)" "$issue" "$(pwd -P)" "$head" "$base" "$branch" "$declared" "$suggested" "$scope" "$coverage" "$(join_tests "${tests[@]}")" > "$tmp"
+  mv "$tmp" "$queue_file"
+  mc_lock_release "$STATE/locks/train-queue.lock"
+  echo "[mc-train] ready #$seq: $issue ${head:0:8} risk=$declared scope=$scope"
+}
+
+status() {
+  local count=0 file
+  for file in "$READY"/*.tsv; do [ -f "$file" ] && count=$((count + 1)); done
+  if [ "${2:-}" = "--count" ]; then printf '%s\n' "$count"; return; fi
+  echo "ready entries: $count"
+  for file in "$READY"/*.tsv; do
+    [ -f "$file" ] || continue
+    read_entry "$file"
+    printf '#%s %s %s risk=%s scope=%s %s\n' "$E_SEQ" "$E_ISSUE" "${E_HEAD:0:8}" "$E_RISK" "$E_SCOPE" "$E_BRANCH"
+  done
+}
+
+combine_scope() {
+  local current="$1" next="$2"
+  [ "$current" = docs ] && { echo "$next"; return; }
+  [ "$next" = docs ] && { echo "$current"; return; }
+  [ "$current" = "$next" ] && { echo "$current"; return; }
+  echo full
+}
+
+prepare_dependencies() {
+  local repo="$1" source="$2" base="$3" head="$4" root source_root target_root changed
+  for root in . server vite firebase; do
+    target_root="$repo"
+    source_root="$source"
+    [ "$root" = . ] || { target_root="$repo/$root"; source_root="$source/$root"; }
+    [ -f "$target_root/package.json" ] || continue
+    changed=0
+    case "$root" in
+      .) git -C "$repo" diff --quiet "$base" "$head" -- package.json package-lock.json || changed=1 ;;
+      *) git -C "$repo" diff --quiet "$base" "$head" -- "$root/package.json" "$root/package-lock.json" || changed=1 ;;
+    esac
+    if [ "$changed" -eq 0 ] && [ -d "$source_root/node_modules" ]; then
+      ln -s "$source_root/node_modules" "$target_root/node_modules" || return 1
+    else
+      (cd "$target_root" && npm ci) || return 1
+    fi
+  done
+}
+
+prepare_local_test_env() {
+  local repo="$1" source="$2" env_source=""
+  if [ -f "$source/.env" ]; then
+    env_source="$(cd "$source" && pwd -P)/.env"
+  elif [ -f "$PRIMARY_CHECKOUT/.env" ]; then
+    env_source="$(cd "$PRIMARY_CHECKOUT" && pwd -P)/.env"
+  fi
+  if [ -n "$env_source" ] && [ ! -e "$repo/.env" ]; then
+    ln -s "$env_source" "$repo/.env" || return 1
+  fi
+}
+
+add_entry_to_repo() {
+  local repo="$1" file="$2" message="$3"
+  read_entry "$file"
+  git -C "$repo" fetch --quiet "$E_WORKTREE" "$E_HEAD"
+  git -C "$repo" merge --no-ff -m "$message" FETCH_HEAD
+}
+
+build_plan() {
+  local group_risk=low group_scope=docs group_coverage="" group_tests="" file test_spec
+  shift 0
+  for file in "$@"; do
+    [ -n "$file" ] || continue
+    read_entry "$file"
+    [ "$E_RISK" = high ] && group_risk=high
+    if [ "$E_RISK" = normal ] && [ "$group_risk" = low ]; then group_risk=normal; fi
+    group_scope="$(combine_scope "$group_scope" "$E_SCOPE")"
+    group_coverage="${group_coverage:+$group_coverage; }$E_ISSUE: $E_COVERAGE"
+    while IFS= read -r test_spec; do
+      [ -n "$test_spec" ] || continue
+      if ! tests_include "$group_tests" "$test_spec"; then group_tests="${group_tests:+$group_tests,}$test_spec"; fi
+    done < <(printf '%s\n' "$E_TESTS" | tr ',' '\n')
+  done
+  PLAN_RISK="$group_risk"
+  PLAN_SCOPE="$group_scope"
+  PLAN_COVERAGE="$group_coverage"
+  PLAN_TESTS="$group_tests"
+}
+
+run_gate_for_repo() {
+  local repo="$1" source="$2" base="$3" label="$4"
+  shift 4
+  local files=("") file test_spec
+  for file in "$@"; do [ -n "$file" ] && files+=("$file"); done
+  build_plan "${files[@]}"
+  local head
+  head="$(git -C "$repo" rev-parse HEAD)"
+  prepare_local_test_env "$repo" "$source" || return 1
+  prepare_dependencies "$repo" "$source" "$base" "$head" || return 1
+  local args=(--train --risk "$PLAN_RISK" --scope "$PLAN_SCOPE" --coverage "$PLAN_COVERAGE")
+  while IFS= read -r test_spec; do
+    [ -n "$test_spec" ] && args+=(--test "$test_spec")
+  done < <(printf '%s\n' "$PLAN_TESTS" | tr ',' '\n')
+  (
+    cd "$repo"
+    MC_GATE_TEST_LOG="$label" "$SCRIPT_DIR/mc-gate" "${args[@]}"
+  )
+}
+
+build_subset_and_test() {
+  local source="$1" base="$2" output="$3"
+  shift 3
+  local subset_files=("") file tmp repo
+  for file in "$@"; do [ -n "$file" ] && subset_files+=("$file"); done
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/mc-train-isolate-XXXXXX")"
+  repo="$tmp/repo"
+  git clone "$LOCAL_MAIN_REPO" "$repo" --quiet
+  git -C "$repo" config user.name 'Maincar Delivery Train'
+  git -C "$repo" config user.email 'delivery-train@maincar.local'
+  for file in "${subset_files[@]}"; do
+    [ -n "$file" ] || continue
+    read_entry "$file"
+    add_entry_to_repo "$repo" "$file" "Train isolation: $E_ISSUE"
+  done
+  set +e
+  run_gate_for_repo "$repo" "$source" "$base" "$output" "${subset_files[@]}"
+  local rc=$?
+  set -e
+  rm -rf "$tmp"
+  return "$rc"
+}
+
+record_failure() {
+  local run_id="$1" kind="$2"
+  shift 2
+  local files=("") file failure_dir issues=""
+  for file in "$@"; do [ -n "$file" ] && files+=("$file"); done
+  failure_dir="$FAILED/$run_id"
+  mkdir -p "$failure_dir"
+  for file in "${files[@]}"; do
+    [ -n "$file" ] || continue
+    read_entry "$file"
+    issues="${issues:+$issues, }$E_ISSUE"
+    mv "$file" "$failure_dir/$(basename "$file")"
+  done
+  printf 'kind=%s\nissues=%s\nrecorded=%s\n' "$kind" "$issues" "$(mc_now)" > "$failure_dir/failure.txt"
+  echo "[mc-train] $kind failure: $issues" >&2
+}
+
+isolate_failure() {
+  local run_id="$1" source="$2" base="$3"
+  shift 3
+  local selected=("") independently_bad=("") file output i j
+  for file in "$@"; do [ -n "$file" ] && selected+=("$file"); done
+  for file in "${selected[@]}"; do
+    [ -n "$file" ] || continue
+    output="$RUNS/$run_id/isolate-$(basename "$file").tsv"
+    if ! build_subset_and_test "$source" "$base" "$output" "$file"; then independently_bad+=("$file"); fi
+  done
+  if [ "${#independently_bad[@]}" -gt 1 ]; then
+    record_failure "$run_id" independent "${independently_bad[@]}"
+    return
+  fi
+  if [ "${#selected[@]}" -eq 3 ]; then
+    # Empty sentinel + exactly two real entries: both pass alone, so their pair
+    # is the minimal failing interaction already observed by the combined run.
+    record_failure "$run_id" interaction "${selected[@]}"
+    return
+  fi
+  # Larger groups: find the first failing pair. If none fails, the full selected
+  # set is the smallest subset this bounded isolation pass can prove.
+  for ((i=1; i<${#selected[@]}; i++)); do
+    for ((j=i+1; j<${#selected[@]}; j++)); do
+      output="$RUNS/$run_id/isolate-pair-$i-$j.tsv"
+      if ! build_subset_and_test "$source" "$base" "$output" "${selected[$i]}" "${selected[$j]}"; then
+        record_failure "$run_id" interaction "${selected[$i]}" "${selected[$j]}"
+        return
+      fi
+    done
+  done
+  record_failure "$run_id" interaction "${selected[@]}"
+}
+
+run_train() {
+  mc_assert_ticket_checkout || exit 2
+  mc_lock_acquire "$STATE/locks/train-conductor.lock" 3600 || die "another conductor held the train for an hour"
+  TRAIN_TMP=""
+  cleanup_train() {
+    if [ -n "$TRAIN_TMP" ]; then
+      case "$TRAIN_TMP" in "${TMPDIR:-/tmp}"/mc-train-run-*) rm -rf -- "$TRAIN_TMP" ;; esac
+    fi
+    mc_lock_release "$STATE/locks/train-conductor.lock"
+  }
+  trap cleanup_train EXIT
+
+  if [ -f "$(mc_primary_refresh_pending_file)" ]; then
+    echo "[mc-train] checking the recorded primary-refresh blocker before the next delivery."
+    mc_sync_local_main
+    MC_PRIMARY_ALLOW_DEPENDENCY_REFRESH=1 mc_refresh_primary_checkout
+    [ ! -f "$(mc_primary_refresh_pending_file)" ] || echo "[mc-train] primary refresh remains blocked; the receipt and recovery command are preserved." >&2
+  fi
+  mc_sync_local_main
+  local upstream
+  upstream="$(mc_canonical_upstream_url)" || die "could not determine GitHub upstream"
+
+  local ready_files=("") file
+  for file in "$READY"/*.tsv; do [ -f "$file" ] && ready_files+=("$file"); done
+  [ "${#ready_files[@]}" -gt 1 ] || { echo "[mc-train] no ready changes"; return 0; }
+
+  local run_id run_dir tmp repo base source selected_count=0 candidate_scope next_scope group_scope=docs group_risk=low current_head
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  run_dir="$RUNS/$run_id"
+  mkdir -p "$run_dir"
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/mc-train-run-XXXXXX")"
+  TRAIN_TMP="$tmp"
+  repo="$tmp/repo"
+  source="$(mc_worktree)"
+  git clone "$LOCAL_MAIN_REPO" "$repo" --quiet
+  git -C "$repo" config user.name 'Maincar Delivery Train'
+  git -C "$repo" config user.email 'delivery-train@maincar.local'
+  base="$(git -C "$repo" rev-parse HEAD)"
+  local selected=("")
+
+  for file in "${ready_files[@]}"; do
+    [ -n "$file" ] || continue
+    read_entry "$file"
+    current_head="$(git -C "$E_WORKTREE" rev-parse HEAD 2>/dev/null || true)"
+    if [ "$current_head" != "$E_HEAD" ] || [ "$(git -C "$E_WORKTREE" branch --show-current 2>/dev/null || true)" != "$E_BRANCH" ]; then
+      mv "$file" "$SUPERSEDED/$(basename "$file")"
+      echo "[mc-train] superseded: $E_ISSUE no longer points at ${E_HEAD:0:8}" >&2
+      continue
+    fi
+    if [ "$selected_count" -gt 0 ] && { [ "$E_RISK" = high ] || [ "$group_risk" = high ]; }; then break; fi
+    next_scope="$(combine_scope "$group_scope" "$E_SCOPE")"
+    if [ "$selected_count" -gt 0 ] && [ "$next_scope" = full ] && [ "$group_scope" != full ]; then break; fi
+    set +e
+    add_entry_to_repo "$repo" "$file" "Train $run_id: $E_ISSUE"
+    merge_rc=$?
+    set -e
+    if [ "$merge_rc" -ne 0 ]; then
+      git -C "$repo" merge --abort >/dev/null 2>&1 || true
+      if [ "$selected_count" -eq 0 ]; then
+        record_failure "$run_id" conflict-with-main "$file"
+        rm -rf "$tmp"
+        TRAIN_TMP=""
+        return 1
+      fi
+      break
+    fi
+    selected+=("$file")
+    selected_count=$((selected_count + 1))
+    group_scope="$next_scope"
+    [ "$E_RISK" = normal ] && [ "$group_risk" = low ] && group_risk=normal
+    [ "$E_RISK" = high ] && group_risk=high
+    [ "$E_RISK" = high ] && break
+  done
+  [ "$selected_count" -gt 0 ] || { rm -rf "$tmp"; TRAIN_TMP=""; die "no current compatible entry could be selected"; }
+
+  build_plan "${selected[@]}"
+  local train_head tests_file="$run_dir/tests.tsv"
+  train_head="$(git -C "$repo" rev-parse HEAD)"
+  set +e
+  run_gate_for_repo "$repo" "$source" "$base" "$tests_file" "${selected[@]}"
+  gate_rc=$?
+  set -e
+  if [ "$gate_rc" -ne 0 ]; then
+    echo "[mc-train] combined train failed; isolating the failing change or interaction." >&2
+    isolate_failure "$run_id" "$source" "$base" "${selected[@]}"
+    rm -rf "$tmp"
+    TRAIN_TMP=""
+    return 1
+  fi
+  if [ "$(git -C "$repo" rev-parse HEAD)" != "$train_head" ] || ! git -C "$repo" diff --quiet || ! git -C "$repo" diff --cached --quiet; then
+    echo "[mc-train] the combined tracked tree changed while tests ran; no receipt or delivery was recorded." >&2
+    rm -rf "$tmp"
+    TRAIN_TMP=""
+    return 1
+  fi
+
+  {
+    echo "train=$run_id"
+    echo "status=green"
+    echo "base=$base"
+    echo "head=$train_head"
+    echo "risk=$PLAN_RISK"
+    echo "scope=$PLAN_SCOPE"
+    echo "tests=$PLAN_TESTS"
+    echo "coverage=$PLAN_COVERAGE"
+    for file in "${selected[@]}"; do
+      [ -n "$file" ] || continue
+      read_entry "$file"
+      echo "member=$E_ISSUE,$E_HEAD,$E_BRANCH"
+    done
+  } > "$run_dir/receipt.tsv"
+
+  local merge_lock="$STATE/locks/merge.lock" current_base
+  echo "[mc-train] tested ${selected_count} change(s) on ${base:0:8}; waiting for the short merge slot."
+  mc_lock_acquire "$merge_lock" 1800 || die "merge slot stayed busy for 30 minutes"
+  git -C "$LOCAL_MAIN_REPO" fetch upstream --prune '+refs/heads/main:refs/heads/main' >/dev/null
+  current_base="$(git -C "$LOCAL_MAIN_REPO" rev-parse main)"
+  if [ "$current_base" != "$base" ]; then
+    mc_lock_release "$merge_lock"
+    echo "[mc-train] main advanced outside the train; selected entries remain ready for a new combined test." >&2
+    rm -rf "$tmp"
+    TRAIN_TMP=""
+    return 1
+  fi
+  git -C "$repo" push "$upstream" HEAD:main
+  mc_lock_release "$merge_lock"
+
+  mc_sync_local_main
+  MC_PRIMARY_ALLOW_DEPENDENCY_REFRESH=1 mc_refresh_primary_checkout
+  local delivered_main
+  delivered_main="$(git -C "$LOCAL_MAIN_REPO" rev-parse main)"
+  for file in "${selected[@]}"; do
+    [ -n "$file" ] || continue
+    read_entry "$file"
+    mc_record_delivery "$E_BRANCH" "$delivered_main" "$upstream"
+    rm -f "$file"
+  done
+  echo "delivered=$(mc_now)" >> "$run_dir/receipt.tsv"
+  echo "[mc-train] delivered ${selected_count} change(s) as ${delivered_main:0:8}; tested tree matched pushed tree."
+  rm -rf "$tmp"
+  TRAIN_TMP=""
+}
+
+case "${1:-}" in
+  enqueue) enqueue "$@" ;;
+  run) run_train ;;
+  status) status "$@" ;;
+  *) echo "usage: mc-train enqueue --risk <low|normal|high> --coverage <text> [--test workspace:path] | run | status [--count]" >&2; exit 2 ;;
+esac

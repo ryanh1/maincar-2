@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Fast static-check backstop. Full unit and integration verification belongs to
-# `mc-gate --delivery`, whose shared scheduler prevents sessions from saturating
-# the machine. See .claude/rules/committing.md for the full delivery workflow.
+# Fast static-check backstop. Risk-based unit and integration verification runs
+# once on the combined tree through `mc-train`. See
+# .claude/rules/committing.md for the full delivery workflow.
 #
 # Emergency bypass is `git commit --no-verify`. You do not need it for another
 # session's red — this hook already handles that. If you use it anyway, the

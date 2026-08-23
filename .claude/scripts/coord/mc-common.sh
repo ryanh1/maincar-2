@@ -54,7 +54,7 @@ mc_sync_local_main() {
   install -m 755 "$COORD_SCRIPTS_DIR/hooks/primary-pre-commit" "$COORD/primary-hooks/pre-commit"
   install -m 755 "$COORD_SCRIPTS_DIR/hooks/primary-pre-push" "$COORD/primary-hooks/pre-push"
   # This must be worktree-local. A normal local config is shared by every linked
-  # worktree, which would block the issue clone while trying to run mc-merge.
+  # worktree, which would block the issue clone while enqueueing for mc-train.
   git -C "$PRIMARY_CHECKOUT" config --local --unset-all core.hooksPath 2>/dev/null || true
   git -C "$PRIMARY_CHECKOUT" config --worktree core.hooksPath "$COORD/primary-hooks"
   git -C "$LOCAL_MAIN_REPO" remote remove origin 2>/dev/null || true
@@ -86,11 +86,22 @@ mc_sync_dependencies() {
   while IFS= read -r root; do
     [ -n "$root" ] || continue
     if [ "$root" = '.' ]; then
-      npm --prefix "$checkout" ci
+      (cd "$checkout" && npm ci) || return 1
     else
-      npm --prefix "$checkout/$root" ci
+      (cd "$checkout/$root" && npm ci) || return 1
     fi
   done
+}
+
+mc_provision_primary_checkout() {
+  local primary="$1" roots_csv="$2" prisma_required="$3"
+  if [ "$roots_csv" != "-" ]; then
+    printf '%s\n' "$roots_csv" | tr ',' '\n' | mc_sync_dependencies "$primary" || return 1
+  fi
+  if [ "$prisma_required" = "1" ]; then
+    echo "[mc-primary] applying tracked Prisma migrations."
+    (cd "$primary/server" && npx prisma migrate deploy) || return 1
+  fi
 }
 
 # A changed Prisma schema or migration can make a freshly refreshed server fail
@@ -101,56 +112,50 @@ mc_prisma_refresh_required() {
 }
 
 mc_primary_refresh_pending_file() { printf '%s\n' "$STATE/primary-refresh-pending.tsv"; }
+mc_primary_refresh_command() { printf '%s\n' 'npm run mirror-to-main'; }
 
 mc_record_primary_refresh_pending() {
-  local reason="$1" primary="${2:-}" target="${3:-}" file tmp primary_sha="-" target_sha="-"
+  local reason="$1" primary="${2:-}" target="${3:-}" command="${4:-}" file tmp primary_sha="-" target_sha="-"
   file="$(mc_primary_refresh_pending_file)"
+  [ -n "$command" ] || command="$(mc_primary_refresh_command)"
   [ -n "$primary" ] && primary_sha="$(git -C "$primary" rev-parse --short HEAD 2>/dev/null || echo '-')"
   [ -n "$target" ] && target_sha="$(git -C "$primary" rev-parse --short "$target" 2>/dev/null || echo '-')"
   tmp="$(mktemp "$STATE/.primary-refresh-pending.XXXXXX")"
-  printf '%s\t%s\t%s\t%s\n' "$(mc_now)" "$primary_sha" "$target_sha" "$reason" > "$tmp"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(mc_now)" "$primary_sha" "$target_sha" "$reason" "$command" > "$tmp"
   mv "$tmp" "$file"
   echo "[mc-primary] REFRESH REQUIRED: $reason" >&2
+  echo "[mc-primary] Next: $command" >&2
 }
 
 mc_clear_primary_refresh_pending() {
   rm -f "$(mc_primary_refresh_pending_file)"
 }
 
-# Print untracked files that an incoming tree would overwrite or turn into a
-# directory. Unrelated untracked files are safe: a fast-forward leaves them
-# intact, so blocking on all of them makes the reference checkout drift forever.
-mc_untracked_paths_conflicting_with_target() {
-  local primary="$1" target="$2" path ancestor kind found=1
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    if git -C "$primary" cat-file -e "$target:$path" 2>/dev/null; then
-      printf '%s\n' "$path"
-      found=0
-      continue
-    fi
-    ancestor="${path%/*}"
-    while [ "$ancestor" != "$path" ]; do
-      kind="$(git -C "$primary" cat-file -t "$target:$ancestor" 2>/dev/null || true)"
-      if [ "$kind" = "blob" ]; then
-        printf '%s\n' "$path"
-        found=0
-        break
-      fi
-      path="$ancestor"
-      ancestor="${path%/*}"
-    done
-  done < <(git -C "$primary" ls-files --others --exclude-standard)
-  return "$found"
+# A runnable checkout must not change under a local dev process. Tests inject a
+# deterministic PID list; normal operation checks only this project's default
+# listener ports and therefore does not mistake unrelated processes for Maincar.
+mc_primary_active_process_pids() {
+  local primary="${1:-$PRIMARY_CHECKOUT}" pid cwd
+  if [ -n "${MC_PRIMARY_ACTIVE_PROCESS_PIDS:-}" ]; then
+    printf '%s\n' "$MC_PRIMARY_ACTIVE_PROCESS_PIDS"
+    return
+  fi
+  command -v lsof >/dev/null 2>&1 || return 0
+  for port in 3010 5183 9140 4140 8140 9240; do
+    lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
+  done | sort -nu | while IFS= read -r pid; do
+    cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    case "$cwd/" in "$primary/"*) printf '%s\n' "$pid" ;; esac
+  done | tr '\n' ' ' | sed 's/[[:space:]]*$//'
 }
 
 # The primary checkout is for running and inspecting the application, never for
-# delivery. After GitHub accepts a delivery and the bare mirror is refreshed, it
-# can safely fast-forward that checkout only when doing so cannot overwrite local
-# work. A local deletion that is also present in delivered main is safe: the
-# checkout already has the delivered file state.
+# delivery. After GitHub accepts a delivery and the bare mirror is refreshed,
+# it can fast-forward only when the checkout is clean and no Maincar process is
+# actively using it.
 mc_refresh_primary_checkout() {
-  local primary branch target path unsafe dependency_roots refresh_requirements prisma_refresh_required=0 untracked_conflicts
+  local primary branch target dependency_roots dependency_roots_csv refresh_requirements prisma_refresh_required=0 active_pids local_changes
+  local pending_file pending_at pending_head pending_target pending_reason pending_command details retry_roots retry_prisma
   primary="$(cd "$PRIMARY_CHECKOUT" && pwd -P)" || {
     echo "[mc-primary] not refreshed: primary checkout is unavailable: $PRIMARY_CHECKOUT" >&2
     return 0
@@ -175,32 +180,56 @@ mc_refresh_primary_checkout() {
     return 0
   fi
 
-  untracked_conflicts="$(mc_untracked_paths_conflicting_with_target "$primary" "$target" || true)"
-  if [ -n "$untracked_conflicts" ]; then
-    echo "[mc-primary] not refreshed: delivered main would overwrite untracked path(s):" >&2
-    printf '%s\n' "$untracked_conflicts" | sed 's/^/  /' >&2
-    mc_record_primary_refresh_pending "delivered main conflicts with untracked path(s): $(tr '\n' ' ' <<< "$untracked_conflicts")" "$primary" "$target"
+  # The normal checkout is a person's runnable copy. Even unrelated untracked
+  # work is evidence that a person is using it, so do not advance source under
+  # that work. Preserve everything and leave one exact follow-up command.
+  local_changes="$(git -C "$primary" status --short)"
+  if [ -n "$local_changes" ]; then
+    echo "[mc-primary] not refreshed: the primary checkout has personal uncommitted or untracked work:" >&2
+    printf '%s\n' "$local_changes" | sed 's/^/  /' >&2
+    mc_record_primary_refresh_pending "primary checkout has personal work: $(printf '%s\n' "$local_changes" | tr '\n' ' ')" "$primary" "$target"
     return 0
   fi
 
-  # Compare only paths changed locally to delivered main. Comparing the entire
-  # worktree would incorrectly classify ordinary incoming files as local edits.
-  unsafe=0
-  while IFS= read -r path; do
-    [ -z "$path" ] && continue
-    if ! git -C "$primary" diff --quiet "$target" -- "$path"; then
-      unsafe=1
-      break
-    fi
-  done < <(git -C "$primary" diff --name-only HEAD)
-  if [ "$unsafe" -eq 1 ]; then
-    echo "[mc-primary] not refreshed: local changes are not already represented by delivered main:" >&2
-    git -C "$primary" status --short >&2
-    mc_record_primary_refresh_pending 'tracked local changes conflict with delivered main' "$primary" "$target"
+  active_pids="$(mc_primary_active_process_pids "$primary")"
+  if [ -n "$active_pids" ]; then
+    echo "[mc-primary] not refreshed: active local process(es) are using the runnable checkout: $active_pids" >&2
+    echo "[mc-primary] stop those processes, then run $(mc_primary_refresh_command)." >&2
+    mc_record_primary_refresh_pending "active local process(es): $active_pids" "$primary" "$target"
     return 0
+  fi
+
+  # Delivery and runnable-environment provisioning are separate durable facts.
+  # If GitHub and the primary source already advanced but npm/Prisma failed,
+  # retain enough detail to retry the exact local provisioning work safely.
+  pending_file="$(mc_primary_refresh_pending_file)"
+  if [ -f "$pending_file" ]; then
+    IFS=$'\t' read -r pending_at pending_head pending_target pending_reason pending_command < "$pending_file" || true
+    if [ "$(git -C "$primary" rev-parse --short HEAD)" = "$pending_target" ]; then
+      case "$pending_reason" in
+        'provisioning failed (roots='*)
+          details="${pending_reason#provisioning failed (roots=}"
+          retry_roots="${details%%; prisma=*}"
+          retry_prisma="${details##*; prisma=}"
+          retry_prisma="${retry_prisma%)}"
+          case "$retry_roots" in -|.|server|vite|firebase|*,*) ;; *) retry_roots="-" ;; esac
+          case "$retry_prisma" in 0|1) ;; *) retry_prisma=0 ;; esac
+          echo "[mc-primary] retrying pending runnable-environment provisioning."
+          if mc_provision_primary_checkout "$primary" "$retry_roots" "$retry_prisma"; then
+            mc_clear_primary_refresh_pending
+            echo "[mc-primary] runnable environment provisioning is current."
+          else
+            mc_record_primary_refresh_pending "$pending_reason" "$primary" "$target"
+          fi
+          return 0
+          ;;
+      esac
+    fi
   fi
 
   dependency_roots="$(mc_changed_dependency_roots "$primary" "$target")"
+  dependency_roots_csv="$(printf '%s\n' "$dependency_roots" | sed '/^$/d' | paste -sd, -)"
+  [ -n "$dependency_roots_csv" ] || dependency_roots_csv="-"
   refresh_requirements=""
   if [ -n "$dependency_roots" ]; then refresh_requirements="dependency manifests"; fi
   if mc_prisma_refresh_required "$primary" "$target"; then
@@ -209,7 +238,7 @@ mc_refresh_primary_checkout() {
   fi
   if [ -n "$refresh_requirements" ] && [ "${MC_PRIMARY_ALLOW_DEPENDENCY_REFRESH:-}" != "1" ]; then
     echo "[mc-primary] not refreshed: delivered $refresh_requirements changed; keeping the runnable checkout on $(git -C "$primary" rev-parse --short HEAD)." >&2
-    echo "[mc-primary] run ./.claude/scripts/coord/mc-local-main refresh to fast-forward and synchronize the runnable environment." >&2
+    echo "[mc-primary] run $(mc_primary_refresh_command) to fast-forward and synchronize the runnable environment." >&2
     mc_record_primary_refresh_pending "delivered $refresh_requirements changed" "$primary" "$target"
     return 0
   fi
@@ -218,11 +247,10 @@ mc_refresh_primary_checkout() {
     echo "[mc-primary] fast-forwarded runnable checkout to $(git -C "$primary" rev-parse --short HEAD)."
     if [ -n "$dependency_roots" ]; then
       echo "[mc-primary] synchronizing dependencies for: $(tr '\n' ' ' <<< "$dependency_roots")"
-      printf '%s\n' "$dependency_roots" | mc_sync_dependencies "$primary"
     fi
-    if [ "$prisma_refresh_required" -eq 1 ]; then
-      echo "[mc-primary] applying tracked Prisma migrations."
-      (cd "$primary/server" && npx prisma migrate deploy)
+    if ! mc_provision_primary_checkout "$primary" "$dependency_roots_csv" "$prisma_refresh_required"; then
+      mc_record_primary_refresh_pending "provisioning failed (roots=$dependency_roots_csv; prisma=$prisma_refresh_required)" "$primary" "$target"
+      return 0
     fi
     mc_clear_primary_refresh_pending
   else
@@ -274,10 +302,8 @@ mc_record_delivery() {
   mv "$tmp" "$STATE/deliveries/$issue.tsv"
 }
 
-# A delivery gate proves one immutable pair: the ticket HEAD it ran and the
-# origin/main tip that HEAD was rebased onto. The receipt is intentionally kept
-# outside every checkout so mc-merge can validate it after taking its short
-# global lock without trusting an uncommitted or branch-local marker.
+# Legacy per-branch receipt helpers remain only for the isolated pre-train merge
+# regression fixture. Production delivery receipts are written by mc-train.
 mc_delivery_receipt_file() {
   local head="$1"
   printf '%s\n' "$STATE/delivery-gates/$head.tsv"
@@ -296,14 +322,12 @@ mc_require_delivery_receipt() {
   local head="$1" base="$2" branch="$3" file receipt_head receipt_base receipt_branch receipt_at
   file="$(mc_delivery_receipt_file "$head")"
   if [ ! -r "$file" ]; then
-    echo "mc-merge: no successful delivery-gate receipt for this branch head." >&2
-    echo "  Run: git fetch origin && git rebase origin/main && ./.claude/scripts/coord/mc-gate --delivery" >&2
+    echo "mc-merge fixture: no legacy receipt for this branch head." >&2
     return 1
   fi
   IFS=$'\t' read -r receipt_head receipt_base receipt_branch receipt_at < "$file" || true
   if [ "$receipt_head" != "$head" ] || [ "$receipt_base" != "$base" ] || [ "$receipt_branch" != "$branch" ]; then
-    echo "mc-merge: delivery-gate receipt is stale for the current branch or main." >&2
-    echo "  Run: git fetch origin && git rebase origin/main && ./.claude/scripts/coord/mc-gate --delivery" >&2
+    echo "mc-merge fixture: legacy receipt is stale for the current branch or main." >&2
     return 1
   fi
 }
@@ -370,53 +394,63 @@ mc_lock_acquire() {
 }
 mc_lock_release() { rm -rf "$1" 2>/dev/null; }
 
-# --- scope classifier for mc-gate ---
-# Reads changed file paths, one per line, on stdin. Prints exactly ONE word:
-#
-#   full    run every check (the safe default)
-#   server  only server code changed -> skip the WEB test suite
-#   web     only web code changed    -> skip the SERVER test suite
-#   docs    only markdown/docs changed -> skip typecheck/lint/build/tests
-#
-# The whole point is to run LESS only when that is provably safe, so the design
-# rule is: anything not clearly docs, server, or web escalates to `full`. A file
-# in an unknown location, a dependency manifest, a schema change, or a mix of
-# server AND web all resolve to `full`. "When in doubt, run more" is not a hope
-# here — it is the default branch of the case below and every fall-through.
-#
-# It is a pure function of its stdin so it can be tested without a git repo.
-mc_classify_files() {
-  local has_full=0 has_server=0 has_web=0 has_docs=0 any=0 f
+# --- delivery-train risk and scope classifiers --------------------------------
+# These are conservative, auditable floors. The enqueue command records both
+# the declared risk and this path-derived suggestion. A person may explicitly
+# classify a contained client/server change as low, but no declaration can
+# lower a high-risk floor (dependencies, data, auth, permissions, billing,
+# scheduling, shared coordination, concurrency, or a cross-system change).
+mc_scope_for_files() {
+  local has_full=0 has_server=0 has_web=0 any=0 f
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     any=1
     case "$f" in
-      # FULL: schema, migrations, any dependency manifest/lockfile, any tsconfig.
-      # These can change how EVERYTHING builds or behaves, so they force the whole
-      # gate no matter where they live.
       server/prisma/schema.prisma|server/prisma/migrations/*) has_full=1 ;;
       package.json|package-lock.json|*/package.json|*/package-lock.json) has_full=1 ;;
       tsconfig*.json|*/tsconfig*.json) has_full=1 ;;
-      # Server code. Checked before the markdown rule on purpose: a server/README.md
-      # counts as `server`, not `docs` — over-running is the safe direction.
       server/*) has_server=1 ;;
-      # Web code (the Vite SPA). Its own config (vite.config.ts) lives here too and
-      # is web-scoped.
       vite/*) has_web=1 ;;
-      # Docs: any markdown anywhere, or anything under docs/.
-      docs/*|*.md) has_docs=1 ;;
-      # Anything else — .github/, firebase/, scripts/, dotfiles, unknown paths —
-      # is NOT provably safe to shortcut, so it runs the full gate.
+      docs/*|*.md) ;;
       *) has_full=1 ;;
     esac
   done
-  if [ "$any" -eq 0 ]; then echo full; return; fi          # empty diff -> be safe
+  if [ "$any" -eq 0 ]; then echo full; return; fi
   if [ "$has_full" -eq 1 ]; then echo full; return; fi
   if [ "$has_server" -eq 1 ] && [ "$has_web" -eq 1 ]; then echo full; return; fi
   if [ "$has_server" -eq 1 ]; then echo server; return; fi
   if [ "$has_web" -eq 1 ]; then echo web; return; fi
   echo docs
 }
+
+mc_risk_for_files() {
+  local scope f lower sensitive=0
+  # Read once because both the sensitivity scan and scope classifier need the
+  # exact same immutable list.
+  local files
+  files="$(cat)"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    lower="$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')"
+    case "$lower" in
+      package.json|package-lock.json|*/package.json|*/package-lock.json|\
+      agents.md|claude.md|server/prisma/*|.githooks/*|.claude/rules/*|.claude/scripts/coord/*|\
+      *auth*|*permission*|*billing*|*schedule*|*concurren*|*infrastructure*)
+        sensitive=1
+        ;;
+    esac
+  done <<< "$files"
+  [ "$sensitive" -eq 1 ] && { echo high; return; }
+  scope="$(printf '%s\n' "$files" | mc_scope_for_files)"
+  case "$scope" in
+    docs) echo low ;;
+    server|web) echo normal ;;
+    *) echo high ;;
+  esac
+}
+
+# Backward-compatible name for callers that only need suite scope.
+mc_classify_files() { mc_scope_for_files; }
 
 # Print the set of files that differ from the merge base with origin/main, UNION
 # the working-tree changes (staged, unstaged, and untracked). The union is what

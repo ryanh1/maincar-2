@@ -1,36 +1,34 @@
 #!/usr/bin/env bash
-# Runs bounded focused checks or a full delivery gate while holding a global
-# worker-budget slot. The M5 Pro defaults reserve six of eighteen CPU workers
-# for the OS, editor, containers, and other sessions.
-#
-#   mc-gate --classify            # print the scope decision and changed files, run nothing
-#   mc-gate --focused -- npm --prefix vite exec vitest run src/pages/Records.test.tsx
-#   mc-gate --delivery            # full verify; only this class can deliver
-#   MC_GATE_OVERRIDE=1 MC_GATE_DELIVERY_LIMIT=1 mc-gate --delivery
-#
-# The class is explicit. `--focused` accepts only one named Vitest or Playwright
-# file, so an arbitrary shell command can never quietly borrow the focused lane.
+# Runs one bounded development test or the risk-specific verification plan for
+# an already-built delivery train. Delivery trains never reserve or run
+# Playwright; every admitted slot represents the Vitest workers it can start.
 set -euo pipefail
 source "$(dirname "$0")/mc-common.sh"
 mc_assert_ticket_checkout || exit 2
 
-# --classify: print the decision and the files behind it, then stop. No slot, no
-# checks. This is the window into the classifier.
 if [ "${1:-}" = "--classify" ]; then
   cd "$(mc_worktree)"
   if files="$(mc_changed_files)" && [ -n "$files" ]; then
-    scope="$(printf '%s\n' "$files" | mc_classify_files)"
+    echo "risk: $(printf '%s\n' "$files" | mc_risk_for_files)"
+    echo "scope: $(printf '%s\n' "$files" | mc_scope_for_files)"
   else
-    scope="full"; files=""
+    files=""
+    echo "risk: high"
+    echo "scope: full"
   fi
-  echo "scope: $scope"
   echo "changed files (vs merge-base with origin/main, plus working tree):"
   if [ -n "$files" ]; then printf '%s\n' "$files" | sed 's/^/  /'
-  else echo "  (none / could not determine — defaulting to full)"; fi
+  else echo "  (none / could not determine — defaulting to high/full)"; fi
   exit 0
 fi
 
 CLASS=""
+RISK=""
+SCOPE=""
+COVERAGE=""
+# Bash 3.2 treats an empty array as unbound under `set -u`. Keep one empty
+# sentinel and skip it in both validation and execution.
+TESTS=("")
 if [ "${1:-}" = "--focused" ]; then
   CLASS="focused"
   shift
@@ -39,15 +37,43 @@ if [ "${1:-}" = "--focused" ]; then
     exit 2
   fi
   shift
-elif [ "${1:-}" = "--delivery" ]; then
-  CLASS="delivery"
-  shift
-  if [ "$#" -ne 0 ]; then
-    echo "[mc-gate] delivery does not accept a command; it always runs the full verification suite." >&2
+  if [ "$#" -ne 7 ] || [ "$1" != "npm" ] || [ "$2" != "--prefix" ] || { [ "$3" != "server" ] && [ "$3" != "vite" ]; } || [ "$4" != "exec" ] || [ "$5" != "vitest" ] || [ "$6" != "run" ] || [[ "$7" != *.test.* && "$7" != *.spec.* ]] || [[ "$7" = /* || "$7" = *..* ]]; then
+    echo "[mc-gate] focused checks must name one Vitest file with: npm --prefix <server|vite> exec vitest run <file>." >&2
     exit 2
   fi
+elif [ "${1:-}" = "--train" ]; then
+  CLASS="train"
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --risk) RISK="${2:-}"; shift 2 ;;
+      --scope) SCOPE="${2:-}"; shift 2 ;;
+      --coverage) COVERAGE="${2:-}"; shift 2 ;;
+      --test) TESTS+=("${2:-}"); shift 2 ;;
+      *) echo "[mc-gate] unknown train option: $1" >&2; exit 2 ;;
+    esac
+  done
+  case "$RISK" in low|normal|high) ;; *) echo "[mc-gate] train risk must be low, normal, or high." >&2; exit 2 ;; esac
+  case "$SCOPE" in docs|server|web|full) ;; *) echo "[mc-gate] train scope must be docs, server, web, or full." >&2; exit 2 ;; esac
+  [ -n "$COVERAGE" ] || { echo "[mc-gate] train coverage is required." >&2; exit 2; }
+  if [ "$RISK" = "normal" ] && [ "$SCOPE" = "full" ]; then
+    echo "[mc-gate] a change spanning server and web is high risk, not normal." >&2
+    exit 2
+  fi
+  for test_spec in "${TESTS[@]}"; do
+    [ -n "$test_spec" ] || continue
+    workspace="${test_spec%%:*}"
+    test_path="${test_spec#*:}"
+    if { [ "$workspace" != "server" ] && [ "$workspace" != "vite" ]; } || [ "$test_path" = "$test_spec" ] || [[ "$test_path" = /* || "$test_path" = *..* ]] || [[ "$test_path" != *.test.* && "$test_path" != *.spec.* ]]; then
+      echo "[mc-gate] train tests must use server:path.test.* or vite:path.test.*." >&2
+      exit 2
+    fi
+  done
+elif [ "${1:-}" = "--delivery" ]; then
+  echo "[mc-gate] per-session delivery validation moved to mc-train; enqueue the committed change instead." >&2
+  exit 2
 else
-  echo "[mc-gate] choose --focused or --delivery explicitly (or use --classify)." >&2
+  echo "[mc-gate] choose --focused or --train explicitly (or use --classify)." >&2
   exit 2
 fi
 
@@ -56,14 +82,12 @@ is_nonnegative_integer() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; 
 
 DEFAULT_MACHINE_WORKERS=18
 DEFAULT_RESERVED_SYSTEM_WORKERS=6
-DEFAULT_GLOBAL_WORKER_BUDGET=12
-DEFAULT_DELIVERY_LIMIT=2
-DEFAULT_VITEST_WORKERS=4
-DEFAULT_PLAYWRIGHT_WORKERS=2
+DEFAULT_JOB_LIMIT=4
+DEFAULT_VITEST_WORKERS=3
 
 override=0
-if [ "${MC_GATE_OVERRIDE:-}" = "1" ]; then override=1; fi
-for setting in MC_GATE_MACHINE_WORKERS MC_GATE_RESERVED_SYSTEM_WORKERS MC_GATE_GLOBAL_WORKER_BUDGET MC_GATE_DELIVERY_LIMIT MC_GATE_VITEST_WORKERS MC_GATE_PLAYWRIGHT_WORKERS; do
+[ "${MC_GATE_OVERRIDE:-}" = "1" ] && override=1
+for setting in MC_GATE_MACHINE_WORKERS MC_GATE_RESERVED_SYSTEM_WORKERS MC_GATE_JOB_LIMIT MC_GATE_VITEST_WORKERS; do
   if [ -n "${!setting:-}" ] && [ "$override" -ne 1 ]; then
     echo "[mc-gate] $setting requires MC_GATE_OVERRIDE=1; defaults protect the shared M5 Pro budget." >&2
     exit 2
@@ -72,73 +96,44 @@ done
 
 MACHINE_WORKERS="${MC_GATE_MACHINE_WORKERS:-$DEFAULT_MACHINE_WORKERS}"
 RESERVED_SYSTEM_WORKERS="${MC_GATE_RESERVED_SYSTEM_WORKERS:-$DEFAULT_RESERVED_SYSTEM_WORKERS}"
-GLOBAL_WORKER_BUDGET="${MC_GATE_GLOBAL_WORKER_BUDGET:-$DEFAULT_GLOBAL_WORKER_BUDGET}"
-DELIVERY_LIMIT="${MC_GATE_DELIVERY_LIMIT:-$DEFAULT_DELIVERY_LIMIT}"
-DELIVERY_VITEST_WORKERS="${MC_GATE_VITEST_WORKERS:-$DEFAULT_VITEST_WORKERS}"
-DELIVERY_PLAYWRIGHT_WORKERS="${MC_GATE_PLAYWRIGHT_WORKERS:-$DEFAULT_PLAYWRIGHT_WORKERS}"
-
-if ! is_positive_integer "$MACHINE_WORKERS" || ! is_nonnegative_integer "$RESERVED_SYSTEM_WORKERS" || ! is_positive_integer "$GLOBAL_WORKER_BUDGET" || ! is_positive_integer "$DELIVERY_LIMIT" || ! is_positive_integer "$DELIVERY_VITEST_WORKERS" || ! is_positive_integer "$DELIVERY_PLAYWRIGHT_WORKERS"; then
+JOB_LIMIT="${MC_GATE_JOB_LIMIT:-$DEFAULT_JOB_LIMIT}"
+TRAIN_VITEST_WORKERS="${MC_GATE_VITEST_WORKERS:-$DEFAULT_VITEST_WORKERS}"
+if ! is_positive_integer "$MACHINE_WORKERS" || ! is_nonnegative_integer "$RESERVED_SYSTEM_WORKERS" || ! is_positive_integer "$JOB_LIMIT" || ! is_positive_integer "$TRAIN_VITEST_WORKERS"; then
   echo "[mc-gate] scheduler settings must be positive integers (reserve may be zero)." >&2
   exit 2
 fi
-if [ "$RESERVED_SYSTEM_WORKERS" -ge "$MACHINE_WORKERS" ] || [ "$GLOBAL_WORKER_BUDGET" -gt $((MACHINE_WORKERS - RESERVED_SYSTEM_WORKERS)) ]; then
-  echo "[mc-gate] global worker budget must leave the configured system headroom." >&2
+AVAILABLE_WORKERS=$((MACHINE_WORKERS - RESERVED_SYSTEM_WORKERS))
+if [ "$AVAILABLE_WORKERS" -lt 1 ] || [ $((JOB_LIMIT * TRAIN_VITEST_WORKERS)) -gt "$AVAILABLE_WORKERS" ]; then
+  echo "[mc-gate] $JOB_LIMIT jobs × $TRAIN_VITEST_WORKERS real Vitest workers exceeds available worker capacity $AVAILABLE_WORKERS." >&2
   exit 2
 fi
 
 if [ "$CLASS" = "focused" ]; then
   VITEST_WORKERS=1
-  PLAYWRIGHT_WORKERS=1
-  if [ "$#" -ne 7 ] || [ "$1" != "npm" ] || [ "$2" != "--prefix" ] || { [ "$3" != "server" ] && [ "$3" != "vite" ]; } || [ "$4" != "exec" ] || { [ "$5" != "vitest" ] && [ "$5" != "playwright" ]; }; then
-    echo "[mc-gate] focused checks must name one test file with: npm --prefix <server|vite> exec <vitest|playwright> <run|test> <file>." >&2
-    exit 2
-  fi
-  if { [ "$5" = "vitest" ] && [ "$6" != "run" ]; } || { [ "$5" = "playwright" ] && { [ "$3" != "vite" ] || [ "$6" != "test" ]; }; } || [[ "$7" != *.test.* && "$7" != *.spec.* ]]; then
-    echo "[mc-gate] focused checks must name one test file with: npm --prefix <server|vite> exec <vitest|playwright> <run|test> <file>." >&2
-    exit 2
-  fi
-  GATE_WORKERS=$((VITEST_WORKERS + PLAYWRIGHT_WORKERS))
 else
-  VITEST_WORKERS="$DELIVERY_VITEST_WORKERS"
-  PLAYWRIGHT_WORKERS="$DELIVERY_PLAYWRIGHT_WORKERS"
-  GATE_WORKERS=$((VITEST_WORKERS + PLAYWRIGHT_WORKERS))
-  if [ $((DELIVERY_LIMIT * GATE_WORKERS)) -gt "$GLOBAL_WORKER_BUDGET" ]; then
-    echo "[mc-gate] $DELIVERY_LIMIT delivery gates × $GATE_WORKERS framework workers exceeds global worker budget $GLOBAL_WORKER_BUDGET." >&2
-    exit 2
-  fi
+  VITEST_WORKERS="$TRAIN_VITEST_WORKERS"
 fi
-
 if [ "$override" -eq 1 ]; then
   echo "[mc-gate] WARNING: manual scheduler override is active; this can reduce headroom or change queue capacity." >&2
 fi
 
 SEM="$STATE/locks/gate"
 mkdir -p "$SEM"
-
 reap_slots_and_measure() {
+  ACTIVE_JOBS=0
   ACTIVE_WORKERS=0
-  ACTIVE_DELIVERIES=0
-  local d owner workers class
+  local d owner workers
   for d in "$SEM"/slot-*; do
     [ -d "$d" ] || continue
-    owner=$(cat "$d/pid" 2>/dev/null || echo "")
+    owner="$(cat "$d/pid" 2>/dev/null || echo "")"
     if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then
       rm -rf "$d"
       continue
     fi
-    workers=$(cat "$d/workers" 2>/dev/null || echo "")
-    class=$(cat "$d/class" 2>/dev/null || echo "unknown")
-    # Older mc-gate versions recorded only a PID. Treat a live legacy slot as
-    # the entire budget so a rollout never runs a new bounded gate beside an
-    # unbounded old full gate.
-    if ! is_positive_integer "$workers"; then
-      workers="$GLOBAL_WORKER_BUDGET"
-      class="delivery"
-    fi
+    workers="$(cat "$d/workers" 2>/dev/null || echo "")"
+    if ! is_positive_integer "$workers"; then workers="$AVAILABLE_WORKERS"; fi
+    ACTIVE_JOBS=$((ACTIVE_JOBS + 1))
     ACTIVE_WORKERS=$((ACTIVE_WORKERS + workers))
-    if [ "$class" = "delivery" ]; then
-      ACTIVE_DELIVERIES=$((ACTIVE_DELIVERIES + 1))
-    fi
   done
 }
 
@@ -147,76 +142,76 @@ acquire() {
   while :; do
     if mc_lock_acquire "$SEM/admission.lock" 15; then
       reap_slots_and_measure
-      if { [ "$CLASS" != "delivery" ] || [ "$ACTIVE_DELIVERIES" -lt "$DELIVERY_LIMIT" ]; } && [ $((ACTIVE_WORKERS + GATE_WORKERS)) -le "$GLOBAL_WORKER_BUDGET" ]; then
+      if [ "$ACTIVE_JOBS" -lt "$JOB_LIMIT" ] && [ $((ACTIVE_WORKERS + VITEST_WORKERS)) -le "$AVAILABLE_WORKERS" ]; then
         SLOT_DIR="$SEM/slot-$$"
         mkdir "$SLOT_DIR"
         printf '%s\n' "$$" > "$SLOT_DIR/pid"
         printf '%s\n' "$CLASS" > "$SLOT_DIR/class"
-        printf '%s\n' "$GATE_WORKERS" > "$SLOT_DIR/workers"
+        printf '%s\n' "$VITEST_WORKERS" > "$SLOT_DIR/workers"
         mc_lock_release "$SEM/admission.lock"
         return 0
       fi
       mc_lock_release "$SEM/admission.lock"
     fi
-    if [ "$waited" -eq 0 ]; then echo "[mc-gate] $CLASS lane is at capacity — queued (delivery limit $DELIVERY_LIMIT, worker budget $GLOBAL_WORKER_BUDGET)."; fi
+    if [ "$waited" -eq 0 ]; then echo "[mc-gate] $CLASS lane is at capacity — queued (limit $JOB_LIMIT, available workers $AVAILABLE_WORKERS)."; fi
     [ "$waited" -ge "$timeout" ] && { echo "[mc-gate] waited an hour, giving up" >&2; return 1; }
-    sleep 1; waited=$((waited+1))
+    sleep 1
+    waited=$((waited + 1))
   done
 }
 
 SLOT_DIR=""
 acquire || { echo "[mc-gate] could not get a runner slot." >&2; exit 1; }
 trap '[ -n "$SLOT_DIR" ] && rm -rf "$SLOT_DIR"' EXIT
-echo "[mc-gate] running (class $CLASS, slot $(basename "$SLOT_DIR"), limit $DELIVERY_LIMIT, vitest=$VITEST_WORKERS, playwright=$PLAYWRIGHT_WORKERS, global budget=$GLOBAL_WORKER_BUDGET)"
-mc_log "gate acquire $(basename "$SLOT_DIR") class=$CLASS workers=$GATE_WORKERS"
-
+echo "[mc-gate] running (class $CLASS, slot $(basename "$SLOT_DIR"), limit $JOB_LIMIT, vitest=$VITEST_WORKERS, available workers=$AVAILABLE_WORKERS)"
+mc_log "gate acquire $(basename "$SLOT_DIR") class=$CLASS workers=$VITEST_WORKERS"
 cd "$(mc_worktree)"
 
-TESTED_HEAD=""
-TESTED_BASE=""
-TESTED_BRANCH=""
-if [ "$CLASS" = "delivery" ]; then
-  if [ -n "$(git status --porcelain)" ]; then
-    echo "[mc-gate] delivery gates require a clean committed branch so their receipt identifies an exact tree." >&2
-    echo "  Commit your feature, then run: git fetch origin && git rebase origin/main && mc-gate --delivery" >&2
-    exit 2
-  fi
-  TESTED_HEAD="$(git rev-parse HEAD)"
-  TESTED_BASE="$(git rev-parse origin/main)"
-  TESTED_BRANCH="$(mc_branch)"
-  if [ "$(git merge-base HEAD origin/main)" != "$TESTED_BASE" ]; then
-    echo "[mc-gate] delivery gates require HEAD to be rebased onto the current origin/main." >&2
-    echo "  Run: git fetch origin && git rebase origin/main, then retry." >&2
-    exit 2
-  fi
-fi
-
-# Ensure Prisma client is in sync. Generation is mandatory and a failure stops
-# the gate immediately instead of becoming a misleading typecheck failure later.
 if ! mc_ensure_prisma_client; then
   echo "[mc-gate] Could not bring the Prisma client in sync — see the error above." >&2
   mc_log "gate refused (prisma client regenerate failed)"
   exit 3
 fi
 
-# set +e around the run: with `set -e` a failing gate exits right here,
-# so rc= and the log line below never execute and events.tsv only ever records rc=0.
+record_test() {
+  [ -z "${MC_GATE_TEST_LOG:-}" ] || printf '%s\t%s\t%s\n' "$RISK" "$COVERAGE" "$*" >> "$MC_GATE_TEST_LOG"
+}
+run_check() {
+  record_test "$*"
+  VITEST_MAX_WORKERS="$VITEST_WORKERS" "$@"
+}
+run_train_plan() {
+  local test_spec workspace test_path
+  if [ "$RISK" = "high" ]; then
+    run_check npm run verify
+    return
+  fi
+  run_check npm run typecheck
+  run_check npm run lint
+  for test_spec in "${TESTS[@]}"; do
+    [ -n "$test_spec" ] || continue
+    workspace="${test_spec%%:*}"
+    test_path="${test_spec#*:}"
+    run_check npm --prefix "$workspace" exec vitest run "$test_path"
+  done
+  if [ "$RISK" = "normal" ]; then
+    case "$SCOPE" in
+      server) run_check npm run test:server ;;
+      web) run_check npm run test:web ;;
+      docs) ;;
+    esac
+  fi
+}
+
 set +e
 if [ "$CLASS" = "focused" ]; then
-  VITEST_MAX_WORKERS="$VITEST_WORKERS" PLAYWRIGHT_WORKERS="$PLAYWRIGHT_WORKERS" "$@"
+  VITEST_MAX_WORKERS="$VITEST_WORKERS" "$@"
+  rc=$?
 else
-  VITEST_MAX_WORKERS="$VITEST_WORKERS" PLAYWRIGHT_WORKERS="$PLAYWRIGHT_WORKERS" npm run verify
+  run_train_plan
+  rc=$?
 fi
-rc=$?
 set -e
 mc_log "gate release rc=$rc"
-[ "$rc" -ne 0 ] && echo "[mc-gate] FAILED rc=$rc — before you debug: does the failing file fail on its own? Under load it probably will not."
-if [ "$rc" -eq 0 ] && [ "$CLASS" = "delivery" ]; then
-  if [ -n "$(git status --porcelain)" ] || [ "$(git rev-parse HEAD)" != "$TESTED_HEAD" ]; then
-    echo "[mc-gate] delivery tree changed while verification ran; no receipt was recorded." >&2
-    exit 1
-  fi
-  mc_record_delivery_gate "$TESTED_HEAD" "$TESTED_BASE" "$TESTED_BRANCH"
-  echo "[mc-gate] delivery receipt recorded for $(git rev-parse --short "$TESTED_HEAD") on $(git rev-parse --short "$TESTED_BASE")"
-fi
-exit $rc
+[ "$rc" -ne 0 ] && echo "[mc-gate] FAILED rc=$rc — isolate the named test before changing the risk plan." >&2
+exit "$rc"

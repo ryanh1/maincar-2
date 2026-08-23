@@ -5,12 +5,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 
-# Two six-worker delivery gates fit inside the measured twelve-worker default,
-# which reserves six of eighteen M5 Pro workers for the system and other tools.
-if ! grep -Fx 'DEFAULT_DELIVERY_LIMIT=2' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
-   ! grep -Fx 'DEFAULT_GLOBAL_WORKER_BUDGET=12' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
-   ! grep -Fx 'DEFAULT_RESERVED_SYSTEM_WORKERS=6' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null; then
-  echo 'mc-gate default worker budget is not bounded for two delivery gates' >&2
+# Four three-worker jobs fit inside the measured twelve-worker capacity. There
+# is no Playwright reservation because the train never invokes Playwright.
+if ! grep -Fx 'DEFAULT_JOB_LIMIT=4' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
+   ! grep -Fx 'DEFAULT_VITEST_WORKERS=3' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null || \
+   grep -F 'DEFAULT_PLAYWRIGHT' "$ROOT/.claude/scripts/coord/mc-gate" >/dev/null; then
+  echo 'mc-gate defaults do not preserve four real non-browser jobs' >&2
   exit 1
 fi
 
@@ -28,14 +28,30 @@ git -C "$SANDBOX/primary" commit --allow-empty -m 'Initial main' --quiet
 git -C "$SANDBOX/primary" remote add origin "$SANDBOX/upstream.git"
 git -C "$SANDBOX/primary" push origin main --quiet
 
-# The old checkout source becomes dirty. Ticket delivery must not depend on it.
-touch "$SANDBOX/primary/unrelated-wip"
-
 env_for_test=(
   MC_STATE_HOME="$SANDBOX/state"
   MC_MAIN_CHECKOUT="$SANDBOX/primary"
   MC_LOCAL_MAIN_REPO="$SANDBOX/state/local-main.git"
 )
+LEGACY_MERGE="$ROOT/.claude/scripts/coord/tests/fixtures/mc-merge-legacy"
+
+classify() {
+  local function_name="$1" files="$2"
+  printf '%s\n' "$files" | env "${env_for_test[@]}" bash -c 'source "$1/.claude/scripts/coord/mc-common.sh"; "$2"' _ "$ROOT" "$function_name"
+}
+
+test "$(classify mc_risk_for_files 'docs/delivery.md')" = low
+test "$(classify mc_scope_for_files 'docs/delivery.md')" = docs
+test "$(classify mc_risk_for_files 'server/src/routes/companies.ts')" = normal
+test "$(classify mc_scope_for_files 'server/src/routes/companies.ts')" = server
+test "$(classify mc_risk_for_files 'vite/src/pages/Companies.tsx')" = normal
+test "$(classify mc_scope_for_files 'vite/src/pages/Companies.tsx')" = web
+test "$(classify mc_risk_for_files 'server/src/routes/auth.ts')" = high
+test "$(classify mc_risk_for_files $'server/src/routes/companies.ts\nvite/src/pages/Companies.tsx')" = high
+test "$(classify mc_scope_for_files $'server/src/routes/companies.ts\nvite/src/pages/Companies.tsx')" = full
+test "$(classify mc_risk_for_files 'package-lock.json')" = high
+test "$(classify mc_risk_for_files 'AGENTS.md')" = high
+test "$(classify mc_risk_for_files '.claude/rules/testing.md')" = high
 
 # The real delivery gate writes this receipt after a green full suite. These
 # mirror tests exercise merge mechanics with no application test runtime, so
@@ -88,7 +104,7 @@ record_delivery_gate "$SANDBOX/issue-worktree"
 
 (
   cd "$SANDBOX/issue-worktree"
-  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Merge issue change'
+  env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'Merge issue change'
 )
 
 if [ "$(git -C "$SANDBOX/issue-worktree" remote get-url origin)" != "$SANDBOX/state/local-main.git" ]; then
@@ -101,11 +117,7 @@ if ! git -C "$SANDBOX/upstream.git" merge-base --is-ancestor "$(git -C "$SANDBOX
   exit 1
 fi
 if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
-  echo 'primary checkout did not refresh across unrelated untracked files' >&2
-  exit 1
-fi
-if [ ! -e "$SANDBOX/primary/unrelated-wip" ]; then
-  echo 'primary refresh discarded an unrelated untracked file' >&2
+  echo 'primary checkout did not refresh after a clean delivery' >&2
   exit 1
 fi
 
@@ -126,9 +138,10 @@ if [ "$(git -C "$SANDBOX/issue-worktree" rev-parse origin/main)" != "$(git -C "$
   exit 1
 fi
 
-# A locally deleted tracked file is safe when the delivered main deletes it.
-# Unrelated untracked files remain in place across the refresh.
+# A locally deleted tracked file still counts as personal work. Clear the
+# intentional deletion before testing the clean automatic refresh path.
 rm -f "$SANDBOX/primary/tracked-placeholder"
+git -C "$SANDBOX/primary" checkout -- tracked-placeholder
 git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-primary-refresh" --quiet
 git -C "$SANDBOX/issue-primary-refresh" config user.name 'Coordination test'
 git -C "$SANDBOX/issue-primary-refresh" config user.email 'coordination-test@example.test'
@@ -140,7 +153,7 @@ git -C "$SANDBOX/issue-primary-refresh" commit -m 'Refresh primary checkout' --q
 record_delivery_gate "$SANDBOX/issue-primary-refresh"
 (
   cd "$SANDBOX/issue-primary-refresh"
-  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Refresh primary checkout'
+  env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'Refresh primary checkout'
 )
 if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
   echo 'clean primary checkout did not fast-forward after delivery' >&2
@@ -170,7 +183,7 @@ record_delivery_gate "$SANDBOX/issue-untracked-collision"
 primary_before_collision_delivery="$(git -C "$SANDBOX/primary" rev-parse HEAD)"
 (
   cd "$SANDBOX/issue-untracked-collision"
-  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver colliding untracked path'
+  env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'Deliver colliding untracked path'
 )
 if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$primary_before_collision_delivery" ]; then
   echo 'primary checkout refreshed across a colliding untracked path' >&2
@@ -191,12 +204,41 @@ if ! grep -F 'REFRESH REQUIRED' "$SANDBOX/doctor.out" >/dev/null; then
   echo 'mc-doctor did not explain the blocked primary refresh' >&2
   exit 1
 fi
+if ! grep -F 'Next: npm run mirror-to-main' "$SANDBOX/doctor.out" >/dev/null; then
+  echo 'mc-doctor did not record the exact primary refresh command' >&2
+  exit 1
+fi
 rm -f "$SANDBOX/primary/untracked-collision"
 env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
 if [ -f "$SANDBOX/state/state/primary-refresh-pending.tsv" ]; then
   echo 'successful primary refresh did not clear the pending receipt' >&2
   exit 1
 fi
+
+# A running local app can observe source, dependencies, and migrations halfway
+# through an update. Automatic refresh must leave the primary unchanged and
+# persist the exact follow-up command; a later safe refresh clears the blocker.
+primary_before_active_process_delivery="$(git -C "$SANDBOX/primary" rev-parse HEAD)"
+git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-active-process" --quiet
+git -C "$SANDBOX/issue-active-process" config user.name 'Coordination test'
+git -C "$SANDBOX/issue-active-process" config user.email 'coordination-test@example.test'
+git -C "$SANDBOX/issue-active-process" checkout -b issue-active-process --quiet
+touch "$SANDBOX/issue-active-process/active-process-change"
+git -C "$SANDBOX/issue-active-process" add active-process-change
+git -C "$SANDBOX/issue-active-process" commit -m 'Deliver while local app runs' --quiet
+record_delivery_gate "$SANDBOX/issue-active-process"
+(
+  cd "$SANDBOX/issue-active-process"
+  MC_PRIMARY_ACTIVE_PROCESS_PIDS=4242 env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'Deliver while local app runs'
+)
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$primary_before_active_process_delivery" ]; then
+  echo 'primary checkout refreshed while a local process was active' >&2
+  exit 1
+fi
+grep -F 'active local process(es): 4242' "$SANDBOX/state/state/primary-refresh-pending.tsv" >/dev/null
+grep -F 'npm run mirror-to-main' "$SANDBOX/state/state/primary-refresh-pending.tsv" >/dev/null
+env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
+test ! -f "$SANDBOX/state/state/primary-refresh-pending.tsv"
 
 # A dependency manifest or lockfile changes the runnable environment, not just
 # tracked source. The automatic refresh must leave the primary on its known-good
@@ -213,7 +255,7 @@ git -C "$SANDBOX/issue-dependency-refresh" commit -m 'Change frontend dependency
 record_delivery_gate "$SANDBOX/issue-dependency-refresh"
 (
   cd "$SANDBOX/issue-dependency-refresh"
-  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver dependency lockfile change'
+  env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'Deliver dependency lockfile change'
 )
 if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$primary_before_dependency_delivery" ]; then
   echo 'primary checkout refreshed source across an unsynchronized dependency lockfile change' >&2
@@ -226,7 +268,7 @@ fi
 mkdir -p "$SANDBOX/fake-bin"
 cat > "$SANDBOX/fake-bin/npm" <<'EOF'
 #!/usr/bin/env bash
-[ -z "${MC_NPM_LOG:-}" ] || printf '%s\n' "$*" >> "$MC_NPM_LOG"
+[ -z "${MC_NPM_LOG:-}" ] || printf '%s|%s\n' "$PWD" "$*" >> "$MC_NPM_LOG"
 EOF
 chmod +x "$SANDBOX/fake-bin/npm"
 MC_NPM_LOG="$SANDBOX/npm.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
@@ -235,7 +277,7 @@ if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$(git -C "$SANDBOX/upstre
   exit 1
 fi
 primary_real="$(cd "$SANDBOX/primary" && pwd -P)"
-if ! grep -Fx -- "--prefix $primary_real/vite ci" "$SANDBOX/npm.log" >/dev/null; then
+if ! grep -Fx -- "$primary_real/vite|ci" "$SANDBOX/npm.log" >/dev/null; then
   echo 'explicit primary refresh did not reinstall the changed frontend dependency root' >&2
   exit 1
 fi
@@ -262,13 +304,13 @@ git -C "$SANDBOX/main-add-firebase-dependency" commit -m 'Add Firebase dependenc
 record_delivery_gate "$SANDBOX/main-add-firebase-dependency"
 (
   cd "$SANDBOX/main-add-firebase-dependency"
-  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver Firebase dependency lockfile'
+  env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'Deliver Firebase dependency lockfile'
 )
 
 record_delivery_gate "$SANDBOX/issue-rebase-dependency"
 if (
   cd "$SANDBOX/issue-rebase-dependency"
-  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" --gate -m 'Reject stale ticket receipt'
+  env "${env_for_test[@]}" "$LEGACY_MERGE" --gate -m 'Reject stale ticket receipt'
 ); then
   echo 'mc-merge accepted a receipt from before main advanced' >&2
   exit 1
@@ -278,7 +320,7 @@ git -C "$SANDBOX/issue-rebase-dependency" rebase origin/main --quiet
 record_delivery_gate "$SANDBOX/issue-rebase-dependency"
 (
   cd "$SANDBOX/issue-rebase-dependency"
-  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Merge ticket after fresh delivery gate'
+  env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'Merge ticket after fresh delivery gate'
 )
 
 # Schema migrations are the database equivalent of a dependency lockfile: code
@@ -297,7 +339,7 @@ git -C "$SANDBOX/issue-migration-refresh" commit -m 'Add a schema migration' --q
 record_delivery_gate "$SANDBOX/issue-migration-refresh"
 (
   cd "$SANDBOX/issue-migration-refresh"
-  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'Deliver schema migration'
+  env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'Deliver schema migration'
 )
 if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$primary_before_migration_delivery" ]; then
   echo 'primary checkout refreshed source across an unapplied schema migration' >&2
@@ -342,7 +384,7 @@ git -C "$SANDBOX/mai-999-closeout" commit --allow-empty -m 'MAI-999: Closeout te
 record_delivery_gate "$SANDBOX/mai-999-closeout"
 (
   cd "$SANDBOX/mai-999-closeout"
-  env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-merge" -m 'MAI-999: Merge closeout test'
+  env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'MAI-999: Merge closeout test'
 )
 test -f "$SANDBOX/state/state/deliveries/MAI-999.tsv"
 if env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-closeout" MAI-999 --worktree "$SANDBOX/mai-999-closeout"; then

@@ -23,12 +23,11 @@ paths:
   3. Prisma generates the SQL
 - For a complex data migration, edit the generated file AFTER Prisma creates it.
 - **Never run `prisma migrate reset` or `prisma db push`.**
-- **After a merge lands a schema change**, the primary checkout does not
-  pick it up automatically — `mc-merge` deliberately skips refreshing it when
-  the delivered change touches the Prisma schema, a migration, or a package
-  manifest/lockfile, since a half-updated database could break a running dev
-  server. Run `./.claude/scripts/coord/mc-local-main refresh` there when you
-  actually need that checkout caught up — not as a routine step otherwise.
+- **After the train lands a schema change**, it automatically refreshes an idle,
+  clean primary checkout and runs `prisma migrate deploy` before declaring the
+  runnable copy current. Personal work or an active Maincar process blocks the
+  refresh without changing source or data; after resolving the blocker, run
+  `npm run mirror-to-main` exactly as recorded in the durable receipt.
 - **Never `DELETE FROM` a user-data table to satisfy a migration warning.** If Prisma warns
   that a column still holds non-null values, the right move is `UPDATE <table> SET
   <column> = NULL` or a proper data migration. Ask before any destructive SQL.

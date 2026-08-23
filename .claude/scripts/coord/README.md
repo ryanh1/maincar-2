@@ -1,242 +1,180 @@
-# maincar-2 Coordination Scripts
+# maincar-2 coordination and delivery train
 
-Eight scripts that let many sessions work on maincar-2 in parallel, one issue per session.
+The coordination scripts let many issue clones develop and test concurrently while one local train delivers compatible ready changes together.
 
-**State location:** `~/code/maincar-2-coord/` (outside the repo, so git never touches it)
-**Worktree location:** `~/code/maincar-2-worktrees/` (one folder per issue)
-**Scripts location:** `.claude/scripts/coord/` (tracked in the repo)
+- State: `~/code/maincar-2-coord/`
+- Issue clones: `~/code/maincar-2-worktrees/`
+- Local bare mirror: `~/code/maincar-2-coord/local-main.git`
+- Durable upstream: GitHub `main`
 
-Ticket checkouts fetch from a local bare mirror. The primary checkout is never a
-remote: it can contain a person's unfinished files, while a bare mirror cannot.
-`mc-merge` refreshes the mirror from GitHub under its merge lock and refreshes it
-again after pushing, so tickets retain a local fetch source without inheriting
-the primary checkout's state. The mirror rejects every push; only `mc-merge`
-may deliver to GitHub under the merge lock. After a successful delivery,
-`mc-merge` fast-forwards the runnable primary checkout from the refreshed mirror
-when it is already on `main` and local changes cannot be overwritten. Unrelated
-untracked files stay in place; only a path collision blocks the refresh. If a
-refresh is unsafe or requires dependency/Prisma provisioning, it leaves a durable
-`REFRESH REQUIRED` receipt and `mc-doctor` exits nonzero until reconciliation.
+The primary checkout is a runnable reference copy, never a ticket workspace or Git remote. The bare mirror is the clean local source for every issue clone and rejects direct pushes.
 
-Running `mc-local-main sync` also installs hard-block hooks in the primary
-checkout, so a commit or push there fails immediately.
+## Delivery model
 
-When delivery changes a package manifest, lockfile, Prisma schema, or tracked
-Prisma migration, `mc-merge` deliberately does not refresh the runnable primary
-checkout: advancing source before its local dependencies or database are ready
-can break a live dev server. Refresh it explicitly instead; this fast-forwards
-only when safe, then runs `npm ci` for affected package roots and applies tracked
-Prisma migrations:
-
-```bash
-./.claude/scripts/coord/mc-local-main refresh
+```text
+committed issue heads
+        ↓ ordered enqueue
+compatible ready group + newest mirrored main
+        ↓ one risk-based test plan
+exact tested train head
+        ↓ short protected base recheck + push
+GitHub → local mirror → clean, idle primary checkout
 ```
 
-## Quick start
+Expensive tests never run while the merge lock is held. The short final slot checks that mirrored `main` still equals the train's tested base and pushes the exact tested head.
 
-### 1. Create a worktree for an issue
+The temporary train tree links the issue clone's ignored `.env`, or the primary checkout's ignored `.env` as a fallback, so database-backed verification uses the existing local test environment. Environment values are never copied into Git or written to train receipts.
+
+## Start an issue
 
 ```bash
-./.claude/scripts/coord/mc-local-main sync
+npm run gh-to-mirror
 cd ~/code/maincar-2-worktrees
 git clone ~/code/maincar-2-coord/local-main.git mai-123-short-title
 cd mai-123-short-title
-```
-
-### 2. Assign a port slot
-
-```bash
+git checkout -b <Linear gitBranchName exactly>
 eval "$(./.claude/scripts/coord/mc-slot --env)"
-# Now your shell has: API_PORT, VITE_PORT, FB_AUTH_PORT, etc.
+npm run hooks:install
 ```
 
-### 3. Run a bounded test lane
+Use one clone per issue. Never edit or commit in the normal `maincar-2` folder.
+
+## Develop with focused tests
 
 ```bash
-./.claude/scripts/coord/mc-gate --focused -- npm --prefix vite exec vitest run src/pages/Records.test.tsx
-# Runs one named test with one Vitest and one Playwright worker available.
+./.claude/scripts/coord/mc-gate --focused -- \
+  npm --prefix server exec vitest run src/routes/__tests__/companies.test.ts
 ```
 
-After committing and rebasing onto a freshly synced `main`, run the full delivery class:
-```bash
-./.claude/scripts/coord/mc-local-main sync
-git fetch origin && git rebase origin/main
-./.claude/scripts/coord/mc-gate --delivery
-# Runs the complete verify suite and records the exact head/main pair.
-# At most two delivery gates run at once.
+The focused lane accepts exactly one named Vitest file in `server` or `vite`. It rejects broad commands and Playwright.
+
+The scheduler admits four normal jobs by default. A train job is budgeted as three real Vitest workers; a focused job uses one. Four train jobs fit inside the measured twelve-worker capacity. No browser workers are reserved because neither lane runs Playwright.
+
+Protected scheduler defaults are:
+
+```text
+machine workers: 18
+system reserve: 6
+job limit: 4
+Vitest workers per train job: 3
 ```
 
-### 4. Merge safely
+An exceptional override requires `MC_GATE_OVERRIDE=1`; invalid worker math is rejected.
 
-```bash
-./.claude/scripts/coord/mc-merge -m "MAI-123: Your commit message"
-# Takes a short merge lock
-# Rechecks that main has not moved since the receipt's delivery gate
-# Merges and pushes, refreshes the mirror, then refreshes the runnable checkout when safe
-```
-
-### 5. Prove closeout, then update Linear
+## Inspect and declare risk
 
 ```bash
-# Run this from a surviving checkout after the issue clone directory is gone.
-./.claude/scripts/coord/mc-closeout MAI-123 --worktree ~/code/maincar-2-worktrees/mai-123-feature
-# Only after it prints LINEAR_DONE_ALLOWED: move MAI-123 to Done in Linear.
+./.claude/scripts/coord/mc-gate --classify
 ```
 
-### 6. Check health
+The classifier prints changed files, suggested risk, and suite scope. It is a conservative floor for high-risk paths, not a replacement for judgment.
 
-```bash
-./.claude/scripts/coord/mc-doctor
-# Shows: load, merge lock, stuck worktrees, databases, etc.
-```
-
-## The 8 scripts
-
-| Script | What it does | When to use |
+| Risk | Examples | Combined train checks |
 | --- | --- | --- |
-| `mc-common.sh` | Shared toolbox (lock, log, local-mirror sync) | Never run directly; sourced by others |
-| `mc-local-main` | Creates/refreshes the local bare `main` mirror; `refresh` also safely updates the runnable primary checkout and changed dependencies | Before creating ticket clones; use `refresh` after a dependency-changing delivery |
-| `mc-slot` | Assigns stable ports for your worktree | `eval "$(mc-slot --env)"` at the start |
-| `mc-gate` | Runs explicit focused or full delivery lanes under a bounded worker scheduler | During development and before every merge |
-| `mc-merge` | Rechecks a delivery receipt and merges safely, with a short lock | After `mc-gate --delivery` passes |
-| `mc-closeout` | Proves GitHub delivery and clone cleanup | Immediately before Linear Done |
-| `mc-migrate` | Creates non-colliding database migrations | When you need a new migration |
-| `mc-doctor` | Shows system health | When something feels stuck |
-| `mc-scratch` | Per-worktree temp folder | Rarely used directly |
+| Low | Docs, isolated copy/styling, contained client UI | typecheck, lint, declared focused tests |
+| Normal | Ordinary server or client behavior in one suite | low checks plus `test:server` or `test:web` |
+| High | Migrations, packages, auth, permissions, billing, scheduling, shared infrastructure, concurrency, cross-system/unknown paths | full `npm run verify`, including integration |
 
-## How they work together
+High-risk entries travel alone. Docs can join either a server or client group. Server and client behavior form separate normal groups so a group never silently becomes a cross-system change. A contained client entry can be explicitly declared low only with a focused test and coverage note. A high-risk floor cannot be lowered.
 
-**Example: One session works on MAI-123**
+## Enqueue a committed head
 
 ```bash
-# Create worktree
-./.claude/scripts/coord/mc-local-main sync
-cd ~/code/maincar-2-worktrees
-git clone ~/code/maincar-2-coord/local-main.git mai-123-feature
-cd mai-123-feature
-
-# Assign ports (slot 0 = 3010, 5183, 9140, etc.)
-eval "$(./.claude/scripts/coord/mc-slot --env)"
-
-# Make changes, commit
-git checkout -b mai-123-feature
-# ... edit code ...
-git add file.ts
-git commit -m "MAI-123: Feature description"
-
-# Run one named test while implementing.
-./.claude/scripts/coord/mc-gate --focused -- npm --prefix vite exec vitest run src/pages/Records.test.tsx
-# Commit before the delivery gate: a receipt cannot prove an uncommitted tree.
-git commit -m "MAI-123: Feature description"
-./.claude/scripts/coord/mc-local-main sync
-git fetch origin && git rebase origin/main
-./.claude/scripts/coord/mc-gate --delivery
-# [mc-gate] running (class delivery, slot slot-..., limit 2, vitest=4, playwright=2, global budget=12)
-# ... full verify runs and records the exact head/main pair ...
-
-# If tests pass, merge
-./.claude/scripts/coord/mc-merge -m "MAI-123: Feature description"
-# [mc-merge] delivery receipt is current; waiting for the short merge lock...
-# [mc-merge] lock held. Rechecking the delivery receipt before merging mai-123-feature.
-# [mc-merge] merged and pushed. mai-123-feature is on main.
+./.claude/scripts/coord/mc-train enqueue \
+  --risk normal \
+  --coverage "company route behavior and validation" \
+  --test server:src/routes/__tests__/companies.test.ts
 ```
 
-**Example: Two delivery gates run in parallel**
+Requirements:
 
-```
-Session A (MAI-123):
-  mc-slot → slot 0 (API 3010, VITE 5183)
-  mc-gate --delivery → delivery slot 1 (6 framework workers)
-  mc-gate → receipt recorded
-  mc-merge → gets lock, merges, releases lock
+- clean committed non-`main` branch;
+- branch name contains the Linear issue key;
+- one-line coverage note;
+- every named focused test exists in the committed head;
+- honest declared risk at or above mandatory high-risk floors.
 
-Session B (MAI-124):
-  mc-slot → slot 1 (API 3020, VITE 5184)
-  mc-gate --delivery → delivery slot 2 (6 framework workers)
-  mc-gate → receipt recorded
-  mc-merge → waits for lock (Session A holds it)
-           → gets lock after Session A releases it
-           → merges
-```
+`enqueue` records an immutable head, its merge base, issue, branch, worktree, declared/suggested risk, scope, coverage, tests, and a monotonic sequence in the shared ready queue. Moving the branch after enqueue supersedes that entry; enqueue the new head explicitly.
 
-No port collisions, no test thrashing, no clobbered merges. The default budget
-reserves six of eighteen M5 Pro workers for the system, allowing two delivery
-gates with four Vitest and two Playwright workers each. A third delivery gate
-queues until capacity returns.
-
-## Configuration
-
-### Explicit manual scheduler override
+View the queue:
 
 ```bash
-MC_GATE_OVERRIDE=1 MC_GATE_DELIVERY_LIMIT=1 ./.claude/scripts/coord/mc-gate --delivery
-# Emits a warning and deliberately reduces delivery concurrency for an exceptional case.
+./.claude/scripts/coord/mc-train status
 ```
 
-The protected defaults are `MC_GATE_MACHINE_WORKERS=18`,
-`MC_GATE_RESERVED_SYSTEM_WORKERS=6`, `MC_GATE_GLOBAL_WORKER_BUDGET=12`,
-`MC_GATE_DELIVERY_LIMIT=2`, `MC_GATE_VITEST_WORKERS=4`, and
-`MC_GATE_PLAYWRIGHT_WORKERS=2`. To change any of them, set
-`MC_GATE_OVERRIDE=1`; invalid budgets (including a delivery total beyond the
-global budget) are rejected. The warning is intentional: overrides are for
-exceptional situations, never routine development.
-
-### Focused checks
+## Run the train
 
 ```bash
-./.claude/scripts/coord/mc-gate --focused -- npm --prefix server exec vitest run src/routes/__tests__/auth.test.ts
+./.claude/scripts/coord/mc-train run
 ```
 
-Focused checks must be one named Vitest or Playwright test file in `server/` or
-`vite/`; a broad suite or arbitrary shell command is refused. They are bounded
-development feedback, not an alternative to the delivery requirement.
+The conductor:
 
-### Use a different database container
+1. Checks any durable primary-refresh blocker and retries only the same safe refresh.
+2. Copies the newest GitHub `main` into the local mirror.
+3. Reads ready entries in sequence order.
+4. Merges the largest compatible group onto that exact base; high-risk work is one entry.
+5. Reuses unchanged local dependencies or installs changed lockfiles in the private train checkout.
+6. Runs the group's highest risk plan once and records each command, coverage intent, base, tested head, risk, scope, and members.
+7. Under the short merge lock, rechecks the base and pushes the exact tested tree.
+8. Refreshes GitHub → mirror → primary checkout and records a delivery receipt for every member.
+
+If another non-train process advances `main`, the short slot refuses the stale train and leaves its members ready. It never reruns tests under the lock.
+
+## Failed groups
+
+No red group is pushed. The conductor rebuilds each entry alone. If entries pass alone, it tests pairs to identify a semantic interaction. It moves the proven failing entry or interaction subset to `state/train/failed/<run>/`, writes `failure.txt`, and leaves unrelated ready entries queued.
+
+Merge conflicts are compatibility failures. An entry that conflicts with the newest main is recorded as failed; an entry that only conflicts with an earlier group member waits for the next train rather than blocking the compatible prefix.
+
+## Primary checkout refresh
+
+Two explicit npm commands make direction clear:
 
 ```bash
-MC_PG_CONTAINER=my-postgres mc-migrate add_column
+npm run gh-to-mirror
+npm run mirror-to-main
 ```
 
-### Use a different state directory
+After every green delivery, the train automatically attempts the full chain. A clean, idle primary checkout fast-forwards. Changed package roots receive `npm ci`; tracked Prisma schema/migrations receive `prisma migrate deploy`.
+
+The refresh changes nothing when any of these is true:
+
+- personal staged, unstaged, or untracked work exists;
+- the primary checkout is not on `main`;
+- local `main` contains a commit absent from delivered `main`;
+- a Maincar process whose working directory is the primary checkout is listening on a project port.
+
+Every block writes `state/primary-refresh-pending.tsv`, prints a plain reason, and records the exact follow-up command `npm run mirror-to-main`. `mc-doctor` stays nonzero until the blocker is reconciled. A later train checks and retries the blocker but never moves or overwrites personal work.
+
+## Close out an issue
+
+After the issue's delivery receipt exists:
+
+1. Confirm the issue head is an ancestor of mirrored `main` and mirror/upstream are `0/0` ahead/behind.
+2. Delete any remote feature branch.
+3. Detach the issue clone at delivered `origin/main`, delete the local feature branch, and remove the clean exact clone directory.
+4. From a surviving checkout, run:
 
 ```bash
-MC_STATE_HOME=~/my-coord-state mc-slot
+./.claude/scripts/coord/mc-closeout MAI-123 \
+  --worktree ~/code/maincar-2-worktrees/mai-123-short-title
 ```
 
-## Troubleshooting
+Move Linear to Done only after `LINEAR_DONE_ALLOWED` prints.
 
-**"mc-merge: merge lock busy for 30 min"**
-→ Another session is stuck. Run `mc-doctor` to see who holds it.
+## Script reference
 
-**"mc-merge: delivery-gate receipt is stale"**
-→ `main` advanced after your suite started. Run `mc-local-main sync`, fetch and
-rebase `origin/main`, then run `mc-gate --delivery` again. The full suite stays
-outside the merge lock.
+| Script | Purpose |
+| --- | --- |
+| `mc-common.sh` | Shared locks, mirror, refresh, risk, receipts |
+| `mc-local-main` | GitHub → mirror sync and explicit mirror → primary refresh |
+| `mc-slot` | Stable per-clone ports |
+| `mc-gate` | Four-job focused/risk scheduler |
+| `mc-train` | Ordered enqueue, grouping, combined test, isolation, delivery |
+| `mc-closeout` | GitHub/clone proof before Linear Done |
+| `mc-migrate` | Non-colliding Prisma migration authoring |
+| `mc-doctor` | Machine, queue, lock, mirror, and refresh health |
+| `mc-scratch` | Per-clone temporary directory |
 
-**"mc-gate FAILED rc=X"**
-→ Re-run the same named test through `--focused` to debug. Do not reclassify a
-broad suite as focused; delivery gates stay full by design.
-
-**"Could not create throwaway database"**
-→ Docker or Postgres is not running. Run `npm run docker:up`.
-
-**Leftover test databases accumulating**
-→ Check `mc-doctor`. A stale migration or database issue. Usually harmless.
-
-## Required delivery workflow
-
-The coordination scripts are not optional for a feature branch's closeout:
-
-1. Run a named focused test during implementation, then commit the feature with
-   its tests.
-2. Run `mc-local-main sync`, fetch and rebase `origin/main`, then run
-   `./.claude/scripts/coord/mc-gate --delivery` to create the required receipt.
-3. Run `./.claude/scripts/coord/mc-merge -m "MAI-123: ..."`; it is the only
-   supported merge-and-push route to `main` and never tests under its lock.
-4. Confirm `main` and `origin/main` are at ahead/behind `0/0`.
-5. Delete the merged feature branch (including an existing remote branch), then
-   remove the clean, exact feature worktree and confirm `git worktree list` is
-   free of stale entries.
-6. Update the Linear issue after those delivery and cleanup receipts exist.
-
-Do not replace `mc-merge` with raw `git merge` or a direct push to `main`.
+`mc-merge` is a retired compatibility shim and always exits. The historical implementation lives only under `tests/fixtures/` for pre-train regression coverage.

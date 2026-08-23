@@ -12,7 +12,7 @@ mkdir -p "$SANDBOX/bin"
 mkdir -p "$SANDBOX/primary"
 cat > "$SANDBOX/bin/npm" <<'EOF'
 #!/usr/bin/env bash
-printf '%s|VITEST_MAX_WORKERS=%s|PLAYWRIGHT_WORKERS=%s\n' "$*" "${VITEST_MAX_WORKERS:-}" "${PLAYWRIGHT_WORKERS:-}" >> "$MC_FAKE_NPM_LOG"
+printf '%s|VITEST_MAX_WORKERS=%s\n' "$*" "${VITEST_MAX_WORKERS:-}" >> "$MC_FAKE_NPM_LOG"
 sleep 2
 EOF
 chmod +x "$SANDBOX/bin/npm"
@@ -47,25 +47,31 @@ if run_gate --focused -- npm run verify >"$SANDBOX/broad.out" 2>&1; then
   echo 'focused lane accepted a broad command' >&2
   exit 1
 fi
-grep -F 'focused checks must name one test file' "$SANDBOX/broad.out" >/dev/null
+grep -F 'focused checks must name one Vitest file' "$SANDBOX/broad.out" >/dev/null
 
 if run_gate --focused -- npm --prefix server exec playwright test src/routes/__tests__/auth.test.ts >"$SANDBOX/server-playwright.out" 2>&1; then
   echo 'focused lane accepted Playwright from the server workspace' >&2
   exit 1
 fi
-grep -F 'focused checks must name one test file' "$SANDBOX/server-playwright.out" >/dev/null
+grep -F 'focused checks must name one Vitest file' "$SANDBOX/server-playwright.out" >/dev/null
 
-if run_gate --delivery npm run verify >"$SANDBOX/delivery-args.out" 2>&1; then
-  echo 'delivery lane accepted an arbitrary command' >&2
+if run_gate --focused -- npm --prefix vite exec playwright test src/pages/Records.spec.ts >"$SANDBOX/vite-playwright.out" 2>&1; then
+  echo 'focused lane retained the unused Playwright reservation' >&2
   exit 1
 fi
-grep -F 'delivery does not accept a command' "$SANDBOX/delivery-args.out" >/dev/null
+grep -F 'focused checks must name one Vitest file' "$SANDBOX/vite-playwright.out" >/dev/null
+
+if run_gate --delivery >"$SANDBOX/per-session-delivery.out" 2>&1; then
+  echo 'mc-gate retained per-session delivery validation' >&2
+  exit 1
+fi
+grep -F 'delivery validation moved to mc-train' "$SANDBOX/per-session-delivery.out" >/dev/null
 
 if run_gate >"$SANDBOX/no-class.out" 2>&1; then
   echo 'mc-gate accepted an implicit class' >&2
   exit 1
 fi
-grep -F 'choose --focused or --delivery explicitly' "$SANDBOX/no-class.out" >/dev/null
+grep -F 'choose --focused or --train explicitly' "$SANDBOX/no-class.out" >/dev/null
 
 run_gate --focused -- npm --prefix vite exec vitest run src/pages/Records.test.tsx >"$SANDBOX/focused.out"
 grep -F 'class focused' "$SANDBOX/focused.out" >/dev/null
@@ -83,63 +89,84 @@ grep -F 'focused lane is at capacity — queued' "$SANDBOX/legacy.out" >/dev/nul
 rm -rf "$legacy_slot"
 wait "$legacy_gate_pid"
 
-# Three repetitions of three competing gates prove the default admits exactly
-# two six-worker deliveries at once and queues the third inside the 12-worker
-# budget. The fake npm command makes this a deterministic scheduler benchmark.
+# Three repetitions of five competing train gates prove the default admits four
+# real non-browser jobs at once and queues the fifth. No capacity is reserved
+# for Playwright because the delivery train never runs it.
 for run in 1 2 3; do
   : > "$SANDBOX/npm.log"
-  run_gate --delivery >"$SANDBOX/delivery-${run}-one.out" 2>&1 &
+  run_gate --train --risk low --scope docs --coverage 'coordination docs' >"$SANDBOX/train-${run}-one.out" 2>&1 &
   first=$!
-  run_gate --delivery >"$SANDBOX/delivery-${run}-two.out" 2>&1 &
+  run_gate --train --risk low --scope docs --coverage 'coordination docs' >"$SANDBOX/train-${run}-two.out" 2>&1 &
   second=$!
-  sleep 1
-  run_gate --delivery >"$SANDBOX/delivery-${run}-three.out" 2>&1 &
+  run_gate --train --risk low --scope docs --coverage 'coordination docs' >"$SANDBOX/train-${run}-three.out" 2>&1 &
   third=$!
-  wait "$first"
-  wait "$second"
-  wait "$third"
-  grep -F 'class delivery, slot' "$SANDBOX/delivery-${run}-one.out" >/dev/null
-  grep -F 'limit 2, vitest=4, playwright=2, global budget=12' "$SANDBOX/delivery-${run}-one.out" >/dev/null
-  grep -lF 'lane is at capacity — queued' "$SANDBOX/delivery-${run}-"*.out >/dev/null
-  grep -F 'VITEST_MAX_WORKERS=4|PLAYWRIGHT_WORKERS=2' "$SANDBOX/npm.log" >/dev/null
+  run_gate --train --risk low --scope docs --coverage 'coordination docs' >"$SANDBOX/train-${run}-four.out" 2>&1 &
+  fourth=$!
+  sleep 1
+  run_gate --train --risk low --scope docs --coverage 'coordination docs' >"$SANDBOX/train-${run}-five.out" 2>&1 &
+  fifth=$!
+  for job in one:$first two:$second three:$third four:$fourth five:$fifth; do
+    name="${job%%:*}"
+    pid="${job#*:}"
+    if ! wait "$pid"; then
+      echo "train gate $name failed during scheduler run $run" >&2
+      sed 's/^/  /' "$SANDBOX/train-${run}-${name}.out" >&2
+      exit 1
+    fi
+  done
+  grep -F 'class train, slot' "$SANDBOX/train-${run}-one.out" >/dev/null
+  grep -F 'limit 4, vitest=3' "$SANDBOX/train-${run}-one.out" >/dev/null
+  grep -lF 'lane is at capacity — queued' "$SANDBOX/train-${run}-"*.out >/dev/null
+  grep -F 'VITEST_MAX_WORKERS=3' "$SANDBOX/npm.log" >/dev/null
+  if grep -F 'PLAYWRIGHT' "$SANDBOX/npm.log" >/dev/null; then
+    echo 'train gate exported a Playwright worker reservation' >&2
+    exit 1
+  fi
 done
 
-# A successful delivery gate must leave evidence of the exact branch head and
-# main base it exercised. mc-merge will later re-check this pair under its
-# short lock instead of running another full suite there.
-run_gate --delivery >"$SANDBOX/receipt.out"
-receipt="$SANDBOX/state/state/delivery-gates/$(git -C "$SANDBOX/ticket" rev-parse HEAD).tsv"
-if [ ! -f "$receipt" ]; then
-  echo 'delivery gate did not write its verification receipt' >&2
-  exit 1
-fi
-if ! grep -F "$(git -C "$SANDBOX/ticket" rev-parse origin/main)" "$receipt" >/dev/null; then
-  echo 'delivery receipt did not record the tested main base' >&2
+# Risk policy is executable: low risk gets static checks, normal risk adds the
+# relevant suite, and high risk runs the full verification exactly once.
+: > "$SANDBOX/npm.log"
+run_gate --train --risk low --scope docs --coverage 'coordination docs' >"$SANDBOX/low.out"
+grep -Fx 'run typecheck|VITEST_MAX_WORKERS=3' "$SANDBOX/npm.log" >/dev/null
+grep -Fx 'run lint|VITEST_MAX_WORKERS=3' "$SANDBOX/npm.log" >/dev/null
+if grep -F 'run verify' "$SANDBOX/npm.log" >/dev/null; then
+  echo 'low-risk train ran full verification' >&2
   exit 1
 fi
 
-if (cd "$SANDBOX/ticket" && env "${gate_env[@]}" MC_GATE_OVERRIDE=1 MC_GATE_MACHINE_WORKERS=24 MC_GATE_GLOBAL_WORKER_BUDGET=16 MC_GATE_VITEST_WORKERS=8 MC_GATE_PLAYWRIGHT_WORKERS=1 "$GATE" --delivery >"$SANDBOX/over-budget.out" 2>&1); then
-  echo 'delivery override exceeded the global worker budget' >&2
+: > "$SANDBOX/npm.log"
+run_gate --train --risk normal --scope server --coverage 'server routes' --test server:src/routes/__tests__/auth.test.ts >"$SANDBOX/normal.out"
+grep -F -- '--prefix server exec vitest run src/routes/__tests__/auth.test.ts' "$SANDBOX/npm.log" >/dev/null
+grep -F 'run test:server' "$SANDBOX/npm.log" >/dev/null
+
+: > "$SANDBOX/npm.log"
+run_gate --train --risk high --scope full --coverage 'shared coordination infrastructure' >"$SANDBOX/high.out"
+test "$(grep -cF 'run verify' "$SANDBOX/npm.log")" -eq 1
+
+if (cd "$SANDBOX/ticket" && env "${gate_env[@]}" MC_GATE_OVERRIDE=1 MC_GATE_MACHINE_WORKERS=18 MC_GATE_RESERVED_SYSTEM_WORKERS=6 MC_GATE_JOB_LIMIT=5 MC_GATE_VITEST_WORKERS=3 "$GATE" --train --risk low --scope docs --coverage docs >"$SANDBOX/over-budget.out" 2>&1); then
+  echo 'train override exceeded the real worker budget' >&2
   exit 1
 fi
-grep -F 'exceeds global worker budget' "$SANDBOX/over-budget.out" >/dev/null
+grep -F 'exceeds available worker capacity' "$SANDBOX/over-budget.out" >/dev/null
 
-(cd "$SANDBOX/ticket" && env "${gate_env[@]}" MC_GATE_OVERRIDE=1 MC_GATE_DELIVERY_LIMIT=1 "$GATE" --delivery >"$SANDBOX/override.out" 2>&1)
+(cd "$SANDBOX/ticket" && env "${gate_env[@]}" MC_GATE_OVERRIDE=1 MC_GATE_JOB_LIMIT=1 "$GATE" --train --risk low --scope docs --coverage docs >"$SANDBOX/override.out" 2>&1)
 grep -F 'WARNING: manual scheduler override is active' "$SANDBOX/override.out" >/dev/null
 
-if ! grep -F 'mc_require_delivery_receipt' "$ROOT/.claude/scripts/coord/mc-merge" >/dev/null; then
-  echo 'mc-merge does not require an exact delivery receipt' >&2
+if grep -F 'npm run verify' "$ROOT/.claude/scripts/coord/mc-train" >/dev/null; then
+  echo 'mc-train must delegate verification before it enters the merge slot' >&2
   exit 1
 fi
 
-if grep -F 'npm run verify' "$ROOT/.claude/scripts/coord/mc-merge" >/dev/null; then
-  echo 'mc-merge must not run a full suite while it holds the merge lock' >&2
+lock_line="$(grep -nF 'mc_lock_acquire "$merge_lock"' "$ROOT/.claude/scripts/coord/mc-train" | cut -d: -f1)"
+if tail -n "+$lock_line" "$ROOT/.claude/scripts/coord/mc-train" | grep -F 'run_gate_for_repo' >/dev/null; then
+  echo 'mc-train retained test execution after acquiring the merge slot' >&2
   exit 1
 fi
 
-if grep -F 'mc_lock_acquire "$LOCK" 3600' "$ROOT/.claude/scripts/coord/mc-merge" >/dev/null; then
-  echo 'mc-merge retained the long gate-and-merge lock path' >&2
+if grep -F 'mc_lock_acquire "$merge_lock" 3600' "$ROOT/.claude/scripts/coord/mc-train" >/dev/null; then
+  echo 'mc-train retained a long test-and-merge lock path' >&2
   exit 1
 fi
 
-echo 'mc-gate bounded scheduler: PASS'
+echo 'mc-gate risk scheduler: PASS'

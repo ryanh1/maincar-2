@@ -42,15 +42,19 @@ The `linear-execute-issue` skill is your workflow for taking an issue from Linea
 
 Use this skill whenever you're working on an existing Linear issue.
 
-## Gate classes
+## Focused checks and delivery trains
 
 Use `mc-gate --focused -- npm --prefix <server|vite> exec vitest run path/to/file.test.ts`
-only for one named test during development. The command is intentionally strict:
-broad or arbitrary commands cannot claim the focused lane. After committing,
-sync and rebase `origin/main`, then use `mc-gate --delivery`; its successful
-receipt identifies the exact branch head and main base. `mc-merge` only rechecks
-that receipt under a short lock and never invokes a delivery suite. Focused
-checks never satisfy pre-commit or delivery.
+for one named Vitest file during development. Broad commands and Playwright
+cannot claim this lane.
+
+After committing, enqueue the exact head with an explicit risk, coverage note,
+and relevant focused tests, then run the train. Compatible ready changes are
+tested together on the newest mirrored `main`; high-risk work travels alone.
+The train receipt identifies the tested combined head, shared-main base, tests,
+coverage, risk, and members. The final merge slot rechecks the base and pushes
+that already-tested tree. Never call `mc-merge`, manufacture a per-session
+receipt, or run a full suite while holding the merge slot.
 
 ## Branch Naming
 

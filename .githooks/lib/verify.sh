@@ -18,8 +18,8 @@
 #   * typecheck and lint failures name a file. If none of the named files are in
 #     the commit, the failure belongs to another session: warn loudly, record it,
 #     and let the commit through.
-# Full unit and integration tests run only through `mc-gate --delivery`, where
-# they have a bounded shared worker budget and produce the delivery receipt.
+# Unit and integration tests run only on the combined tree through `mc-train`,
+# where they use the bounded worker scheduler and produce one train receipt.
 #
 # `--no-verify` stays for genuine emergencies rather than for Tuesdays.
 

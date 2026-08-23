@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Historical per-session merger used only by mc-common.test.sh. Production
+# callers must use mc-train; keeping this fixture out of coord/ prevents an
+# environment variable from reviving the retired delivery path.
+set -euo pipefail
+source "$(dirname "$0")/../../mc-common.sh"
+
+MSG=""
+LEGACY_GATE=0
+while :; do
+  case "${1:-}" in
+    -m) MSG="${2:-}"; shift 2 ;;
+    --gate) LEGACY_GATE=1; shift ;;
+    *) break ;;
+  esac
+done
+
+WT="$(mc_worktree)"
+BR="$(mc_branch)"
+cd "$WT"
+mc_assert_ticket_checkout || exit 2
+[ "$BR" = "main" ] && { echo "mc-merge fixture: run from a ticket branch." >&2; exit 2; }
+if [ -n "$(git status --porcelain)" ]; then
+  echo "mc-merge fixture: working tree is dirty." >&2
+  git status --short >&2
+  exit 2
+fi
+if [ "$LEGACY_GATE" = 1 ]; then
+  echo "[mc-merge fixture] --gate no longer runs tests under the merge lock." >&2
+fi
+
+UPSTREAM="$(mc_canonical_upstream_url)" || exit 1
+mc_fetch_local_main --quiet
+HEAD="$(git rev-parse HEAD)"
+TIP="$(git rev-parse origin/main)"
+BASE="$(git merge-base HEAD origin/main)"
+
+if [ "$BASE" != "$TIP" ]; then
+  echo "mc-merge fixture: branch is behind origin/main." >&2
+  exit 1
+fi
+
+if [ "${1:-}" = "--check" ]; then
+  mc_require_delivery_receipt "$HEAD" "$TIP" "$BR"
+  echo "delivery receipt is current for $(git rev-parse --short "$HEAD") on $(git rev-parse --short "$TIP")"
+  exit 0
+fi
+
+mc_require_delivery_receipt "$HEAD" "$TIP" "$BR" || exit 1
+
+LOCK="$STATE/locks/merge.lock"
+mc_lock_acquire "$LOCK" 1800 || { echo "mc-merge fixture: merge lock busy." >&2; exit 1; }
+TMP=""
+cleanup() {
+  [ -n "$TMP" ] && git worktree remove --force "$TMP" 2>/dev/null || true
+  mc_lock_release "$LOCK"
+}
+trap cleanup EXIT
+
+mc_fetch_local_main --quiet
+CURRENT_HEAD="$(git rev-parse HEAD)"
+CURRENT_TIP="$(git rev-parse origin/main)"
+mc_require_delivery_receipt "$CURRENT_HEAD" "$CURRENT_TIP" "$BR" || exit 1
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/mc-merge-fixture-XXXXXX")"
+rmdir "$TMP"
+git worktree add --detach "$TMP" origin/main --quiet
+[ -z "$MSG" ] && MSG="Merge $BR into main"
+printf '%s\n\nCo-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>\n' "$MSG" > "$TMP/../mc-merge-msg.txt"
+git -C "$TMP" merge --no-ff "$BR" -F "$TMP/../mc-merge-msg.txt"
+git -C "$TMP" push "$UPSTREAM" HEAD:main
+git worktree remove --force "$TMP" 2>/dev/null || true
+TMP=""
+mc_lock_release "$LOCK"
+trap - EXIT
+
+mc_sync_local_main
+mc_refresh_primary_checkout
+git fetch --quiet origin
+mc_record_delivery "$BR" "$(git -C "$LOCAL_MAIN_REPO" rev-parse main)" "$UPSTREAM"

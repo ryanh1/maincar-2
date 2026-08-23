@@ -6,6 +6,15 @@ health=0
 
 echo "=== load (check if >8 — higher means tests will fail at random) ==="; uptime
 echo; echo "=== gate runners busy ==="; ls "$STATE/locks/gate" 2>/dev/null | wc -l | tr -d ' '
+echo; echo "=== delivery train ==="
+ready_count="$(find "$STATE/train/ready" -maxdepth 1 -name '*.tsv' -type f 2>/dev/null | wc -l | tr -d ' ')"
+failed_count="$(find "$STATE/train/failed" -name failure.txt -type f 2>/dev/null | wc -l | tr -d ' ')"
+echo "ready: $ready_count   failed groups: $failed_count"
+if [ -d "$STATE/locks/train-conductor.lock" ]; then
+  echo "conductor: HELD by pid $(cat "$STATE/locks/train-conductor.lock/pid" 2>/dev/null)"
+else
+  echo "conductor: free"
+fi
 echo; echo "=== merge lock ==="
 [ -d "$STATE/locks/merge.lock" ] && echo "HELD by pid $(cat "$STATE/locks/merge.lock/pid" 2>/dev/null)" || echo free
 echo; echo "=== concurrent vitest processes ==="; pgrep -fl vitest 2>/dev/null | wc -l | tr -d ' '
@@ -59,8 +68,9 @@ else
   fi
   pending_file="$(mc_primary_refresh_pending_file)"
   if [ -f "$pending_file" ]; then
-    IFS=$'\t' read -r pending_at pending_head pending_target pending_reason < "$pending_file"
+    IFS=$'\t' read -r pending_at pending_head pending_target pending_reason pending_command < "$pending_file"
     echo "  REFRESH REQUIRED since $pending_at ($pending_head → $pending_target): $pending_reason"
+    echo "  Next: ${pending_command:-$(mc_primary_refresh_command)}"
     health=1
   fi
 fi
@@ -84,7 +94,7 @@ if [ -d "$ticket_root" ]; then
     if [ "$ticket_origin" = "$LOCAL_MAIN_REPO" ]; then
       echo "  ok: $d"
     else
-      echo "  LEGACY ORIGIN: $d → $ticket_origin (expected $LOCAL_MAIN_REPO; mc-merge will migrate it)"
+      echo "  LEGACY ORIGIN: $d → $ticket_origin (expected $LOCAL_MAIN_REPO; mc-train enqueue will migrate it)"
     fi
   done < <(find "$ticket_root" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)
 fi
