@@ -24,8 +24,9 @@ const IN_FLIGHT_STATUSES = ['queued', 'ringing', 'in-progress']
 const TERMINAL_STATUSES = ['completed', 'canceled', 'busy', 'failed', 'no-answer']
 
 /**
- * The route's guard body, verbatim: lock the caller's active number, refuse when
- * a call to this number is already in flight, otherwise write the queued row.
+ * The route's guard body, verbatim: lock the caller's assigned, active numbers,
+ * resolve either the one-call selection or primary, refuse when a call to this
+ * number is already in flight, otherwise write the queued row.
  *
  * The `search_path` line is a harness detail, not part of the route. This suite
  * runs in a per-run schema, and an unqualified table name in RAW SQL does not
@@ -34,21 +35,30 @@ const TERMINAL_STATUSES = ['completed', 'canceled', 'busy', 'failed', 'no-answer
  */
 async function placeCall(
   prisma: PrismaClient,
-  args: { orgId: string; userId: string; toE164: string },
-): Promise<'created' | 'refused' | 'no-number'> {
+  args: { orgId: string; userId: string; toE164: string; phoneNumberId?: string },
+): Promise<'created' | 'refused' | 'no-number' | 'selected-number-unavailable'> {
   const schema = inject('testSchema')
   try {
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SET LOCAL search_path TO "${schema}"`)
-      const locked = await tx.$queryRaw<{ id: string; e164: string }[]>`
-        SELECT "id", "e164" FROM "PhoneNumber"
+      const locked = await tx.$queryRaw<{
+        id: string
+        e164: string
+        isActiveForOutbound: boolean
+      }[]>`
+        SELECT "id", "e164", "isActiveForOutbound" FROM "PhoneNumber"
         WHERE "orgId" = ${args.orgId}
           AND "assignedUserId" = ${args.userId}
-          AND "isActiveForOutbound" = true
+          AND "status" = 'active'
         FOR UPDATE
       `
-      if (locked.length === 0) throw new Error('NO_NUMBER')
-      const fromE164 = locked[0].e164
+      const selectedNumber = args.phoneNumberId
+        ? locked.find((number) => number.id === args.phoneNumberId)
+        : locked.find((number) => number.isActiveForOutbound)
+      if (!selectedNumber) {
+        throw new Error(args.phoneNumberId ? 'SELECTED_NUMBER_UNAVAILABLE' : 'NO_NUMBER')
+      }
+      const fromE164 = selectedNumber.e164
 
       const existing = await tx.call.findFirst({
         where: {
@@ -76,6 +86,9 @@ async function placeCall(
   } catch (err) {
     if (err instanceof Error && err.message === 'DOUBLE_CALL') return 'refused'
     if (err instanceof Error && err.message === 'NO_NUMBER') return 'no-number'
+    if (err instanceof Error && err.message === 'SELECTED_NUMBER_UNAVAILABLE') {
+      return 'selected-number-unavailable'
+    }
     throw err
   }
 }
@@ -173,9 +186,10 @@ describe('outbound-call guard (integration, real Postgres)', () => {
     expect(await countCalls(prisma, org.orgId, toE164)).toBe(1)
   })
 
-  it('refuses when the caller has no active number, and writes nothing', async () => {
+  it('refuses without an explicit selection when the caller has no primary number', async () => {
     const org = await seedOrgWithAdmin(prisma)
-    // A number that exists but is NOT active for outbound must not qualify.
+    // An assigned active number without the primary flag cannot be used until a
+    // caller explicitly chooses it for this request.
     await seedPhoneNumber(prisma, {
       orgId: org.orgId,
       assignedUserId: org.adminUserId,
@@ -186,6 +200,90 @@ describe('outbound-call guard (integration, real Postgres)', () => {
     const result = await placeCall(prisma, { orgId: org.orgId, userId: org.adminUserId, toE164 })
 
     expect(result).toBe('no-number')
+    expect(await countCalls(prisma, org.orgId, toE164)).toBe(0)
+  })
+
+  it('uses an explicit assigned active number once, then returns to the primary', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const primary = await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      e164: '+12025550101',
+      isActiveForOutbound: true,
+    })
+    const secondary = await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      e164: '+12025550102',
+    })
+
+    expect(await placeCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035550223',
+      phoneNumberId: secondary.id,
+    })).toBe('created')
+    expect(await placeCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164: '+13035550224',
+    })).toBe('created')
+
+    const calls = await prisma.call.findMany({
+      where: { orgId: org.orgId, userId: org.adminUserId },
+      orderBy: { toE164: 'asc' },
+      select: { fromE164: true },
+    })
+    expect(calls).toEqual([{ fromE164: secondary.e164 }, { fromE164: primary.e164 }])
+  })
+
+  it('rejects a selected number that is not assigned to the caller', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      isActiveForOutbound: true,
+    })
+    const otherOrg = await seedOrgWithAdmin(prisma)
+    const colleagueNumber = await seedPhoneNumber(prisma, {
+      orgId: otherOrg.orgId,
+      assignedUserId: otherOrg.adminUserId,
+    })
+    const toE164 = '+13035550225'
+
+    const result = await placeCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164,
+      phoneNumberId: colleagueNumber.id,
+    })
+
+    expect(result).toBe('selected-number-unavailable')
+    expect(await countCalls(prisma, org.orgId, toE164)).toBe(0)
+  })
+
+  it('rejects an explicitly selected number that is no longer active', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      isActiveForOutbound: true,
+    })
+    const inactiveNumber = await seedPhoneNumber(prisma, {
+      orgId: org.orgId,
+      assignedUserId: org.adminUserId,
+      status: 'released',
+    })
+    const toE164 = '+13035550226'
+
+    const result = await placeCall(prisma, {
+      orgId: org.orgId,
+      userId: org.adminUserId,
+      toE164,
+      phoneNumberId: inactiveNumber.id,
+    })
+
+    expect(result).toBe('selected-number-unavailable')
     expect(await countCalls(prisma, org.orgId, toE164)).toBe(0)
   })
 

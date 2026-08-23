@@ -7,6 +7,13 @@ import { ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { BuyNumberBanner } from '@/components/BuyNumberBanner'
 import { GreenRoom } from '@/components/GreenRoom'
 import type { DeviceSelection } from '@/components/DeviceCheck'
@@ -78,23 +85,31 @@ export function NumericKeypad({ className, initialEntry = '' }: NumericKeypadPro
 
   const [greenRoomOpen, setGreenRoomOpen] = useState(false)
   const [gatingCall, setGatingCall] = useState(false)
+  const [selectedPhoneNumberId, setSelectedPhoneNumberId] = useState<string | undefined>()
   const numberInputRef = useRef<HTMLInputElement>(null)
   const callButtonRef = useRef<HTMLButtonElement>(null)
   const deviceCheckButtonRef = useRef<HTMLButtonElement>(null)
   const greenRoomReturnTargetRef = useRef<'call' | 'devices' | null>(null)
   const initialFocusPendingRef = useRef(true)
 
-  // The org's numbers, so the rep sees which line the call goes out on and cannot
-  // reach a Call button when there is no line to call from. The active number's
-  // e164 is the caller ID; `activeCount === 0` means the rep has none yet.
+  // The org's numbers, so the rep sees every assigned active line and can choose
+  // one for this call only. The primary is the default, but a rep with no primary
+  // can still call after explicitly choosing an active number.
   const { data: numbers } = useGetNumbers(org?.id)
-  const activeNumber = numbers?.numbers.find((n) => n.isActiveForOutbound)
-  const hasNoActiveNumber = !!numbers && numbers.activeCount === 0
+  const dialableNumbers = useMemo(
+    () => numbers?.numbers.filter((number) => number.status === 'active') ?? [],
+    [numbers],
+  )
+  const primaryNumber = dialableNumbers.find((number) => number.isActiveForOutbound)
+  const selectedNumber = selectedPhoneNumberId
+    ? dialableNumbers.find((number) => number.id === selectedPhoneNumberId)
+    : primaryNumber
+  const hasNoDialableNumber = !!numbers && dialableNumbers.length === 0
 
   // The line the call goes out on is also the country bare digits are read in: a
   // rep on a US number who types ten digits means a US number. With no active
   // number there is no country, and bare digits are refused rather than guessed.
-  const defaultCountry = useMemo(() => defaultCountryOf(activeNumber?.e164), [activeNumber?.e164])
+  const defaultCountry = useMemo(() => defaultCountryOf(selectedNumber?.e164), [selectedNumber?.e164])
   const parsed = useMemo(() => readEntry(entry, defaultCountry), [entry, defaultCountry])
   const display = dialing ? entry : formatEntry(entry, defaultCountry)
   const invalidMessage = entryMessage(parsed)
@@ -120,8 +135,13 @@ export function NumericKeypad({ className, initialEntry = '' }: NumericKeypadPro
     (toE164: string) => {
       if (!org) return
       createCall.mutate(
-        { orgId: org.id, toE164 },
         {
+          orgId: org.id,
+          toE164,
+          ...(selectedPhoneNumberId ? { phoneNumberId: selectedPhoneNumberId } : {}),
+        },
+        {
+          onSuccess: () => setSelectedPhoneNumberId(undefined),
           onError: (err) => {
             // A 409 with a live Call is a recovered session, not an actionable
             // failure. useCreateCall has expanded the dialer with that call.
@@ -131,7 +151,7 @@ export function NumericKeypad({ className, initialEntry = '' }: NumericKeypadPro
         },
       )
     },
-    [org, createCall],
+    [org, createCall, selectedPhoneNumberId],
   )
 
   // Place the call, or gate it behind the greenroom first. Guarded so an unusable
@@ -205,11 +225,11 @@ export function NumericKeypad({ className, initialEntry = '' }: NumericKeypadPro
 
   // The Call button is live only when a call can actually go out: the entry is a
   // number we can dial, no call is already up or in flight, and the org has a
-  // caller ID to dial from. Without an active number the button is not disabled —
-  // it is not shown at all, and the buy prompt takes its place (never a
-  // live-looking control that does nothing).
+  // caller ID to dial from. Without a dialable number the button is not shown at
+  // all, and the buy prompt takes its place (never a live-looking control that
+  // does nothing). A caller with no primary needs an explicit selection.
   const callDisabled =
-    parsed.status !== 'valid' || dialing || createCall.isPending || !activeNumber
+    parsed.status !== 'valid' || dialing || createCall.isPending || !selectedNumber
 
   const messageId = 'keypad-number-error'
   const keys = dialing ? IN_CALL_KEYS : ENTRY_KEYS
@@ -243,9 +263,26 @@ export function NumericKeypad({ className, initialEntry = '' }: NumericKeypadPro
   return (
     <div className={cn('flex flex-col gap-3', className)}>
       <div className="flex items-center gap-2">
-        <p className="flex-1 text-center text-xs tabular-nums text-muted-foreground">
-          {activeNumber ? `From ${activeNumber.e164}` : null}
-        </p>
+        {dialableNumbers.length > 0 ? (
+          <div className="flex flex-1 items-center gap-2">
+            <span className="text-xs text-muted-foreground">Call from</span>
+            <Select
+              value={selectedNumber?.id}
+              onValueChange={setSelectedPhoneNumberId}
+            >
+              <SelectTrigger aria-label="Call from" size="sm" className="min-w-0 flex-1 tabular-nums">
+                <SelectValue placeholder="Select a number" />
+              </SelectTrigger>
+              <SelectContent>
+                {dialableNumbers.map((number) => (
+                  <SelectItem key={number.id} value={number.id} className="tabular-nums">
+                    {number.e164}{number.isActiveForOutbound ? ' (Primary)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : <div className="flex-1" />}
         <IconButton
           ref={deviceCheckButtonRef}
           type="button"
@@ -292,7 +329,7 @@ export function NumericKeypad({ className, initialEntry = '' }: NumericKeypadPro
           </Button>
         ))}
       </div>
-      {hasNoActiveNumber ? (
+      {hasNoDialableNumber ? (
         <BuyNumberBanner />
       ) : (
         <>

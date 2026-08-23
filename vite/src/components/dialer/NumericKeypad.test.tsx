@@ -98,7 +98,7 @@ const E164 = '+12025550123'
 function numbersWithActive() {
   return {
     data: {
-      numbers: [{ id: 'n1', e164: '+14155550100', isActiveForOutbound: true }],
+      numbers: [{ id: 'n1', e164: '+14155550100', status: 'active', isActiveForOutbound: true }],
       total: 1,
       activeCount: 1,
     },
@@ -433,7 +433,48 @@ describe('NumericKeypad', () => {
   it('shows which number the call goes out from', () => {
     render(<NumericKeypad />)
 
-    expect(screen.getByText('From +14155550100')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Call from' })).toHaveTextContent('+14155550100')
+  })
+
+  it('lets the rep select an active secondary number for just this call', () => {
+    useGetNumbersMock.mockReturnValue({
+      data: {
+        numbers: [
+          { id: 'n1', e164: '+14155550100', status: 'active', isActiveForOutbound: true },
+          { id: 'n2', e164: '+14155550101', status: 'active', isActiveForOutbound: false },
+        ],
+        total: 2,
+        activeCount: 1,
+      },
+    })
+    render(<NumericKeypad />)
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Call from' }))
+    fireEvent.click(screen.getByRole('option', { name: '+14155550101' }))
+    typeNumber(NATIONAL)
+    fireEvent.click(callButton())
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { orgId: 'org-1', toE164: E164, phoneNumberId: 'n2' },
+      expect.any(Object),
+    )
+  })
+
+  it('requires an explicit selection when the caller has no primary number', () => {
+    useGetNumbersMock.mockReturnValue({
+      data: {
+        numbers: [{ id: 'n2', e164: '+14155550101', status: 'active', isActiveForOutbound: false }],
+        total: 1,
+        activeCount: 0,
+      },
+    })
+    render(<NumericKeypad />)
+
+    typeNumber(NATIONAL)
+    expect(callButton()).toBeDisabled()
+    fireEvent.click(screen.getByRole('combobox', { name: 'Call from' }))
+    fireEvent.click(screen.getByRole('option', { name: '+14155550101' }))
+    expect(callButton()).toBeEnabled()
   })
 
   it('prompts the rep to buy a number instead of a Call button when there is none', () => {
