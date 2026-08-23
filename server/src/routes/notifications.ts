@@ -59,6 +59,12 @@ function snapshotFields(value: unknown): { title: string; preview: string | null
   }
 }
 
+function actorFields(actor: { firstName: string | null; lastName: string | null; email: string; imageUrl: string | null } | null) {
+  if (!actor) return null
+  const name = [actor.firstName, actor.lastName].filter(Boolean).join(' ') || actor.email
+  return { name, imageUrl: actor.imageUrl }
+}
+
 function actionData(action: z.infer<typeof actionSchema>, snoozedUntil: Date | undefined): {
   readAt?: Date | null
   archivedAt?: Date | null
@@ -156,7 +162,11 @@ router.get(
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * limit,
         take: limit,
-        include: { notificationObject: true },
+        include: {
+          notificationObject: {
+            include: { actor: { select: { firstName: true, lastName: true, email: true, imageUrl: true } } },
+          },
+        },
       }),
     ])
     const callIds = notifications
@@ -199,6 +209,7 @@ router.get(
           archivedAt: notification.archivedAt?.toISOString() ?? null,
           snoozedUntil: notification.snoozedUntil?.toISOString() ?? null,
           createdAt: notification.createdAt.toISOString(),
+          actor: actorFields(object.actor),
           source: {
             status: available ? 'available' : 'unavailable',
             type: object.objectType,

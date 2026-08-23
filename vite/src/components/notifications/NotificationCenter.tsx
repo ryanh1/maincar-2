@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { Bell } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { IconButton } from '@/components/ui/icon-button'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -35,7 +34,7 @@ const readLabels: Record<NotificationReadFilter, string> = {
 }
 
 /** The app-shell bell and recipient-scoped notification drawer. */
-export function NotificationCenter() {
+export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
   const { org, user } = useAuth()
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<NotificationView>('inbox')
@@ -49,13 +48,16 @@ export function NotificationCenter() {
   const selected = new Set(selectedIds)
   const allSelected = notifications.length > 0 && notifications.every((notification) => selected.has(notification.id))
 
-  const bellLabel = unreadCount === 0
-    ? 'Open notifications'
-    : `Open notifications. ${unreadCount} unread.`
+  const inboxLabel = unreadCount === 0 ? 'Inbox' : `Inbox. ${unreadCount} unread.`
 
   function changeView(next: NotificationView): void {
     setView(next)
     setSelectedIds([])
+  }
+
+  function openInbox(): void {
+    setOpen(true)
+    onOpen?.()
   }
 
   function toggleSelection(id: string, checked: boolean): void {
@@ -81,17 +83,23 @@ export function NotificationCenter() {
   return (
     <>
       <div className="relative">
-        <IconButton tooltip={bellLabel} onClick={() => setOpen(true)}>
+        <button
+          type="button"
+          aria-label={inboxLabel}
+          className="flex h-8 w-full items-center gap-3 rounded-md px-3 text-sm transition-colors hover:bg-white/5"
+          onClick={openInbox}
+        >
           <Bell size={16} aria-hidden />
-        </IconButton>
-        {unreadCount > 0 && (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-xs font-medium tabular-nums text-primary-foreground"
-          >
-            {unreadCount > 99 ? '99+' : unreadCount}
-          </span>
-        )}
+          <span>Inbox</span>
+          {unreadCount > 0 && (
+            <span
+              aria-hidden="true"
+              className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-xs font-medium tabular-nums text-primary-foreground"
+            >
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
+        </button>
       </div>
 
       <Sheet open={open} onOpenChange={setOpen}>

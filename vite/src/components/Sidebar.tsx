@@ -1,9 +1,9 @@
-import type { ReactNode } from 'react'
 import { BarChart3, CalendarDays, Database, Home, List, ListChecks, LogOut, Phone, Settings, Voicemail } from 'lucide-react'
 import { Link, NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
 import { Button } from '@/components/ui/button'
+import { NotificationCenter } from '@/components/notifications/NotificationCenter'
 import { useKeyboardSystemOptional } from '@/components/keyboard/keyboardContext'
 import { OrgSwitcher } from '@/components/OrgSwitcher'
 import { useGetLists, useGetObjects } from '@/hooks/crm'
@@ -37,7 +37,7 @@ function brokenBadgeLabel(count: number): string {
     : `Reconnect ${count} broken email connections in Integrations.`
 }
 
-export function Sidebar({ open, onClose, notificationCenter }: { open: boolean; onClose: () => void; notificationCenter?: ReactNode }) {
+export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, signOut, org } = useAuth()
   const keyboard = useKeyboardSystemOptional()
   const displayName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.email
@@ -74,7 +74,6 @@ export function Sidebar({ open, onClose, notificationCenter }: { open: boolean; 
       >
         <div className="flex h-14 items-center justify-between gap-2 border-b border-sidebar-border px-4">
           <span className="display font-bold tracking-tight text-white">{APP_NAME}</span>
-          {notificationCenter}
         </div>
 
         <div className="border-b border-sidebar-border p-3">
@@ -83,6 +82,7 @@ export function Sidebar({ open, onClose, notificationCenter }: { open: boolean; 
 
         <nav aria-label="Main navigation" className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
           <NavSection label="Favorites">
+            <NotificationCenter onOpen={onClose} />
             {NAV.map(({ to, label, icon: Icon }) => {
             // The badge rides the Settings row, but is its own link so a click lands on
             // the Integrations tab rather than the default Settings tab. Rendered as a

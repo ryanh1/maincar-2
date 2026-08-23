@@ -49,14 +49,35 @@ describe('NotificationCenter', () => {
     const user = userEvent.setup()
     renderWithProviders(<NotificationCenter />)
 
-    const bell = await screen.findByRole('button', { name: 'Open notifications. 2 unread.' })
-    await user.click(bell)
+    const inboxTrigger = await screen.findByRole('button', { name: 'Inbox. 2 unread.' })
+    expect(inboxTrigger).toHaveTextContent('Inbox')
+    await user.click(inboxTrigger)
 
     expect(await screen.findByRole('dialog', { name: 'Notifications' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Inbox' })).toHaveAttribute('data-state', 'active')
     expect(screen.getByText('Maya mentioned you')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'System notification' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open call' })).toHaveAttribute('href', '/calls/call-1')
     expect(screen.getByText(/EDT$/)).toBeInTheDocument()
     expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/notifications?read=false&limit=1')
+  })
+
+  it('shows a teammate avatar when the notification identifies its actor', async () => {
+    jsonFetchMock.mockImplementation((url: string) => {
+      if (url.includes('read=false')) return Promise.resolve({ notifications: [], total: 1, page: 1, limit: 1 })
+      return Promise.resolve({
+        notifications: [{ ...notification, actor: { name: 'Maya Chen', imageUrl: null } }],
+        total: 1,
+        page: 1,
+        limit: 25,
+      })
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationCenter />)
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 1 unread.' }))
+
+    expect(await screen.findByLabelText('Notification from Maya Chen')).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'System notification' })).not.toBeInTheDocument()
   })
 
   it('sends a row lifecycle action and restores the row when the request fails', async () => {
@@ -67,7 +88,7 @@ describe('NotificationCenter', () => {
     })
     const user = userEvent.setup()
     renderWithProviders(<NotificationCenter />)
-    await user.click(await screen.findByRole('button', { name: 'Open notifications. 1 unread.' }))
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 1 unread.' }))
 
     await user.click(screen.getByRole('button', { name: 'Show actions for Maya mentioned you' }))
     await user.click(await screen.findByRole('menuitem', { name: 'Archive' }))
@@ -96,9 +117,9 @@ describe('NotificationCenter', () => {
 
     const user = userEvent.setup()
     renderWithProviders(<NotificationCenter />)
-    await user.click(await screen.findByRole('button', { name: 'Open notifications. 1 unread.' }))
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 1 unread.' }))
 
-    expect(await screen.findByRole('link', { name: 'You were mentioned in a note' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Open record' })).toHaveAttribute(
       'href',
       '/records/company?recordId=company-1',
     )
@@ -107,7 +128,7 @@ describe('NotificationCenter', () => {
   it('switches to the archived view and applies a bulk action to selected rows', async () => {
     const user = userEvent.setup()
     renderWithProviders(<NotificationCenter />)
-    await user.click(await screen.findByRole('button', { name: 'Open notifications. 2 unread.' }))
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 2 unread.' }))
 
     await user.click(screen.getByRole('tab', { name: 'Archived' }))
     await waitFor(() => expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/notifications?view=archived&limit=25'))

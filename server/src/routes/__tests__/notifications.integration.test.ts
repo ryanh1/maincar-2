@@ -34,6 +34,7 @@ async function createNotification(args: {
   recipientUserId: string
   objectType?: string
   objectId?: string
+  actorUserId?: string | null
   createdAt?: Date
   readAt?: Date | null
   archivedAt?: Date | null
@@ -43,6 +44,7 @@ async function createNotification(args: {
     data: {
       orgId: args.orgId,
       eventKey: `notification-${Date.now()}-${Math.random()}`,
+      actorUserId: args.actorUserId ?? null,
       verb: 'mentioned',
       objectType: args.objectType ?? 'call',
       objectId: args.objectId ?? 'missing-call',
@@ -80,6 +82,7 @@ describe('notification inbox API (integration, real Postgres)', () => {
       orgId: org.orgId,
       recipientUserId: recipient.userId,
       objectId: call.id,
+      actorUserId: org.adminUserId,
       createdAt: new Date('2026-08-01T10:00:00.000Z'),
     })
     const older = await createNotification({
@@ -108,6 +111,7 @@ describe('notification inbox API (integration, real Postgres)', () => {
     expect(res.body.notifications).toHaveLength(1)
     expect(res.body.notifications[0]).toMatchObject({
       id: visible.id,
+      actor: { name: 'Avery Admin', imageUrl: null },
       source: {
         status: 'available',
         type: 'call',

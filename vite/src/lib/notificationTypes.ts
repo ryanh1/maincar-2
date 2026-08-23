@@ -10,12 +10,18 @@ export interface NotificationSource {
   route?: string
 }
 
+export interface NotificationActor {
+  name: string
+  imageUrl: string | null
+}
+
 export interface Notification {
   id: string
   readAt: string | null
   archivedAt: string | null
   snoozedUntil: string | null
   createdAt: string
+  actor: NotificationActor | null
   source: NotificationSource
 }
 
