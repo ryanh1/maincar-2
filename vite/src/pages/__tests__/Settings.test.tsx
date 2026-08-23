@@ -60,6 +60,7 @@ describe('Settings', () => {
       'Teams',
       'Phone numbers',
       'Call recordings',
+      'Inbound calls',
       'Call dispositions',
       'Next steps',
       'Voicemail greeting',
