@@ -229,7 +229,7 @@ export async function fanOutNotificationInTransaction(
   }
 
   if (isImmediate(verb) && dedupeKey === undefined) {
-    await tx.notification.createMany({
+    const created = await tx.notification.createMany({
       data: validRecipientUserIds.map((recipientUserId) => ({
         orgId,
         notificationObjectId: notificationObject.id,
@@ -245,6 +245,19 @@ export async function fanOutNotificationInTransaction(
       // guard when two retries pass membership validation concurrently.
       skipDuplicates: true,
     })
+    if (created.count > 0) {
+      // A new recipient row proves this is activity rather than a retry. Return
+      // matching snoozed rows without changing their read or archive state.
+      await tx.notification.updateMany({
+        where: {
+          orgId,
+          recipientUserId: { in: validRecipientUserIds },
+          snoozedUntil: { not: null },
+          notificationObject: { is: { objectType, objectId } },
+        },
+        data: { snoozedUntil: null },
+      })
+    }
   } else if (isImmediate(verb)) {
     for (const recipientUserId of recipientUserIdsForWrites) {
       const mentionBatchKey = notificationBatchKey(recipientUserId, 'mention', dedupeKey!)

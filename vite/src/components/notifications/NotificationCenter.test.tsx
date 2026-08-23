@@ -99,6 +99,31 @@ describe('NotificationCenter', () => {
     await waitFor(() => expect(screen.getByText('Maya mentioned you')).toBeInTheDocument())
   })
 
+  it('offers reminder durations instead of a fixed one-day snooze', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationCenter />)
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 2 unread.' }))
+
+    await user.click(screen.getByRole('button', { name: 'Show actions for Maya mentioned you' }))
+
+    expect(await screen.findByRole('menuitem', { name: 'In one hour' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Tomorrow' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Next week' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Snooze for one day' })).not.toBeInTheDocument()
+
+    const beforeSnooze = Date.now()
+    await user.click(screen.getByRole('menuitem', { name: 'Tomorrow' }))
+    await waitFor(() => expect(jsonFetchMock).toHaveBeenCalledWith(
+      '/api/orgs/org-1/notifications/notification-1',
+      expect.objectContaining({ method: 'PATCH' }),
+    ))
+    const [, options] = jsonFetchMock.mock.calls.find(([url]: [string]) => url.endsWith('/notification-1'))!
+    const body = JSON.parse(options.body)
+    expect(body.action).toBe('snooze')
+    expect(new Date(body.snoozedUntil).getTime() - beforeSnooze).toBeGreaterThanOrEqual(86_399_000)
+    expect(new Date(body.snoozedUntil).getTime() - beforeSnooze).toBeLessThanOrEqual(86_401_000)
+  })
+
   it('links a note mention back to the record that owns the note', async () => {
     const noteMention = {
       ...notification,

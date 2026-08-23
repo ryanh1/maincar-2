@@ -9,6 +9,7 @@ import {
 function fakeClient(opts: {
   actorIsMember?: boolean
   activeRecipientIds?: string[]
+  createdRecipientCount?: number
   objectId?: string
   existingBundle?: {
     id: string
@@ -27,7 +28,7 @@ function fakeClient(opts: {
     return memberIds.map((userId) => ({ userId }))
   })
   const upsert = vi.fn(async () => ({ id: opts.objectId ?? 'notification-object-1' }))
-  const createMany = vi.fn(async () => ({ count: 2 }))
+  const createMany = vi.fn(async () => ({ count: opts.createdRecipientCount ?? 2 }))
   const findFirst = vi.fn(async () => opts.existingBundle ?? null)
   const updateMany = vi.fn(async () => ({ count: 1 }))
   const count = vi.fn(async () => opts.noisyBundleCount ?? 0)
@@ -159,6 +160,30 @@ describe('fanOutNotification', () => {
     expect(result.recipientUserIds).toEqual([])
     expect(result.rejectedRecipientUserIds).toEqual(['foreign-user'])
     expect(createMany).not.toHaveBeenCalled()
+  })
+
+  it('returns a snoozed notification when new activity arrives for its source without changing read or archive state', async () => {
+    const { client, updateMany } = fakeClient()
+
+    await fanOutNotification(client, event)
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        orgId: 'org-1',
+        recipientUserId: { in: ['recipient-1', 'recipient-2'] },
+        snoozedUntil: { not: null },
+        notificationObject: { is: { objectType: 'call_comment', objectId: 'comment-1' } },
+      },
+      data: { snoozedUntil: null },
+    })
+  })
+
+  it('does not return snoozed notifications when a durable event is retried', async () => {
+    const { client, updateMany } = fakeClient({ createdRecipientCount: 0 })
+
+    await fanOutNotification(client, event)
+
+    expect(updateMany).not.toHaveBeenCalled()
   })
 
   it('refuses an actor who is not an active member of the event org', async () => {
