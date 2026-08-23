@@ -19,6 +19,7 @@ const response: GetNotificationsResponse = {
     id: 'notification-1', readAt: null, archivedAt: null, snoozedUntil: null,
     createdAt: '2026-08-22T16:00:00.000Z',
     actor: null,
+    summary: 'Mention', bundleSize: 1,
     source: { status: 'available', type: 'call', title: 'Mention', preview: null },
   }],
   total: 1, page: 1, limit: 25,

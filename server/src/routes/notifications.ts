@@ -67,6 +67,51 @@ function actorFields(actor: { firstName: string | null; lastName: string | null;
   return { name, imageUrl: actor.imageUrl }
 }
 
+type BundleObject = {
+  id: string
+  verb: string
+  sourceSnapshot: unknown
+  actor: { firstName: string | null; lastName: string | null; email: string; imageUrl: string | null } | null
+}
+
+function bundleObjectIds(notification: { notificationObjectId: string; objectIds: string[] }): string[] {
+  return [...new Set([notification.notificationObjectId, ...notification.objectIds])]
+}
+
+function sourceSubject(title: string): string {
+  const commentTarget = title.match(/^comment on (?:a |the )?(.+)$/i)
+  if (commentTarget) return `the ${commentTarget[1]}`
+  return /^the\b/i.test(title) ? title : `the ${title}`
+}
+
+function aggregateActorNames(objects: BundleObject[]): string | null {
+  const names = [...new Set(objects.map((object) => object.actor?.firstName || object.actor?.email).filter((name): name is string => !!name))]
+  if (names.length === 0) return null
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names[0]} and ${names.length - 1} others`
+}
+
+function bundleSummary(objects: BundleObject[], representative: BundleObject): string {
+  const snapshot = snapshotFields(representative.sourceSnapshot)
+  if (objects.length <= 1) return snapshot.title
+
+  const actors = aggregateActorNames(objects)
+  const verb = representative.verb
+  if (verb === 'comment' || verb === 'commented') {
+    return actors ? `${actors} commented on ${sourceSubject(snapshot.title)}` : `${objects.length} comments on ${sourceSubject(snapshot.title)}`
+  }
+  if (verb === 'status_change') {
+    const singleObjectCount = snapshot.title.match(/^1 (.+)$/)
+    if (singleObjectCount) return `${objects.length} ${singleObjectCount[1]}`
+    return actors ? `${actors} changed ${sourceSubject(snapshot.title)}` : `${objects.length} updates to ${sourceSubject(snapshot.title)}`
+  }
+  if (verb === 'bulk_edit') {
+    return `${objects.length} updates to ${sourceSubject(snapshot.title)}`
+  }
+  return snapshot.title
+}
+
 function actionData(action: z.infer<typeof actionSchema>, snoozedUntil: Date | undefined): {
   readAt?: Date | null
   archivedAt?: Date | null
@@ -174,6 +219,15 @@ router.get(
         },
       }),
     ])
+    const objectsById = new Map(
+      (await prisma.notificationObject.findMany({
+        where: {
+          orgId,
+          id: { in: [...new Set(notifications.flatMap((notification) => bundleObjectIds(notification)))] },
+        },
+        include: { actor: { select: { firstName: true, lastName: true, email: true, imageUrl: true } } },
+      })).map((object) => [object.id, object]),
+    )
     const callIds = notifications
       .filter((notification) => notification.notificationObject.objectType === 'call')
       .map((notification) => notification.notificationObject.objectId)
@@ -197,6 +251,11 @@ router.get(
     res.json({
       notifications: notifications.map((notification) => {
         const object = notification.notificationObject
+        const objects: BundleObject[] = []
+        for (const id of bundleObjectIds(notification)) {
+          const bundleObject = objectsById.get(id)
+          if (bundleObject) objects.push(bundleObject)
+        }
         const snapshot = snapshotFields(object.sourceSnapshot)
         const noteTarget = noteTargetById.get(object.objectId)
         const available =
@@ -215,6 +274,8 @@ router.get(
           snoozedUntil: notification.snoozedUntil?.toISOString() ?? null,
           createdAt: notification.createdAt.toISOString(),
           actor: actorFields(object.actor),
+          bundleSize: objects.length,
+          summary: bundleSummary(objects, object),
           source: {
             status: available ? 'available' : 'unavailable',
             type: object.objectType,

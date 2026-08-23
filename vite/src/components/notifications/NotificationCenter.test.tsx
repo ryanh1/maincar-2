@@ -23,6 +23,8 @@ const notification = {
   archivedAt: null,
   snoozedUntil: null,
   createdAt: '2026-08-22T16:00:00.000Z',
+  summary: 'Maya mentioned you',
+  bundleSize: 1,
   source: {
     status: 'available' as const,
     type: 'call',
@@ -78,6 +80,24 @@ describe('NotificationCenter', () => {
 
     expect(await screen.findByLabelText('Notification from Maya Chen')).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: 'System notification' })).not.toBeInTheDocument()
+  })
+
+  it('renders one card with the server aggregated sentence for a folded bundle', async () => {
+    jsonFetchMock.mockImplementation((url: string) => {
+      if (url.includes('read=false')) return Promise.resolve({ notifications: [], total: 1, page: 1, limit: 1 })
+      return Promise.resolve({
+        notifications: [{ ...notification, summary: 'Ana and 2 others commented on the Acme deal', bundleSize: 3 }],
+        total: 1,
+        page: 1,
+        limit: 25,
+      })
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationCenter />)
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 1 unread.' }))
+
+    expect(await screen.findByText('Ana and 2 others commented on the Acme deal')).toBeInTheDocument()
+    expect(screen.queryByText('Maya mentioned you')).not.toBeInTheDocument()
   })
 
   it('sends a row lifecycle action and restores the row when the request fails', async () => {

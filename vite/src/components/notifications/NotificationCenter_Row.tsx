@@ -46,7 +46,7 @@ export function NotificationRow({
       <NotificationActor actor={notification.actor} />
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-2">
-          <p className="min-w-0 flex-1 text-sm">{notification.source.title}</p>
+          <p className="min-w-0 flex-1 text-sm">{notification.summary}</p>
           {!notification.readAt && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
         </div>
         {sourcePath && <Link to={sourcePath} className="mt-1 inline-block text-xs font-medium text-primary underline-offset-4 hover:underline">Open {sourceLabel}</Link>}

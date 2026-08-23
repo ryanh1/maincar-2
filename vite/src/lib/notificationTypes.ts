@@ -24,6 +24,10 @@ export interface Notification {
   snoozedUntil: string | null
   createdAt: string
   actor: NotificationActor | null
+  /** The server-written, readable sentence for the whole folded bundle. */
+  summary: string
+  /** The number of durable events covered by this recipient-owned bundle row. */
+  bundleSize: number
   source: NotificationSource
 }
 
