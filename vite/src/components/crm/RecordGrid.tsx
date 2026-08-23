@@ -29,7 +29,7 @@ import { chipCellRenderer, type ChipCellData } from './chipCell'
 import { fieldEditorCellRenderer, type FieldEditorCellData } from './fieldEditorCell'
 import { GridViewToolbar } from './GridViewToolbar'
 import { GridColumnFilterMenu } from './GridColumnFilterMenu'
-import type { GridFilterValue, GridMenuAnchor } from './gridFilterMenu'
+import type { GridMenuAnchor } from './gridFilterMenu'
 import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { RecordGridCreateRow } from './RecordGrid_CreateRow'
@@ -107,28 +107,6 @@ const HEADER_MENU_UNSUPPORTED_TYPES = new Set(['multiselect', 'record_reference'
 
 function headerMenuSupported(attribute: AttributeDef): boolean {
   return !attribute.isMulti && !HEADER_MENU_UNSUPPORTED_TYPES.has(attribute.type)
-}
-
-function headerMenuValues(attribute: AttributeDef, rows: RecordRow[], timeZone: string | null | undefined): GridFilterValue[] {
-  if (Array.isArray(attribute.optionsJson)) {
-    return attribute.optionsJson
-      .filter((option): option is { value: string; label: string; isArchived?: boolean } =>
-        typeof option === 'object' && option !== null && typeof (option as { value?: unknown }).value === 'string' && typeof (option as { label?: unknown }).label === 'string',
-      )
-      .filter((option) => !option.isArchived)
-      .map((option) => ({ value: option.value, label: option.label }))
-  }
-
-  const values = new Map<string, string>()
-  for (const row of rows) {
-    const raw = row[attribute.slug]
-    if (raw === undefined || raw === null || raw === '') continue
-    const value = String(raw)
-    values.set(value, formatCellValue(raw, attribute.type, timeZone, typeof row.currency === 'string' ? row.currency : undefined))
-  }
-  return [...values.entries()]
-    .map(([value, label]) => ({ value, label }))
-    .sort((left, right) => left.label.localeCompare(right.label))
 }
 
 // Mirrors KeyboardSystem.tsx's guards (not imported from there: those two are
@@ -542,11 +520,6 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
       })
     },
     [visibleColumns, onViewConfigChange],
-  )
-
-  const activeHeaderMenuValues = useMemo(
-    () => headerMenu ? headerMenuValues(headerMenu.attribute, rows, user?.timeZone) : [],
-    [headerMenu, rows, user?.timeZone],
   )
 
   const selectedColumnIds = useMemo(() => {
@@ -1078,7 +1051,6 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
               if (!open) setHeaderMenu(null)
             }}
             open
-            values={activeHeaderMenuValues}
           />
         )}
 

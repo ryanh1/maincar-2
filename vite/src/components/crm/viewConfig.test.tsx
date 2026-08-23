@@ -41,6 +41,58 @@ describe('viewConfig', () => {
     })
   })
 
+  it('expands between and none-of builder operators into the server filter contract', () => {
+    const query = toRecordListQuery(
+      {
+        sorts: [],
+        filterTree: {
+          type: 'group',
+          op: 'and',
+          children: [
+            { type: 'condition', attributeId: 'first-name', operator: 'between', value: ['10', '20'] },
+            { type: 'condition', attributeId: 'status', operator: 'not_in', value: ['open', 'qualified'] },
+          ],
+        },
+      },
+      attributes,
+    )
+
+    expect(query.filter).toEqual({
+      type: 'group',
+      op: 'and',
+      children: [
+        {
+          type: 'group',
+          op: 'and',
+          children: [
+            { type: 'condition', field: 'firstName', operator: 'gte', value: '10' },
+            { type: 'condition', field: 'firstName', operator: 'lte', value: '20' },
+          ],
+        },
+        {
+          type: 'group',
+          op: 'and',
+          children: [
+            { type: 'condition', field: 'status', operator: 'neq', value: 'open' },
+            { type: 'condition', field: 'status', operator: 'neq', value: 'qualified' },
+          ],
+        },
+      ],
+    })
+  })
+
+  it('does not send an incomplete condition to the record-list API', () => {
+    const query = toRecordListQuery(
+      {
+        sorts: [],
+        filterTree: { type: 'condition', attributeId: 'first-name', operator: 'contains', value: '' },
+      },
+      attributes,
+    )
+
+    expect(query.filter).toBeUndefined()
+  })
+
   it('keeps the reusable Team scope intact for the list API', () => {
     const query = toRecordListQuery(
       {

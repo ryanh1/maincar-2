@@ -20,7 +20,7 @@ export type TeamScope = { teamIds?: string[]; leadUserIds?: string[] }
 
 type FilterOperator =
   | 'eq' | 'neq' | 'contains' | 'not_contains' | 'starts_with' | 'ends_with'
-  | 'gt' | 'gte' | 'lt' | 'lte' | 'is_empty' | 'is_not_empty' | 'in'
+  | 'gt' | 'gte' | 'lt' | 'lte' | 'is_empty' | 'is_not_empty' | 'in' | 'between' | 'not_in'
 
 export type SavedViewConfig = {
   version: typeof VIEW_CONFIG_VERSION
@@ -47,7 +47,7 @@ const directionSchema = z.enum(['asc', 'desc'])
 const layoutSchema = z.enum(['list', 'grid', 'kanban'])
 const filterOperators = new Set<FilterOperator>([
   'eq', 'neq', 'contains', 'not_contains', 'starts_with', 'ends_with',
-  'gt', 'gte', 'lt', 'lte', 'is_empty', 'is_not_empty', 'in',
+  'gt', 'gte', 'lt', 'lte', 'is_empty', 'is_not_empty', 'in', 'between', 'not_in',
 ])
 
 const configShape = z.object({
