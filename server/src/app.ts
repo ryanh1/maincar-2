@@ -10,6 +10,7 @@ import authRouter from './routes/auth.js'
 import callsRouter from './routes/calls.js'
 import calendarWorkspaceRouter from './routes/calendarWorkspace.js'
 import callCommentsRouter from './routes/callComments.js'
+import callSpeakersRouter from './routes/callSpeakers.js'
 import callAlertSettingsRouter from './routes/callAlertSettings.js'
 import companiesRouter from './routes/companies.js'
 import dealsRouter from './routes/deals.js'
@@ -104,6 +105,7 @@ app.use('/api/orgs/:orgId/calls', callsRouter)
 app.use('/api/orgs/:orgId/calls/:callId/next-steps', callNextStepsRouter)
 app.use('/api/orgs/:orgId/calls/:callId/complete', callCompletionRouter)
 app.use('/api/orgs/:orgId/calls/:callId/comments', callCommentsRouter)
+app.use('/api/orgs/:orgId/calls/:callId/speakers', callSpeakersRouter)
 app.use('/api/orgs/:orgId/dispositions', dispositionsRouter)
 app.use('/api/orgs/:orgId/next-steps', nextStepsRouter)
 app.use('/api/orgs/:orgId/voicemail-greeting', voicemailGreetingRouter)

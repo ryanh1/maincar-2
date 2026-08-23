@@ -4,7 +4,16 @@ import { logger } from '../../../dependencies/logger.js'
 
 vi.mock('../../config.js', () => ({ DEEPGRAM_API_KEY: 'dg-test-key' }))
 
-const db = vi.hoisted(() => ({ findUnique: vi.fn(), updateMany: vi.fn(), upsert: vi.fn(), transaction: vi.fn() }))
+const db = vi.hoisted(() => ({
+  findUnique: vi.fn(),
+  findFirst: vi.fn(),
+  updateMany: vi.fn(),
+  upsert: vi.fn(),
+  speakerFindMany: vi.fn(),
+  speakerCreate: vi.fn(),
+  speakerUpdateMany: vi.fn(),
+  transaction: vi.fn(),
+}))
 vi.mock('../../db.js', () => ({ default: { call: { findUnique: db.findUnique, updateMany: db.updateMany }, $transaction: db.transaction } }))
 
 const s3 = vi.hoisted(() => ({ getObjectBytes: vi.fn() }))
@@ -30,25 +39,50 @@ const RESULT = {
 beforeEach(() => {
   vi.clearAllMocks()
   db.findUnique.mockResolvedValue({ ...ROW })
+  db.findFirst.mockResolvedValue({
+    id: ROW.id,
+    direction: 'outbound',
+    userId: 'user_1',
+    user: { firstName: 'Avery', lastName: 'Admin' },
+  })
   db.updateMany.mockResolvedValue({ count: 1 })
   db.upsert.mockResolvedValue({ id: 'transcript_1' })
-  db.transaction.mockImplementation(async (callback) => callback({ call: { updateMany: db.updateMany }, transcript: { upsert: db.upsert } }))
+  db.speakerFindMany.mockResolvedValue([])
+  db.speakerCreate.mockResolvedValue({ id: 'speaker_1' })
+  db.speakerUpdateMany.mockResolvedValue({ count: 1 })
+  db.transaction.mockImplementation(async (callback) => callback({
+    call: { findFirst: db.findFirst, updateMany: db.updateMany },
+    transcript: { upsert: db.upsert },
+    callSpeaker: { findMany: db.speakerFindMany, create: db.speakerCreate, updateMany: db.speakerUpdateMany },
+  }))
   s3.getObjectBytes.mockResolvedValue(Buffer.from('dual-channel-mp3'))
   deepgram.transcribeCallRecording.mockResolvedValue(RESULT)
 })
 
 describe('transcribeRecordingJob', () => {
-  it('reads private object bytes, requests Deepgram, and atomically writes only provider-owned final transcript data', async () => {
+  it('reads private object bytes, requests Deepgram, and atomically writes the final transcript with its known rep', async () => {
     await transcribeRecordingJob({ callId: ROW.id })
     expect(s3.getObjectBytes).toHaveBeenCalledWith(ROW.recordingUrl)
     expect(deepgram.transcribeCallRecording).toHaveBeenCalledWith(Buffer.from('dual-channel-mp3'), 'audio/mpeg')
     expect(db.transaction).toHaveBeenCalledTimes(1)
-    expect(db.updateMany).toHaveBeenCalledWith({ where: { id: ROW.id, orgId: ROW.orgId, recordingPlanned: true, transcriptStatus: { not: 'done' } }, data: { transcript: RESULT.plainText, transcriptStatus: 'done' } })
+    expect(db.updateMany).toHaveBeenCalledWith({ where: { id: ROW.id, orgId: ROW.orgId, recordingPlanned: true }, data: { transcript: RESULT.plainText, transcriptStatus: 'done' } })
     expect(db.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { callId: ROW.id },
       create: expect.objectContaining({ orgId: ROW.orgId, callId: ROW.id, provider: 'deepgram', plainText: RESULT.plainText }),
       update: expect.objectContaining({ provider: 'deepgram', plainText: RESULT.plainText, segments: expect.objectContaining({ deleteMany: {}, create: expect.any(Array) }) }),
     }))
+    expect(db.speakerCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orgId: ROW.orgId,
+        callId: ROW.id,
+        speakerKey: RESULT.segments[0].speakerKey,
+        displayName: 'Avery Admin',
+        source: 'call-user',
+        userId: 'user_1',
+        confidence: 1,
+        evidence: { type: 'call-user', userId: 'user_1' },
+      }),
+    })
   })
 
   it.each([['the policy did not allow recording', { recordingPlanned: false }], ['the stored recording is missing', { recordingUrl: null }]])('honestly settles without Deepgram when %s', async (_reason, overrides) => {

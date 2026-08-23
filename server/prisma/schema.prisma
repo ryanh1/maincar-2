@@ -218,6 +218,9 @@ model User {
   invitationsAccepted Invitation[]      @relation("InvitationAcceptor")
   phoneNumbers        PhoneNumber[]
   calls               Call[]
+  // The rep identity seeded for a recorded call speaker. SetNull preserves the
+  // auditable speaker decision if the user is deleted later.
+  callSpeakers        CallSpeaker[]    @relation("CallSpeakerUser")
   callCommentsAuthored CallComment[]         @relation("CallCommentAuthor")
   callCommentReactions CallCommentReaction[]
   emailDrafts         EmailDraft[]
@@ -840,10 +843,15 @@ model CallSpeaker {
 
   speakerKey  String
   displayName String?
-  // Allowed values: "provider", "crm", "manual".
+  // Allowed values: "provider", "crm", "call-user", "manual".
   source      String
   evidence    Json?
   confidence  Float?
+
+  // The internal rep is an explicit link to Call.userId, never a voice or
+  // context inference. Outside speakers leave this null.
+  userId String?
+  user   User? @relation("CallSpeakerUser", fields: [userId], references: [id], onDelete: SetNull)
 
   personId String?
   person   Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
@@ -856,6 +864,7 @@ model CallSpeaker {
 
   @@unique([callId, speakerKey])
   @@index([orgId])
+  @@index([orgId, userId])
   @@index([orgId, personId])
 }
 
