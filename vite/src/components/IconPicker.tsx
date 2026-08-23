@@ -93,6 +93,7 @@ export function IconPicker({ value, onValueChange, assignments = [], disabled = 
         <Button
           type="button"
           variant="secondary"
+          size="sm"
           role="combobox"
           aria-label="Icon"
           aria-expanded={open}
