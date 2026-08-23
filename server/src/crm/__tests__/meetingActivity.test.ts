@@ -39,6 +39,7 @@ function meetingRow(overrides: Partial<Meeting> = {}): Meeting {
     orgId: 'org-a',
     companyId: null,
     dealId: null,
+    manualAttach: false,
     title: 'Discovery call',
     description: 'Agenda: current stack, timeline, budget.',
     location: null,
