@@ -131,10 +131,9 @@ describe('GridViewToolbar', () => {
     const heightUpdate = onConfigChange.mock.calls[2][0] as (current: typeof config) => typeof config
     expect(heightUpdate(config).rowHeight).toBe('comfortable')
 
-    await user.click(screen.getByRole('button', { name: 'Row height' }))
-    await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Show grid lines' }))
+    await user.click(screen.getByRole('button', { name: 'Show grid lines' }))
     const linesUpdate = onConfigChange.mock.calls[3][0] as (current: typeof config) => typeof config
-    expect(linesUpdate(config).gridLines).toBe(false)
+    expect(linesUpdate(config).gridLines).toBe(true)
   })
 
   it('reconfigures a Kanban board from valid option metadata instead of grid grouping', async () => {

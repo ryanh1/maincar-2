@@ -158,7 +158,7 @@ const EMPTY_CONFIG: Omit<ViewConfig, 'columns'> = {
   sorts: [],
   groupBy: [],
   rowHeight: 'compact',
-  gridLines: true,
+  gridLines: false,
   frozenRows: 0,
   frozenCols: 1,
   zoom: 100,

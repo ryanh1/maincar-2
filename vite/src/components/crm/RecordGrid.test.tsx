@@ -151,6 +151,95 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('RecordGrid', () => {
+  it('renders only loaded rows while another page is available', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada' }, { id: 'r2', firstName: 'Grace' }],
+      totalCount: 500,
+      isPending: false,
+      isError: false,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+
+    expect(dataEditorProps.current!.rows).toBe(2)
+  })
+
+  it('keeps the open-record affordance attached to the hovered cell', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} />)
+    act(() => {
+      ;(dataEditorProps.current!.onMouseMove as (args: Record<string, unknown>) => void)({
+        kind: 'cell',
+        location: [1, 0],
+        bounds: { x: 252, y: 36, width: 160, height: 34 },
+      })
+    })
+
+    const openRecord = screen.getByRole('button', { name: 'Open test object on row 1' })
+    expect(openRecord).toHaveStyle({ left: '386px', top: '43px' })
+  })
+
+  it('draws enabled grid lines only around rendered header and data cells', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const config = { ...createViewConfig(ATTRIBUTES), gridLines: true }
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={vi.fn()} />,
+    )
+
+    const props = dataEditorProps.current!
+    expect(props.verticalBorder).toBe(false)
+    expect(props.theme).toEqual(expect.objectContaining({
+      horizontalBorderColor: 'transparent',
+      headerBottomBorderColor: 'transparent',
+    }))
+
+    const ctx = {
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      strokeStyle: '',
+    } as unknown as CanvasRenderingContext2D
+    const drawContent = vi.fn()
+    ;(props.drawCell as (args: Record<string, unknown>, draw: () => void) => void)(
+      { row: 0, col: 1, ctx, rect: { x: 252, y: 36, width: 160, height: 34 } },
+      drawContent,
+    )
+    ;(props.drawHeader as (args: Record<string, unknown>, draw: () => void) => void)(
+      { columnIndex: 1, ctx, theme: { borderColor: '#border' }, rect: { x: 252, y: 0, width: 160, height: 36 } },
+      drawContent,
+    )
+
+    expect(ctx.lineTo).toHaveBeenCalledWith(411.5, 70)
+    expect(ctx.lineTo).toHaveBeenCalledWith(412, 69.5)
+    expect(ctx.lineTo).toHaveBeenCalledWith(411.5, 36)
+    expect(ctx.lineTo).toHaveBeenCalledWith(412, 35.5)
+  })
+
   it('writes a Kanban column drop through the optimistic field mutation and rolls it back when rejected', async () => {
     const status = attribute({ id: 'stage', slug: 'stage', name: 'Stage', type: 'status', optionsJson: [{ value: 'demo', label: 'Demo' }, { value: 'won', label: 'Won' }], sortOrder: 1 })
     const kanbanAttributes = [attribute({ id: 'name', slug: 'name', name: 'Deal', isIdentity: true, sortOrder: 0 }), status]

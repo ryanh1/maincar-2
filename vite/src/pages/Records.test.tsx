@@ -74,6 +74,7 @@ vi.mock('@/components/crm/RecordGrid', () => ({
         {props.toolbarLeading}
         <div role="grid" aria-label="People grid" data-sort={props.viewConfig.sorts.map((sort) => `${sort.attributeId}:${sort.direction}`).join(',')} />
         <button onClick={() => props.onViewConfigChange((current) => ({ ...current, sorts: [{ attributeId: 'name', direction: 'asc' }] }))}>Change sort</button>
+        <button onClick={() => props.onViewConfigChange((current) => ({ ...current, gridLines: !current.gridLines }))}>Toggle grid lines</button>
         <button onClick={() => props.onLayoutChange('kanban')}>Show Kanban</button>
         <output>{props.layout}</output>
       </>
@@ -213,6 +214,27 @@ describe('Records', () => {
 
     expect(screen.getByText('kanban')).toBeInTheDocument()
     await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org-1', viewId: 'view-1', layout: 'kanban' })))
+  })
+
+  it('persists the grid-line toolbar choice on the saved view', async () => {
+    const user = userEvent.setup()
+    const person = object()
+    const view = { id: 'view-1', objectId: 'person', name: 'People', layout: 'grid' as const, config: createViewConfig([]), ownerUserId: 'user-1', isShared: false, isDefault: true, sortOrder: 0, createdAt: '', updatedAt: '' }
+    const update = vi.fn().mockResolvedValue({ view: { ...view, config: { ...view.config, gridLines: true } } })
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetViewsMock.mockReturnValue({ data: { views: [view] }, isPending: false, isError: false, refetch: vi.fn() })
+    useUpdateViewMock.mockReturnValue({ isPending: false, mutateAsync: update })
+
+    renderRecords('/records/person')
+    await user.click(screen.getByRole('button', { name: 'Toggle grid lines' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: 'org-1',
+      viewId: 'view-1',
+      config: expect.objectContaining({ gridLines: true }),
+    })))
   })
 
   it('falls back to the object default when a bookmarked view is no longer visible', async () => {

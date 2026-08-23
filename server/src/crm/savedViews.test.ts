@@ -13,6 +13,11 @@ const ATTRIBUTES = [
 ]
 
 describe('repairSavedViewConfig', () => {
+  it('defaults unconfigured views to grid lines off and retains an explicit choice', () => {
+    expect(repairSavedViewConfig({}, ATTRIBUTES).gridLines).toBe(false)
+    expect(repairSavedViewConfig({ gridLines: true }, ATTRIBUTES).gridLines).toBe(true)
+  })
+
   it('migrates legacy config and repairs deleted attributes without retaining unknown state', () => {
     const config = repairSavedViewConfig({
       columns: [
