@@ -23,7 +23,7 @@ const TERMINAL_DISPOSITION_VALUE: Record<AutoDispositionStatus, string> = {
   failed: 'no_answer',
 }
 
-export interface CallDispositionCompletedEvent {
+export interface CallDispositionSelectedEvent {
   callId: string
   dispositionId: string
 }
@@ -33,8 +33,10 @@ export interface DialerDispositionBarProps {
   callId: string
   /** A terminal provider outcome that has a deterministic disposition. */
   terminalStatus?: AutoDispositionStatus | null
-  /** Consumption seam for a later power-dial session. Fires only after persistence. */
-  onComplete?: (event: CallDispositionCompletedEvent) => void
+  /** The selected outcome stays local until Save & Next persists the full post-call action. */
+  onSelect?: (event: CallDispositionSelectedEvent) => void
+  /** @deprecated Pass onSelect to defer persistence to the atomic post-call action. */
+  onComplete?: (event: CallDispositionSelectedEvent) => void
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -74,13 +76,11 @@ function DispositionVisual({ disposition }: { disposition: Disposition }) {
   )
 }
 
-export function DialerDispositionBar({ orgId, callId, terminalStatus = null, onComplete }: DialerDispositionBarProps) {
+export function DialerDispositionBar({ orgId, callId, terminalStatus = null, onSelect, onComplete }: DialerDispositionBarProps) {
   const dispositionsQuery = useGetDispositions(orgId)
   const logDisposition = useLogCallDisposition(orgId, callId)
-  const [saved, setSaved] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const savingRef = useRef(false)
+  const [isSaving, setIsSaving] = useState(false)
   const autoHandledRef = useRef<AutoDispositionStatus | null>(null)
 
   const { pinned, unpinned } = useMemo(() => {
@@ -91,23 +91,23 @@ export function DialerDispositionBar({ orgId, callId, terminalStatus = null, onC
     }
   }, [dispositionsQuery.data?.dispositions])
 
-  const save = useCallback(async (disposition: Disposition) => {
-    if (savingRef.current || saved) return
-
-    savingRef.current = true
+  const select = useCallback(async (disposition: Disposition) => {
+    setPaletteOpen(false)
+    if (onSelect) {
+      onSelect({ callId, dispositionId: disposition.id })
+      return
+    }
+    if (isSaving || logDisposition.isPending) return
     setIsSaving(true)
     try {
       await logDisposition.mutateAsync({ dispositionId: disposition.id })
-      setSaved(true)
-      setPaletteOpen(false)
       onComplete?.({ callId, dispositionId: disposition.id })
     } catch {
       toast.error('Could not save the call outcome. Try again.')
     } finally {
-      savingRef.current = false
       setIsSaving(false)
     }
-  }, [callId, logDisposition, onComplete, saved])
+  }, [callId, isSaving, logDisposition, onComplete, onSelect])
 
   useEffect(() => {
     if (!terminalStatus || autoHandledRef.current === terminalStatus) return
@@ -117,8 +117,8 @@ export function DialerDispositionBar({ orgId, callId, terminalStatus = null, onC
     if (!disposition) return
 
     autoHandledRef.current = terminalStatus
-    queueMicrotask(() => void save(disposition))
-  }, [dispositionsQuery.data?.dispositions, save, terminalStatus])
+    queueMicrotask(() => void select(disposition))
+  }, [dispositionsQuery.data?.dispositions, select, terminalStatus])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -133,14 +133,14 @@ export function DialerDispositionBar({ orgId, callId, terminalStatus = null, onC
       if (!Number.isInteger(shortcut) || shortcut < 1 || shortcut > pinned.length) return
 
       event.preventDefault()
-      void save(pinned[shortcut - 1])
+      void select(pinned[shortcut - 1])
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [pinned, save, unpinned.length])
+  }, [pinned, select, unpinned.length])
 
-  if (saved || dispositionsQuery.isPending || !dispositionsQuery.data?.dispositions.length) return null
+  if (dispositionsQuery.isPending || !dispositionsQuery.data?.dispositions.length) return null
 
   return (
     <div className="border-t border-border pt-3" role="group" aria-label="Call outcomes">
@@ -154,7 +154,7 @@ export function DialerDispositionBar({ orgId, callId, terminalStatus = null, onC
               variant="secondary"
               aria-label={`${index + 1}: ${disposition.label}`}
               disabled={isSaving || logDisposition.isPending}
-              onClick={() => void save(disposition)}
+              onClick={() => void select(disposition)}
             >
               <span aria-hidden="true" className="tabular-nums text-text-muted">{index + 1}</span>
               <DispositionVisual disposition={disposition} />
@@ -191,7 +191,7 @@ export function DialerDispositionBar({ orgId, callId, terminalStatus = null, onC
                 key={disposition.id}
                 value={disposition.label}
                 disabled={isSaving || logDisposition.isPending}
-                onSelect={() => void save(disposition)}
+                onSelect={() => void select(disposition)}
               >
                 <DispositionVisual disposition={disposition} />
                 {disposition.label}

@@ -224,6 +224,30 @@ export interface LogCallDispositionInput {
   noteText?: string | null
 }
 
+export interface CompleteCallInput {
+  dispositionId: string
+  noteText?: string | null
+  nextSteps: Array<{ nextStepTypeId: string; scheduledAt?: string | null }>
+}
+
+export interface CompleteCallResponse {
+  nextSteps: Array<{
+    id: string
+    scheduledAt: string | null
+    sortOrder: number
+    nextStepType: {
+      id: string
+      value: string
+      label: string
+      color: string
+      icon: string | null
+      requiresDateTime: boolean
+      createsTask: boolean
+    }
+  }>
+  tasks: Array<{ id: string }>
+}
+
 /** What GET /voice-token returns: a short-lived credential for `new Device(token)`. */
 export interface VoiceTokenResponse {
   token: string

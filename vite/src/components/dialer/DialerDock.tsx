@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronDown, Phone } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { formatElapsed } from '@/lib/duration'
 import { InCallWorkspace } from '@/components/dialer/InCallWorkspace'
 import { DialerDispositionBar } from '@/components/dialer/DialerDispositionBar'
+import { DialerPostCallActions } from '@/components/dialer/DialerPostCallActions'
 import { NumericKeypad } from '@/components/dialer/NumericKeypad'
 import { Button } from '@/components/ui/button'
 import { useDialer } from '@/components/dialer/dialerContext'
@@ -39,7 +40,10 @@ export function DialerDock() {
   const {
     view, mode, phase, elapsedSeconds, activeCall, terminalStatus, prefilledNumber,
     toggleView, collapseDialer, acceptIncomingCall, rejectIncomingCall,
+    reset,
   } = useDialer()
+  const [postCall, setPostCall] = useState<{ callId: string; dispositionId: string } | null>(null)
+  const [draftNote, setDraftNote] = useState<{ callId: string; noteText: string } | null>(null)
   const expanded = view === 'expanded'
   const inCall = mode === 'call'
   const incoming = phase === 'ringing' && activeCall?.direction === 'inbound'
@@ -53,6 +57,8 @@ export function DialerDock() {
     ? caller.preferredFirstName ?? ([caller.firstName, caller.lastName].filter(Boolean).join(' ') || null)
     : null
   const persona = caller?.persona ? caller.persona.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) : null
+  const selectedDispositionId = postCall && postCall.callId === activeCall?.callId ? postCall.dispositionId : null
+  const draftNoteText = draftNote && draftNote.callId === activeCall?.callId ? draftNote.noteText : ''
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -125,11 +131,28 @@ export function DialerDock() {
             toE164={activeCall.toE164 ?? ''}
             companyId={activeCall.companyId}
             recording={activeCall.recording}
+            onNoteTextChange={(noteText) => setDraftNote({ callId: activeCall.callId, noteText })}
           />
         ) : (
           <NumericKeypad initialEntry={prefilledNumber} />
         )}
-        {activeCall ? <DialerDispositionBar orgId={activeCall.orgId} callId={activeCall.callId} terminalStatus={terminalStatus} /> : null}
+        {activeCall && !selectedDispositionId ? (
+          <DialerDispositionBar
+            orgId={activeCall.orgId}
+            callId={activeCall.callId}
+            terminalStatus={terminalStatus}
+            onSelect={({ dispositionId }) => setPostCall({ callId: activeCall.callId, dispositionId })}
+          />
+        ) : null}
+        {activeCall && selectedDispositionId ? (
+          <DialerPostCallActions
+            orgId={activeCall.orgId}
+            callId={activeCall.callId}
+            dispositionId={selectedDispositionId}
+            noteText={draftNoteText}
+            onSaved={reset}
+          />
+        ) : null}
       </div>
     </div>
   )
