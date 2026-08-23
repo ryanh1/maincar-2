@@ -457,6 +457,15 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
     [cellValue, updateRecordValue, orgId, object],
   )
 
+  const kanbanRows = useMemo(
+    () => visibleRows.map((record) => ({ ...record, ...edits.get(record.id) })),
+    [edits, visibleRows],
+  )
+  const moveKanbanRecord = useCallback((record: RecordRow, value: string | null) => {
+    if (!groupAttribute || groupAttribute.isReadOnly) return
+    commitValue(record, groupAttribute, value)
+  }, [commitValue, groupAttribute])
+
   // Glide renders the fill handle but delegates the values to us. This keeps
   // fills on the same typed coercion and optimistic persistence path as edits,
   // rather than copying a rendered GridCell into a record value.
@@ -1136,7 +1145,12 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
             onLayoutChange={setLayout}
           />
         )}
-        <KanbanBoard attributes={columns} config={config} rows={rows} />
+        <KanbanBoard
+          attributes={columns}
+          config={config}
+          rows={kanbanRows}
+          onRecordMove={groupAttribute?.isReadOnly ? undefined : moveKanbanRecord}
+        />
       </div>
     )
   }
