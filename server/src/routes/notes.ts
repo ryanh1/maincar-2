@@ -39,6 +39,7 @@ import { requireMembership } from '../lib/membership.js'
 import { activityFromNote, recordActivityInTx } from '../crm/activityFeed.js'
 import { resolveNewTeammateMentions, resolveTeammateMentions } from '../crm/mentions.js'
 import { fanOutNotificationInTransaction } from '../crm/notifications.js'
+import { buildMentionEvent, sanitizeTipTapDocument } from '../crm/richTextMentions.js'
 import {
   flattenTipTapText,
   mapLinksToApi,
@@ -152,21 +153,19 @@ async function writeNoteMentionNotifications(
 ): Promise<void> {
   if (args.recipientUserIds.length === 0) return
 
-  await fanOutNotificationInTransaction(tx, {
-    orgId: args.orgId,
-    eventKey: `note:${args.noteId}:mentions:v1`,
-    actorUserId: args.actorUserId,
-    verb: 'mentioned',
-    object: {
-      type: 'note',
-      id: args.noteId,
-      sourceSnapshot: {
+  await fanOutNotificationInTransaction(
+    tx,
+    buildMentionEvent(
+      {
+        orgId: args.orgId,
+        sourceType: 'note',
+        sourceId: args.noteId,
+        actorUserId: args.actorUserId,
         title: 'You were mentioned in a note',
-        preview: args.bodyText.slice(0, 500) || 'A teammate mentioned you in a note.',
       },
-    },
-    recipientUserIds: args.recipientUserIds,
-  })
+      { bodyText: args.bodyText, recipientUserIds: args.recipientUserIds },
+    ),
+  )
 }
 
 router.use(requireAuth)
@@ -298,8 +297,10 @@ router.post(
     }
 
     // The one flattening (rule 2), done BEFORE the write so the two columns land
-    // together and cannot be derived from different inputs.
-    const bodyJson = parsed.data.bodyJson
+    // together and cannot be derived from different inputs. The document is
+    // sanitized first, so the stored JSON and the flattened text describe the
+    // same, safe document — and a mention's identity survives the sanitizer.
+    const bodyJson = sanitizeTipTapDocument(parsed.data.bodyJson)
     const bodyText = flattenTipTapText(bodyJson)
     const mentions = await resolveTeammateMentions(prisma, { orgId, content: bodyJson })
     if (mentions.rejectedUserIds.length > 0) {
@@ -378,16 +379,20 @@ router.patch(
       }
     }
 
-    // Re-flattened from the NEW document, through the same one function.
+    // Re-flattened from the NEW document, through the same one function. The new
+    // document is sanitized once, so the stored JSON, the flattened text, and the
+    // mention diff all read the same safe document.
+    const nextBodyJson =
+      body.bodyJson === undefined ? undefined : sanitizeTipTapDocument(body.bodyJson)
     const nextBodyText =
-      body.bodyJson === undefined ? existing.bodyText : flattenTipTapText(body.bodyJson)
+      nextBodyJson === undefined ? existing.bodyText : flattenTipTapText(nextBodyJson)
     const newMentions =
-      body.bodyJson === undefined
+      nextBodyJson === undefined
         ? { recipientUserIds: [], rejectedUserIds: [] }
         : await resolveNewTeammateMentions(prisma, {
             orgId,
             previousContent: existing.bodyJson,
-            content: body.bodyJson,
+            content: nextBodyJson,
           })
     if (newMentions.rejectedUserIds.length > 0) {
       return void res.status(422).json({ error: 'A mentioned teammate is not an active member of this organization.' })
@@ -395,11 +400,11 @@ router.patch(
 
     // --- Execute the write atomically ---
     await prisma.$transaction(async (tx) => {
-      if (body.bodyJson !== undefined) {
+      if (nextBodyJson !== undefined) {
         const result = await tx.note.updateMany({
           where: { id, orgId, deletedAt: null },
           // Both columns, always together (rule 2).
-          data: { bodyJson: body.bodyJson as Prisma.InputJsonValue, bodyText: nextBodyText },
+          data: { bodyJson: nextBodyJson as Prisma.InputJsonValue, bodyText: nextBodyText },
         })
         if (result.count === 0) throw new Error('note vanished mid-update')
       }

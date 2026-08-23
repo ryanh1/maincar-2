@@ -280,6 +280,34 @@ describe('POST /api/orgs/:orgId/notes', () => {
     expect(prismaMock.notificationObject.upsert).not.toHaveBeenCalled()
   })
 
+  it('sanitizes the document before persisting, keeping a mention identity but dropping forged attributes', async () => {
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({
+        bodyJson: {
+          type: 'doc',
+          content: [{
+            type: 'paragraph',
+            content: [{
+              type: 'mention',
+              attrs: { id: 'user-b', label: 'Taylor', kind: 'teammate', onclick: 'alert(1)' },
+            }],
+          }],
+        },
+      })
+
+    expect(res.status).toBe(201)
+    const data = prismaMock.note.create.mock.calls[0][0].data
+    expect(data.bodyJson).toEqual({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'mention', attrs: { id: 'user-b', label: 'Taylor', kind: 'teammate' } }],
+      }],
+    })
+  })
+
   it('422s an attachment to a record that is not in this org, writing nothing', async () => {
     prismaMock.person.findFirst.mockResolvedValue(null)
 
