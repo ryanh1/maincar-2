@@ -33,7 +33,7 @@ describe('option value migration (integration, real Postgres)', () => {
   async function migrateInSchema(args: {
     orgId: string
     object: { id: string; slug: string; storage: string }
-    attribute: { slug: string; storage: string }
+    attribute: { slug: string; storage: string; isMulti?: boolean }
     oldValue: string
     newValue: string
   }): Promise<number> {
@@ -46,7 +46,7 @@ describe('option value migration (integration, real Postgres)', () => {
   async function countInSchema(args: {
     orgId: string
     object: { id: string; slug: string; storage: string }
-    attribute: { slug: string; storage: string }
+    attribute: { slug: string; storage: string; isMulti?: boolean }
     value: string
   }): Promise<number> {
     return prisma.$transaction(async (tx) => {
@@ -111,5 +111,51 @@ describe('option value migration (integration, real Postgres)', () => {
 
     const companies = await prisma.company.findMany({ where: { orgId }, orderBy: { name: 'asc' } })
     expect(companies.map((row) => row.companyType).sort()).toEqual(['agency', 'software', 'software'])
+  })
+
+  it('migrates a multiselect value across record JSON arrays', async () => {
+    const { orgId } = await seedOrgWithAdmin(prisma)
+    const object = await prisma.objectDef.create({
+      data: { orgId, slug: `project_tags_${Date.now()}`, name: 'Project', namePlural: 'Projects', storage: 'record', isStandard: false },
+    })
+    await prisma.record.createMany({
+      data: [
+        { orgId, objectId: object.id, valuesJson: { tags: ['active', 'priority'] } },
+        { orgId, objectId: object.id, valuesJson: { tags: ['active'] } },
+        { orgId, objectId: object.id, valuesJson: { tags: ['done'] } },
+      ],
+    })
+
+    const attribute = { slug: 'tags', storage: 'custom', isMulti: true }
+    const objectRef = { id: object.id, slug: object.slug, storage: object.storage }
+
+    expect(await countInSchema({ orgId, object: objectRef, attribute, value: 'active' })).toBe(2)
+    expect(await migrateInSchema({ orgId, object: objectRef, attribute, oldValue: 'active', newValue: 'live' })).toBe(2)
+
+    const rows = await prisma.record.findMany({ where: { orgId, objectId: object.id } })
+    expect(rows.map((row) => (row.valuesJson as { tags: string[] }).tags.join(',')).sort()).toEqual(['done', 'live', 'live,priority'])
+  })
+
+  it('migrates a list-scoped option value without touching another object\'s entries', async () => {
+    const { orgId } = await seedOrgWithAdmin(prisma, { seed: true })
+    const person = await prisma.objectDef.findFirstOrThrow({ where: { orgId, slug: 'person' } })
+    const list = await prisma.list.create({ data: { orgId, name: 'Q3 outreach', slug: `q3-outreach-${Date.now()}`, objectSlug: 'person' } })
+    const otherList = await prisma.list.create({ data: { orgId, name: 'Other outreach', slug: `other-outreach-${Date.now()}`, objectSlug: 'company' } })
+    await prisma.listEntry.createMany({
+      data: [
+        { orgId, listId: list.id, objectSlug: 'person', targetId: 'person-1', valuesJson: { stage: 'open' } },
+        { orgId, listId: list.id, objectSlug: 'person', targetId: 'person-2', valuesJson: { stage: 'open' } },
+        { orgId, listId: otherList.id, objectSlug: 'company', targetId: 'company-1', valuesJson: { stage: 'open' } },
+      ],
+    })
+
+    const attribute = { slug: 'stage', storage: 'list', isMulti: false }
+    const objectRef = { id: person.id, slug: person.slug, storage: person.storage }
+
+    expect(await countInSchema({ orgId, object: objectRef, attribute, value: 'open' })).toBe(2)
+    expect(await migrateInSchema({ orgId, object: objectRef, attribute, oldValue: 'open', newValue: 'contacted' })).toBe(2)
+
+    const entries = await prisma.listEntry.findMany({ where: { orgId } })
+    expect(entries.map((entry) => (entry.valuesJson as { stage: string }).stage).sort()).toEqual(['contacted', 'contacted', 'open'])
   })
 })
