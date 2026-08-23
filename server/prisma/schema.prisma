@@ -1179,8 +1179,11 @@ model MailBackfill {
   // running | complete | failed
   status String @default("running")
   cursor String?
+  eventCursor String?
   scannedCount Int @default(0)
   matchedCount Int @default(0)
+  eventsScannedCount Int @default(0)
+  meetingsMatchedCount Int @default(0)
   errorMessage String?
   completedAt DateTime?
 

@@ -60,6 +60,8 @@ export interface Mailbox {
     status: 'running' | 'complete' | 'failed'
     scannedCount: number
     matchedCount: number
+    eventsScannedCount: number
+    meetingsMatchedCount: number
     completedAt: string | null
   } | null
 }
@@ -89,7 +91,7 @@ const MAILBOX_PUBLIC_SELECT = {
     select: { status: true, statusDetail: true, errorCode: true, lastValidatedAt: true, scopes: true },
   },
   backfill: {
-    select: { status: true, scannedCount: true, matchedCount: true, completedAt: true },
+    select: { status: true, scannedCount: true, matchedCount: true, eventsScannedCount: true, meetingsMatchedCount: true, completedAt: true },
   },
 } satisfies Prisma.MailAccountSelect
 
@@ -122,6 +124,8 @@ function serializeMailbox(row: MailboxRow): Mailbox {
           status: row.backfill.status as 'running' | 'complete' | 'failed',
           scannedCount: row.backfill.scannedCount,
           matchedCount: row.backfill.matchedCount,
+          eventsScannedCount: row.backfill.eventsScannedCount,
+          meetingsMatchedCount: row.backfill.meetingsMatchedCount,
           completedAt: row.backfill.completedAt?.toISOString() ?? null,
         }
       : null,

@@ -1,5 +1,5 @@
 import prisma from '../db.js'
-import { attachEmailMatchInTx, resolveParticipantsToCrm } from '../lib/crmMatch.js'
+import { attachEmailMatchInTx, attachMeetingMatchInTx, resolveParticipantsToCrm } from '../lib/crmMatch.js'
 import { getMailProvider } from '../lib/mail/getMailProvider.js'
 import { JOB_MAIL_BACKFILL, sendJob, workJob } from './queue.js'
 
@@ -16,6 +16,10 @@ function twelveMonthsAgo(now = new Date()): Date {
 
 function emailProvider(provider: 'google' | 'microsoft'): 'gmail' | 'm365' {
   return provider === 'google' ? 'gmail' : 'm365'
+}
+
+function meetingProvider(provider: 'google' | 'microsoft'): 'google' | 'm365' {
+  return provider === 'google' ? 'google' : 'm365'
 }
 
 function hasCrmMatch(match: Awaited<ReturnType<typeof resolveParticipantsToCrm>>): boolean {
@@ -52,8 +56,11 @@ export async function mailBackfillJob({ mailAccountId }: MailBackfillPayload): P
   if (backfill.status === 'complete') return
 
   const provider = await getMailProvider(account.id, account.orgId)
-  const page = await provider.listBackfillMessages(backfill.cursor, MAIL_BACKFILL_PAGE_SIZE, twelveMonthsAgo())
+  const since = twelveMonthsAgo()
+  const page = await provider.listBackfillMessages(backfill.cursor, MAIL_BACKFILL_PAGE_SIZE, since)
+  const eventPage = await provider.listBackfillEvents(backfill.eventCursor, MAIL_BACKFILL_PAGE_SIZE, since)
   let matchedCount = 0
+  let meetingsMatchedCount = 0
 
   await prisma.$transaction(async (tx) => {
     for (const message of page.messages) {
@@ -101,20 +108,71 @@ export async function mailBackfillJob({ mailAccountId }: MailBackfillPayload): P
       if (await attachEmailMatchInTx(tx, email, match)) matchedCount += 1
     }
 
+    for (const event of eventPage.events) {
+      const participants = [event.organizer, ...event.attendees].filter(
+        (participant): participant is NonNullable<typeof participant> => participant !== null && participant.email !== '',
+      )
+      const match = await resolveParticipantsToCrm(tx, {
+        orgId: account.orgId,
+        participants: participants.map((participant) => ({
+          address: participant.email,
+          isOrganizer: participant.email === event.organizer?.email,
+        })),
+        occurredAt: event.startsAt,
+      })
+      if (!hasCrmMatch(match)) continue
+
+      const existing = await tx.meeting.findFirst({
+        where: { orgId: account.orgId, provider: meetingProvider(provider.provider), providerEventId: event.providerEventId },
+        select: { id: true },
+      })
+      if (existing) continue
+
+      const attendeeByEmail = new Map(
+        participants.map((participant) => [participant.email.toLowerCase(), participant]),
+      )
+      const meeting = await tx.meeting.create({
+        data: {
+          orgId: account.orgId,
+          title: event.title ?? '(untitled event)',
+          description: event.description,
+          startsAt: event.startsAt,
+          endsAt: event.endsAt,
+          isAllDay: event.isAllDay,
+          provider: meetingProvider(provider.provider),
+          providerEventId: event.providerEventId,
+          organizerEmail: event.organizer?.email ?? null,
+          attendees: {
+            create: [...attendeeByEmail.values()].map((participant) => ({
+              orgId: account.orgId,
+              name: participant.name ?? null,
+              email: participant.email,
+              isOrganizer: participant.email === event.organizer?.email,
+            })),
+          },
+        },
+      })
+      if (await attachMeetingMatchInTx(tx, meeting, match)) meetingsMatchedCount += 1
+    }
+
+    const complete = page.nextCursor === null && eventPage.nextCursor === null
     await tx.mailBackfill.updateMany({
       where: { mailAccountId },
       data: {
         cursor: page.nextCursor,
+        eventCursor: eventPage.nextCursor,
         scannedCount: { increment: page.messages.length },
         matchedCount: { increment: matchedCount },
-        status: page.nextCursor ? 'running' : 'complete',
-        completedAt: page.nextCursor ? null : new Date(),
+        eventsScannedCount: { increment: eventPage.events.length },
+        meetingsMatchedCount: { increment: meetingsMatchedCount },
+        status: complete ? 'complete' : 'running',
+        completedAt: complete ? new Date() : null,
         errorMessage: null,
       },
     })
   })
 
-  if (page.nextCursor) await queueMailBackfill(mailAccountId)
+  if (page.nextCursor || eventPage.nextCursor) await queueMailBackfill(mailAccountId)
 }
 
 export function registerMailBackfillWorker(): Promise<string> {

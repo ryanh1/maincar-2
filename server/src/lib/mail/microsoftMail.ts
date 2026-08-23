@@ -463,6 +463,22 @@ export function microsoftMail(
       }
     },
 
+    async listBackfillEvents(cursor, limit, since) {
+      const raw = await guard(() =>
+        client().then((c) => c.listBackfillEvents({
+          ...(cursor ? { cursor } : {}),
+          startDateTime: since.toISOString(),
+          endDateTime: new Date().toISOString(),
+          limit,
+        })),
+      )
+      const page = parseOrThrow(GraphEventsDeltaSchema, raw, 'a historical event page')
+      return {
+        events: (page.value ?? []).map(toCalendarEvent),
+        nextCursor: page['@odata.nextLink'] ?? null,
+      }
+    },
+
     async listEventsSince(
       cursor: string | null,
       _limit: number,

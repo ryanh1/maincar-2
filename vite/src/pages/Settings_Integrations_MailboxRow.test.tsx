@@ -165,7 +165,7 @@ describe('Settings_Integrations_MailboxRow', () => {
         <Settings_Integrations_MailboxRow
           mailbox={{
             ...connectedMailbox,
-            backfill: { status: 'running', scannedCount: 320, matchedCount: 45, completedAt: null },
+            backfill: { status: 'running', scannedCount: 320, matchedCount: 45, eventsScannedCount: 20, meetingsMatchedCount: 5, completedAt: null },
           }}
           orgId={mockOrgId}
           onOpenSettings={mockOnOpenSettings}
@@ -176,7 +176,7 @@ describe('Settings_Integrations_MailboxRow', () => {
       expect(screen.getByText('Importing your email and calendar…')).toBeInTheDocument()
       expect(screen.getByRole('progressbar', { name: 'Import progress' })).toHaveAttribute(
         'aria-valuetext',
-        'Checked 320 messages and matched 45 activities so far',
+        'Checked 320 messages and 20 events. Matched 45 emails and 5 meetings so far',
       )
     })
 

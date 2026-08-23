@@ -6,11 +6,13 @@ const db = vi.hoisted(() => ({
   backfillUpdateMany: vi.fn(),
   emailFindFirst: vi.fn(),
   emailCreate: vi.fn(),
+  meetingFindFirst: vi.fn(),
+  meetingCreate: vi.fn(),
   transaction: vi.fn(),
 }))
 
-const provider = vi.hoisted(() => ({ listBackfillMessages: vi.fn() }))
-const matcher = vi.hoisted(() => ({ resolveParticipantsToCrm: vi.fn(), attachEmailMatchInTx: vi.fn() }))
+const provider = vi.hoisted(() => ({ provider: 'google' as const, listBackfillMessages: vi.fn(), listBackfillEvents: vi.fn() }))
+const matcher = vi.hoisted(() => ({ resolveParticipantsToCrm: vi.fn(), attachEmailMatchInTx: vi.fn(), attachMeetingMatchInTx: vi.fn() }))
 const queue = vi.hoisted(() => ({ sendJob: vi.fn(), workJob: vi.fn() }))
 
 vi.mock('../../db.js', () => ({
@@ -31,6 +33,11 @@ const message = {
   to: [{ email: 'jane@acme.com' }], cc: [], subject: 'Hello', bodyHtml: '<p>Hello</p>',
   bodyText: 'Hello', sentAt: new Date('2026-08-20T12:00:00.000Z'), isOutbound: false,
 }
+const event = {
+  providerEventId: 'event-1', title: 'Discovery call', description: null,
+  startsAt: new Date('2026-08-20T13:00:00.000Z'), endsAt: new Date('2026-08-20T13:30:00.000Z'),
+  isAllDay: false, attendees: [{ email: 'jane@acme.com' }], organizer: { email: 'rep@maincar.com' },
+}
 const match = {
   excluded: false, exclusion: null, primaryPersonId: 'person-1', primaryCompanyId: 'company-1',
   personIds: ['person-1'], personIdByAddress: { 'jane@acme.com': 'person-1' }, companyIds: ['company-1'], dealId: null,
@@ -42,14 +49,19 @@ beforeEach(() => {
   db.backfillUpsert.mockResolvedValue({ cursor: null })
   db.emailFindFirst.mockResolvedValue(null)
   db.emailCreate.mockResolvedValue({ id: 'email-1', orgId: 'org-1', manualAttach: false, ...message })
+  db.meetingFindFirst.mockResolvedValue(null)
+  db.meetingCreate.mockResolvedValue({ id: 'meeting-1', orgId: 'org-1', manualAttach: false, ...event })
   db.backfillUpdateMany.mockResolvedValue({ count: 1 })
   db.transaction.mockImplementation(async (callback) => callback({
     email: { findFirst: db.emailFindFirst, create: db.emailCreate },
+    meeting: { findFirst: db.meetingFindFirst, create: db.meetingCreate },
     mailBackfill: { updateMany: db.backfillUpdateMany },
   }))
   provider.listBackfillMessages.mockResolvedValue({ messages: [message], nextCursor: 'page-2' })
+  provider.listBackfillEvents.mockResolvedValue({ events: [], nextCursor: null })
   matcher.resolveParticipantsToCrm.mockResolvedValue(match)
   matcher.attachEmailMatchInTx.mockResolvedValue(true)
+  matcher.attachMeetingMatchInTx.mockResolvedValue(true)
 })
 
 describe('mailBackfillJob', () => {
@@ -90,6 +102,21 @@ describe('mailBackfillJob', () => {
 
     expect(db.emailCreate).not.toHaveBeenCalled()
     expect(matcher.attachEmailMatchInTx).not.toHaveBeenCalled()
+  })
+
+  it('matches and stores calendar events in the same resumable import', async () => {
+    provider.listBackfillMessages.mockResolvedValue({ messages: [], nextCursor: null })
+    provider.listBackfillEvents.mockResolvedValue({ events: [event], nextCursor: null })
+
+    await mailBackfillJob({ mailAccountId: 'mailbox-1' })
+
+    expect(db.meetingCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      orgId: 'org-1', provider: 'google', providerEventId: 'event-1',
+    }) }))
+    expect(matcher.attachMeetingMatchInTx).toHaveBeenCalledOnce()
+    expect(db.backfillUpdateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      eventsScannedCount: { increment: 1 }, meetingsMatchedCount: { increment: 1 }, status: 'complete',
+    }) }))
   })
 })
 

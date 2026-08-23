@@ -75,6 +75,7 @@ export interface GraphClient {
   listMessages(opts?: { deltaLink?: string; folderId?: string }): Promise<unknown>
   /** Historical messages, filtered by receivedDateTime for the initial import. */
   listBackfillMessages(opts: { cursor?: string; receivedAfter: string; limit: number }): Promise<unknown>
+  listBackfillEvents(opts: { cursor?: string; startDateTime: string; endDateTime: string; limit: number }): Promise<unknown>
   /** One full message by id. */
   getMessage(id: string): Promise<unknown>
   /** Send a message. `saveToSentItems` defaults to true, matching Graph's own default. */
@@ -168,6 +169,11 @@ export function graphClient(accessToken: string): GraphCalendarClient {
           .top(limit)
           .get(),
       )
+    },
+
+    listBackfillEvents({ cursor, startDateTime, endDateTime, limit }) {
+      if (cursor) return run(() => client.api(cursor).get())
+      return run(() => client.api('/me/calendarView').query({ startDateTime, endDateTime }).top(limit).get())
     },
 
     getMessage(id) {

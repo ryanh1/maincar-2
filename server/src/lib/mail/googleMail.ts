@@ -514,6 +514,21 @@ export function googleMail(
       return { messages, nextCursor: page.nextPageToken ?? null }
     },
 
+    async listBackfillEvents(cursor, limit, since) {
+      const raw = await guard(() =>
+        client().then((c) => c.listEvents({
+          maxResults: limit,
+          pageToken: cursor ?? undefined,
+          singleEvents: true,
+          orderBy: 'startTime',
+          timeMin: since.toISOString(),
+          timeMax: new Date().toISOString(),
+        })),
+      )
+      const page = parseOrThrow(CalendarEventsListSchema, raw, 'a historical event list')
+      return { events: (page.items ?? []).map(toCalendarEvent), nextCursor: page.nextPageToken ?? null }
+    },
+
     async listEventsSince(
       cursor: string | null,
       limit: number,

@@ -153,6 +153,19 @@ function makeFakeClient(scenario: MailProviderScenario): GraphClient {
       }
     },
 
+    async listBackfillEvents(opts) {
+      countAttempt()
+      maybeThrowHttp()
+      const events = scenario.events ?? []
+      const offset = opts.cursor ? offsetOf(opts.cursor) : 0
+      const slice = events.slice(offset, offset + opts.limit)
+      const nextOffset = offset + opts.limit
+      return {
+        value: slice.map(toGraphEvent),
+        ...(nextOffset < events.length ? { '@odata.nextLink': NEXT_LINK(nextOffset) } : {}),
+      }
+    },
+
     async getMessage(id) {
       countAttempt()
       maybeThrowHttp()

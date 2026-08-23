@@ -35,6 +35,8 @@ export interface Mailbox {
     status: 'running' | 'complete' | 'failed'
     scannedCount: number
     matchedCount: number
+    eventsScannedCount: number
+    meetingsMatchedCount: number
     completedAt: string | null
   } | null
 }

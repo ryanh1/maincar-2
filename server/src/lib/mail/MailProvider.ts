@@ -112,6 +112,11 @@ export interface MailProvider {
     limit: number,
     since: Date,
   ): Promise<{ messages: InboundMessage[]; nextCursor: string | null }>
+  listBackfillEvents(
+    cursor: string | null,
+    limit: number,
+    since: Date,
+  ): Promise<{ events: CalendarEvent[]; nextCursor: string | null }>
   listEventsSince(
     cursor: string | null,
     limit: number,

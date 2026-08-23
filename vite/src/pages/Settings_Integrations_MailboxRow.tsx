@@ -183,7 +183,8 @@ export function Settings_Integrations_MailboxRow({
 }
 
 function MailboxBackfillProgress({ backfill }: { backfill: NonNullable<Mailbox['backfill']> }) {
-  if (backfill.status === 'complete' && backfill.matchedCount === 0) {
+  const activityCount = backfill.matchedCount + backfill.meetingsMatchedCount
+  if (backfill.status === 'complete' && activityCount === 0) {
     return (
       <div className="mt-2 rounded-md border border-border bg-muted/60 p-3" role="status">
         <p className="text-sm text-foreground">No matches yet. As you add contacts, we’ll attach their past email automatically.</p>
@@ -194,7 +195,7 @@ function MailboxBackfillProgress({ backfill }: { backfill: NonNullable<Mailbox['
   if (backfill.status === 'complete') {
     return (
       <div className="mt-2 rounded-md border border-border bg-muted/60 p-3" role="status">
-        <p className="text-sm text-foreground">Import complete. {backfill.matchedCount} activities added.</p>
+        <p className="text-sm text-foreground">Import complete. {activityCount} activities added.</p>
       </div>
     )
   }
@@ -204,14 +205,14 @@ function MailboxBackfillProgress({ backfill }: { backfill: NonNullable<Mailbox['
       <p className="text-sm font-medium text-foreground">Importing your email and calendar…</p>
       <div
         aria-label="Import progress"
-        aria-valuetext={`Checked ${backfill.scannedCount} messages and matched ${backfill.matchedCount} activities so far`}
+        aria-valuetext={`Checked ${backfill.scannedCount} messages and ${backfill.eventsScannedCount} events. Matched ${backfill.matchedCount} emails and ${backfill.meetingsMatchedCount} meetings so far`}
         className="mt-2 h-2 overflow-hidden rounded-md bg-surface"
         role="progressbar"
       >
         <div className="h-full w-1/2 bg-primary" />
       </div>
       <p className="mt-2 text-xs tabular-nums text-muted-foreground">
-        Matched {backfill.matchedCount} activities from {backfill.scannedCount} messages so far.
+        Matched {backfill.matchedCount} emails and {backfill.meetingsMatchedCount} meetings so far.
       </p>
     </div>
   )
