@@ -340,11 +340,24 @@ router.post(
     const mappedStatus = dialStatus ? TWILIO_TO_CALL_STATUS[dialStatus] : undefined
     const status = mappedStatus ?? 'failed'
     const durationS = Number.parseInt(params.DialCallDuration ?? '', 10)
+    const forwarding = status !== 'completed' && leg === 'browser'
+      ? await prisma.inboundForwarding.findFirst({
+          where: {
+            orgId: call.orgId,
+            userId: call.userId,
+            enabled: true,
+            strategy: 'browser_fallback',
+            mobileE164: { not: null },
+          },
+        })
+      : null
+    const mobileE164 = forwarding?.mobileE164
+    const continuesToMobile = !!mobileE164
     await prisma.call.updateMany({
       where: { id: call.id, orgId: call.orgId },
       data: {
-        status,
-        endedAt: new Date(),
+        status: continuesToMobile ? 'ringing' : status,
+        ...(continuesToMobile ? {} : { endedAt: new Date() }),
         ...(Number.isFinite(durationS) ? { durationS } : {}),
       },
     })
@@ -354,25 +367,14 @@ router.post(
       return void res.status(200).type('text/xml').send(buildEmptyTwiml())
     }
 
-    if (leg === 'browser') {
-      const forwarding = await prisma.inboundForwarding.findFirst({
-        where: {
-          orgId: call.orgId,
-          userId: call.userId,
-          enabled: true,
-          strategy: 'browser_fallback',
-          mobileE164: { not: null },
-        },
-      })
-      if (forwarding?.mobileE164) {
-        return void res.status(200).type('text/xml').send(
-          buildInboundMobileTwiml({
-            callId: call.id,
-            mobileE164: forwarding.mobileE164,
-            callerId: call.toE164,
-          }),
-        )
-      }
+    if (mobileE164) {
+      return void res.status(200).type('text/xml').send(
+        buildInboundMobileTwiml({
+          callId: call.id,
+          mobileE164,
+          callerId: call.toE164,
+        }),
+      )
     }
 
     await respondWithInboundVoicemail(req, res, {

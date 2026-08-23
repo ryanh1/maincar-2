@@ -588,6 +588,12 @@ describe('inbound browser result', () => {
     expect(res.text).toContain('callerId="+13035550199"')
     expect(res.text).toContain('leg=mobile')
     expect(res.text).not.toContain('<Record')
+    expect(prismaMock.call.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'ringing' }),
+      }),
+    )
+    expect(prismaMock.call.updateMany.mock.calls[0][0].data).not.toHaveProperty('endedAt')
   })
 })
 
