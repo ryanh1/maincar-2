@@ -71,6 +71,18 @@ describe('saved view hooks', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.savedViews.all('org-1') })
   })
 
+  it('can create a Personal view without changing the default', async () => {
+    jsonFetch.mockResolvedValue({ view: { id: 'view-2' } })
+    const { result } = renderHook(() => useSaveView(), { wrapper: wrapper() })
+
+    await result.current.mutateAsync({ orgId: 'org-1', objectId: 'company', name: 'Q3 prospects', config, makeDefault: false })
+
+    expect(jsonFetch).toHaveBeenCalledTimes(1)
+    expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/saved-views', {
+      method: 'POST', body: JSON.stringify({ objectId: 'company', name: 'Q3 prospects', layout: 'grid', config }),
+    })
+  })
+
   it('PATCHes an existing view config and refreshes its object’s views', async () => {
     jsonFetch.mockResolvedValue({ view: { id: 'view-1' } })
     const client = makeTestQueryClient()

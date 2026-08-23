@@ -382,7 +382,7 @@ function mergeLocalViewState(config: ViewConfig, local: LocalViewState | null): 
 export function useViewConfig(
   attributes: AttributeDef[],
   savedConfig?: ViewConfig,
-): [ViewConfig, (update: (current: ViewConfig) => ViewConfig) => void, () => void] {
+): [ViewConfig, (update: (current: ViewConfig) => ViewConfig) => void, () => void, () => void] {
   const [searchParams, setSearchParams] = useSearchParams()
   const sharedConfig = useMemo(() => {
     const defaults = createViewConfig(attributes)
@@ -417,5 +417,7 @@ export function useViewConfig(
     }, { replace: true })
   }, [setSearchParams])
 
-  return [config, updateConfig, resetConfig]
+  const clearLocalConfig = useCallback(() => setLocalConfig(null), [])
+
+  return [config, updateConfig, resetConfig, clearLocalConfig]
 }

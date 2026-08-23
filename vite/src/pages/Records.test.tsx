@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 
 import { createViewConfig, type ViewConfig } from '@/components/crm/viewConfig'
+import { encodeViewState } from '@/components/crm/viewStateCodec'
 import { renderWithProviders } from '@/test/utils'
 
 const {
@@ -232,7 +233,7 @@ describe('Records', () => {
     expect(screen.getByLabelText('Current route')).toHaveTextContent('/records/person')
   })
 
-  it('writes the selected saved view to the URL so it can be reopened', async () => {
+  it('writes the selected saved view to the canonical URL key so it can be reopened', async () => {
     const user = userEvent.setup()
     const person = object()
     const defaultView = { id: 'default', objectId: 'person', name: 'Default people', layout: 'grid' as const, config: createViewConfig([]), ownerUserId: 'user-1', isShared: false, isDefault: true, sortOrder: 0, createdAt: '', updatedAt: '' }
@@ -246,7 +247,93 @@ describe('Records', () => {
     await user.click(screen.getByRole('combobox', { name: 'Saved view' }))
     await user.click(screen.getByRole('option', { name: 'Team pipeline' }))
 
-    expect(screen.getByLabelText('Current route')).toHaveTextContent('/records/person?viewId=team')
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('/records/person?view=team')
+  })
+
+  it('keeps a valid arrangement overlay when switching views', async () => {
+    const user = userEvent.setup()
+    const attribute = {
+      id: 'name', objectId: 'person', slug: 'name', name: 'Name', description: null,
+      icon: null, type: 'text', optionsJson: null, refObjectId: null, formatJson: null,
+      validationJson: null, isIdentity: true, storage: 'column', isMulti: false,
+      isRequired: false, isUnique: false, isReadOnly: false, isSystem: true,
+      defaultJson: null, sortOrder: 0, isArchived: false,
+      createdAt: '2026-08-22T12:00:00.000Z', updatedAt: '2026-08-22T12:00:00.000Z',
+    }
+    const person = object({ attributes: [attribute] })
+    const defaultConfig = createViewConfig([attribute])
+    const defaultView = { id: 'default', objectId: 'person', name: 'Default view', layout: 'grid' as const, config: defaultConfig, ownerUserId: 'user-1', isShared: false, isDefault: true, sortOrder: 0, createdAt: '', updatedAt: '' }
+    const sharedView = { ...defaultView, id: 'shared', name: 'Team pipeline', isDefault: false, config: { ...defaultConfig, sorts: [{ attributeId: 'name', direction: 'desc' as const }] } }
+    const overlay = encodeViewState({ ...defaultConfig, sorts: [{ attributeId: 'name', direction: 'asc' as const }] })
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetViewsMock.mockReturnValue({ data: { views: [defaultView, sharedView] }, isPending: false, isError: false, isSuccess: true, refetch: vi.fn() })
+
+    renderRecords(`/records/person?view=default&v=${overlay}`)
+
+    await user.click(screen.getByRole('combobox', { name: 'Saved view' }))
+    await user.click(screen.getByRole('option', { name: 'Team pipeline' }))
+
+    expect(screen.getByRole('grid', { name: 'People grid' })).toHaveAttribute('data-sort', 'name:asc')
+    expect(screen.getByLabelText('Current route')).toHaveTextContent(`view=shared&v=${overlay}`)
+  })
+
+  it('clears the URL overlay after saving the merged arrangement', async () => {
+    const user = userEvent.setup()
+    const attribute = {
+      id: 'name', objectId: 'person', slug: 'name', name: 'Name', description: null,
+      icon: null, type: 'text', optionsJson: null, refObjectId: null, formatJson: null,
+      validationJson: null, isIdentity: true, storage: 'column', isMulti: false,
+      isRequired: false, isUnique: false, isReadOnly: false, isSystem: true,
+      defaultJson: null, sortOrder: 0, isArchived: false,
+      createdAt: '2026-08-22T12:00:00.000Z', updatedAt: '2026-08-22T12:00:00.000Z',
+    }
+    const person = object({ attributes: [attribute] })
+    const view = { id: 'default', objectId: 'person', name: 'Default view', layout: 'grid' as const, config: createViewConfig([attribute]), ownerUserId: 'user-1', isShared: false, isDefault: true, sortOrder: 0, createdAt: '', updatedAt: '' }
+    const update = vi.fn().mockResolvedValue({ view })
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetViewsMock.mockReturnValue({ data: { views: [view] }, isPending: false, isError: false, isSuccess: true, refetch: vi.fn() })
+    useUpdateViewMock.mockReturnValue({ isPending: false, mutateAsync: update })
+
+    const overlay = encodeViewState({ ...view.config, sorts: [{ attributeId: 'name', direction: 'asc' as const }] })
+    renderRecords(`/records/person?v=${overlay}`)
+
+    await user.click(screen.getByRole('button', { name: 'Change sort' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalled())
+    expect(screen.getByLabelText('Current route')).not.toHaveTextContent('v=')
+  })
+
+  it('saves a changed arrangement as a named Personal view', async () => {
+    const user = userEvent.setup()
+    const attribute = {
+      id: 'name', objectId: 'person', slug: 'name', name: 'Name', description: null,
+      icon: null, type: 'text', optionsJson: null, refObjectId: null, formatJson: null,
+      validationJson: null, isIdentity: true, storage: 'column', isMulti: false,
+      isRequired: false, isUnique: false, isReadOnly: false, isSystem: true,
+      defaultJson: null, sortOrder: 0, isArchived: false,
+      createdAt: '2026-08-22T12:00:00.000Z', updatedAt: '2026-08-22T12:00:00.000Z',
+    }
+    const person = object({ attributes: [attribute] })
+    const defaultView = { id: 'default', objectId: 'person', name: 'Default view', layout: 'grid' as const, config: createViewConfig([attribute]), ownerUserId: 'user-1', isShared: false, isDefault: true, sortOrder: 0, createdAt: '', updatedAt: '' }
+    const savedView = { ...defaultView, id: 'saved', name: 'Q3 prospects', isDefault: false }
+    const save = vi.fn().mockResolvedValue({ view: savedView })
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetViewsMock.mockReturnValue({ data: { views: [defaultView] }, isPending: false, isError: false, isSuccess: true, refetch: vi.fn() })
+    useSaveViewMock.mockReturnValue({ isPending: false, mutateAsync: save })
+
+    renderRecords('/records/person')
+
+    await user.click(screen.getByRole('button', { name: 'Change sort' }))
+    await user.click(screen.getByRole('button', { name: 'Save as new view' }))
+    await user.type(screen.getByRole('textbox', { name: 'New saved view name' }), 'Q3 prospects')
+    await user.click(screen.getByRole('button', { name: 'Save new view' }))
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ name: 'Q3 prospects', makeDefault: false })))
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('/records/person?view=saved')
   })
 
   it('keeps a newly saved view selected until the refreshed switcher includes it', async () => {
@@ -266,7 +353,7 @@ describe('Records', () => {
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() => expect(save).toHaveBeenCalledOnce())
-    expect(screen.getByLabelText('Current route')).toHaveTextContent('viewId=saved')
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('/records/person?view=saved')
     expect(toastErrorMock).not.toHaveBeenCalled()
   })
 })
