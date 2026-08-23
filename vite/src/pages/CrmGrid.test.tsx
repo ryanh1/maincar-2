@@ -5,9 +5,12 @@ import { Route, Routes } from 'react-router-dom'
 
 import { renderWithProviders } from '@/test/utils'
 
-const { getListEntriesMock, removeListEntryMock } = vi.hoisted(() => ({
+const { getListEntriesMock, removeListEntryMock, updateListEntryMock, reorderListEntriesMock, createListAttributeMock } = vi.hoisted(() => ({
   getListEntriesMock: vi.fn(),
   removeListEntryMock: vi.fn(),
+  updateListEntryMock: vi.fn(),
+  reorderListEntriesMock: vi.fn(),
+  createListAttributeMock: vi.fn(),
 }))
 
 vi.mock('@/providers/useAuth', () => ({
@@ -29,6 +32,9 @@ vi.mock('@/hooks/crm', () => ({
   }),
   useGetListEntries: () => getListEntriesMock(),
   useRemoveListEntry: () => ({ mutateAsync: removeListEntryMock, isPending: false }),
+  useUpdateListEntry: () => ({ mutateAsync: updateListEntryMock, isPending: false }),
+  useReorderListEntries: () => ({ mutateAsync: reorderListEntriesMock, isPending: false }),
+  useCreateListAttribute: () => ({ mutateAsync: createListAttributeMock, isPending: false }),
   useGetObject: () => ({
     data: { object: { attributes: [] } },
     isPending: false,
@@ -56,6 +62,9 @@ beforeEach(() => {
     refetch: vi.fn(),
   })
   removeListEntryMock.mockReset()
+  updateListEntryMock.mockReset()
+  reorderListEntriesMock.mockReset()
+  createListAttributeMock.mockReset()
 })
 
 describe('CrmGrid', () => {

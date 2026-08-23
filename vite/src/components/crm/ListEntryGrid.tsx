@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useState } from 'react'
 import { DataEditor, GridCellKind, emptyGridSelection } from '@glideapps/glide-data-grid'
-import type { GridCell, GridColumn, GridSelection, Item, Rectangle, Theme } from '@glideapps/glide-data-grid'
+import type { EditableGridCell, GridCell, GridColumn, GridSelection, Item, Rectangle, Theme } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
 
 import { useAuth } from '@/providers/useAuth'
 import type { AttributeDef, CrmListEntry, ObjectDef } from '@/lib/crmTypes'
-import { buildGridCell } from './cellBuilder'
-import { chipCellRenderer } from './chipCell'
+import { buildGridCell, coerceForType } from './cellBuilder'
+import { chipCellRenderer, type ChipCellData } from './chipCell'
+import { fieldEditorCellRenderer, type FieldEditorCellData } from './fieldEditorCell'
 import { useGridColors } from './useGridColors'
 import { useRowSelection } from './useRowSelection'
 import { BulkActionBar } from './BulkActionBar'
@@ -21,10 +22,11 @@ interface ListEntryGridProps {
   isFetchingNextPage: boolean
   fetchNextPage: () => Promise<unknown>
   onRemoveEntry: (entry: CrmListEntry) => void
+  onUpdateEntry?: (entry: CrmListEntry, values: Record<string, unknown>) => void
 }
 
 /** A read-only Glide grid: list values come from ListEntry, never a record PATCH. */
-export function ListEntryGrid({ orgId, object, attributes, entries, totalCount, hasNextPage, isFetchingNextPage, fetchNextPage, onRemoveEntry }: ListEntryGridProps) {
+export function ListEntryGrid({ orgId, object, attributes, entries, totalCount, hasNextPage, isFetchingNextPage, fetchNextPage, onRemoveEntry, onUpdateEntry }: ListEntryGridProps) {
   const { user } = useAuth()
   const colors = useGridColors()
   const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
@@ -47,8 +49,26 @@ export function ListEntryGrid({ orgId, object, attributes, entries, totalCount, 
     if (!attribute) return { kind: GridCellKind.Loading, allowOverlay: false }
     if (!entry.target && column === 0) return { kind: GridCellKind.Text, data: 'Unavailable record', displayData: 'Unavailable record', readonly: true, allowOverlay: false }
     const value = attribute.storage === 'list' ? entry.values[attribute.slug] : entry.target?.[attribute.slug]
-    return buildGridCell({ ...attribute, isReadOnly: true }, value, { timeZone: user?.timeZone, paintColors: colors.paintColors })
-  }, [columns, entries, gridColumns, user?.timeZone, colors.paintColors])
+    return buildGridCell(
+      { ...attribute, isReadOnly: attribute.storage !== 'list' || attribute.isReadOnly },
+      value,
+      { orgId, timeZone: user?.timeZone, paintColors: colors.paintColors },
+    )
+  }, [columns, entries, gridColumns, orgId, user?.timeZone, colors.paintColors])
+  const onCellEdited = useCallback(([column, row]: Item, newValue: EditableGridCell) => {
+    const attribute = columns[column]
+    const entry = entries[row]
+    if (!entry || !attribute || attribute.storage !== 'list' || attribute.isReadOnly || !onUpdateEntry) return
+    let value: unknown
+    if (newValue.kind === GridCellKind.Boolean) value = newValue.data
+    else if (newValue.kind === GridCellKind.Number) value = newValue.data ?? null
+    else if (newValue.kind === GridCellKind.Custom) {
+      const data = newValue.data as ChipCellData | FieldEditorCellData
+      value = data.kind === 'field-editor-cell' ? data.value : attribute.isMulti ? data.selectedValues : (data.selectedValues[0] ?? null)
+    } else if (newValue.kind === GridCellKind.Text) value = coerceForType(attribute, newValue.data, entry.values[attribute.slug]).value
+    else return
+    onUpdateEntry(entry, { ...entry.values, [attribute.slug]: value })
+  }, [columns, entries, onUpdateEntry])
   const requestRemoval = useCallback(([column, row]: Item) => {
     if (gridColumns[column]?.id !== '__remove-entry') return
     const entry = entries[row]
@@ -61,6 +81,6 @@ export function ListEntryGrid({ orgId, object, attributes, entries, totalCount, 
   if (columns.length === 0) return <p className="text-sm text-muted-foreground">This list’s object has no fields yet.</p>
   return <div className="flex h-full min-h-0 flex-col border border-border bg-bg">
     {object && rowSelection.selectedCount > 0 && <BulkActionBar orgId={orgId} object={object} attributes={attributes} selection={{ mode: 'ids', ids: [...rowSelection.selectedIds] }} selectedCount={rowSelection.selectedCount} canChangeOwner={attributes.some((attribute) => attribute.slug === 'ownerUserId' && attribute.type === 'user_reference')} onClear={rowSelection.clear} />}
-    <div className="min-h-0 flex-1"><DataEditor columns={gridColumns} getCellContent={getCellContent} customRenderers={[chipCellRenderer]} rows={totalCount} freezeColumns={1} rowHeight={32} rowMarkers={{ kind: 'checkbox-visible', width: 32 }} rowSelect="multi" verticalBorder smoothScrollX smoothScrollY onVisibleRegionChanged={onVisibleRegionChanged} onCellClicked={requestRemoval} onCellActivated={requestRemoval} gridSelection={gridSelection} onGridSelectionChange={(nextSelection) => { setGridSelection(nextSelection); rowSelection.setLoadedSelection(nextSelection.rows.toArray().flatMap((row) => entries[row]?.target ? [entries[row].targetId] : [])) }} theme={theme} width="100%" height="100%" /></div>
+    <div className="min-h-0 flex-1"><DataEditor columns={gridColumns} getCellContent={getCellContent} customRenderers={[chipCellRenderer, fieldEditorCellRenderer]} rows={totalCount} freezeColumns={1} rowHeight={32} rowMarkers={{ kind: 'checkbox-visible', width: 32 }} rowSelect="multi" verticalBorder smoothScrollX smoothScrollY onVisibleRegionChanged={onVisibleRegionChanged} onCellEdited={onCellEdited} onCellClicked={requestRemoval} onCellActivated={requestRemoval} gridSelection={gridSelection} onGridSelectionChange={(nextSelection) => { setGridSelection(nextSelection); rowSelection.setLoadedSelection(nextSelection.rows.toArray().flatMap((row) => entries[row]?.target ? [entries[row].targetId] : [])) }} theme={theme} width="100%" height="100%" /></div>
   </div>
 }
