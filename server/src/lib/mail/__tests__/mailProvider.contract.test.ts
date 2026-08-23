@@ -119,6 +119,22 @@ function makeFakeProvider(scenario: MailProviderScenario): MailProvider {
       return found
     },
 
+    async listBackfillMessages(cursor, limit, _since) {
+      countAttempt()
+      guardCursor(cursor)
+      guardFailure()
+      const { page, nextCursor } = pageFrom(oldestFirst(messages), cursor, limit)
+      return { messages: page, nextCursor }
+    },
+
+    async listBackfillEvents(cursor, limit, _since) {
+      countAttempt()
+      guardCursor(cursor)
+      guardFailure()
+      const { page, nextCursor } = pageFrom(events, cursor, limit)
+      return { events: page, nextCursor }
+    },
+
     async listEventsSince(cursor, limit) {
       countAttempt()
       guardCursor(cursor)

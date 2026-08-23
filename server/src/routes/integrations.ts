@@ -38,6 +38,7 @@ import { wrapRoute } from '../lib/fnWrapper.js'
 import { listBrokenConnections } from '../lib/mail/connectionHealth.js'
 import { testConnection, type CapabilityResult } from '../lib/mail/connectionTest.js'
 import { getMailProvider } from '../lib/mail/getMailProvider.js'
+import { queueMailBackfillForConnection } from '../jobs/mailBackfill.js'
 import { mapProviderError, type IntegrationErrorCode } from '../lib/mail/integrationErrors.js'
 import {
   CONNECTION_PUBLIC_SELECT,
@@ -727,6 +728,12 @@ callbackRouter.get(
       refreshToken: grant.refreshToken,
       expiresAt: grant.expiresAt,
       grantedScopes: grant.grantedScopes,
+    })
+
+    // The consent is already durable. A queue outage must not turn a successful
+    // OAuth callback into an error page; pg-boss retains the job once accepted.
+    void Promise.resolve(queueMailBackfillForConnection(connection.id, payload.orgId)).catch((error) => {
+      logger.error({ error, connectionId: connection.id, orgId: payload.orgId }, 'mail backfill enqueue failed')
     })
 
     return void sendCallbackPage(res, successOutcome(provider, connection))
