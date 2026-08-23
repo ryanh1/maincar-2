@@ -32,6 +32,7 @@ import { buildGridCell, coerceForType, FLAGGED_THEME, parseOptions } from './cel
 import { chipCellRenderer, type ChipCellData } from './chipCell'
 import { fieldEditorCellRenderer, type FieldEditorCellData } from './fieldEditorCell'
 import { GridViewToolbar } from './GridViewToolbar'
+import { GridZoomControl } from './GridZoomControl'
 import { GridColumnFilterMenu } from './GridColumnFilterMenu'
 import type { GridMenuAnchor } from './gridFilterMenu'
 import { useGridColors } from './useGridColors'
@@ -43,7 +44,7 @@ import { CellExpandOverlay } from './CellExpandOverlay'
 import { CellCopyMenu } from './CellCopyMenu'
 import { formatCellValue } from './recordCellValue'
 import { ColumnGroupHeaders } from './ColumnGroupHeaders'
-import { createKanbanConfig, createViewConfig, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
+import { createKanbanConfig, createViewConfig, reorderColumnGroup, resolveHeaderColor, stepZoom, toRecordListQuery, type ViewConfig } from './viewConfig'
 import { parseGridCommand } from './gridCommands'
 import { coerceCurrency, coerceNumber } from './cellCoercion'
 import { formatEntry } from '@/lib/dialPad'
@@ -59,6 +60,8 @@ const DEFAULT_COLUMN_WIDTH = 160
 const ROW_HEIGHTS = { compact: 34, comfortable: 44, tall: 56 } as const
 const GRID_HEADER_HEIGHT = 36
 const ROW_MARKER_WIDTH = 32
+// Glide's default base/header font size, scaled by the per-view zoom factor.
+const BASE_FONT_SIZE = 13
 // Glide asks for the next window once the reader has scrolled within this many
 // rows of the end of what is loaded, so the fetch lands before blank rows do.
 const PREFETCH_MARGIN = 60
@@ -215,6 +218,12 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
   const fallbackConfig = useMemo(() => createViewConfig(attributes), [attributes])
   const config = viewConfig ?? fallbackConfig
   const sortActive = config.sorts.length > 0
+  // Per-view zoom (journey 4b.10.1): scales font, row height, and column widths
+  // together. Stored as a percentage in ViewConfig.zoom; 100 is identity.
+  const zoomFactor = config.zoom / 100
+  const rowHeightPx = Math.round(ROW_HEIGHTS[config.rowHeight] * zoomFactor)
+  const headerHeightPx = Math.round(GRID_HEADER_HEIGHT * zoomFactor)
+  const scaledFontSize = Math.round(BASE_FONT_SIZE * zoomFactor)
   const [gridSelection, setGridSelection] = useState<GridSelection>(emptyGridSelection)
   const [headerMenu, setHeaderMenu] = useState<{ attribute: AttributeDef; anchor: GridMenuAnchor; columnIndex: number } | null>(null)
   const [rowFreezeMenu, setRowFreezeMenu] = useState<{ anchor: GridMenuAnchor; row: number } | null>(null)
@@ -244,14 +253,18 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
       visibleColumns.map((attr, index) => {
         const column = configuredColumns.get(attr.id)
         const collapsedGroup = column?.group && column.collapsed ? column.group : undefined
+        const headerColor = resolveHeaderColor(attr, config.columnStyles)
         return {
           id: attr.slug,
           title: collapsedGroup ? `${collapsedGroup} (${config.columns.filter((candidate) => candidate.group === collapsedGroup).length})` : attr.name,
-          width: config.columnWidths[attr.id] ?? (index === 0 ? LEADING_COLUMN_WIDTH : DEFAULT_COLUMN_WIDTH),
+          width: Math.round((config.columnWidths[attr.id] ?? (index === 0 ? LEADING_COLUMN_WIDTH : DEFAULT_COLUMN_WIDTH)) * zoomFactor),
           hasMenu: headerMenuSupported(attr),
+          ...(headerColor
+            ? { themeOverride: { bgHeader: colors.headerTintColors[headerColor], headerBottomBorderColor: colors.paintColors[headerColor] } }
+            : {}),
         }
       }),
-    [visibleColumns, config.columnWidths, configuredColumns, config.columns],
+    [visibleColumns, config.columnWidths, configuredColumns, config.columns, config.columnStyles, zoomFactor, colors],
   )
   const firstGridColumn = gridColumns[0]
   const leadingColumnWidth =
@@ -710,12 +723,13 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
       )
       const indexes = selectedIndexes.length > 0 ? selectedIndexes : [columnIndex]
       const attributeIds = indexes.map((index) => visibleColumns[index]?.id).filter((id): id is string => Boolean(id))
+      const storedWidth = Math.round(width / zoomFactor)
       onViewConfigChange((current) => ({
         ...current,
-        columnWidths: { ...current.columnWidths, ...Object.fromEntries(attributeIds.map((id) => [id, width])) },
+        columnWidths: { ...current.columnWidths, ...Object.fromEntries(attributeIds.map((id) => [id, storedWidth])) },
       }))
     },
-    [gridSelection.columns.items, onViewConfigChange, visibleColumns],
+    [gridSelection.columns.items, onViewConfigChange, visibleColumns, zoomFactor],
   )
 
   const theme: Partial<Theme> = useMemo(
@@ -732,8 +746,10 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
       borderColor: colors.border,
       horizontalBorderColor: config.gridLines ? colors.border : 'transparent',
       fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+      baseFontStyle: `${scaledFontSize}px`,
+      headerFontStyle: `600 ${scaledFontSize}px`,
     }),
-    [colors, config.gridLines],
+    [colors, config.gridLines, scaledFontSize],
   )
 
   // --- Row focus (controlled selection) + the peek drawer (MAI-167) ---
@@ -882,6 +898,25 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     document.addEventListener('keydown', onFindShortcut, true)
     return () => document.removeEventListener('keydown', onFindShortcut, true)
   }, [])
+
+  // Cmd/Ctrl +/–/0 zoom the grid in-app (journey 4b.10.1), never the browser.
+  useEffect(() => {
+    function onZoomShortcut(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || isTypingTarget(document.activeElement)) return
+      if (event.key === '=' || event.key === '+') {
+        event.preventDefault()
+        onViewConfigChange?.((current) => ({ ...current, zoom: stepZoom(current.zoom, 1) }))
+      } else if (event.key === '-' || event.key === '_') {
+        event.preventDefault()
+        onViewConfigChange?.((current) => ({ ...current, zoom: stepZoom(current.zoom, -1) }))
+      } else if (event.key === '0') {
+        event.preventDefault()
+        onViewConfigChange?.((current) => ({ ...current, zoom: 100 }))
+      }
+    }
+    document.addEventListener('keydown', onZoomShortcut, true)
+    return () => document.removeEventListener('keydown', onZoomShortcut, true)
+  }, [onViewConfigChange])
 
   const replaceAll = useCallback(() => {
     if (!matcher || matches.length === 0) return
@@ -1059,7 +1094,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
       .reduce((total, column) => total + ('width' in column && typeof column.width === 'number' ? column.width : DEFAULT_COLUMN_WIDTH), 0),
     [config.frozenCols, gridColumns],
   )
-  const frozenRowBoundary = GRID_HEADER_HEIGHT + config.frozenRows * ROW_HEIGHTS[config.rowHeight]
+  const frozenRowBoundary = headerHeightPx + config.frozenRows * rowHeightPx
 
   const freezeColumnsAt = useCallback((x: number) => {
     const gridX = Math.max(0, x - ROW_MARKER_WIDTH)
@@ -1074,9 +1109,9 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
   }, [gridColumns])
 
   const freezeRowsAt = useCallback((y: number) => {
-    const count = Math.round((y - GRID_HEADER_HEIGHT) / ROW_HEIGHTS[config.rowHeight])
+    const count = Math.round((y - headerHeightPx) / rowHeightPx)
     return Math.max(0, Math.min(gridRowCount, count))
-  }, [config.rowHeight, gridRowCount])
+  }, [headerHeightPx, rowHeightPx, gridRowCount])
 
   useEffect(() => {
     function onPointerMove(event: PointerEvent) {
@@ -1314,7 +1349,8 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         drawCell={drawCell}
         rows={gridRowCount}
         freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
-        rowHeight={ROW_HEIGHTS[config.rowHeight]}
+        rowHeight={rowHeightPx}
+        headerHeight={headerHeightPx}
         verticalBorder={config.gridLines}
         onColumnMoved={sortActive || config.columns.some((column) => column.group) ? undefined : onColumnMoved}
         onColumnResize={onColumnResize}
@@ -1519,7 +1555,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
             className="pointer-events-none absolute inset-x-0 z-10 border-b border-border bg-bg"
             data-row-count={config.frozenRows}
             data-testid="frozen-rows-overlay"
-            style={{ top: 36, height: config.frozenRows * ROW_HEIGHTS[config.rowHeight] }}
+            style={{ top: headerHeightPx, height: config.frozenRows * rowHeightPx }}
           >
             <DataEditor
               className="record-grid-frozen-rows"
@@ -1528,7 +1564,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
               rows={config.frozenRows}
               freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
               rowMarkers={{ kind: 'clickable-number', width: ROW_MARKER_WIDTH }}
-              rowHeight={ROW_HEIGHTS[config.rowHeight]}
+              rowHeight={rowHeightPx}
               headerHeight={0}
               scrollOffsetX={scrollOffsetX}
               smoothScrollX
@@ -1621,6 +1657,11 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         }}
         />
       </div>
+      {onViewConfigChange && (
+        <div className="flex h-7 shrink-0 items-center justify-end border-t border-border bg-surface px-3">
+          <GridZoomControl zoom={config.zoom} onZoomChange={(zoom) => onViewConfigChange((current) => ({ ...current, zoom }))} />
+        </div>
+      )}
     </div>
   )
 }

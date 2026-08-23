@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
 import type { AttributeDef } from '@/lib/crmTypes'
@@ -23,5 +24,20 @@ describe('GridColumnFilterMenu', () => {
     expect(screen.queryByRole('button', { name: 'A to Z' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Apply sort' })).not.toBeInTheDocument()
     expect(onConfigChange).not.toHaveBeenCalled()
+  })
+
+  it('sets a manual header colour and clears it back to automatic', async () => {
+    const user = userEvent.setup()
+    const config = createViewConfig([attribute])
+    const onConfigChange = vi.fn()
+    renderWithProviders(<GridColumnFilterMenu attribute={attribute} config={config} onConfigChange={onConfigChange} open onOpenChange={vi.fn()} anchor={{ x: 16, y: 16, width: 160, height: 32 }} />)
+
+    await user.click(screen.getByRole('button', { name: 'Header colour option-3' }))
+    const setUpdate = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(setUpdate(config).columnStyles).toEqual([{ attributeId: 'status', headerColor: 'option-3' }])
+
+    await user.click(screen.getByRole('button', { name: 'Clear header colour' }))
+    const clearUpdate = onConfigChange.mock.calls[1][0] as (current: typeof config) => typeof config
+    expect(clearUpdate(config).columnStyles).toEqual([])
   })
 })

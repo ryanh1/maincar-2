@@ -116,6 +116,17 @@
   --option-7: #0f766e;
   --option-8: #475569;
 
+  /* Faint header tints for relation-aware column headers (SPEC-CHUNK-2 J2.5 §B).
+     The saturated token stays the accent; the tint is the readable background. */
+  --option-1-tint: #e0f2fe;
+  --option-2-tint: #e0f2fe;
+  --option-3-tint: #eef2ff;
+  --option-4-tint: #f3e8ff;
+  --option-5-tint: #ffe4e6;
+  --option-6-tint: #fef3c7;
+  --option-7-tint: #ccfbf1;
+  --option-8-tint: #f1f5f9;
+
   /* Dark sidebar in both themes — the anchor a pale light UI needs. It makes the
      white content area read brighter by contrast. */
   --sidebar: #0f172a; /* slate-900 */
@@ -177,6 +188,15 @@
   --option-6: #fbbf24;
   --option-7: #2dd4bf;
   --option-8: #94a3b8;
+
+  --option-1-tint: #0e2a30;
+  --option-2-tint: #0c2434;
+  --option-3-tint: #1e1b4b;
+  --option-4-tint: #2e1065;
+  --option-5-tint: #4c0519;
+  --option-6-tint: #451a03;
+  --option-7-tint: #042f2e;
+  --option-8-tint: #1e293b;
 
   --sidebar: #0b1120;
   --sidebar-foreground: #cbd5e1;
