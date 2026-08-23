@@ -97,7 +97,7 @@ function renderJourney(props: { prefilledNumber?: string } = {}) {
   useCreateCallMock.mockReturnValue({ mutate: mutateMock, isPending: false })
   useGetNumbersMock.mockReturnValue({
     data: {
-      numbers: [{ id: 'number-1', e164: '+14155550100', isActiveForOutbound: true }],
+      numbers: [{ id: 'number-1', e164: '+14155550100', status: 'active', isActiveForOutbound: true }],
       total: 1,
       activeCount: 1,
     },

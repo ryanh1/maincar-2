@@ -381,6 +381,14 @@ const createCallSchema = z.object({
       E164_PATTERN,
       'Enter the number in E.164 form — a plus, the country code, then digits, like +12025550123.',
     ),
+  // A picker selection applies only to this request. The server resolves its
+  // E.164 value from the caller's assigned, active rows; a client must never
+  // choose a From number by supplying its digits.
+  phoneNumberId: z
+    .string()
+    .trim()
+    .min(1, 'Pick a phone number to call from.')
+    .optional(),
 })
 
 const logCallSchema = z.object({
@@ -462,6 +470,9 @@ const ALREADY_ENDED_ERROR = 'This call has already ended, so there is nothing to
 const NO_ACTIVE_NUMBER_ERROR =
   'Activate a phone number for outbound calling before you place a call.'
 
+const SELECTED_PHONE_NUMBER_ERROR =
+  'Choose an active phone number assigned to you before you place a call.'
+
 const DOUBLE_CALL_ERROR =
   'You already have a call to this number in progress. Wait for it to end before calling again.'
 
@@ -469,6 +480,7 @@ const DOUBLE_CALL_ERROR =
 // Classes rather than strings because the double-call case carries the existing
 // call the response hands back.
 class NoActiveNumber extends Error {}
+class SelectedPhoneNumberUnavailable extends Error {}
 class DoubleCall extends Error {
   constructor(readonly existing: Call) {
     super('a call to this number is already in flight')
@@ -768,7 +780,7 @@ router.post(
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
-    const { toE164 } = parsed.data
+    const { toE164, phoneNumberId } = parsed.data
 
     // The one instant this request means by "now". Both the calling-hours check
     // and the lastDialedAt it writes read it, so the moment a dial was judged
@@ -778,24 +790,36 @@ router.post(
     const dialedAt = new Date()
 
     // --- Guard & create, in one transaction ---
-    // The caller's active number is read with `FOR UPDATE`, so it is the lock
-    // every one of this user's concurrent call attempts contends on. Postgres
-    // runs at READ COMMITTED, so without the lock two requests would both read
-    // "no call in flight" and both insert. Raw SQL because Prisma cannot express
-    // a row lock; parameterised, and orgId/userId come from the verified path and
-    // token, never from the body.
+    // Every active number assigned to this caller is read with `FOR UPDATE`, so
+    // it is the lock every one of this user's concurrent call attempts contends
+    // on. This also makes a one-call selection and a concurrent release or
+    // reassignment agree on whether that number was dialable. Postgres runs at
+    // READ COMMITTED, so without the lock two requests would both read "no call
+    // in flight" and both insert. Raw SQL because Prisma cannot express a row
+    // lock; parameterised, and orgId/userId come from the verified path and token,
+    // never from the body.
     let created: Call
     try {
       created = await prisma.$transaction(async (tx) => {
-        const locked = await tx.$queryRaw<{ id: string; e164: string }[]>`
-          SELECT "id", "e164" FROM "PhoneNumber"
+        const locked = await tx.$queryRaw<{
+          id: string
+          e164: string
+          isActiveForOutbound: boolean
+        }[]>`
+          SELECT "id", "e164", "isActiveForOutbound" FROM "PhoneNumber"
           WHERE "orgId" = ${orgId}
             AND "assignedUserId" = ${userId}
-            AND "isActiveForOutbound" = true
+            AND "status" = 'active'
           FOR UPDATE
         `
-        if (locked.length === 0) throw new NoActiveNumber()
-        const fromE164 = locked[0].e164
+        const selectedNumber = phoneNumberId
+          ? locked.find((number) => number.id === phoneNumberId)
+          : locked.find((number) => number.isActiveForOutbound)
+        if (!selectedNumber) {
+          if (phoneNumberId) throw new SelectedPhoneNumberUnavailable()
+          throw new NoActiveNumber()
+        }
+        const fromE164 = selectedNumber.e164
 
         // In-flight to the SAME number by the SAME user. Scoped to this user so a
         // colleague calling the same number is untouched, and to this org as the
@@ -889,6 +913,9 @@ router.post(
     } catch (error) {
       if (error instanceof NoActiveNumber) {
         return void res.status(400).json({ error: NO_ACTIVE_NUMBER_ERROR })
+      }
+      if (error instanceof SelectedPhoneNumberUnavailable) {
+        return void res.status(400).json({ error: SELECTED_PHONE_NUMBER_ERROR })
       }
       if (error instanceof DialRefused) {
         // The refusal CODE, never the number: which rule fired is the operational

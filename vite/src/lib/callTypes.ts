@@ -176,6 +176,8 @@ export interface CallDisposition {
 /** What POST accepts. Recording is decided by the organization policy. */
 export interface CreateCallInput {
   toE164: string
+  /** An assigned, active number to use only for this outbound call. */
+  phoneNumberId?: string
 }
 
 /** The columns the history list may sort on. Mirrors `SORT_FIELDS` on the server. */

@@ -164,7 +164,9 @@ beforeEach(() => {
   authAs()
   // A locked active number is the default; the no-active-number test overrides
   // this to an empty result.
-  prismaMock.$queryRaw.mockResolvedValue([{ id: 'num-1', e164: '+12025550123' }])
+  prismaMock.$queryRaw.mockResolvedValue([
+    { id: 'num-1', e164: '+12025550123', isActiveForOutbound: true },
+  ])
   prismaMock.call.findFirst.mockResolvedValue(null)
   prismaMock.call.findMany.mockResolvedValue([callRow()])
   prismaMock.call.count.mockResolvedValue(1)
@@ -743,6 +745,38 @@ describe('POST /api/orgs/:orgId/calls', () => {
     expect(res.body.call.twilioCallSid).toBeNull()
   })
 
+  it('uses an assigned active number selected for this call without changing the primary', async () => {
+    prismaMock.$queryRaw.mockResolvedValue([
+      { id: 'num-primary', e164: '+12025550123', isActiveForOutbound: true },
+      { id: 'num-secondary', e164: '+12025550124', isActiveForOutbound: false },
+    ])
+    prismaMock.call.create.mockResolvedValue(callRow({ fromE164: '+12025550124' }))
+
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ ...VALID_BODY, phoneNumberId: 'num-secondary' })
+
+    expect(res.status).toBe(201)
+    expect(res.body.call.fromE164).toBe('+12025550124')
+    expect(prismaMock.call.create.mock.calls[0][0].data.fromE164).toBe('+12025550124')
+  })
+
+  it('allows an explicit active selection when the caller has no primary number', async () => {
+    prismaMock.$queryRaw.mockResolvedValue([
+      { id: 'num-secondary', e164: '+12025550124', isActiveForOutbound: false },
+    ])
+    prismaMock.call.create.mockResolvedValue(callRow({ fromE164: '+12025550124' }))
+
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ ...VALID_BODY, phoneNumberId: 'num-secondary' })
+
+    expect(res.status).toBe(201)
+    expect(res.body.call.fromE164).toBe('+12025550124')
+  })
+
   it('appends the ONE activity-feed row, inside the same transaction as the call (MAI-140)', async () => {
     prismaMock.call.create.mockResolvedValue(callRow({ id: 'call-1', status: 'queued' }))
 
@@ -915,6 +949,16 @@ describe('POST /api/orgs/:orgId/calls — invalid input', () => {
     expect(res.body.error).toBe(
       'Activate a phone number for outbound calling before you place a call.',
     )
+    expect(prismaMock.call.create).not.toHaveBeenCalled()
+  })
+
+  it('400s an unavailable selected number without writing a call', async () => {
+    const res = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ ...VALID_BODY, phoneNumberId: 'num-not-assigned-to-the-caller' })
+
+    expect(res.status).toBe(400)
     expect(prismaMock.call.create).not.toHaveBeenCalled()
   })
 })

@@ -201,6 +201,23 @@ describe('useCreateCall', () => {
     await waitFor(() => expect(deviceConnectMock).toHaveBeenCalledWith({ params: { callId: 'call-1' } }))
   })
 
+  it('sends an optional one-call caller-ID selection to the API', async () => {
+    jsonFetch.mockResolvedValue({ call: queuedCall('call-1') })
+
+    const { result } = renderCreateCall()
+    result.current.create.mutate({
+      orgId: 'org-1',
+      toE164: '+12025550123',
+      phoneNumberId: 'number-secondary',
+    })
+
+    await waitFor(() => expect(result.current.create.isSuccess).toBe(true))
+    expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/calls', {
+      method: 'POST',
+      body: JSON.stringify({ toE164: '+12025550123', phoneNumberId: 'number-secondary' }),
+    })
+  })
+
   it('resets the dialer and toasts when the Device cannot connect the call', async () => {
     jsonFetch.mockResolvedValue({ call: queuedCall('call-1') })
     deviceConnectMock.mockRejectedValue(new Error('Could not reach the microphone.'))
