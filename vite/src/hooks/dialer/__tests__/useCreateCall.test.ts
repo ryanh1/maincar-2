@@ -121,6 +121,7 @@ describe('useCreateCall', () => {
     expect(result.current.dialer.activeCall).toEqual({
       orgId: 'org-1',
       callId: 'call-1',
+      toE164: '+12025550123',
       recording: true,
     })
   })
@@ -182,6 +183,7 @@ describe('useCreateCall', () => {
     expect(result.current.dialer.activeCall).toEqual({
       orgId: 'org-1',
       callId: 'call-existing',
+      toE164: '+12025550123',
       recording: true,
     })
     expect(deviceConnectMock).not.toHaveBeenCalled()

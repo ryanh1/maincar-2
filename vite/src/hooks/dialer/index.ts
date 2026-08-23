@@ -6,12 +6,14 @@ export { useGetVoiceToken } from './useGetVoiceToken'
 export { isAdoptableInFlightCallError, useCreateCall } from './useCreateCall'
 export { useEndCall } from './useEndCall'
 export { useLogCallDisposition } from './useLogCallDisposition'
+export { useSaveCallNote } from './useSaveCallNote'
 
 // What each mutation is called with. These are hook shapes, not API shapes, so
 // they live beside the hook rather than in lib/callTypes.ts — that file mirrors
 // the server's responses and nothing else.
 export type { CreateCallVariables } from './useCreateCall'
 export type { EndCallVariables } from './useEndCall'
+export type { SaveCallNoteInput } from './useSaveCallNote'
 
 // The API shapes and the list params live in lib/callTypes.ts, re-exported here
 // so a component that already imports a hook does not need a second import path.

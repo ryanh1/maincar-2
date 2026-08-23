@@ -14,6 +14,7 @@ import app from '../../app.js'
 
 const ORG_ID = 'org-a'
 const URL = `/api/orgs/${ORG_ID}/calls/call-1/disposition`
+const NOTE_URL = `/api/orgs/${ORG_ID}/calls/call-1/note`
 const AUTH = 'Bearer token'
 const NOW = new Date('2026-08-22T12:00:00.000Z')
 
@@ -47,6 +48,16 @@ describe('logging a call disposition', () => {
     expect(prismaMock.call.updateMany).toHaveBeenCalledWith({ where: { id: 'call-1', orgId: ORG_ID }, data: { dispositionId: 'disposition-1', noteText: 'Asked for a demo.' } })
   })
 
+  it('keeps an autosaved note when logging a disposition without replacing it', async () => {
+    const response = await request(app).patch(URL).set('Authorization', AUTH).send({ dispositionId: 'disposition-1' })
+
+    expect(response.status).toBe(200)
+    expect(prismaMock.call.updateMany).toHaveBeenCalledWith({
+      where: { id: 'call-1', orgId: ORG_ID },
+      data: { dispositionId: 'disposition-1' },
+    })
+  })
+
   it('refuses a disposition outside the active organization before changing the call', async () => {
     prismaMock.dispositionDef.findFirst.mockResolvedValue(null)
 
@@ -54,5 +65,18 @@ describe('logging a call disposition', () => {
 
     expect(response.status).toBe(400)
     expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('saving an in-call note', () => {
+  it('writes a trimmed note through an organization-scoped update', async () => {
+    const response = await request(app).patch(NOTE_URL).set('Authorization', AUTH).send({ noteText: ' Asked for a demo. ' })
+
+    expect(response.status).toBe(200)
+    expect(prismaMock.call.updateMany).toHaveBeenCalledWith({
+      where: { id: 'call-1', orgId: ORG_ID },
+      data: { noteText: 'Asked for a demo.' },
+    })
+    expect(response.body.call).toEqual(expect.objectContaining({ noteText: 'Asked for a demo.' }))
   })
 })

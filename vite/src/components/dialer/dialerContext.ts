@@ -39,6 +39,8 @@ export interface ActiveCall {
   orgId: string
   /** The live call's id. */
   callId: string
+  /** The number being called, available before the detail read resolves. */
+  toE164?: string
   /** Whether the call is being recorded, driving the in-call recording dot. */
   recording: boolean
 }

@@ -16,12 +16,13 @@ vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }
 vi.mock('@/components/dialer/NumericKeypad', () => ({
   NumericKeypad: () => <div data-testid="keypad" />,
 }))
-vi.mock('@/components/dialer/InCallControls', () => ({
-  InCallControls: (props: { orgId: string; callId: string; recording?: boolean }) => (
+vi.mock('@/components/dialer/InCallWorkspace', () => ({
+  InCallWorkspace: (props: { orgId: string; callId: string; toE164: string; recording?: boolean }) => (
     <div
       data-testid="in-call"
       data-org={props.orgId}
       data-call={props.callId}
+      data-number={props.toE164}
       data-recording={String(props.recording)}
     />
   ),
@@ -126,7 +127,7 @@ describe('DialerDock', () => {
       view: 'expanded',
       mode: 'call',
       phase: 'in-progress',
-      activeCall: { orgId: 'org-9', callId: 'call-9', recording: true },
+      activeCall: { orgId: 'org-9', callId: 'call-9', toE164: '+12025550123', recording: true },
     })
     render(<DialerDock />)
 
@@ -134,6 +135,7 @@ describe('DialerDock', () => {
     expect(controls).toBeInTheDocument()
     expect(controls).toHaveAttribute('data-org', 'org-9')
     expect(controls).toHaveAttribute('data-call', 'call-9')
+    expect(controls).toHaveAttribute('data-number', '+12025550123')
     expect(controls).toHaveAttribute('data-recording', 'true')
     expect(screen.queryByTestId('keypad')).not.toBeInTheDocument()
   })
