@@ -38,12 +38,38 @@ test('walks the live workspace for known and unknown callers', async ({ page }) 
     }
     await route.continue()
   })
+  await page.route('**/api/orgs/org-fixture/activity?**', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        activity: [
+          {
+            id: 'activity-prior-call', sourceType: 'call', sourceId: 'call-prior',
+            summary: 'Completed call with Acme', preview: 'Asked for a proposal.', direction: 'outbound',
+            occurredAt: '2026-08-22T18:00:00.000Z', createdByUserId: 'user-fixture',
+            companyId: 'company-fixture', personId: 'person-fixture', dealId: null,
+            createdAt: '2026-08-22T18:00:00.000Z',
+          },
+        ],
+        page: 1, limit: 3, hasMore: false,
+      }),
+    })
+  })
 
   await page.goto('/__fixtures/in-call-workspace')
   await expect(page.getByRole('heading', { name: 'In-call workspace fixture' })).toBeVisible()
   await expect(page.getByText('+12025550123')).toBeVisible()
   await expect(page.getByText('Jordan Lee')).toBeVisible()
-  await expect(page.getByText('Acme')).toBeVisible()
+  await expect(page.getByText('Acme', { exact: true })).toBeVisible()
+
+  const priorCalls = page.getByRole('button', { name: 'Prior calls at Acme' })
+  await expect(priorCalls).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByText('Completed call with Acme')).toHaveCount(0)
+  await priorCalls.click()
+  await expect(priorCalls).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByText('Completed call with Acme')).toBeVisible()
+  await page.getByRole('button', { name: 'Show more' }).click()
+  await expect(page.getByText('Asked for a proposal.')).toBeVisible()
 
   const notes = page.getByRole('textbox', { name: 'Call notes' })
   await expect(notes).not.toBeFocused()
@@ -66,5 +92,6 @@ test('walks the live workspace for known and unknown callers', async ({ page }) 
   await expect(page.getByText('+12025550999')).toBeVisible()
   await expect(page.getByText('Jordan Lee')).toHaveCount(0)
   await expect(page.getByText('Acme')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Prior calls at/ })).toHaveCount(0)
   expect(consoleErrors).toEqual([])
 })

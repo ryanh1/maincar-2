@@ -39,9 +39,10 @@ const router = Router({ mergeParams: true })
 // --- Mappers: database row → API shape ---
 
 // orgId and userId are deliberately absent: the caller already knows both (they
-// are the requester and the path). twilioCallSid is included because it is null
-// on the row this route first writes and set moments later, so the client can
-// see which state it got back.
+// are the requester and the path). The nullable CRM spine ids are included so a
+// live-call surface can reuse the account feed without another call-detail read.
+// twilioCallSid is included because it is null on the row this route first writes
+// and set moments later, so the client can see which state it got back.
 function mapCallToApi(call: Call) {
   return {
     id: call.id,
@@ -51,6 +52,8 @@ function mapCallToApi(call: Call) {
     toE164: call.toE164,
     recordingPlanned: call.recordingPlanned,
     recordingReason: call.recordingReason,
+    personId: call.personId,
+    companyId: call.companyId,
     twilioCallSid: call.twilioCallSid,
     createdAt: call.createdAt.toISOString(),
   }

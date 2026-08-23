@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Mic, MicOff, Phone } from 'lucide-react'
+import { ChevronDown, Mic, MicOff, Phone } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { cn } from '@/lib/utils'
 import { ApiError } from '@/lib/api'
 import { formatElapsed } from '@/lib/duration'
+import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { ActivityFeedRow } from '@/components/activity-feed/ActivityFeedRow'
+import { mapActivityEntry } from '@/components/activity-feed/activityFeed'
 import type { CallPhase } from '@/components/dialer/dialerContext'
 import { useDialer } from '@/components/dialer/dialerContext'
 import { useEndCall } from '@/hooks/dialer'
+import { useGetActivity } from '@/hooks/crm'
+import { useAuth } from '@/providers/useAuth'
 
 /** Human-facing status line for each phase the in-call view can show. */
 const STATUS_LABEL: Record<CallPhase, string> = {
@@ -33,6 +38,10 @@ export interface InCallControlsProps {
    * precondition either way.
    */
   recording?: boolean
+  /** The current call's linked company. Absent for an unknown or unlinked number. */
+  companyId?: string | null
+  /** Read from the existing live call detail for the visible account name. */
+  companyName?: string | null
   className?: string
 }
 
@@ -54,11 +63,25 @@ export interface InCallControlsProps {
  * The duration and status read the shared dialer state (`useDialer`), so the timer
  * ticks with the one interval the provider owns rather than a second clock here.
  */
-export function InCallControls({ orgId, callId, recording = false, className }: InCallControlsProps) {
+export function InCallControls({
+  orgId,
+  callId,
+  recording = false,
+  companyId,
+  companyName,
+  className,
+}: InCallControlsProps) {
   const { phase, elapsedSeconds, canControlAudio, muteCall } = useDialer()
+  const { user } = useAuth()
   const endCall = useEndCall()
+  const priorCalls = useGetActivity(
+    orgId,
+    companyId ? { companyId } : null,
+    { sourceType: 'call', limit: 3 },
+  )
 
   const [muted, setMuted] = useState(false)
+  const [priorCallsOpen, setPriorCallsOpen] = useState(false)
   const previousRecording = useRef(recording)
   const [recordingAnnouncement, setRecordingAnnouncement] = useState('')
 
@@ -118,6 +141,35 @@ export function InCallControls({ orgId, callId, recording = false, className }: 
           {recordingAnnouncement}
         </span>
       </div>
+
+      {companyId && companyName ? (
+        <section className="rounded-md border border-border bg-surface" aria-label={`Prior calls at ${companyName}`}>
+          <Button
+            type="button"
+            variant="ghost"
+            className="flex w-full justify-between px-3 text-sm font-medium"
+            aria-expanded={priorCallsOpen}
+            onClick={() => setPriorCallsOpen((open) => !open)}
+          >
+            Prior calls at {companyName}
+            <ChevronDown
+              size={16}
+              aria-hidden="true"
+              className={cn('transition-transform', priorCallsOpen && 'rotate-180')}
+            />
+          </Button>
+          {priorCallsOpen ? (
+            <div aria-live="polite">
+              {priorCalls.isPending ? <p className="p-3 text-sm text-text-muted">Loading prior calls…</p> : null}
+              {priorCalls.isError ? <p className="p-3 text-sm text-danger">Could not load prior calls.</p> : null}
+              {priorCalls.data?.activity.length === 0 ? <p className="p-3 text-sm text-text-muted">No prior calls.</p> : null}
+              {priorCalls.data?.activity.map((entry) => (
+                <ActivityFeedRow key={entry.id} item={mapActivityEntry(entry)} timeZone={user?.timeZone} />
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <div className="flex items-center gap-2" role="group" aria-label="Call controls">
         {canControlAudio ? (

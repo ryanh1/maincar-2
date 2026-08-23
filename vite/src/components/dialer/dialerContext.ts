@@ -44,6 +44,10 @@ export interface ActiveCall {
   toE164?: string
   /** Whether the other party called the rep or the rep called them. */
   direction?: CallDirection
+  /** The matched person, if the call is linked to one. */
+  personId?: string | null
+  /** The matched company, if the linked person belongs to one. */
+  companyId?: string | null
   /** Whether the call is being recorded, driving the in-call recording dot. */
   recording: boolean
 }

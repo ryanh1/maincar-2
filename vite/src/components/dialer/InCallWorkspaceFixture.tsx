@@ -50,7 +50,14 @@ queryClient.setQueryData(queryKeys.calls.detail('org-fixture', unknownCall.id), 
 
 const dialer: DialerContextValue = {
   view: 'expanded', phase: 'ringing', mode: 'call', dialing: true, elapsedSeconds: 75,
-  activeCall: { orgId: 'org-fixture', callId: knownCall.id, toE164: knownCall.toE164, recording: false },
+  activeCall: {
+    orgId: 'org-fixture',
+    callId: knownCall.id,
+    toE164: knownCall.toE164,
+    personId: 'person-fixture',
+    companyId: 'company-fixture',
+    recording: false,
+  },
   canControlAudio: false,
   expandDialer: () => undefined, collapseDialer: () => undefined, toggleView: () => undefined,
   startCall: () => undefined, adoptCall: () => undefined, connectCall: () => undefined, endCall: () => undefined,
@@ -76,7 +83,14 @@ export function InCallWorkspaceFixture() {
                 {call.id === knownCall.id ? 'Show unknown caller' : 'Show known caller'}
               </Button>
               <DialerContext.Provider value={{ ...dialer, phase }}>
-                <InCallWorkspace key={call.id} orgId="org-fixture" callId={call.id} toE164={call.toE164} recording={false} />
+                <InCallWorkspace
+                  key={call.id}
+                  orgId="org-fixture"
+                  callId={call.id}
+                  toE164={call.toE164}
+                  companyId={call.review?.crm.company?.id ?? null}
+                  recording={false}
+                />
               </DialerContext.Provider>
             </div>
           </section>

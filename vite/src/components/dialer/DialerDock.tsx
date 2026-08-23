@@ -98,6 +98,7 @@ export function DialerDock() {
             orgId={activeCall.orgId}
             callId={activeCall.callId}
             toE164={activeCall.toE164 ?? ''}
+            companyId={activeCall.companyId}
             recording={activeCall.recording}
           />
         ) : (

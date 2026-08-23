@@ -15,6 +15,8 @@ export interface InCallWorkspaceProps {
   callId: string
   /** Available immediately after placing a call, before detail context resolves. */
   toE164: string
+  /** The linked company from the live call's response, if the number matched a person. */
+  companyId?: string | null
   recording?: boolean
 }
 
@@ -24,7 +26,7 @@ function personName(person: { firstName: string | null; lastName: string | null;
 }
 
 /** The live-call view: CRM context, durable notes, an on-demand DTMF keypad, and controls. */
-export function InCallWorkspace({ orgId, callId, toE164, recording = false }: InCallWorkspaceProps) {
+export function InCallWorkspace({ orgId, callId, toE164, companyId, recording = false }: InCallWorkspaceProps) {
   const { phase } = useDialer()
   const detailQuery = useGetCallDetail(orgId, callId)
   const saveNote = useSaveCallNote(orgId, callId)
@@ -98,7 +100,13 @@ export function InCallWorkspace({ orgId, callId, toE164, recording = false }: In
         )}
       </div>
 
-      <InCallControls orgId={orgId} callId={callId} recording={recording} />
+      <InCallControls
+        orgId={orgId}
+        callId={callId}
+        companyId={companyId}
+        companyName={crm?.company?.name ?? null}
+        recording={recording}
+      />
     </div>
   )
 }

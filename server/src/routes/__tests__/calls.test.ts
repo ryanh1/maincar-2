@@ -130,6 +130,8 @@ function callRow(overrides: Record<string, unknown> = {}) {
     recordingConsent: null,
     recordingPlanned: true,
     recordingReason: 'allowed',
+    personId: 'person-1',
+    companyId: 'company-1',
     destinationState: 'CO',
     recordingEnabled: null,
     recordingUrl: null,
@@ -833,10 +835,12 @@ describe('POST /api/orgs/:orgId/calls', () => {
     const res = await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
 
     expect(Object.keys(res.body.call).sort()).toEqual([
+      'companyId',
       'createdAt',
       'direction',
       'fromE164',
       'id',
+      'personId',
       'recordingPlanned',
       'recordingReason',
       'status',

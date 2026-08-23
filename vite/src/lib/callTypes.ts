@@ -126,6 +126,9 @@ export interface Call {
   toE164: string
   recordingPlanned: boolean | null
   recordingReason: RecordingDecisionReason | null
+  /** Existing CRM links, returned so live-call surfaces can read related activity. */
+  personId?: string | null
+  companyId?: string | null
   /** Null until Twilio accepts the call. */
   twilioCallSid: string | null
   createdAt: string
