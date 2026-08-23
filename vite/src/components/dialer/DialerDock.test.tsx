@@ -12,8 +12,13 @@ import { DialerDock } from './DialerDock'
  * and which child it shows — and never about a keypad's network or a call's
  * hang-up.
  */
-const { useDialerMock, useGetCallDetailMock } = vi.hoisted(() => ({ useDialerMock: vi.fn(), useGetCallDetailMock: vi.fn() }))
+const { useDialerMock, useGetCallDetailMock, useOutreachLayoutMock } = vi.hoisted(() => ({
+  useDialerMock: vi.fn(),
+  useGetCallDetailMock: vi.fn(),
+  useOutreachLayoutMock: vi.fn(),
+}))
 vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }))
+vi.mock('@/components/outreachLayout', () => ({ useOutreachLayout: useOutreachLayoutMock }))
 vi.mock('@/hooks/dialer', () => ({ useGetCallDetail: useGetCallDetailMock }))
 vi.mock('@/providers/useAuth', () => ({ useAuth: () => ({ user: { timeZone: 'America/New_York' } }) }))
 vi.mock('@/components/dialer/NumericKeypad', () => ({
@@ -71,6 +76,12 @@ function titleBar(): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks()
   useGetCallDetailMock.mockReturnValue({ data: undefined })
+  useOutreachLayoutMock.mockReturnValue({
+    usesRail: true,
+    pageRightInsetPx: 64,
+    pageBottomInsetPx: 0,
+    dialerRightInsetPx: 64,
+  })
 })
 
 describe('DialerDock', () => {
@@ -89,6 +100,20 @@ describe('DialerDock', () => {
     expect(region.className).toContain('rounded-t-md')
     expect(region.className).toContain('shadow-md')
     expect(region.className).toContain('w-80')
+    expect(region).toHaveStyle({ right: '64px' })
+  })
+
+  it('uses the full viewport below the rail breakpoint', () => {
+    useOutreachLayoutMock.mockReturnValue({
+      usesRail: false,
+      pageRightInsetPx: 0,
+      pageBottomInsetPx: 48,
+      dialerRightInsetPx: 0,
+    })
+    setDialer({ view: 'expanded' })
+    render(<DialerDock />)
+
+    expect(screen.getByRole('region', { name: 'Dialer' })).toHaveClass('inset-x-0', 'top-0', 'w-full', 'z-[130]')
   })
 
   it('expanded still shows the collapsing chevron', () => {

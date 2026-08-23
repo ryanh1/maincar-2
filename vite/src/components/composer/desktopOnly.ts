@@ -4,19 +4,12 @@ import { useSyncExternalStore } from 'react'
  * The one place that says the composer is desktop-only, read by both halves of
  * it: the dock in the corner and the Compose button in the sidebar.
  *
- * The sidebar takes 224 px on the left, the dock reserves 368 px for the
- * dialer on the right, the standing rail (the "Compose email" and "Drafts"
- * buttons — MAI-209) an estimated 280 px, and the card itself is 320 px —
- * 1192 px spoken for before anything else, rounded up to 1204 so the card's
- * own 320 px slot (plus its 12 px gap) always has exactly the room it needs.
- * Below this there is no corner left to put a card in, so — rather than
- * shrink one onto a phone — the dock renders nothing there
- * (SPEC-composer-dock.md → Open questions).
- *
- * This is no longer Tailwind's own `lg` (1024 px); it moved when MAI-209
- * widened the rail from one icon button to two labeled ones. Nothing outside
- * `ComposerDock.tsx` reads this threshold today (`useIsDesktop` below is
- * unused so far), so nothing else needed to move with it.
+ * The composer keeps its existing 1204 px desktop threshold. MAI-468 replaces
+ * the old estimated action width with a 64 px rail and a shared 384 px
+ * rail-plus-dialer reserve, but does not widen the desktop composer onto compact
+ * layouts. Below this threshold, composing remains full-screen; at and above it,
+ * one 320 px card plus its 12 px slot gap fits without touching the sidebar or
+ * the outreach reserve.
  *
  * Measured in JavaScript rather than with a `hidden lg:flex` class, because
  * "renders nothing" is the promise being made — a control hidden by CSS is still

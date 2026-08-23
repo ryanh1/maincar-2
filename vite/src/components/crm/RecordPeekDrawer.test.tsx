@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { vi } from 'vitest'
+import { beforeEach, vi } from 'vitest'
 
 import type { AttributeDef, ObjectDef, RecordRow, RelatedRecordGroup } from '@/lib/crmTypes'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 
 const useGetRelatedRecords = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: { related: [] as RelatedRecordGroup[] } })))
+const useOutreachLayout = vi.hoisted(() => vi.fn())
 const lifecycleMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 
 vi.mock('@/hooks/crm', () => ({
@@ -13,6 +14,17 @@ vi.mock('@/hooks/crm', () => ({
   useUpdateRecordLifecycle: () => ({ mutateAsync: lifecycleMutateAsync, isPending: false }),
 }))
 vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => null }))
+vi.mock('@/components/outreachLayout', () => ({ useOutreachLayout }))
+
+beforeEach(() => {
+  lifecycleMutateAsync.mockClear()
+  useOutreachLayout.mockReturnValue({
+    usesRail: false,
+    pageRightInsetPx: 0,
+    pageBottomInsetPx: 48,
+    dialerRightInsetPx: 0,
+  })
+})
 
 const object: ObjectDef = {
   id: 'people', slug: 'person', name: 'Person', namePlural: 'People', icon: 'user', iconColor: 'option-1',
@@ -33,7 +45,18 @@ function attribute(overrides: Partial<AttributeDef>): AttributeDef {
 }
 
 describe('RecordPeekDrawer', () => {
-  beforeEach(() => lifecycleMutateAsync.mockClear())
+  it('stops before the reserved outreach rail and expanded dialer', () => {
+    useOutreachLayout.mockReturnValue({
+      usesRail: true,
+      pageRightInsetPx: 384,
+      pageBottomInsetPx: 0,
+      dialerRightInsetPx: 64,
+    })
+
+    render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={{ id: 'person-1', name: 'Ada', createdAt: '', updatedAt: '' }} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
+
+    expect(document.querySelector('[data-slot="sheet-content"]')).toHaveStyle({ right: '384px' })
+  })
 
   it('offers a full-page record view', () => {
     const onOpenFullPage = vi.fn()

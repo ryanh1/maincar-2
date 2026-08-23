@@ -6,6 +6,7 @@ import type { EmailDraft } from '@/lib/emailTypes'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ComposerContext, type ComposerContextValue } from '@/components/composer/composerContext'
 import type { DialerContextValue } from '@/components/dialer/dialerContext'
+import { OutreachLayoutProvider } from '@/components/OutreachLayoutProvider'
 import { CommandBar } from './CommandBar'
 
 const { useDialerMock } = vi.hoisted(() => ({ useDialerMock: vi.fn() }))
@@ -34,15 +35,23 @@ function renderBar(drafts: EmailDraft[] = [], width = 1440) {
   }
   const dialer: Partial<DialerContextValue> = { expandDialer: vi.fn(), phase: 'idle' }
   useDialerMock.mockReturnValue(dialer)
-  render(<TooltipProvider><ComposerContext.Provider value={composer}><CommandBar /></ComposerContext.Provider></TooltipProvider>)
+  render(
+    <TooltipProvider>
+      <ComposerContext.Provider value={composer}>
+        <OutreachLayoutProvider><CommandBar /></OutreachLayoutProvider>
+      </ComposerContext.Provider>
+    </TooltipProvider>,
+  )
   return { composer, dialer }
 }
 
 describe('CommandBar', () => {
-  it('shows the working Email and Phone actions in a fixed desktop rail', () => {
+  it('shows the working Email and Phone actions in a fixed, full-height desktop rail', () => {
     renderBar()
 
-    expect(screen.getByRole('toolbar', { name: 'Outreach actions' })).toHaveClass('fixed', 'right-6', 'bottom-6')
+    expect(screen.getByRole('toolbar', { name: 'Outreach actions' })).toHaveClass(
+      'fixed', 'inset-y-0', 'right-0', 'w-16', 'border-l', 'bg-surface',
+    )
     expect(screen.getByRole('button', { name: 'Write an email' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Open the dialer' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /text|calendar|ask ai/i })).not.toBeInTheDocument()
@@ -95,7 +104,7 @@ describe('CommandBar', () => {
   it('keeps the desktop command rail at the sm breakpoint', () => {
     renderBar([], 640)
 
-    expect(screen.getByRole('toolbar', { name: 'Outreach actions' })).toHaveClass('right-6', 'bottom-6', 'flex-col')
+    expect(screen.getByRole('toolbar', { name: 'Outreach actions' })).toHaveClass('inset-y-0', 'right-0', 'w-16', 'flex-col')
   })
 
   it('uses a full-screen composer below the desktop dock threshold', async () => {

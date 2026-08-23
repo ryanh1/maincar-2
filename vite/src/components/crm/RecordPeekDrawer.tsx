@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react'
 import { ActivityFeedRow } from '@/components/activity-feed/ActivityFeedRow'
 import { mapActivityEntry } from '@/components/activity-feed/activityFeed'
 import { RecordTypeIcon } from '@/components/RecordTypeIcon'
+import { useOutreachLayout } from '@/components/outreachLayout'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useGetActivity, useGetRelatedRecords, useUpdateRecordLifecycle, type ActivityScope } from '@/hooks/crm'
@@ -67,6 +68,7 @@ export function RecordPeekDrawer({
   onOpenFullPage,
   onLifecycleChanged,
 }: RecordPeekDrawerProps) {
+  const outreachLayout = useOutreachLayout()
   const rootEntry = useMemo<PeekEntry | null>(() => record ? { object, attributes, record, scrollTop: 0 } : null, [attributes, object, record])
   const [stack, setStack] = useState<PeekEntry[]>(() => rootEntry ? [rootEntry] : [])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -157,7 +159,12 @@ export function RecordPeekDrawer({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-[540px]" onEscapeKeyDown={handleEscape}>
+      <SheetContent
+        side="right"
+        className="w-full gap-0 p-0 sm:max-w-[540px]"
+        style={{ right: outreachLayout.pageRightInsetPx }}
+        onEscapeKeyDown={handleEscape}
+      >
         <SheetHeader className="border-b border-border">
           {stack.length > 1 && <Button type="button" variant="ghost" size="sm" className="-ml-2 w-fit gap-1 px-2" onClick={() => popTo(stack.length - 2)}><ArrowLeft size={14} aria-hidden /> Back</Button>}
           <nav aria-label="Record path" className="flex min-w-0 items-center gap-1 overflow-x-auto text-xs text-muted-foreground">

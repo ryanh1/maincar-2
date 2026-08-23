@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import { Route, Routes } from 'react-router-dom'
 
 import { renderWithProviders } from '@/test/utils'
@@ -30,6 +30,8 @@ function renderAt(path: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  window.innerWidth = 1440
+  window.dispatchEvent(new Event('resize'))
 })
 
 describe('ProtectedLayout', () => {
@@ -61,6 +63,29 @@ describe('ProtectedLayout', () => {
     renderAt('/home')
 
     expect(screen.getByText('home page')).toBeInTheDocument()
+  })
+
+  it('reserves the desktop rail and expands the same right inset with the dialer', () => {
+    useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true, needsOnboarding: false, needsOrg: false })
+
+    renderAt('/home')
+
+    const shell = document.querySelector<HTMLElement>('[data-outreach-layout="rail"]')
+    expect(shell).toHaveStyle({ paddingRight: '64px', paddingBottom: '0px' })
+    fireEvent.click(screen.getByRole('button', { name: 'Open the dialer' }))
+    expect(shell).toHaveStyle({ paddingRight: '384px' })
+  })
+
+  it('reserves the mobile bottom bar instead of desktop rail space', () => {
+    window.innerWidth = 375
+    useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true, needsOnboarding: false, needsOrg: false })
+
+    renderAt('/home')
+
+    expect(document.querySelector('[data-outreach-layout="bottom"]')).toHaveStyle({
+      paddingRight: '0px',
+      paddingBottom: '48px',
+    })
   })
 
   it('forces an unonboarded user to /welcome', () => {

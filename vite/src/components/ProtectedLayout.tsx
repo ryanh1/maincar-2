@@ -10,6 +10,8 @@ import { CommandBar } from '@/components/command-bar/CommandBar'
 import { DialerDock } from '@/components/dialer/DialerDock'
 import { DialerProvider } from '@/components/dialer/DialerProvider'
 import { KeyboardProvider } from '@/components/keyboard/KeyboardProvider'
+import { OutreachLayoutProvider } from '@/components/OutreachLayoutProvider'
+import { useOutreachLayout } from '@/components/outreachLayout'
 import { PageLoader } from '@/components/PageLoader'
 import { Sidebar } from '@/components/Sidebar'
 import { IconButton } from '@/components/ui/icon-button'
@@ -19,9 +21,6 @@ import { useAuth } from '@/providers/useAuth'
 export function ProtectedLayout() {
   const { isLoading, isAuthenticated, needsOnboarding, needsOrg } = useAuth()
   const location = useLocation()
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [hiddenDraftIds, setHiddenDraftIds] = useState<string[]>([])
-  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null)
 
   if (isLoading) return <PageLoader />
 
@@ -45,6 +44,23 @@ export function ProtectedLayout() {
     return <Navigate to="/home" replace />
   }
 
+  return (
+    <DialerProvider>
+      <ComposerProvider>
+        <OutreachLayoutProvider>
+          <ProtectedApplication />
+        </OutreachLayoutProvider>
+      </ComposerProvider>
+    </DialerProvider>
+  )
+}
+
+function ProtectedApplication() {
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [hiddenDraftIds, setHiddenDraftIds] = useState<string[]>([])
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null)
+  const outreachLayout = useOutreachLayout()
+
   // ComposerProvider wraps everything and sits OUTSIDE <Outlet />, which is the
   // whole point of it: a half-written email survives navigation only because the
   // state holding it never unmounts when the route under it changes. The dock is
@@ -52,18 +68,21 @@ export function ProtectedLayout() {
   // bottom-right corner, so nesting it inside the scrolling <Outlet /> would let
   // a page's own scroll container clip it.
   //
-  // The dock takes the card through `renderCard` rather than importing it, so
-  // the corner's arithmetic and the card's autosave stay testable apart. This is
-  // the only place the two meet.
-  // DialerProvider wraps the tree for the same reason ComposerProvider does: a
+  // DialerProvider wraps this tree for the same reason ComposerProvider does: a
   // call in progress survives navigation only because the state holding it never
-  // unmounts when the route under it changes. Its expanded surface sits beside
-  // the command bar; when idle, the command bar is the only dialer entry point.
+  // unmounts when the route under it changes. OutreachLayoutProvider gives the
+  // page, rail, composer, dialer, and portalled drawers one geometry contract.
   return (
-    <DialerProvider>
-      <ComposerProvider>
-        <KeyboardProvider>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <>
+      <KeyboardProvider>
+        <div
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          data-outreach-layout={outreachLayout.usesRail ? 'rail' : 'bottom'}
+          style={{
+            paddingRight: outreachLayout.pageRightInsetPx,
+            paddingBottom: outreachLayout.pageBottomInsetPx,
+          }}
+        >
           <header className="flex h-14 shrink-0 items-center border-b border-border bg-background/85 px-4 backdrop-blur lg:hidden">
             <IconButton
               tooltip="Open the navigation menu"
@@ -83,17 +102,16 @@ export function ProtectedLayout() {
               </div>
             </main>
           </div>
-          </div>
-        </KeyboardProvider>
+        </div>
+      </KeyboardProvider>
 
-        <ComposerDock
-          renderCard={(draft) => <ComposerCard draft={draft} />}
-          selectedDraftId={selectedDraftId}
-          onHiddenDraftIdsChange={setHiddenDraftIds}
-        />
-        <CommandBar hiddenDraftIds={hiddenDraftIds} onSelectDraft={setSelectedDraftId} />
-      </ComposerProvider>
+      <ComposerDock
+        renderCard={(draft) => <ComposerCard draft={draft} />}
+        selectedDraftId={selectedDraftId}
+        onHiddenDraftIdsChange={setHiddenDraftIds}
+      />
+      <CommandBar hiddenDraftIds={hiddenDraftIds} onSelectDraft={setSelectedDraftId} />
       <DialerDock />
-    </DialerProvider>
+    </>
   )
 }
