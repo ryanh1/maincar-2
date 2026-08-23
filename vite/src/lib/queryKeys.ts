@@ -161,6 +161,10 @@ export const queryKeys = {
     all: (orgId: string) => ['savedViews', orgId] as const,
     list: (orgId: string, objectId: string) => ['savedViews', orgId, 'list', objectId] as const,
   },
+  cellStyles: {
+    all: (orgId: string) => ['cellStyles', orgId] as const,
+    list: (orgId: string, viewId: string) => ['cellStyles', orgId, 'list', viewId] as const,
+  },
   detailLayouts: {
     detail: (orgId: string, objectId: string) => ['detailLayouts', orgId, objectId] as const,
   },

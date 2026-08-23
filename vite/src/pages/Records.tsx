@@ -164,6 +164,7 @@ export function Records() {
             orgId={orgId}
             object={detail}
             attributes={detail.attributes}
+            viewId={selectedView?.id ?? null}
             initialRecordId={searchParams.get('recordId')}
             viewConfig={viewConfig}
             onViewConfigChange={setViewConfig}
