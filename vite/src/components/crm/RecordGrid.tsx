@@ -44,6 +44,9 @@ import { coerceCurrency, coerceNumber } from './cellCoercion'
 import { KanbanBoard } from './KanbanBoard'
 import { ChangeHighlightOverlay, FieldHistoryPopover, type ChangeHighlightTarget } from './ChangeHighlightOverlay'
 import { drawChangeDots } from './changeHighlightCanvas'
+import { useRowSelection } from './useRowSelection'
+import { SelectionBanner } from './SelectionBanner'
+import { BulkActionBar } from './BulkActionBar'
 
 const LEADING_COLUMN_WIDTH = 220
 const DEFAULT_COLUMN_WIDTH = 160
@@ -150,6 +153,13 @@ function textOverflowsCell(value: string, width: number): boolean {
   if (!context) return value.length * 7 > availableWidth
   context.font = '14px Inter'
   return value.split('\n').some((line) => context.measureText(line).width > availableWidth)
+}
+
+function selectedGridRows(selection: GridSelection): number[] | null {
+  // Glide always supplies CompactSelection at runtime. The lightweight grid test
+  // double only exercises cell selection, however, and omits its row helpers.
+  const rows = selection.rows as unknown as { toArray?: () => number[] }
+  return typeof rows.toArray === 'function' ? rows.toArray() : null
 }
 
 /**
@@ -315,6 +325,12 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
     const displayRow = displayRows[row]
     return displayRow?.kind === 'record' ? displayRow.record : null
   }, [displayRows])
+  const loadedRecordIds = useMemo(() => displayRows.flatMap((row) => row.kind === 'record' ? [row.record.id] : []), [displayRows])
+  const rowSelection = useRowSelection(loadedRecordIds, totalCount)
+  const bulkSelection = useMemo(() => rowSelection.allInFilter
+    ? { mode: 'filter' as const, filter: listQuery.filter, teamScope: listQuery.teamScope }
+    : { mode: 'ids' as const, ids: [...rowSelection.selectedIds] }, [listQuery.filter, listQuery.teamScope, rowSelection.allInFilter, rowSelection.selectedIds])
+  const canChangeOwner = columns.some((attribute) => attribute.slug === 'ownerUserId' && attribute.type === 'user_reference')
 
   // Calls are standard CRM records, so the dialer's call id is the row identity
   // for the Calls grid. Do not apply it to another object whose record id merely
@@ -1180,6 +1196,25 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
           onCancel={() => { setCreateError(null); setIsCreating(false) }}
         />
       )}
+      {rowSelection.selectedCount > 0 && (
+        <BulkActionBar
+          orgId={orgId}
+          object={object}
+          attributes={columns}
+          selection={bulkSelection}
+          selectedCount={rowSelection.selectedCount}
+          canChangeOwner={canChangeOwner}
+          onClear={rowSelection.clear}
+        />
+      )}
+      {rowSelection.shouldOfferSelectAll && (
+        <SelectionBanner
+          loadedCount={loadedRecordIds.length}
+          totalCount={totalCount}
+          onSelectAll={rowSelection.selectAllInFilter}
+          onClear={rowSelection.clear}
+        />
+      )}
       {onViewConfigChange && (
         <ColumnGroupHeaders
           columns={gridColumns.map((column, index) => ({
@@ -1211,14 +1246,19 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
         verticalBorder={config.gridLines}
         onColumnMoved={sortActive || config.columns.some((column) => column.group) ? undefined : onColumnMoved}
         onColumnResize={onColumnResize}
-        rowMarkers={{ kind: 'clickable-number', width: ROW_MARKER_WIDTH }}
+        rowMarkers={{ kind: 'checkbox-visible', width: ROW_MARKER_WIDTH }}
+        rowSelect="multi"
         smoothScrollX
         smoothScrollY
         onVisibleRegionChanged={onGridVisibleRegionChanged}
         onHeaderMenuClick={onHeaderMenuClick}
         onCellClicked={onCellClicked}
         gridSelection={finderSelection ?? gridSelection}
-        onGridSelectionChange={setGridSelection}
+        onGridSelectionChange={(nextSelection) => {
+          setGridSelection(nextSelection)
+          const selectedRows = selectedGridRows(nextSelection)
+          if (!finderSelection && selectedRows) rowSelection.setLoadedSelection(selectedRows.flatMap((row) => recordAtRow(row)?.id ?? []))
+        }}
         onMouseMove={onMouseMove}
         getRowThemeOverride={getRowThemeOverride}
         theme={theme}

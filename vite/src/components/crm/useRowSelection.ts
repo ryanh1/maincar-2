@@ -8,6 +8,7 @@ export interface RowSelection {
   isSelected: (id: string) => boolean
   toggle: (id: string, extendRange?: boolean) => void
   toggleLoaded: () => void
+  setLoadedSelection: (ids: readonly string[]) => void
   selectAllInFilter: () => void
   clear: () => void
 }
@@ -63,6 +64,12 @@ export function useRowSelection(loadedIds: readonly string[], totalCount: number
     setRangeAnchor(loadedIds[0] ?? null)
   }, [allInFilter, clear, loadedIds, loadedSelectionComplete])
 
+  const setLoadedSelection = useCallback((ids: readonly string[]) => {
+    setAllInFilter(false)
+    setSelectedIds(new Set(ids.filter((id) => loadedIdSet.has(id))))
+    setRangeAnchor(ids[0] ?? null)
+  }, [loadedIdSet])
+
   const selectAllInFilter = useCallback(() => {
     setSelectedIds(new Set())
     setAllInFilter(true)
@@ -77,6 +84,7 @@ export function useRowSelection(loadedIds: readonly string[], totalCount: number
     isSelected: (id) => allInFilter || selectedIds.has(id),
     toggle,
     toggleLoaded,
+    setLoadedSelection,
     selectAllInFilter,
     clear,
   }

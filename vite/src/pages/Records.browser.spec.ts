@@ -35,6 +35,40 @@ const pipelineStageAttribute = {
 }
 const amountAttribute = { ...nameAttribute, objectId: 'deal', id: 'amount', slug: 'amount', name: 'Amount', isIdentity: false, type: 'currency', sortOrder: 2 }
 
+test('selects loaded Companies, extends to the filtered view, and exports through the bulk endpoint', async ({ page }) => {
+  const rows = [
+    { id: 'company-1', name: 'Ada', createdAt: companyObject.createdAt, updatedAt: companyObject.updatedAt },
+    { id: 'company-2', name: 'Grace', createdAt: companyObject.createdAt, updatedAt: companyObject.updatedAt },
+  ]
+  const actions: Array<Record<string, unknown>> = []
+  await page.route('**/api/orgs/org-fixture/objects**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects')) return route.fulfill({ json: { objects: [companyObject] } })
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects/company')) return route.fulfill({ json: { object: { ...companyObject, attributes: [nameAttribute] } } })
+    if (route.request().method() === 'POST' && pathname.endsWith('/objects/company/list')) return route.fulfill({ json: { rows, nextCursor: null, totalCount: 100 } })
+    if (route.request().method() === 'POST' && pathname.endsWith('/objects/company/bulk')) {
+      actions.push(route.request().postDataJSON() as Record<string, unknown>)
+      return route.fulfill({ json: { rows, totalCount: 100 } })
+    }
+    return route.fallback()
+  })
+  await page.route('**/api/orgs/org-fixture/saved-views**', (route) => route.fulfill({ json: { views: [] } }))
+  await page.route('**/api/orgs/org-fixture/lists', (route) => route.fulfill({ json: { lists: [], total: 0, page: 1, limit: 100 } }))
+  await page.route('**/api/orgs/org-fixture/members**', (route) => route.fulfill({ json: { members: [], total: 0, page: 1, limit: 200, meta: { activeAdminCount: 0 }, viewerRoles: ['basic'] } }))
+
+  await page.goto('/__fixtures/records/company')
+  const canvas = page.getByTestId('data-grid-canvas')
+  await expect(canvas).toBeVisible()
+  const bounds = await canvas.boundingBox()
+  if (!bounds) throw new Error('The record grid canvas was not measurable.')
+  await page.mouse.click(bounds.x + 16, bounds.y + 18)
+  await expect(page.getByText('All 2 on screen are selected.')).toBeVisible()
+  await page.getByRole('button', { name: 'Select all 100 in this view' }).click()
+  await expect(page.getByText('100 selected')).toBeVisible()
+  await page.getByRole('button', { name: 'Export' }).click()
+  await expect.poll(() => actions).toEqual([{ selection: { mode: 'filter' }, action: { type: 'export' } }])
+})
+
 test('creates a Company from its grid after a recoverable validation error', async ({ page }) => {
   const consoleErrors: string[] = []
   const companies: Array<Record<string, unknown>> = []
