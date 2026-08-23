@@ -104,9 +104,10 @@ never reset, stash, revert, commit, or "clean up" another session's work.
 
 ## Before you commit
 
-**Green tests are the gate.** The pre-commit hook remains the immediate commit
-backstop. After committing and rebasing, run this at the repo root to create the
-exact receipt required before every delivery:
+**Green delivery tests are the merge gate.** The pre-commit hook is only the
+immediate static-check backstop; it never starts full suites. After committing
+and rebasing, run this at the repo root to create the exact receipt required
+before every delivery:
 
 ```bash
 ./.claude/scripts/coord/mc-gate --delivery
@@ -120,7 +121,9 @@ of the gate, not an extra** — `npm test` does not include it, and it holds the
 only tests that prove the concurrency guardrails. It needs Postgres, so run
 `npm run docker:up` first.
 
-- **Red blocks the commit.** Fix it, or stop and report exactly what is broken. Never commit or push over it.
+- **Red static checks block the commit; red delivery tests block the merge.**
+  Fix it, or stop and report exactly what is broken. Never merge or push over a
+  red delivery gate.
 - **Another session's red is not your red.** The `pre-commit` hook already tells them apart, so you do not need `--no-verify` for a file you did not write. See [committing.md](.claude/rules/committing.md).
 - **Never skip, delete, or `.skip()` a test to reach green.** Change the code, or change the rule on purpose and say so.
 - **A feature commit carries its own tests**, committed together, never as a follow-up. **That holds even when the files you touched do not load [testing.md](.claude/rules/testing.md).**
@@ -131,7 +134,8 @@ Mechanics, the hook, and the `Verified-by:` trailer: [committing.md](.claude/rul
 ## Verification before finishing
 
 - **After editing UI**, run `npm run typecheck` and `npm run lint` at the repo root. TypeScript does not always report an undefined JSX component; the build does.
-- **Run `npm test`** before calling anything done, and again before you commit — see [Before you commit](#before-you-commit).
+- **Run a named focused test** while implementing, then the full
+  `mc-gate --delivery` after the final commit and rebase — see [Before you commit](#before-you-commit).
 - **Walk the journey in a browser** for anything user-facing. Parts passing in isolation is not evidence the journey works. A route path is a string, so `tsc` cannot verify a rename — click it.
 - **Never leave a feature half-wired.** If a control cannot be finished, do not render it, or render it visibly disabled with an honest label. Never ship a live-looking control that does nothing.
 - **Report what you could not verify**, at the step where it applies.

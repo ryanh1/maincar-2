@@ -22,17 +22,20 @@ hypothetical. It needs Postgres: `npm run docker:up`.
 
 ## The hook
 
-`.githooks/pre-commit` runs the same four and refuses a red commit. Install once
-per clone:
+`.githooks/pre-commit` runs only the attributable static checks (`typecheck`
+and `lint`) and refuses a red commit. It intentionally never starts unit tests,
+integration tests, or Docker: those full suites must run once through the
+post-commit delivery gate above. Install once per clone:
 
 ```bash
 npm run hooks:install
 ```
 
-The hook is the immediate commit backstop. After committing, sync and rebase
-onto current `origin/main`, then run the delivery gate to create the receipt
-that authorizes `mc-merge`. A green pre-commit hook alone cannot authorize
-delivery because it ran before the final commit and rebase.
+The hook is the immediate static-check backstop. After committing, sync and
+rebase onto current `origin/main`, then run the delivery gate to create the
+receipt that authorizes `mc-merge`. A green pre-commit hook alone cannot
+authorize delivery because it runs neither the full suite nor the final commit
+and rebase.
 
 ## Another session's red is not your red
 
@@ -44,22 +47,25 @@ file that is not yours. The hook handles that itself:
 | -- | -- | -- |
 | typecheck | yes | Blocks only if a failing file is in **your** commit. Otherwise warns, names the foreign files, and lets you through. |
 | lint | yes | Same. |
-| test | no | **Always blocks.** Your change can break a test you did not stage. |
-| integration test | no | **Always blocks.** |
+
+Unit and integration test failures are evaluated by `mc-gate --delivery`, not
+by the hook. This keeps every full suite within the shared delivery lanes and
+worker budget.
 
 A failure whose file cannot be determined counts as yours. Guessing in the
 lenient direction is how a gate quietly stops gating.
 
 **So you do not need `--no-verify` for someone else's unfinished work.** That was
 the old failure mode: the only escape hatch was all-or-nothing, so a routine
-condition forced a total bypass, and the commit shipped with *all four* checks
+condition forced a total bypass, and the commit shipped with its static checks
 skipped behind a plausible note.
 
 ## Every commit says how it was verified
 
 `.githooks/prepare-commit-msg` appends a `Verified-by:` trailer:
 
-- **All green** — no trailer. Silence means the gate passed.
+- **All static checks green** — no trailer. This only means the fast hook
+  passed; the delivery receipt remains required for merge.
 - **Degraded** — names which checks were red on another session's files.
 - **Not run** — `Verified-by: NOTHING`. The hook was bypassed or never installed.
 

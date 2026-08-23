@@ -9,17 +9,17 @@
 # regularly goes red for a half-written file that is not yours.
 #
 # The only way past a hook is `git commit --no-verify`, and that is all-or-
-# nothing: it drops ALL four checks, including the ones that would have caught
-# YOUR mistake. A routine, expected condition was therefore forcing a total
-# bypass — which is how an unverified commit ships behind a plausible note.
+# nothing: it drops every fast static check, including the ones that would have
+# caught YOUR mistake. A routine, expected condition was therefore forcing a
+# total bypass — which is how an unverified commit ships behind a plausible note.
 #
 # So this splits the verdict by WHOSE file is red:
 #
 #   * typecheck and lint failures name a file. If none of the named files are in
 #     the commit, the failure belongs to another session: warn loudly, record it,
 #     and let the commit through.
-#   * test failures are NOT reliably attributable to a file — your change can
-#     break a test you did not stage. They always block.
+# Full unit and integration tests run only through `mc-gate --delivery`, where
+# they have a bounded shared worker budget and produce the delivery receipt.
 #
 # `--no-verify` stays for genuine emergencies rather than for Tuesdays.
 
@@ -70,54 +70,4 @@ red_is_ours() {
     if printf '%s\n' "$staged" | grep -qxF -- "$f"; then return 0; fi
   done < "$failing"
   return 1
-}
-
-# Could this commit possibly affect workspace $1 ("server" or "vite")?
-#
-# Test failures cannot be pinned to a file — your change to members.ts can break
-# team.test.ts, which you never staged. But they CAN be pinned to a workspace: if
-# a commit stages nothing that reaches `vite/`, a vite test failure is not its
-# doing. That is a fact about the dependency graph, not a guess.
-#
-# Shared ground counts as reaching everything: the root package.json, docker/,
-# firebase/, scripts/, .env.example. Prose and git hooks reach nothing — no
-# vitest run has ever been changed by a markdown file.
-#
-# Exit 0 = yes, this commit reaches that workspace (its test failures block).
-touches_workspace() {
-  local ws="$1" f
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    case "$f" in
-      "$ws"/*)                      return 0 ;;
-      server/*|vite/*)              continue ;;   # the OTHER workspace
-      .claude/*|.githooks/*|docs/*) continue ;;   # inert
-      *.md)                         continue ;;   # inert
-      *)                            return 0 ;;   # shared ground
-    esac
-  done < <(staged_files)
-  return 1
-}
-
-# Print the useful part of a test command's output without changing the hook's
-# verdict. A test runner is not required to use any one summary format, so an
-# absent match is normal diagnostic output, not a new hook failure.
-test_failure_summary() {
-  local out="$1" indent="$2" limit="$3"
-  local line count=0
-
-  while IFS= read -r line; do
-    case "$line" in
-      *FAIL*|*'✕'*|*'Test Files'*|*'Tests '*)
-        printf '%s%s\n' "$indent" "$line"
-        count=$((count + 1))
-        [ "$count" -lt "$limit" ] || break
-        ;;
-    esac
-  done < "$out"
-
-  if [ "$count" -eq 0 ]; then
-    printf '%s(no recognized test failure summary was emitted)\n' "$indent"
-  fi
-  return 0
 }

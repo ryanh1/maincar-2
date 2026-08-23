@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# The commit gate. CLAUDE.md says green blocks a red commit; this is what makes
-# that true rather than a request. See .claude/rules/committing.md for the rules
-# it enforces and .githooks/lib/verify.sh for why it attributes failures.
+# Fast static-check backstop. Full unit and integration verification belongs to
+# `mc-gate --delivery`, whose shared scheduler prevents sessions from saturating
+# the machine. See .claude/rules/committing.md for the full delivery workflow.
 #
 # Emergency bypass is `git commit --no-verify`. You do not need it for another
 # session's red — this hook already handles that. If you use it anyway, the
@@ -36,29 +36,6 @@ fail() {
   exit 1
 }
 
-# --- Is Postgres up? -----------------------------------------------------------
-# The integration suite needs real Postgres. If it is down we STOP rather than
-# skip: a silent skip is how the one suite that proves the concurrency
-# guardrails stops running without anyone noticing.
-if ! node --input-type=module -e '
-  import net from "node:net"
-  import fs from "node:fs"
-  const env = fs.readFileSync(".env", "utf8")
-  const line = env.split("\n").find((l) => l.startsWith("DATABASE_URL="))
-  if (!line) process.exit(2)
-  const u = new URL(line.slice("DATABASE_URL=".length).trim().replace(/^["\x27]|["\x27]$/g, ""))
-  const s = net.connect({ host: u.hostname, port: Number(u.port) || 5432 })
-  s.on("connect", () => { s.end(); process.exit(0) })
-  s.on("error", () => process.exit(1))
-  s.setTimeout(3000, () => { s.destroy(); process.exit(1) })
-' 2>/dev/null; then
-  fail "cannot reach Postgres, so the integration tests cannot run.
-    Start it, then commit again:
-
-      npm run docker:up
-"
-fi
-
 # --- Attributable checks: typecheck and lint -----------------------------------
 # Each names a file, so a failure can be traced to whoever wrote it.
 attributable() {
@@ -86,42 +63,13 @@ attributable "vite typecheck"   vite   npm --prefix vite   run typecheck --silen
 attributable "server lint"      server npm --prefix server run lint      --silent
 attributable "vite lint"        vite   npm --prefix vite   run lint      --silent
 
-# --- Workspace-attributed checks: tests ----------------------------------------
-# A test failure cannot be pinned to a FILE — your change to members.ts can break
-# team.test.ts, which you never staged. But it can be pinned to a WORKSPACE: a
-# commit that stages nothing reaching vite/ cannot have broken a vite test. That
-# is the dependency graph, not a guess. See touches_workspace() in lib/verify.sh.
-workspace_tests() {
-  local label="$1" ws="$2"; shift 2
-  echo "pre-commit: ${label}…"
-  if "$@" > "$TMP/out" 2>&1; then return 0; fi
-
-  if touches_workspace "$ws"; then
-    echo ""
-    test_failure_summary "$TMP/out" "    " 20
-    fail "$label failed, and this commit touches $ws/.
-    A test failure is never written off as another session's when your
-    change could have caused it."
-  fi
-
-  foreign+=("$label")
-  echo "  ⚠ $label is red, but this commit stages nothing that reaches $ws/:"
-  test_failure_summary "$TMP/out" "      " 6
-  echo "    Another session is mid-work. Letting the commit through, and"
-  echo "    stamping the commit message to say $label did not pass."
-}
-
-workspace_tests "server tests"      server npm --prefix server run test --silent
-workspace_tests "vite tests"        vite   npm --prefix vite   run test --silent
-workspace_tests "integration tests" server npm run test:integration --silent
-
 # --- Record the verdict for prepare-commit-msg ---------------------------------
 if [ ${#foreign[@]} -gt 0 ]; then
   # Comma-space separated. `IFS` only takes its first character for array
   # expansion, so build the list explicitly rather than getting "a,b".
   joined="$(printf '%s, ' "${foreign[@]}")"
   printf 'degraded: %s\n' "${joined%, }" > "$STATUS_FILE"
-  echo "pre-commit: tests green; ${#foreign[@]} check(s) red on other sessions' files."
+  echo "pre-commit: static checks green; ${#foreign[@]} check(s) red on other sessions' files."
 else
   echo "green" > "$STATUS_FILE"
   echo "pre-commit: all green."
