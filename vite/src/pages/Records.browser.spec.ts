@@ -58,9 +58,9 @@ test('creates a Company from its grid after a recoverable validation error', asy
   })
 
   await page.goto('/__fixtures/records/company')
-  await expect(page.getByRole('button', { name: 'Create Company' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'New' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Create Company' }).click()
+  await page.getByRole('button', { name: 'New' }).click()
   await page.getByRole('button', { name: 'Save Company' }).click()
   await expect(page.getByRole('alert')).toHaveText('A company needs at least one of a name, a domain, or a LinkedIn URL.')
 

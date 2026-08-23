@@ -27,9 +27,6 @@ interface GridViewToolbarProps {
   config: ViewConfig
   onConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
   teamScopeSupported?: boolean
-  createLabel?: string
-  onCreate?: () => void
-  createDisabled?: boolean
   selectedColumnIds?: string[]
 }
 
@@ -108,7 +105,7 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 }
 
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
-export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, createLabel, onCreate, createDisabled = false, selectedColumnIds = [] }: GridViewToolbarProps) {
+export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [] }: GridViewToolbarProps) {
   const [columnGroupName, setColumnGroupName] = useState('')
   function setColumnVisible(attributeId: string, visible: boolean) {
     onConfigChange((current) => ({
@@ -318,10 +315,6 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
           </label>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      <div className="ml-auto flex items-center gap-2">
-        {createLabel && onCreate && <Button type="button" size="sm" disabled={createDisabled} onClick={onCreate}>{createLabel}</Button>}
-      </div>
     </div>
   )
 }

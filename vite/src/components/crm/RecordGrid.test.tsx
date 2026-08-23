@@ -6,7 +6,7 @@
  * scroll are verified in the browser (CLAUDE.md → Verification before finishing).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, screen } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { makeTestQueryClient, renderWithProviders, withProviders } from '@/test/utils'
@@ -167,7 +167,7 @@ describe('RecordGrid', () => {
     expect(getExpiredRowThemeOverride(0)).toBeUndefined()
   })
 
-  it('does not render a create action when the server says grid creation is unsupported', () => {
+  it('does not open the create flow when the server says grid creation is unsupported', () => {
     useRecordWindow.mockReturnValue({
       rows: [], totalCount: 0, isPending: false, isError: false, hasNextPage: false,
       isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
@@ -184,29 +184,44 @@ describe('RecordGrid', () => {
       />,
     )
 
-    expect(screen.queryByRole('button', { name: 'Create Call' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('form', { name: 'New Call' })).not.toBeInTheDocument()
   })
 
-  it('creates a new record from a blank grid row and closes it after the confirmed save', async () => {
+  it('creates a new record from the page-level New request, then focuses its first cell', async () => {
     const user = userEvent.setup()
     useRecordWindow.mockReturnValue({
-      rows: [], totalCount: 0, isPending: false, isError: false, hasNextPage: false,
+      rows: [{ id: 'company-1', name: 'Acme' }], totalCount: 1, isPending: false, isError: false, hasNextPage: false,
       isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
     })
+    createMutateAsync.mockResolvedValue({ company: { id: 'company-1', name: 'Acme' } })
     const object = { ...TEST_OBJECT, slug: 'company', name: 'Company', namePlural: 'Companies', isGridCreateSupported: true }
     const attributes = [attribute({ slug: 'name', name: 'Name', isIdentity: true })]
+    const client = makeTestQueryClient()
 
-    renderWithProviders(
+    const view = renderWithProviders(
       <RecordGrid
         orgId="org-1"
         object={object}
         attributes={attributes}
         viewConfig={createViewConfig(attributes)}
         onViewConfigChange={vi.fn()}
+        createRequestToken={0}
       />,
+      { client },
     )
 
-    await user.click(screen.getByRole('button', { name: 'Create Company' }))
+    view.rerender(withProviders(
+      <RecordGrid
+        orgId="org-1"
+        object={object}
+        attributes={attributes}
+        viewConfig={createViewConfig(attributes)}
+        onViewConfigChange={vi.fn()}
+        createRequestToken={1}
+      />,
+      { client },
+    ))
+
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Acme')
     await user.click(screen.getByRole('button', { name: 'Save Company' }))
 
@@ -214,6 +229,10 @@ describe('RecordGrid', () => {
       orgId: 'org-1', object, values: { name: 'Acme' },
     })
     expect(screen.queryByRole('textbox', { name: 'Name' })).not.toBeInTheDocument()
+    await waitFor(() => expect(dataEditorProps.current!.gridSelection).toEqual(expect.objectContaining({
+      current: expect.objectContaining({ cell: [0, 0] }),
+    })))
+    expect(dataEditorScrollTo).toHaveBeenCalledWith(0, 0, 'both', 0, 0, expect.objectContaining({ behavior: 'smooth' }))
   })
 
   it('shows a loading state before the first page resolves', () => {

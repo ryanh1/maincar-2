@@ -101,6 +101,8 @@ interface RecordGridProps {
   viewConfig?: ViewConfig
   onViewConfigChange?: (update: (current: ViewConfig) => ViewConfig) => void
   toolbarLeading?: ReactNode
+  /** Increments when the page-level New action should open this grid's create flow. */
+  createRequestToken?: number
 }
 
 const HEADER_MENU_UNSUPPORTED_TYPES = new Set(['multiselect', 'record_reference', 'user_reference', 'location', 'ai'])
@@ -146,7 +148,16 @@ function wrapIndex(index: number, length: number): number {
  * records (`j`/`k`) is just moving an index into data already resident —
  * never a refetch.
  */
-export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfigChange, toolbarLeading }: RecordGridProps) {
+function createdRecordId(response: unknown, object: ObjectDef): string | null {
+  if (!response || typeof response !== 'object') return null
+  const keyed = response as Record<string, unknown>
+  const value = object.storage === 'record' ? keyed.record : keyed[object.slug]
+  return value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'
+    ? (value as { id: string }).id
+    : null
+}
+
+export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken }: RecordGridProps) {
   const { user } = useAuth()
   const { activeCall, dialing } = useDialer()
   const colors = useGridColors()
@@ -215,6 +226,8 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const createRecord = useCreateRecord()
   const [isCreating, setIsCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [createdRecordIdToFocus, setCreatedRecordIdToFocus] = useState<string | null>(null)
+  const previousCreateRequestToken = useRef(createRequestToken)
   const createAttributes = columns.filter((attribute) => !attribute.isReadOnly && (attribute.isIdentity || attribute.isRequired))
   if (createAttributes.length === 0) {
     const firstEditable = columns.find((attribute) => !attribute.isReadOnly)
@@ -224,12 +237,20 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
   const saveNewRecord = useCallback(async (values: Record<string, unknown>) => {
     setCreateError(null)
     try {
-      await createRecord.mutateAsync({ orgId, object, values })
+      const response = await createRecord.mutateAsync({ orgId, object, values })
+      setCreatedRecordIdToFocus(createdRecordId(response, object))
       setIsCreating(false)
     } catch (error) {
       setCreateError(error instanceof Error && error.message ? error.message : `Could not save this ${object.name.toLowerCase()}. Try again.`)
     }
   }, [createRecord, object, orgId])
+
+  useEffect(() => {
+    if (createRequestToken === undefined || createRequestToken === previousCreateRequestToken.current) return
+    previousCreateRequestToken.current = createRequestToken
+    setCreateError(null)
+    setIsCreating(true)
+  }, [createRequestToken])
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const groupAttribute = config.groupBy[0] ? columns.find((attribute) => attribute.id === config.groupBy[0]?.attributeId) : undefined
@@ -651,6 +672,22 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
     })
   }, [])
 
+  useEffect(() => {
+    if (!createdRecordIdToFocus) return
+    const row = displayRows.findIndex((displayRow) => displayRow.kind === 'record' && displayRow.record.id === createdRecordIdToFocus)
+    if (row < 0) return
+    const frame = window.requestAnimationFrame(() => {
+      focusCell(0, row)
+      dataEditorRef.current?.scrollTo(0, row, 'both', 0, 0, {
+        hAlign: 'center',
+        vAlign: 'center',
+        behavior: 'smooth',
+      })
+      setCreatedRecordIdToFocus(null)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [createdRecordIdToFocus, displayRows, focusCell])
+
   const [peekIndex, setPeekIndex] = useState<number | null>(null)
   const peekOpen = peekIndex !== null
 
@@ -977,9 +1014,6 @@ export function RecordGrid({ orgId, object, attributes, viewConfig, onViewConfig
           config={config}
           onConfigChange={onViewConfigChange}
           teamScopeSupported={teamScopeSupported}
-          createLabel={object.isGridCreateSupported ? `Create ${object.name}` : undefined}
-          createDisabled={isCreating}
-          onCreate={object.isGridCreateSupported ? () => { setCreateError(null); setIsCreating(true) } : undefined}
           selectedColumnIds={selectedColumnIds}
         />
       )}

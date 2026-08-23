@@ -8,6 +8,9 @@ import { useAuthStore } from '@/store/authStore'
 
 import { Records } from './Records'
 
+// The grid reads the dialer only to mark a live Call row. Browser fixtures do
+// not exercise calling, so provide the idle state without starting the Voice
+// SDK or making an unrelated token request.
 const idleDialer: DialerContextValue = {
   view: 'collapsed', phase: 'idle', mode: 'keypad', dialing: false, elapsedSeconds: 0,
   activeCall: null, canControlAudio: false,

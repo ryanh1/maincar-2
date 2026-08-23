@@ -41,6 +41,7 @@ export function Records() {
   const saveView = useSaveView()
   const updateView = useUpdateView()
   const isSaving = saveView.isPending || updateView.isPending
+  const [createRequestToken, setCreateRequestToken] = useState(0)
 
   const isPending = objectsQuery.isPending || (!isUnavailable && object !== null && (objectQuery.isPending || viewsQuery.isPending))
   const isError = objectsQuery.isError || (!isUnavailable && (objectQuery.isError || viewsQuery.isError))
@@ -72,7 +73,13 @@ export function Records() {
 
   return (
     <div className="flex h-[calc(100vh-8rem)] min-h-0 flex-col">
-      <PageHeader icon={Table2} title={detail?.namePlural ?? object?.namePlural ?? slug ?? 'Records'} />
+      <PageHeader
+        icon={Table2}
+        title={detail?.namePlural ?? object?.namePlural ?? slug ?? 'Records'}
+        action={detail?.isGridCreateSupported ? (
+          <Button size="sm" onClick={() => setCreateRequestToken((current) => current + 1)}>New</Button>
+        ) : undefined}
+      />
 
       <div className="min-h-0 flex-1 pt-4">
         {isPending && (
@@ -120,6 +127,7 @@ export function Records() {
                 onReset={resetViewConfig}
               />
             }
+            createRequestToken={createRequestToken}
           />
         )}
       </div>
