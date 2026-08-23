@@ -249,6 +249,7 @@ const personBodySchema = z.object({
   nameAudioUrl: optionalText,
   customJson: z.record(z.string(), z.unknown()).optional(),
   customValues: z.record(z.string(), z.unknown()).optional(),
+  isArchived: z.boolean().optional(),
   // Nested children accepted ONLY on create, so a person can be created with just a
   // phone or email as its anchor (§5.15). Update touches children via /phones and
   // /emails sub-routes.
@@ -424,6 +425,7 @@ const listQuerySchema = z.object({
   ),
   // Filter to one company's people, when set.
   companyId: z.preprocess(blankToUndefined, z.string().optional()),
+  includeArchived: z.preprocess((value) => value === 'true' ? true : value === 'false' ? false : value, z.boolean().optional()),
 })
 
 router.use(requireAuth)
@@ -449,12 +451,13 @@ router.get(
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
-    const { page, limit, sort, dir, q, companyId } = parsed.data
+    const { page, limit, sort, dir, q, companyId, includeArchived } = parsed.data
 
     // --- Build filters ---
     const where: Prisma.PersonWhereInput = {
       orgId,
       deletedAt: null,
+      ...(includeArchived ? {} : { isArchived: false }),
       ...(companyId ? { companyId } : {}),
       ...(q
         ? {
@@ -799,6 +802,7 @@ router.patch(
       }
       data.customJson = custom
     }
+    if (body.isArchived !== undefined) data.isArchived = body.isArchived
 
     // --- Execute query, with its field history in the SAME transaction ---
     // Spec §5.7 / MAI-136: a field change and its FieldHistory rows commit or roll

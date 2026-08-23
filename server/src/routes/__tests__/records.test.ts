@@ -298,9 +298,23 @@ describe('GET /api/orgs/:orgId/records', () => {
     expect(res.status).toBe(200)
     expect(res.body.records.map((r: { id: string }) => r.id)).toEqual(['r1', 'r2'])
     expect(prismaMock.record.findMany.mock.calls[0][0].where).toEqual({
-      orgId: ORG_A, objectId: 'obj-project', deletedAt: null,
+      orgId: ORG_A, objectId: 'obj-project', deletedAt: null, isArchived: false,
     })
     expect(filterMock).not.toHaveBeenCalled()
+  })
+
+  it('includes archived records only when the caller opts in', async () => {
+    prismaMock.record.findMany.mockResolvedValue([recordRow({ id: 'active' }), recordRow({ id: 'archived', isArchived: true })])
+
+    const res = await request(app)
+      .get(`${URL_A}?objectId=obj-project&includeArchived=true`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.records.map((record: { id: string }) => record.id)).toEqual(['active', 'archived'])
+    expect(prismaMock.record.findMany.mock.calls[0][0].where).toEqual({
+      orgId: ORG_A, objectId: 'obj-project', deletedAt: null,
+    })
   })
 
   it('routes a ?match= filter through the GIN containment helper', async () => {
@@ -341,6 +355,22 @@ describe('GET /api/orgs/:orgId/records', () => {
     expect(prismaMock.record.findFirst.mock.calls[0][0].where).toEqual({
       id: 'rec-9', orgId: ORG_A, deletedAt: null,
     })
+  })
+
+  it('marks an archived custom-record target without removing the link', async () => {
+    prismaMock.record.findFirst.mockResolvedValue(recordRow({ id: 'rec-9' }))
+    prismaMock.recordLink.findMany.mockResolvedValue([
+      { attribute: 'client', toObject: 'company_custom', toId: 'rec-target' },
+    ])
+    prismaMock.objectDef.findMany.mockResolvedValue([{ id: 'obj-company', slug: 'company_custom' }])
+    prismaMock.record.findMany.mockResolvedValue([recordRow({ id: 'rec-target', objectId: 'obj-company', isArchived: true })])
+
+    const res = await request(app).get(`${URL_A}/rec-9`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.record.links).toEqual([
+      { attribute: 'client', toObject: 'company_custom', toId: 'rec-target', isArchived: true },
+    ])
   })
 
   it('404s a record in another org — never a 403', async () => {
@@ -423,6 +453,32 @@ describe('PATCH /api/orgs/:orgId/records/:id', () => {
       .send({ values: { title: 'x' } })
     expect(res.status).toBe(404)
     expect(prismaMock.record.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/orgs/:orgId/records/:id/duplicate', () => {
+  it('copies references while clearing unique and contact-channel values without activity', async () => {
+    prismaMock.record.findFirst
+      .mockResolvedValueOnce(recordRow({ id: 'rec-source', valuesJson: { name: 'Acme', email: 'a@acme.test', code: 'ACME-1', related: 'rec-target' } }))
+      .mockResolvedValueOnce(recordRow({ id: 'rec-copy', valuesJson: { name: 'Acme', related: 'rec-target' } }))
+    prismaMock.attributeDef.findMany.mockResolvedValue([
+      attrRow({ slug: 'name', type: 'text' }),
+      attrRow({ slug: 'email', type: 'email' }),
+      attrRow({ slug: 'code', type: 'text', isUnique: true }),
+      attrRow({ slug: 'related', type: 'record_reference', refObjectId: 'obj-target' }),
+    ])
+    prismaMock.objectDef.findMany.mockResolvedValue([{ id: 'obj-target', slug: 'target', storage: 'record' }])
+    prismaMock.record.create.mockResolvedValue(recordRow({ id: 'rec-copy', valuesJson: { name: 'Acme', related: 'rec-target' } }))
+    prismaMock.record.findFirst.mockResolvedValueOnce(recordRow({ id: 'rec-target', objectId: 'obj-target' }))
+
+    const res = await request(app)
+      .post(`${URL_A}/rec-source/duplicate`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(201)
+    expect(prismaMock.record.create.mock.calls[0][0].data.valuesJson).toEqual({ name: 'Acme', related: 'rec-target' })
+    expect(prismaMock.recordLink.create).toHaveBeenCalledOnce()
+    expect(prismaMock.activityEntry.upsert).not.toHaveBeenCalled()
   })
 })
 

@@ -367,7 +367,7 @@ describe('GET /api/orgs/:orgId/deals', () => {
     expect(res.status).toBe(200)
     expect(res.body.deals.map((d: { id: string }) => d.id)).toEqual(['d1', 'd2'])
     expect(res.body.total).toBe(2)
-    expect(prismaMock.deal.count).toHaveBeenCalledWith({ where: { orgId: ORG_A, deletedAt: null } })
+    expect(prismaMock.deal.count).toHaveBeenCalledWith({ where: { orgId: ORG_A, deletedAt: null, isArchived: false } })
   })
 
   it('filters by companyId, stageId and status', async () => {
@@ -378,6 +378,7 @@ describe('GET /api/orgs/:orgId/deals', () => {
     expect(prismaMock.deal.findMany.mock.calls[0][0].where).toEqual({
       orgId: ORG_A,
       deletedAt: null,
+      isArchived: false,
       companyId: 'co-1',
       stageId: 'stage-2',
       status: 'won',
@@ -399,7 +400,7 @@ describe('GET /api/orgs/:orgId/deals', () => {
 describe('GET /api/orgs/:orgId/deals/:id', () => {
   it('reads by id AND orgId, and includes personRoles', async () => {
     prismaMock.deal.findFirst.mockResolvedValue(
-      dealRow({ id: 'deal-9', personRoles: [roleRow({ id: 'r1' }), roleRow({ id: 'r2', role: 'influencer' })] }),
+      dealRow({ id: 'deal-9', personRoles: [roleRow({ id: 'r1', person: { id: 'p-1', firstName: 'Dana', lastName: 'Reeve', isArchived: true } }), roleRow({ id: 'r2', role: 'influencer' })] }),
     )
 
     const res = await request(app).get(`${URL_A}/deal-9`).set('Authorization', AUTH)
@@ -407,9 +408,10 @@ describe('GET /api/orgs/:orgId/deals/:id', () => {
     expect(res.status).toBe(200)
     expect(res.body.deal.id).toBe('deal-9')
     expect(res.body.deal.personRoles.map((r: { id: string }) => r.id)).toEqual(['r1', 'r2'])
+    expect(res.body.deal.personRoles[0].person).toEqual({ id: 'p-1', firstName: 'Dana', lastName: 'Reeve', isArchived: true })
     expect(prismaMock.deal.findFirst).toHaveBeenCalledWith({
       where: { id: 'deal-9', orgId: ORG_A, deletedAt: null },
-      include: { personRoles: true },
+      include: { personRoles: { include: { person: true } } },
     })
     expect(res.body.deal.orgId).toBeUndefined()
   })

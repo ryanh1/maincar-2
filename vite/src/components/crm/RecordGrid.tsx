@@ -129,6 +129,7 @@ interface RecordGridProps {
   viewConfig?: ViewConfig
   onViewConfigChange?: (update: (current: ViewConfig) => ViewConfig) => void
   toolbarLeading?: ReactNode
+  includeArchived?: boolean
   /** Increments when the page-level New action should open this grid's create flow. */
   createRequestToken?: number
   layout?: 'grid' | 'kanban'
@@ -202,7 +203,7 @@ function createdRecordId(response: unknown, object: ObjectDef): string | null {
     : null
 }
 
-export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken, layout = 'grid', onLayoutChange }: RecordGridProps) {
+export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId, viewConfig, onViewConfigChange, toolbarLeading, includeArchived = false, createRequestToken, layout = 'grid', onLayoutChange }: RecordGridProps) {
   const { user } = useAuth()
   const navigate = useNavigate()
   const { activeCall, dialing } = useDialer()
@@ -289,7 +290,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
 
   const listQuery = useMemo(() => toRecordListQuery(config, attributes), [config, attributes])
   const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
-    useRecordWindow(orgId, object.id, listQuery)
+    useRecordWindow(orgId, object.id, { ...listQuery, includeArchived })
   const cellStylesQuery = useGetCellStyles(orgId, viewId ?? null)
   const setCellStyle = useSetCellStyle()
   const paintByCell = useMemo(
@@ -820,6 +821,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
   const getRowThemeOverride = useCallback((row: number): Partial<Theme> | undefined => {
     const record = recordAtRow(row)
     if (!record) return undefined
+    if (record.isArchived) return { textDark: colors.mutedText, bgCell: colors.background }
     if (record.id === liveCallRecordId) {
       return {
         // Glide renders this row's accent at the leading edge. It deliberately
@@ -1757,6 +1759,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           closePeek()
           navigate(`/records/${object.slug}/${peekRecord.id}`)
         } : undefined}
+        onLifecycleChanged={() => void refetch()}
         />
       </div>
       {onViewConfigChange && (

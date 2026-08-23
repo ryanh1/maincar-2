@@ -1,14 +1,16 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 
 import type { AttributeDef, ObjectDef, RecordRow, RelatedRecordGroup } from '@/lib/crmTypes'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 
 const useGetRelatedRecords = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: { related: [] as RelatedRecordGroup[] } })))
+const lifecycleMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 
 vi.mock('@/hooks/crm', () => ({
   useGetActivity: () => ({ isPending: false, isError: false, data: undefined }),
   useGetRelatedRecords,
+  useUpdateRecordLifecycle: () => ({ mutateAsync: lifecycleMutateAsync, isPending: false }),
 }))
 vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => null }))
 
@@ -31,6 +33,8 @@ function attribute(overrides: Partial<AttributeDef>): AttributeDef {
 }
 
 describe('RecordPeekDrawer', () => {
+  beforeEach(() => lifecycleMutateAsync.mockClear())
+
   it('offers a full-page record view', () => {
     const onOpenFullPage = vi.fn()
     render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={{ id: 'person-1', name: 'Ada', createdAt: '', updatedAt: '' }} timeZone="America/New_York" position={null} onEdit={vi.fn()} onOpenFullPage={onOpenFullPage} />)
@@ -105,5 +109,22 @@ describe('RecordPeekDrawer', () => {
     expect(screen.getByRole('heading', { name: 'Acme' })).toBeInTheDocument()
     fireEvent.keyDown(screen.getByRole('heading', { name: 'Acme' }), { key: 'Escape' })
     expect(screen.getByRole('heading', { name: 'Dana' })).toBeInTheDocument()
+  })
+
+  it('shows archived state and can unarchive the record', async () => {
+    const attributes = [attribute({ slug: 'name', name: 'Name', isIdentity: true })]
+    const record: RecordRow = {
+      id: 'person-1', name: 'Ada', isArchived: true,
+      createdAt: '2026-08-22T00:00:00.000Z', updatedAt: '2026-08-22T00:00:00.000Z',
+    }
+
+    render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={attributes} record={record} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
+
+    expect(screen.getByText('Archived')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Unarchive' }))
+
+    await waitFor(() => expect(lifecycleMutateAsync).toHaveBeenCalledWith({
+      orgId: 'org-1', object, recordId: 'person-1', isArchived: false, confirmArchive: false,
+    }))
   })
 })

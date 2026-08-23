@@ -67,6 +67,19 @@ describe('useListRecords', () => {
     )
   })
 
+  it('requests archived rows when the archived scope is enabled', async () => {
+    jsonFetch.mockResolvedValue({ rows: [], nextCursor: null, totalCount: 0 })
+
+    renderListRecords('org-1', 'obj-1', { includeArchived: true })
+
+    await waitFor(() =>
+      expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/objects/obj-1/list', {
+        method: 'POST',
+        body: JSON.stringify({ cursor: null, includeArchived: true }),
+      }),
+    )
+  })
+
   it('fetches the next window using the cursor the server returned', async () => {
     jsonFetch
       .mockResolvedValueOnce({ rows: [{ id: 'r1' }], nextCursor: 'cursor-1', totalCount: 2 })

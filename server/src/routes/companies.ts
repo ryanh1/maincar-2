@@ -131,6 +131,8 @@ const companyBodySchema = z.object({
   source: optionalText,
   customJson: z.record(z.string(), z.unknown()).optional(),
   customValues: z.record(z.string(), z.unknown()).optional(),
+  isArchived: z.boolean().optional(),
+  confirmArchive: z.boolean().optional(),
 })
 
 const ANCHOR_ERROR =
@@ -185,6 +187,7 @@ const listQuerySchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().trim().min(1).optional(),
   ),
+  includeArchived: z.preprocess((value) => value === 'true' ? true : value === 'false' ? false : value, z.boolean().optional()),
 })
 
 router.use(requireAuth)
@@ -210,13 +213,14 @@ router.get(
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
-    const { page, limit, sort, dir, q } = parsed.data
+    const { page, limit, sort, dir, q, includeArchived } = parsed.data
 
     // --- Build filters ---
     // orgId is the tenant boundary, always; deletedAt: null hides the trash.
     const where = {
       orgId,
       deletedAt: null,
+      ...(includeArchived ? {} : { isArchived: false }),
       ...(q
         ? {
             OR: [
@@ -420,6 +424,19 @@ router.patch(
       return void res.status(422).json({ error: ANCHOR_ERROR })
     }
 
+    if (body.isArchived === true && !existing.isArchived && !body.confirmArchive) {
+      const activePeopleCount = await prisma.person.count({
+        where: { orgId, companyId: id, deletedAt: null, isArchived: false },
+      })
+      if (activePeopleCount > 0) {
+        return void res.status(409).json({
+          error: 'This company has active people. Confirm archiving the company without archiving its people.',
+          code: 'ARCHIVE_PARENT_CONFIRMATION_REQUIRED',
+          relatedCount: activePeopleCount,
+        })
+      }
+    }
+
     // --- Verify a new parent is in-org and not the row itself ---
     if (body.parentCompanyId !== undefined) {
       if (body.parentCompanyId === id) {
@@ -472,6 +489,7 @@ router.patch(
       }
       data.customJson = custom
     }
+    if (body.isArchived !== undefined) data.isArchived = body.isArchived
 
     // --- Execute query ---
     // updateMany with id+orgId, never update-by-id: the tenant key carries the

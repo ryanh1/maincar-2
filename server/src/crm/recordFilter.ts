@@ -37,11 +37,12 @@ export interface FilterArgs {
   // { slug: value } — a row matches when valuesJson @> this object.
   match: Record<string, unknown>
   limit?: number
+  includeArchived?: boolean
 }
 
 export async function filterRecordsByContainment(
   client: RawClient,
-  { orgId, objectId, match, limit = 200 }: FilterArgs,
+  { orgId, objectId, match, limit = 200, includeArchived = false }: FilterArgs,
 ): Promise<RecordRow[]> {
   // The containment value is bound as one jsonb parameter, never string-built, so
   // there is no SQL injection surface even though this is a raw query.
@@ -54,6 +55,7 @@ export async function filterRecordsByContainment(
     WHERE "orgId" = ${orgId}
       AND "objectId" = ${objectId}
       AND "deletedAt" IS NULL
+      ${includeArchived ? Prisma.empty : Prisma.sql`AND "isArchived" = FALSE`}
       AND "valuesJson" @> ${matchJson}::jsonb
     ORDER BY "createdAt" DESC
     LIMIT ${limit}

@@ -227,6 +227,7 @@ const listBodySchema = z.object({
   sort: z.union([sortSpecSchema, z.array(sortSpecSchema).min(1)]).nullish(),
   groupBy: z.array(z.string().min(1)).min(1).max(2).nullish(),
   teamScope: teamScopeSchema.optional(),
+  includeArchived: z.boolean().optional(),
   cursor: z.string().nullish(),
   limit: z.number().int().positive().optional(),
 })

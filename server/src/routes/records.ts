@@ -48,7 +48,7 @@ function mapRecordToApi(
     RecordRow,
     'id' | 'objectId' | 'valuesJson' | 'isArchived' | 'createdAt' | 'updatedAt'
   >,
-  links?: { attribute: string | null; toObject: string; toId: string }[],
+  links?: { attribute: string | null; toObject: string; toId: string; isArchived?: boolean }[],
 ) {
   return {
     id: record.id,
@@ -72,6 +72,8 @@ const updateBodySchema = z.object({
   values: valuesSchema.optional(),
   isArchived: z.boolean().optional(),
 })
+
+const includeArchivedQuery = (value: unknown): boolean => value === 'true'
 
 // The active attributes that live in valuesJson for an object: not deleted, not
 // archived, and not list-scoped (those belong to ListEntry). These are what the
@@ -154,6 +156,7 @@ router.get(
 
     // --- Parse & validate params ---
     const objectId = typeof req.query?.objectId === 'string' ? req.query.objectId : ''
+    const includeArchived = includeArchivedQuery(req.query?.includeArchived)
     if (!objectId) {
       return void res.status(400).json({ error: 'An objectId query param is required.' })
     }
@@ -174,12 +177,12 @@ router.get(
     // --- Execute query ---
     if (match) {
       // GIN-indexed containment filter (spec §5.1) — the raw @> path.
-      const rows = await filterRecordsByContainment(prisma, { orgId, objectId, match })
+      const rows = await filterRecordsByContainment(prisma, { orgId, objectId, match, ...(includeArchived ? { includeArchived: true } : {}) })
       return void res.json({ records: rows.map((r) => mapRecordToApi(r)) })
     }
 
     const records = await prisma.record.findMany({
-      where: { orgId, objectId, deletedAt: null },
+      where: { orgId, objectId, deletedAt: null, ...(includeArchived ? {} : { isArchived: false }) },
       orderBy: [{ createdAt: 'desc' }],
     })
     res.json({ records: records.map((r) => mapRecordToApi(r)) })
@@ -210,9 +213,59 @@ router.get(
       where: { orgId, fromObject: 'record', fromId: id },
       select: { attribute: true, toObject: true, toId: true },
     })
+    const resolvedLinks = await addArchivedLinkState(orgId, links)
 
     // --- Return response ---
-    res.json({ record: mapRecordToApi(record, links) })
+    res.json({ record: mapRecordToApi(record, resolvedLinks) })
+  }),
+)
+
+// ============================================================
+// POST /api/orgs/:orgId/records/:id/duplicate — duplicate a custom record
+// ============================================================
+// Duplicates preserve ordinary values and RecordLink references, but unique and
+// contact-channel fields are intentionally blank so the copy is safe to edit.
+// This is a create-like action, not an edit, so it writes no activity or history.
+router.post(
+  '/:id/duplicate',
+  wrapRoute('POST /api/orgs/:orgId/records/:id/duplicate', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Execute query ---
+    const source = await prisma.record.findFirst({ where: { id, orgId, deletedAt: null } })
+    if (!source) return void res.status(404).json({ error: 'Record not found' })
+
+    const attributes = await prisma.attributeDef.findMany({
+      where: { orgId, objectId: source.objectId, deletedAt: null, storage: { not: 'list' } },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    })
+    const values = { ...((source.valuesJson ?? {}) as RecordValues) }
+    for (const attribute of attributes) {
+      if (attribute.isUnique || attribute.type === 'email' || attribute.type === 'phone') delete values[attribute.slug]
+    }
+
+    // --- Verify ownership of copied references ---
+    const refTargets = await resolveRefTargets(orgId, attributes, values)
+    const missingRef = await verifyReferenceTargets(orgId, attributes, values, refTargets)
+    if (missingRef) return void res.status(422).json({ error: missingRef })
+
+    const duplicate = await prisma.$transaction(async (tx) => {
+      const created = await tx.record.create({
+        data: { orgId, objectId: source.objectId, valuesJson: values as Prisma.InputJsonValue },
+      })
+      await syncRecordLinks(tx, orgId, created.id, attributes, values, refTargets)
+      return created
+    })
+
+    logger.info({ orgId, userId, sourceRecordId: id, recordId: duplicate.id }, 'duplicated a custom record')
+    res.status(201).json({ record: mapRecordToApi(duplicate) })
   }),
 )
 
@@ -503,6 +556,32 @@ async function syncRecordLinks(
       })
     }
   }
+}
+
+/** Adds lifecycle state to custom-record links while preserving links to active table records. */
+async function addArchivedLinkState(
+  orgId: string,
+  links: { attribute: string | null; toObject: string; toId: string }[],
+): Promise<{ attribute: string | null; toObject: string; toId: string; isArchived?: boolean }[]> {
+  const slugs = [...new Set(links.map((link) => link.toObject))]
+  if (slugs.length === 0) return links
+
+  const targetObjects = await prisma.objectDef.findMany({
+    where: { orgId, slug: { in: slugs }, storage: 'record', deletedAt: null },
+    select: { id: true, slug: true },
+  })
+  if (targetObjects.length === 0) return links
+
+  const targetIds = links.map((link) => link.toId)
+  const targetRecords = await prisma.record.findMany({
+    where: { orgId, objectId: { in: targetObjects.map((object) => object.id) }, id: { in: targetIds }, deletedAt: null },
+    select: { id: true, isArchived: true },
+  })
+  const states = new Map(targetRecords.map((record) => [record.id, record.isArchived]))
+  return links.map((link) => {
+    const isArchived = states.get(link.toId)
+    return isArchived === undefined ? link : { ...link, isArchived }
+  })
 }
 
 export default router

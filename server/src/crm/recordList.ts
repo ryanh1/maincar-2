@@ -36,6 +36,7 @@ const RAW_LIST_REQUIRED_COLUMNS = [
   { name: 'id', prismaType: 'String' },
   { name: 'orgId', prismaType: 'String' },
   { name: 'customJson', prismaType: 'Json' },
+  { name: 'isArchived', prismaType: 'Boolean' },
   { name: 'deletedAt', prismaType: 'DateTime' },
   { name: 'createdAt', prismaType: 'DateTime' },
   { name: 'updatedAt', prismaType: 'DateTime' },
@@ -142,6 +143,8 @@ export interface ListQuery {
   /** One or two field slugs whose full filtered result set is returned as grouped section descriptors. */
   groupBy?: string[] | null
   teamScope?: TeamScope
+  /** Archived rows stay out of normal grids; lifecycle views opt in explicitly. */
+  includeArchived?: boolean
   cursor?: string | null
   limit?: number
 }
@@ -450,7 +453,7 @@ function buildSelectList(
   jsonColumnName: 'customJson' | 'valuesJson',
   sortFields: CompiledField[],
 ): Prisma.Sql {
-  const cols: Prisma.Sql[] = [Prisma.raw('"id"'), Prisma.raw('"createdAt"'), Prisma.raw('"updatedAt"')]
+  const cols: Prisma.Sql[] = [Prisma.raw('"id"'), Prisma.raw('"createdAt"'), Prisma.raw('"updatedAt"'), Prisma.raw('"isArchived"')]
   if (mode === 'table') {
     for (const attr of attributes) {
       if (attr.storage === 'column' && SAFE_IDENTIFIER.test(attr.slug)) {
@@ -476,6 +479,7 @@ function mapRow(
     id: row.id,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    isArchived: row.isArchived,
   }
   for (const attr of attributes) {
     if (attr.storage === 'column' && mode === 'table') {
@@ -644,6 +648,7 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
   const limit = clampLimit(query.limit)
 
   const whereParts: Prisma.Sql[] = [Prisma.sql`"orgId" = ${orgId}`, Prisma.sql`"deletedAt" IS NULL`]
+  if (!query.includeArchived) whereParts.push(Prisma.sql`"isArchived" = FALSE`)
   if (mode === 'record') whereParts.push(Prisma.sql`"objectId" = ${object.id}`)
   if (query.filter) whereParts.push(compileFilterNode(query.filter, ctx))
   if (query.teamScope) {

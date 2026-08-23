@@ -63,7 +63,7 @@ const DEAL_ROLES = [
 // exact integer STRING (or null). A client re-sends that same string, so the
 // value round-trips with no float drift (spec §5.8).
 function mapDealToApi(
-  deal: Deal & { personRoles?: DealPersonRole[] },
+  deal: Deal & { personRoles?: Array<DealPersonRole & { person?: { id: string; firstName: string | null; lastName: string | null; isArchived: boolean } }> },
 ) {
   return {
     id: deal.id,
@@ -85,7 +85,7 @@ function mapDealToApi(
   }
 }
 
-function mapRoleToApi(role: DealPersonRole) {
+function mapRoleToApi(role: DealPersonRole & { person?: { id: string; firstName: string | null; lastName: string | null; isArchived: boolean } }) {
   return {
     id: role.id,
     dealId: role.dealId,
@@ -94,6 +94,14 @@ function mapRoleToApi(role: DealPersonRole) {
     isPrimary: role.isPrimary,
     createdAt: role.createdAt.toISOString(),
     updatedAt: role.updatedAt.toISOString(),
+    ...(role.person ? {
+      person: {
+        id: role.person.id,
+        firstName: role.person.firstName,
+        lastName: role.person.lastName,
+        isArchived: role.person.isArchived,
+      },
+    } : {}),
   }
 }
 
@@ -167,6 +175,7 @@ const dealBodySchema = z.object({
   ownerUserId: z.preprocess(blankToUndefined, z.string().optional()),
   customJson: z.record(z.string(), z.unknown()).optional(),
   customValues: z.record(z.string(), z.unknown()).optional(),
+  isArchived: z.boolean().optional(),
 })
 
 const roleInputSchema = z.object({
@@ -228,6 +237,7 @@ const listQuerySchema = z.object({
   companyId: z.preprocess(blankToUndefined, z.string().optional()),
   stageId: z.preprocess(blankToUndefined, z.string().optional()),
   status: z.enum(DEAL_STATUSES, { error: `status is one of: ${DEAL_STATUSES.join(', ')}.` }).optional(),
+  includeArchived: z.preprocess((value) => value === 'true' ? true : value === 'false' ? false : value, z.boolean().optional()),
 })
 
 router.use(requireAuth)
@@ -253,12 +263,13 @@ router.get(
     if (!parsed.success) {
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
-    const { page, limit, sort, dir, q, companyId, stageId, status } = parsed.data
+    const { page, limit, sort, dir, q, companyId, stageId, status, includeArchived } = parsed.data
 
     // --- Build filters ---
     const where: Prisma.DealWhereInput = {
       orgId,
       deletedAt: null,
+      ...(includeArchived ? {} : { isArchived: false }),
       ...(companyId ? { companyId } : {}),
       ...(stageId ? { stageId } : {}),
       ...(status ? { status } : {}),
@@ -297,7 +308,7 @@ router.get(
     // --- Execute query ---
     const deal = await prisma.deal.findFirst({
       where: { id, orgId, deletedAt: null },
-      include: { personRoles: true },
+      include: { personRoles: { include: { person: true } } },
     })
     if (!deal) {
       return void res.status(404).json({ error: 'Deal not found' })
@@ -474,6 +485,7 @@ router.patch(
       }
       data.customJson = custom
     }
+    if (body.isArchived !== undefined) data.isArchived = body.isArchived
 
     // --- Execute query ---
     // A stage move is both a Deal update and a timeline event. Keep them in one
@@ -530,7 +542,7 @@ router.patch(
     // --- Return response ---
     const updated = await prisma.deal.findFirst({
       where: { id, orgId },
-      include: { personRoles: true },
+      include: { personRoles: { include: { person: true } } },
     })
     if (!updated) {
       return void res.status(404).json({ error: 'Deal not found' })
