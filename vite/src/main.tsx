@@ -18,6 +18,7 @@ import { ComposerCardFixture } from './components/composer/ComposerCardFixture'
 import { Settings_EmailSignaturesFixture } from './pages/Settings_EmailSignaturesFixture'
 import { Settings_EmailTemplatesFixture } from './pages/Settings_EmailTemplatesFixture'
 import { MentionEditorFixture } from './components/editor/MentionEditorFixture'
+import { Settings_DispositionsFixture } from './pages/Settings_DispositionsFixture'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -58,6 +59,8 @@ createRoot(document.getElementById('root')!).render(
       <Settings_EmailTemplatesFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/mention-editor' ? (
       <MentionEditorFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/dispositions' ? (
+      <Settings_DispositionsFixture />
     ) : (
       <QueryClientProvider client={queryClient}>
         <App />
