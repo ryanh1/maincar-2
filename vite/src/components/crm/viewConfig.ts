@@ -90,7 +90,7 @@ export type RecordListFilter =
     }
 
 export type RecordListQuery = {
-  sort?: { field: string; direction: 'asc' | 'desc' }
+  sort?: Array<{ field: string; direction: 'asc' | 'desc' }>
   filter?: RecordListFilter
   teamScope?: TeamScope
 }
@@ -277,12 +277,14 @@ function toRecordListFilter(node: ViewFilterNode, attributesById: Map<string, At
 /** Translate durable view-config attribute ids into the API's current slugs. */
 export function toRecordListQuery(config: ViewConfig, attributes: AttributeDef[]): RecordListQuery {
   const attributesById = new Map(attributes.map((attribute) => [attribute.id, attribute]))
-  const firstSort = config.sorts[0]
-  const sortAttribute = firstSort ? attributesById.get(firstSort.attributeId) : undefined
+  const sorts = config.sorts.flatMap((sort) => {
+    const attribute = attributesById.get(sort.attributeId)
+    return attribute ? [{ field: attribute.slug, direction: sort.direction }] : []
+  })
   const filter = config.filterTree ? toRecordListFilter(config.filterTree, attributesById) : null
 
   return {
-    ...(sortAttribute && firstSort ? { sort: { field: sortAttribute.slug, direction: firstSort.direction } } : {}),
+    ...(sorts.length ? { sort: sorts } : {}),
     ...(filter ? { filter } : {}),
     ...(config.teamScope ? { teamScope: config.teamScope } : {}),
   }

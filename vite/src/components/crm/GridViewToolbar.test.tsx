@@ -56,13 +56,12 @@ describe('GridViewToolbar', () => {
       isPending: false,
     })
   })
-  it('keeps sorting in the header and exposes the condition builder with compact labeled toolbar controls', () => {
+  it('exposes the sort popover and condition builder with compact labeled toolbar controls', () => {
     const config = createViewConfig(attributes)
 
     renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={vi.fn()} />)
 
-    expect(screen.queryByRole('button', { name: 'Sort' })).not.toBeInTheDocument()
-    for (const name of ['Fields', 'Filter', 'Changes', 'Group', 'Row height', 'Freeze']) {
+    for (const name of ['Fields', 'Sort', 'Filter', 'Changes', 'Group', 'Row height', 'Freeze']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
   })

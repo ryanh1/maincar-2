@@ -18,16 +18,17 @@ interface ColumnGroupHeadersProps {
   columns: Array<{ width: number; group?: string; collapsed?: boolean }>
   onCollapsedChange: (group: string, collapsed: boolean) => void
   onReorder: (activeGroup: string, overGroup: string) => void
+  reorderDisabled?: boolean
 }
 
-function SortableGroupHeader({ group, onCollapsedChange }: { group: ColumnGroupHeader; onCollapsedChange: ColumnGroupHeadersProps['onCollapsedChange'] }) {
-  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: group.name })
+function SortableGroupHeader({ group, onCollapsedChange, reorderDisabled = false }: { group: ColumnGroupHeader; onCollapsedChange: ColumnGroupHeadersProps['onCollapsedChange']; reorderDisabled?: boolean }) {
+  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: group.name, disabled: reorderDisabled })
   const style: CSSProperties = { width: group.width, transform: CSS.Transform.toString(transform), transition }
   const action = group.collapsed ? 'Expand' : 'Collapse'
 
   return (
     <div ref={setNodeRef} style={style} className="flex h-7 shrink-0 items-center border-r border-border bg-muted/60 text-xs text-text-muted">
-      <button type="button" aria-label={`Reorder ${group.name} column group`} className="cursor-grab px-1 active:cursor-grabbing" {...attributes} {...listeners}>
+      <button type="button" aria-label={`Reorder ${group.name} column group`} disabled={reorderDisabled} className="cursor-grab px-1 active:cursor-grabbing disabled:cursor-not-allowed" {...attributes} {...listeners}>
         <GripVertical className="size-3.5" />
       </button>
       <button type="button" aria-label={`${action} ${group.name} column group`} className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left hover:text-foreground" onClick={() => onCollapsedChange(group.name, !group.collapsed)}>
@@ -39,7 +40,7 @@ function SortableGroupHeader({ group, onCollapsedChange }: { group: ColumnGroupH
 }
 
 /** Column groups sit directly above Glide's normal header, while its canvas remains responsible for the fields themselves. */
-export function ColumnGroupHeaders({ columns, onCollapsedChange, onReorder }: ColumnGroupHeadersProps) {
+export function ColumnGroupHeaders({ columns, onCollapsedChange, onReorder, reorderDisabled = false }: ColumnGroupHeadersProps) {
   const segments: HeaderSegment[] = []
   const groups: ColumnGroupHeader[] = []
   for (let index = 0; index < columns.length;) {
@@ -81,7 +82,7 @@ export function ColumnGroupHeaders({ columns, onCollapsedChange, onReorder }: Co
         <div aria-label="Column groups" className="flex h-7 shrink-0 overflow-hidden border-b border-border bg-surface">
           {segments.map((segment, index) => segment.kind === 'spacer'
             ? <div key={`spacer-${index}`} style={{ width: segment.width }} className="shrink-0 border-r border-border" />
-            : <SortableGroupHeader key={segment.group.name} group={segment.group} onCollapsedChange={onCollapsedChange} />,
+            : <SortableGroupHeader key={segment.group.name} group={segment.group} onCollapsedChange={onCollapsedChange} reorderDisabled={reorderDisabled} />,
           )}
         </div>
       </SortableContext>
