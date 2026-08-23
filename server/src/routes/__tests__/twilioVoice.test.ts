@@ -39,6 +39,9 @@ const {
       findFirst: vi.fn(),
       upsert: vi.fn(),
     },
+    dispositionDef: {
+      findFirst: vi.fn(),
+    },
   },
   verifySignatureMock: vi.fn(),
   queueUploadRecordingMock: vi.fn(),
@@ -594,6 +597,15 @@ function statusWrite() {
     | undefined
 }
 
+/** The guarded write that selects an automatic outcome, if the callback made one. */
+function automaticDispositionWrite() {
+  return prismaMock.call.updateMany.mock.calls
+    .map(([args]) => args)
+    .find((args) => 'dispositionId' in args.data) as
+    | { where: Record<string, unknown>; data: Record<string, unknown> }
+    | undefined
+}
+
 describe('status callback — signature', () => {
   it('403s on a bad signature, before any lookup', async () => {
     verifySignatureMock.mockReturnValue(false)
@@ -709,6 +721,94 @@ describe('status callback — terminal statuses set endedAt', () => {
       expect(statusWrite()?.data).not.toHaveProperty('endedAt')
     },
   )
+})
+
+// ============================================================
+// Automatic dead-call dispositions
+// ============================================================
+describe('status callback — deterministic dead-call dispositions', () => {
+  it.each([
+    ['busy', 'busy'],
+    ['failed', 'failed'],
+    ['no-answer', 'no_answer'],
+  ])('selects the active %s disposition without an LLM call', async (callStatus, dispositionValue) => {
+    prismaMock.dispositionDef.findFirst.mockResolvedValue({ id: 'auto-disposition' })
+
+    const res = await postStatus({ CallSid: CALL_SID, CallStatus: callStatus })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.dispositionDef.findFirst).toHaveBeenCalledWith({
+      where: { orgId: 'org-a', value: dispositionValue, isArchived: false },
+      select: { id: true },
+    })
+    expect(automaticDispositionWrite()).toEqual({
+      where: { id: 'call-1', orgId: 'org-a', dispositionId: null },
+      data: { dispositionId: 'auto-disposition' },
+    })
+  })
+
+  it.each(['machine_start', 'machine_end_beep', 'machine_end_silence', 'machine_end_other'])(
+    'selects the active machine outcome when AMD reports %s',
+    async (answeredBy) => {
+      prismaMock.dispositionDef.findFirst.mockResolvedValue({ id: 'machine-disposition' })
+
+      await postStatus({ CallSid: CALL_SID, CallStatus: 'completed', AnsweredBy: answeredBy })
+
+      expect(prismaMock.dispositionDef.findFirst).toHaveBeenCalledWith({
+        where: { orgId: 'org-a', value: 'voicemail', isArchived: false },
+        select: { id: true },
+      })
+      expect(automaticDispositionWrite()).toEqual({
+        where: { id: 'call-1', orgId: 'org-a', dispositionId: null },
+        data: { dispositionId: 'machine-disposition' },
+      })
+    },
+  )
+
+  it.each(['completed', 'queued', 'ringing', 'in-progress'])(
+    'leaves an ordinary %s call undispositioned for the rep',
+    async (callStatus) => {
+      await postStatus({ CallSid: CALL_SID, CallStatus: callStatus })
+
+      expect(prismaMock.dispositionDef.findFirst).not.toHaveBeenCalled()
+      expect(automaticDispositionWrite()).toBeUndefined()
+    },
+  )
+
+  it('leaves the call undispositioned when its matching active configuration is missing', async () => {
+    prismaMock.dispositionDef.findFirst.mockResolvedValue(null)
+
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'no-answer' })
+
+    expect(automaticDispositionWrite()).toBeUndefined()
+  })
+
+  it('does not overwrite a rep-selected disposition when Twilio retries the status callback', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(callRow({ dispositionId: 'rep-disposition' }))
+
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'no-answer' })
+
+    expect(prismaMock.dispositionDef.findFirst).not.toHaveBeenCalled()
+    expect(automaticDispositionWrite()).toBeUndefined()
+  })
+
+  it('applies the automatic outcome once across idempotent no-answer retries', async () => {
+    prismaMock.dispositionDef.findFirst.mockResolvedValue({ id: 'auto-disposition' })
+    prismaMock.call.findFirst
+      .mockResolvedValueOnce(callRow())
+      .mockResolvedValueOnce(callRow({ dispositionId: 'auto-disposition' }))
+
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'no-answer' })
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'no-answer' })
+
+    const automaticWrites = prismaMock.call.updateMany.mock.calls
+      .map(([args]) => args)
+      .filter((args) => 'dispositionId' in args.data)
+    expect(automaticWrites).toEqual([{
+      where: { id: 'call-1', orgId: 'org-a', dispositionId: null },
+      data: { dispositionId: 'auto-disposition' },
+    }])
+  })
 })
 
 describe('status callback — durationS', () => {

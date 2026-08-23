@@ -26,6 +26,7 @@ const { prismaMock, verifyTokenMock, mintVoiceAccessTokenMock, hangUpCallMock, p
       delete: vi.fn(),
       deleteMany: vi.fn(),
     },
+    dispositionDef: { findFirst: vi.fn() },
     // The number→person match (lib/callMatch.ts) reads this inside the POST
     // transaction. Defaulted to "no match" in beforeEach, so an unknown number
     // still logs; the CRM-spine tests override it with a hit.
@@ -1260,6 +1261,36 @@ describe('POST /api/orgs/:orgId/calls — org isolation', () => {
 
     expect(res.status).toBe(404)
     expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// PATCH /:id/disposition — a rep can replace an automatic outcome
+// ============================================================
+describe('PATCH /api/orgs/:orgId/calls/:id/disposition', () => {
+  it('replaces an automatic outcome and returns the rep’s final selected disposition', async () => {
+    prismaMock.dispositionDef.findFirst.mockResolvedValue({ id: 'rep-disposition' })
+    prismaMock.call.findFirst.mockResolvedValue(callRow({
+      dispositionId: 'rep-disposition',
+      disposition: {
+        id: 'rep-disposition', value: 'callback', label: 'Call back', color: 'option-7', icon: null, category: 'connected',
+      },
+      nextSteps: [],
+    }))
+
+    const res = await request(app)
+      .patch(`${URL_A}/call-1/disposition`)
+      .set('Authorization', AUTH)
+      .send({ dispositionId: 'rep-disposition' })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.call.updateMany).toHaveBeenCalledWith({
+      where: { id: 'call-1', orgId: ORG_A },
+      data: { dispositionId: 'rep-disposition' },
+    })
+    expect(res.body.call.disposition).toEqual({
+      id: 'rep-disposition', value: 'callback', label: 'Call back', color: 'option-7', icon: null, category: 'connected',
+    })
   })
 })
 
