@@ -90,6 +90,7 @@ model Org {
   savedViews    SavedView[]
   detailLayouts DetailLayout[]
   cellStyles    CellStyle[]
+  colorRules    ColorRule[]
 
   // Custom objects (MAI-135 T7). Back-relations so a deleted org cascades its
   // custom-object rows and their links away — the same onDelete: Cascade the rest
@@ -2018,6 +2019,7 @@ model SavedView {
   deletedAt DateTime?
 
   cellStyles CellStyle[]
+  colorRules ColorRule[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2059,6 +2061,43 @@ model CellStyle {
 
   @@unique([viewId, recordId, fieldId])
   @@index([orgId, viewId])
+}
+
+// Conditional formatting (SPEC-CHUNK-2 J2.5 §C): ordered, view-scoped rules that
+// colour a cell by a typed predicate. First enabled match wins. `attribute` is a
+// plain AttributeDef id; the service verifies it belongs to the view's object.
+// `color` is a muted palette token name (--option-1…8), never hex. `isDefault`
+// marks a seeded rule (e.g. due-date temperature) that a user may toggle, edit,
+// or restore; seeding is insert-missing-only and never overwrites edits.
+model ColorRule {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  viewId String
+  view   SavedView @relation(fields: [viewId], references: [id], onDelete: Cascade)
+
+  // The AttributeDef id the rule keys off. A plain string; the service verifies
+  // it belongs to the view's object.
+  attribute String
+  // { op: before_today | is_today | after_today | eq | gt | lt, value? }
+  predicate Json
+  // background | text | dot
+  target String
+  // cell | subvalue — colour the whole cell or just the matching subvalue.
+  scope String @default("cell")
+  // Muted palette token name (--option-1…8).
+  color String
+  // First enabled match wins; lower sortOrder is evaluated first.
+  sortOrder Int     @default(0)
+  isDefault Boolean @default(false)
+  enabled   Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, viewId])
+  @@index([viewId, sortOrder])
 }
 
 // One organization-wide record-page arrangement per object. The read route

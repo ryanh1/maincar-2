@@ -24,3 +24,17 @@ export function drawChangeDots(
   }
   ctx.restore()
 }
+
+/** Draw the single dot a `dot`-target colour rule contributes (SPEC-CHUNK-2 J2.5 §C). */
+export function drawColorRuleDot(
+  ctx: CanvasRenderingContext2D,
+  bounds: { x: number; y: number; width: number; height: number },
+  color: string,
+) {
+  ctx.save()
+  ctx.fillStyle = color
+  ctx.beginPath()
+  ctx.arc(bounds.x + bounds.width - 8, bounds.y + 8, 3, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}

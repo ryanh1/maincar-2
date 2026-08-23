@@ -41,6 +41,7 @@ import reportsRouter from './routes/reports.js'
 import savedViewsRouter from './routes/savedViews.js'
 import objectViewsRouter from './routes/objectViews.js'
 import cellStylesRouter from './routes/cellStyles.js'
+import colorRulesRouter from './routes/colorRules.js'
 import tasksRouter from './routes/tasks.js'
 import teamRouter from './routes/team.js'
 import teamsRouter from './routes/teams.js'
@@ -159,6 +160,7 @@ app.use('/api/orgs/:orgId/field-history', fieldHistoryRouter)
 app.use('/api/orgs/:orgId/records', recordsRouter)
 app.use('/api/orgs/:orgId/saved-views', savedViewsRouter)
 app.use('/api/orgs/:orgId/cell-styles', cellStylesRouter)
+app.use('/api/orgs/:orgId/color-rules', colorRulesRouter)
 app.use('/api/orgs/:orgId/detail-layouts', detailLayoutsRouter)
 
 // Work objects (MAI-141 T13) — the two things a rep creates by hand. FULL CRUD,

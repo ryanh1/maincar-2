@@ -20,14 +20,14 @@ interface GridColumnFilterMenuProps {
   onConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
   onOpenChange: (open: boolean) => void
   onToggleWrap?: () => void
+  onConditionalFormat?: () => void
   open: boolean
   wrap?: boolean
 }
 
 /** Header menus retain freezing and text wrapping; multi-level sorting lives in GridSortPopover. */
-export function GridColumnFilterMenu({ attribute, anchor, config, freezeActions, onConfigChange, onOpenChange, onToggleWrap, open, wrap = false }: GridColumnFilterMenuProps) {
+export function GridColumnFilterMenu({ attribute, anchor, config, freezeActions, onConfigChange, onOpenChange, onToggleWrap, onConditionalFormat, open, wrap = false }: GridColumnFilterMenuProps) {
   const headerColor = config.columnStyles.find((style) => style.attributeId === attribute.id)?.headerColor
-
   function closeMenu() {
     onOpenChange(false)
   }
@@ -87,6 +87,11 @@ export function GridColumnFilterMenu({ attribute, anchor, config, freezeActions,
               </button>
             </div>
           </div>
+          {onConditionalFormat && (
+            <Button size="sm" variant="secondary" className="w-full justify-start" onClick={() => { onConditionalFormat(); closeMenu() }}>
+              Conditional formatting…
+            </Button>
+          )}
         </div>
       </PopoverContent>
     </Popover>

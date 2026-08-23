@@ -172,6 +172,10 @@ export const queryKeys = {
     all: (orgId: string) => ['cellStyles', orgId] as const,
     list: (orgId: string, viewId: string) => ['cellStyles', orgId, 'list', viewId] as const,
   },
+  colorRules: {
+    all: (orgId: string) => ['colorRules', orgId] as const,
+    list: (orgId: string, viewId: string) => ['colorRules', orgId, 'list', viewId] as const,
+  },
   detailLayouts: {
     detail: (orgId: string, objectId: string) => ['detailLayouts', orgId, objectId] as const,
   },

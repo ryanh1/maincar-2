@@ -23,7 +23,9 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { useCreateRecord, useGetFieldChanges, useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
 import { useGetCellStyles, useSetCellStyle } from '@/hooks/cellStyles'
+import { useGetColorRules, type ColorRule } from '@/hooks/colorRules'
 import { isStoredScalarCell } from '@/lib/paintTokens'
+import { colorRuleThemeOverride, matchColorRule } from '@/lib/colorRule'
 import { useWorkspaceUrlState } from '@/hooks/workspaceUrlState'
 import { useAuth } from '@/providers/useAuth'
 import { useDialer } from '@/components/dialer/dialerContext'
@@ -40,6 +42,7 @@ import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { RecordGridCreateRow } from './RecordGrid_CreateRow'
 import { GridRowFreezeMenu } from './GridRowFreezeMenu'
 import { CellPaintMenu } from './CellPaintMenu'
+import { ConditionalFormatPanel } from './ConditionalFormatPanel'
 import { CellExpandOverlay } from './CellExpandOverlay'
 import { CellCopyMenu } from './CellCopyMenu'
 import { formatCellValue } from './recordCellValue'
@@ -50,7 +53,7 @@ import { coerceCurrency, coerceNumber } from './cellCoercion'
 import { formatEntry } from '@/lib/dialPad'
 import { KanbanBoard } from './KanbanBoard'
 import { ChangeHighlightOverlay, FieldHistoryPopover, type ChangeHighlightTarget } from './ChangeHighlightOverlay'
-import { drawChangeDots } from './changeHighlightCanvas'
+import { drawChangeDots, drawColorRuleDot } from './changeHighlightCanvas'
 import { useRowSelection } from './useRowSelection'
 import { SelectionBanner } from './SelectionBanner'
 import { BulkActionBar } from './BulkActionBar'
@@ -229,6 +232,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
   const [rowFreezeMenu, setRowFreezeMenu] = useState<{ anchor: GridMenuAnchor; row: number } | null>(null)
   const [expandedCell, setExpandedCell] = useState<{ column: number; row: number; anchor: GridMenuAnchor; value: string } | null>(null)
   const [paintMenu, setPaintMenu] = useState<{ anchor: GridMenuAnchor; recordId: string; attribute: AttributeDef } | null>(null)
+  const [formatPanel, setFormatPanel] = useState<{ anchor: GridMenuAnchor; attributeId: string | null } | null>(null)
   const [copyMenu, setCopyMenu] = useState<{ anchor: GridMenuAnchor; rawValue: string; displayValue: string } | null>(null)
 
   const configuredColumns = useMemo(() => new Map(config.columns.map((column) => [column.attributeId, column])), [config.columns])
@@ -281,6 +285,16 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     () => new Map((cellStylesQuery.data?.cellStyles ?? []).map((style) => [`${style.recordId}:${style.fieldId}`, style])),
     [cellStylesQuery.data?.cellStyles],
   )
+  const colorRulesQuery = useGetColorRules(orgId, viewId ?? null)
+  const rulesByAttribute = useMemo(() => {
+    const map = new Map<string, ColorRule[]>()
+    for (const rule of colorRulesQuery.data?.colorRules ?? []) {
+      const list = map.get(rule.attribute) ?? []
+      list.push(rule)
+      map.set(rule.attribute, list)
+    }
+    return map
+  }, [colorRulesQuery.data?.colorRules])
   const changeHighlightEnabled = config.changeHighlight.mode === 'on'
   const fieldChangesQuery = useGetFieldChanges(orgId, object.id, config.changeHighlight.days, changeHighlightEnabled)
   const changesByCell = useMemo(
@@ -443,14 +457,18 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
             ...(paint.textToken ? { textDark: colors.paintColors[paint.textToken] } : {}),
           }
         : undefined
+      const rule = matchColorRule(rulesByAttribute.get(attr.id) ?? [], value)
+      const ruleOverride = rule ? colorRuleThemeOverride(rule, colors.paintColors) : undefined
       const override = change
-        ? { ...cell.themeOverride, ...paintOverride, bgCell: colors.changeHighlightTint }
+        ? { ...cell.themeOverride, ...ruleOverride, ...paintOverride, bgCell: colors.changeHighlightTint }
         : paintOverride
-          ? { ...cell.themeOverride, ...paintOverride }
-          : cell.themeOverride
+          ? { ...cell.themeOverride, ...ruleOverride, ...paintOverride }
+          : ruleOverride
+            ? { ...cell.themeOverride, ...ruleOverride }
+            : cell.themeOverride
       return override ? { ...cell, themeOverride: override } : cell
     },
-    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups, orgId, configuredColumns, changesByCell, colors.changeHighlightTint, paintByCell, colors.paintColors],
+    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups, orgId, configuredColumns, changesByCell, colors.changeHighlightTint, paintByCell, colors.paintColors, rulesByAttribute],
   )
 
   const drawCell = useCallback<DrawCellCallback>((args, drawContent) => {
@@ -460,7 +478,9 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     if (!record || !attribute) return
     const change = changesByCell.get(`${record.id}:${attribute.id}`)
     if (change) drawChangeDots(args.ctx, args.rect, change.changeCount, colors.changeHighlightDot)
-  }, [recordAtRow, visibleColumns, changesByCell, colors.changeHighlightDot])
+    const rule = matchColorRule(rulesByAttribute.get(attribute.id) ?? [], cellValue(record, attribute))
+    if (rule && rule.target === 'dot') drawColorRuleDot(args.ctx, args.rect, colors.paintColors[rule.color] ?? rule.color)
+  }, [recordAtRow, visibleColumns, changesByCell, colors.changeHighlightDot, rulesByAttribute, cellValue, colors.paintColors])
 
   // The single coercion seam: runs for a typed commit AND a paste (glide
   // calls this before either lands). Never returns `false` — the raw text
@@ -1267,6 +1287,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
             teamScopeSupported={teamScopeSupported}
             layout={layout}
             onLayoutChange={setLayout}
+            onFormat={(anchor) => setFormatPanel({ anchor, attributeId: null })}
           />
         )}
         <KanbanBoard
@@ -1292,6 +1313,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           selectedColumnIds={selectedColumnIds}
           layout={layout}
           onLayoutChange={setLayout}
+          onFormat={(anchor) => setFormatPanel({ anchor, attributeId: null })}
         />
       )}
       {isCreating && (
@@ -1406,6 +1428,10 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
               onFreeze: () => onViewConfigChange((current) => ({ ...current, frozenCols: headerMenu.columnIndex + 1 })),
               onUnfreeze: () => onViewConfigChange((current) => ({ ...current, frozenCols: 0 })),
               unfreezeLabel: 'Unfreeze columns',
+            }}
+            onConditionalFormat={() => {
+              setFormatPanel({ anchor: headerMenu.anchor, attributeId: headerMenu.attribute.id })
+              setHeaderMenu(null)
             }}
             onOpenChange={(open) => {
               if (!open) setHeaderMenu(null)
@@ -1621,6 +1647,21 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
             onOpenChange={(open) => {
               if (!open) setPaintMenu(null)
             }}
+          />
+        )}
+
+        {formatPanel && viewId && (
+          <ConditionalFormatPanel
+            anchor={formatPanel.anchor}
+            open
+            onOpenChange={(open) => {
+              if (!open) setFormatPanel(null)
+            }}
+            orgId={orgId}
+            viewId={viewId}
+            attributes={columns}
+            colors={colors.paintColors}
+            initialAttributeId={formatPanel.attributeId}
           />
         )}
 

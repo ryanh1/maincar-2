@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from 'react'
-import { ChevronDown, Columns3Cog, History, LayoutList, PanelsTopLeft, Rows3, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
+import { ChevronDown, Columns3Cog, History, LayoutList, Palette, PanelsTopLeft, Rows3, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,6 +19,7 @@ import type { AttributeDef } from '@/lib/crmTypes'
 import { memberDisplayName, useGetMembers, useGetTeams } from '@/hooks/orgs'
 import { createKanbanConfig, isKanbanGroupAttribute, type TeamScope, type ViewConfig } from './viewConfig'
 import { GridFilterBuilder } from './GridFilterBuilder'
+import type { GridMenuAnchor } from './gridFilterMenu'
 import { GridSortPopover } from './GridSortPopover'
 import { KanbanCardFieldPicker } from './KanbanCardFieldPicker'
 
@@ -32,6 +33,7 @@ interface GridViewToolbarProps {
   selectedColumnIds?: string[]
   layout?: 'grid' | 'kanban'
   onLayoutChange?: (layout: 'grid' | 'kanban') => void
+  onFormat?: (anchor: GridMenuAnchor) => void
 }
 
 function scopeLabel(scope: TeamScope | undefined, teams: Array<{ id: string; name: string }>, members: Array<{ userId: string; firstName: string | null; lastName: string | null; email: string }>): string | null {
@@ -109,7 +111,7 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 }
 
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
-export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange }: GridViewToolbarProps) {
+export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange, onFormat }: GridViewToolbarProps) {
   const [columnGroupName, setColumnGroupName] = useState('')
   const [customChangeDays, setCustomChangeDays] = useState('')
   function setColumnVisible(attributeId: string, visible: boolean) {
@@ -212,6 +214,20 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
           </DropdownMenuSub>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {onFormat && (
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect()
+            onFormat({ x: rect.left, y: rect.bottom, width: rect.width, height: rect.height })
+          }}
+        >
+          <Palette size={16} />
+          Format
+        </Button>
+      )}
 
       {selectedColumnIds.length >= 2 && (
         <div className="flex items-center gap-1">
