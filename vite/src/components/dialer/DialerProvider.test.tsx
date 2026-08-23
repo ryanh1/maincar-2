@@ -25,11 +25,12 @@ vi.mock('@/hooks/dialer/useGetCallDetail', () => ({ useGetCallDetail: useGetCall
 const { toastErrorMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
 
-const { deviceCtorMock, deviceConnectMock, deviceOnMock, deviceUpdateTokenMock, deviceDestroyMock } =
+const { deviceCtorMock, deviceConnectMock, deviceOnMock, deviceRegisterMock, deviceUpdateTokenMock, deviceDestroyMock } =
   vi.hoisted(() => ({
     deviceCtorMock: vi.fn(),
     deviceConnectMock: vi.fn(),
     deviceOnMock: vi.fn(),
+    deviceRegisterMock: vi.fn(() => Promise.resolve()),
     deviceUpdateTokenMock: vi.fn(),
     deviceDestroyMock: vi.fn(),
   }))
@@ -41,6 +42,7 @@ vi.mock('@/dependencies/twilioVoice', () => ({
     return {
       connect: deviceConnectMock,
       on: deviceOnMock,
+      register: deviceRegisterMock,
       updateToken: deviceUpdateTokenMock,
       destroy: deviceDestroyMock,
     }
@@ -63,6 +65,7 @@ describe('DialerProvider', () => {
     deviceCtorMock.mockClear()
     deviceConnectMock.mockReset()
     deviceOnMock.mockClear()
+    deviceRegisterMock.mockClear()
     deviceUpdateTokenMock.mockClear()
     deviceDestroyMock.mockClear()
     toastErrorMock.mockReset()
@@ -439,6 +442,8 @@ describe('DialerProvider', () => {
       // Registers the Device-level seams: a token refresh and a fatal SDK error.
       expect(deviceOnMock).toHaveBeenCalledWith('tokenWillExpire', expect.any(Function))
       expect(deviceOnMock).toHaveBeenCalledWith('error', expect.any(Function))
+      expect(deviceOnMock).toHaveBeenCalledWith('incoming', expect.any(Function))
+      expect(deviceRegisterMock).toHaveBeenCalledOnce()
     })
 
     it('updates the existing Device rather than rebuilding it when the token refreshes', () => {
@@ -458,6 +463,69 @@ describe('DialerProvider', () => {
 
       expect(deviceCtorMock).toHaveBeenCalledTimes(1)
       expect(deviceUpdateTokenMock).toHaveBeenCalledWith('token-2')
+      expect(deviceRegisterMock).toHaveBeenCalledOnce()
+    })
+
+    it('opens an incoming call from its server-issued call id, then accepts it into the existing controls', () => {
+      useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'fake-token', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+      const callHandlers: Record<string, () => void> = {}
+      const acceptMock = vi.fn()
+      const fakeCall = {
+        parameters: { callId: 'call-1', From: '+12025550123' },
+        accept: acceptMock,
+        reject: vi.fn(),
+        on: vi.fn((event: string, handler: () => void) => (callHandlers[event] = handler)),
+      }
+
+      const { result } = renderDialer()
+      const incoming = deviceOnMock.mock.calls.find(([event]) => event === 'incoming')?.[1] as ((call: typeof fakeCall) => void)
+      act(() => incoming(fakeCall))
+
+      expect(result.current.activeCall).toEqual({
+        orgId: 'org-1', callId: 'call-1', toE164: '+12025550123', direction: 'inbound', recording: false,
+      })
+      expect(result.current.phase).toBe('ringing')
+      expect(result.current.canControlAudio).toBe(false)
+
+      act(() => result.current.acceptIncomingCall())
+      expect(acceptMock).toHaveBeenCalledOnce()
+      act(() => callHandlers.accept())
+
+      expect(result.current.phase).toBe('in-progress')
+      expect(result.current.canControlAudio).toBe(true)
+    })
+
+    it('clears an incoming call locally when the caller cancels or the rep rejects it', () => {
+      useAuthMock.mockReturnValue({ org: { id: 'org-1' } })
+      useGetVoiceTokenMock.mockReturnValue({
+        data: { token: 'fake-token', identity: 'user-1', ttlSeconds: 3600 },
+        refetch: vi.fn(),
+      })
+      const callHandlers: Record<string, () => void> = {}
+      const rejectMock = vi.fn()
+      const fakeCall = {
+        parameters: { callId: 'call-1', From: '+12025550123' },
+        accept: vi.fn(),
+        reject: rejectMock,
+        on: vi.fn((event: string, handler: () => void) => (callHandlers[event] = handler)),
+      }
+      const { result } = renderDialer()
+      const incoming = deviceOnMock.mock.calls.find(([event]) => event === 'incoming')?.[1] as ((call: typeof fakeCall) => void)
+      act(() => incoming(fakeCall))
+      act(() => result.current.rejectIncomingCall())
+
+      expect(rejectMock).toHaveBeenCalledOnce()
+      expect(result.current.phase).toBe('idle')
+      expect(result.current.activeCall).toBeNull()
+
+      act(() => incoming(fakeCall))
+      act(() => callHandlers.cancel())
+      expect(result.current.phase).toBe('idle')
+      expect(result.current.activeCall).toBeNull()
     })
 
     it('connects the Device with the given params, and wires accept/disconnect onto the dialer phase', async () => {

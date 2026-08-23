@@ -10,6 +10,7 @@ import { InCallControlsFixture } from './components/dialer/InCallControlsFixture
 import { InCallWorkspaceFixture } from './components/dialer/InCallWorkspaceFixture'
 import { DialerDispositionBarFixture } from './components/dialer/DialerDispositionBarFixture'
 import { NumericKeypadFixture } from './components/dialer/NumericKeypadFixture'
+import { DialerIncomingCallFixture } from './components/dialer/DialerIncomingCallFixture'
 import { TooltipProvider } from './components/ui/tooltip'
 import { DatePickerFixture } from './components/ui/DatePickerFixture'
 import { ReportsFixture } from './pages/ReportsFixture'
@@ -48,6 +49,8 @@ createRoot(document.getElementById('root')!).render(
       <DialerDispositionBarFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/numeric-keypad' ? (
       <NumericKeypadFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/dialer-incoming-call' ? (
+      <DialerIncomingCallFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/account-timeline' ? (
       <AccountTimelineFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/reports' ? (

@@ -65,6 +65,8 @@ function dialerValue(overrides: Partial<DialerContextValue> = {}): DialerContext
     connectCall: vi.fn(),
     endCall: vi.fn(),
     cancelCall: vi.fn(),
+    acceptIncomingCall: vi.fn(),
+    rejectIncomingCall: vi.fn(),
     reset: vi.fn(),
     placeDeviceCall: vi.fn(),
     muteCall: vi.fn(),

@@ -38,7 +38,9 @@ export function InCallWorkspace({ orgId, callId, toE164, recording = false }: In
   const serverNote = call?.noteText ?? ''
   const crm = call?.review?.crm
   const name = personName(crm?.person ?? null)
-  const number = call?.toE164 ?? toE164
+  const number = call
+    ? call.direction === 'inbound' ? call.fromE164 : call.toE164
+    : toE164
   // A status poll updates the same cache as this workspace. Once a rep has typed,
   // their local draft remains authoritative until this call leaves the dock.
   const visibleNote = dirty ? noteText : serverNote

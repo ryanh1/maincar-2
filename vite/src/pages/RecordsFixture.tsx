@@ -16,7 +16,8 @@ const idleDialer: DialerContextValue = {
   activeCall: null, canControlAudio: false,
   expandDialer: () => {}, collapseDialer: () => {}, toggleView: () => {},
   startCall: () => {}, adoptCall: () => {}, connectCall: () => {}, endCall: () => {},
-  cancelCall: () => {}, reset: () => {}, placeDeviceCall: async () => {},
+  cancelCall: () => {}, acceptIncomingCall: () => {}, rejectIncomingCall: () => {},
+  reset: () => {}, placeDeviceCall: async () => {},
   muteCall: () => {}, sendDigits: () => {},
 }
 
