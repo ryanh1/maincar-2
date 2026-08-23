@@ -4,6 +4,12 @@ export type { CreateListInput, CreateListResponse } from './useCreateList'
 export { useGetList } from './useGetList'
 export { useGetListEntries } from './useGetListEntries'
 export { useRemoveListEntry } from './useRemoveListEntry'
+export { useCreateListAttribute } from './useCreateListAttribute'
+export type { CreateListAttributeInput } from './useCreateListAttribute'
+export { useUpdateListEntry } from './useUpdateListEntry'
+export type { UpdateListEntryInput } from './useUpdateListEntry'
+export { useReorderListEntries } from './useReorderListEntries'
+export type { ReorderListEntriesInput } from './useReorderListEntries'
 // The barrel is the only thing components import from this domain
 // (frontend.md → Frontend data fetching).
 export { useGetObjects } from './useGetObjects'
