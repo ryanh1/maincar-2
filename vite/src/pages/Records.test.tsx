@@ -179,6 +179,7 @@ describe('Records', () => {
     await user.click(screen.getByRole('button', { name: 'Change sort' }))
     await user.click(screen.getByRole('button', { name: 'Reset' }))
     expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument()
+    expect(screen.getByRole('grid', { name: 'People grid' })).toHaveAttribute('data-sort', 'name:desc')
 
     await user.click(screen.getByRole('button', { name: 'Change sort' }))
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
