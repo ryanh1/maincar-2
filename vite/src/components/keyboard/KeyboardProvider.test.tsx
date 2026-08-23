@@ -13,6 +13,9 @@ const { useAuthMock, openComposerMock } = vi.hoisted(() => ({
 
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/components/composer/composerContext', () => ({ useComposer: () => ({ openComposer: openComposerMock }) }))
+vi.mock('@/hooks/keyboardBindings', () => ({
+  useGetKeyboardBindings: () => ({ data: { bindings: [{ actionId: 'compose-email', keys: 'G' }] } }),
+}))
 
 function LocationProbe() {
   const location = useLocation()
@@ -52,5 +55,23 @@ describe('KeyboardProvider', () => {
     await user.click(screen.getByRole('option', { name: 'Tasks' }))
 
     expect(screen.getByText('/tasks')).toBeInTheDocument()
+  })
+
+  it('uses a saved binding in both keyboard surfaces', async () => {
+    const user = userEvent.setup()
+    useAuthMock.mockReturnValue({ org: { id: 'org-1' }, isAdmin: true })
+
+    renderWithProviders(
+      <KeyboardProvider>
+        <LocationProbe />
+      </KeyboardProvider>,
+      { initialEntries: ['/home'] },
+    )
+
+    await user.keyboard('{Meta>}k{/Meta}')
+    expect(screen.getByRole('option', { name: /compose email/i })).toHaveTextContent('G')
+
+    await user.click(screen.getByRole('option', { name: /show keyboard shortcuts/i }))
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toHaveTextContent('Compose emailG')
   })
 })

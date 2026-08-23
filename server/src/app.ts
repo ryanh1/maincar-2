@@ -22,6 +22,7 @@ import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import mailboxesRouter from './routes/mailboxes.js'
 import invitationsRouter from './routes/invitations.js'
+import keyboardBindingsRouter from './routes/keyboardBindings.js'
 import listsRouter from './routes/lists.js'
 import meetingsRouter from './routes/meetings.js'
 import membersRouter from './routes/members.js'
@@ -79,6 +80,7 @@ app.use('/api', invitationsRouter)
 
 app.use('/api/auth', authRouter)
 app.use('/api/team', teamRouter)
+app.use('/api/keyboard-bindings', keyboardBindingsRouter)
 
 // Mounted at /api/email rather than under /api/orgs/:orgId: the org sits inside
 // this router's own paths (/orgs/:orgId/drafts), which keeps every route the

@@ -80,4 +80,17 @@ describe('KeyboardSystem', () => {
 
     expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
   })
+
+  it('runs a modifier shortcut outside a typing field', async () => {
+    const user = userEvent.setup()
+    const openCalls = vi.fn()
+
+    renderWithProviders(
+      <KeyboardSystem commands={[{ id: 'compose', title: 'Compose email', group: 'Actions', shortcut: 'Ctrl+G', execute: openCalls }]} />,
+    )
+
+    await user.keyboard('{Control>}g{/Control}')
+
+    expect(openCalls).toHaveBeenCalledOnce()
+  })
 })

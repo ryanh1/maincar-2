@@ -50,7 +50,7 @@ describe('Settings', () => {
     expect(screen.getByText('profile tab content')).toBeInTheDocument()
   })
 
-  it('adds Call recordings without reintroducing Devices as a standalone Settings destination', () => {
+  it('shows all supported Settings destinations without reintroducing Devices as a standalone destination', () => {
     renderSettings()
 
     expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual([
@@ -66,6 +66,8 @@ describe('Settings', () => {
       'Email templates',
       'Signatures',
       'Integrations',
+      'Data model',
+      'Keyboard',
     ])
     expect(screen.queryByRole('link', { name: 'Devices' })).not.toBeInTheDocument()
   })
