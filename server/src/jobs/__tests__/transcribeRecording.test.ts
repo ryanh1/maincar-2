@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { logger } from '../../../dependencies/logger.js'
+
 vi.mock('../../config.js', () => ({ DEEPGRAM_API_KEY: 'dg-test-key' }))
 
 const db = vi.hoisted(() => ({ findUnique: vi.fn(), updateMany: vi.fn(), upsert: vi.fn(), transaction: vi.fn() }))
@@ -69,6 +71,43 @@ describe('transcribeRecordingJob', () => {
     await expect(transcribeRecordingJob({ callId: ROW.id })).rejects.toThrow('down')
     await expect(transcribeRecordingJob({ callId: ROW.id }, { retryCount: 1, retryLimit: 1 })).resolves.toBeUndefined()
     expect(db.updateMany).toHaveBeenLastCalledWith({ where: { id: ROW.id, orgId: ROW.orgId, transcriptStatus: { not: 'done' } }, data: { transcriptStatus: 'failed' } })
+  })
+
+  it('captures a safe correlated terminal diagnostic when the provider fails', async () => {
+    deepgram.transcribeCallRecording.mockRejectedValue(Object.assign(new Error('provider response body: call audio'), { status: 401 }))
+
+    await expect(transcribeRecordingJob({ callId: ROW.id }, { retryCount: 1, retryLimit: 1 })).resolves.toBeUndefined()
+
+    const [fields] = vi.mocked(logger.error).mock.calls.at(-1) ?? []
+    expect(fields).toMatchObject({
+      diagnostic: {
+        correlationId: `transcribe-recording:${ROW.id}`,
+        orgId: ROW.orgId,
+        job: { name: 'transcribe-recording', retryCount: 1, retryLimit: 1 },
+        recording: { available: true },
+        provider: { name: 'deepgram', status: 401 },
+        stage: 'provider',
+        transcriptState: 'failed',
+        nextAction: 'verify-deepgram-credentials',
+      },
+    })
+    expect(JSON.stringify(fields)).not.toContain('call audio')
+  })
+
+  it('names persistence as the terminal stage after Deepgram already succeeded', async () => {
+    db.transaction.mockRejectedValue(new Error('database rejected the transcript'))
+
+    await expect(transcribeRecordingJob({ callId: ROW.id }, { retryCount: 1, retryLimit: 1 })).resolves.toBeUndefined()
+
+    const [fields] = vi.mocked(logger.error).mock.calls.at(-1) ?? []
+    expect(fields).toMatchObject({
+      diagnostic: {
+        provider: { name: 'deepgram', outcome: 'succeeded', status: null },
+        stage: 'persistence',
+        transcriptState: 'failed',
+        nextAction: 'verify-transcript-persistence',
+      },
+    })
   })
 })
 

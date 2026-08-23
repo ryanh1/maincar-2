@@ -56,4 +56,18 @@ describe('Deepgram final-pass persistence (integration, real Postgres)', () => {
     })
     expect(persisted.speakers).toEqual([expect.objectContaining({ displayName: 'Jordan Lee', personId: person.id, manualOverride: true })])
   })
+
+  it('settles a successful no-speech recording as done with an empty transcript', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const call = await seedCall(prisma, { orgId: org.orgId, userId: org.adminUserId })
+    await prisma.call.updateMany({ where: { id: call.id, orgId: org.orgId }, data: { recordingPlanned: true } })
+
+    await expect(persistFinalTranscript(prisma, call.id, org.orgId, { plainText: '', segments: [] })).resolves.toBe(true)
+
+    const persisted = await prisma.call.findFirstOrThrow({
+      where: { id: call.id, orgId: org.orgId }, include: { finalTranscript: { include: { segments: true } } },
+    })
+    expect(persisted).toMatchObject({ transcriptStatus: 'done', transcript: '' })
+    expect(persisted.finalTranscript).toMatchObject({ provider: 'deepgram', plainText: '', segments: [] })
+  })
 })
