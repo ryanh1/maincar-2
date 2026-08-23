@@ -1,7 +1,7 @@
 # Maincar schema
 
 > AUTO-GENERATED — DO NOT EDIT BY HAND.
-> Generated at: 2026-08-23T02:33:41.616Z
+> Generated at: 2026-08-23T19:10:29.955Z
 > Dynamic-object source: seeded standard-object definitions.
 > Journey: [4.S4 — Generate a Prisma-style schema markdown](../journeys/4-crm-data-and-views.md#journey-4s4--generate-a-prisma-style-schema-markdown-for-every-object-internal-engineering-tool).
 
@@ -195,6 +195,7 @@ model Org {
   attributeDefs            AttributeDef[]
   savedViews               SavedView[]
   detailLayouts            DetailLayout[]
+  cellStyles               CellStyle[]
   records                  Record[]
   recordLinks              RecordLink[]
   fieldHistory             FieldHistory[]
@@ -1183,6 +1184,27 @@ model SavedView {
   isDefault                Boolean // default: "false"
   sortOrder                Int // default: "0"
   deletedAt                DateTime?
+  cellStyles               CellStyle[]
+  createdAt                DateTime // default: "now()"
+  updatedAt                DateTime // updatedAt
+}
+```
+
+### CellStyle
+
+Storage kind: **real Prisma table**.
+
+```prisma
+model CellStyle {
+  id                       String // id; default: "cuid()"
+  orgId                    String
+  org                      Org
+  viewId                   String
+  view                     SavedView
+  recordId                 String
+  fieldId                  String
+  backgroundToken          String?
+  textToken                String?
   createdAt                DateTime // default: "now()"
   updatedAt                DateTime // updatedAt
 }

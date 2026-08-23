@@ -23,7 +23,11 @@ const createMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 const useCreateRecord = vi.hoisted(() => vi.fn(() => ({ mutateAsync: createMutateAsync, isPending: false })))
 const dataEditorScrollTo = vi.hoisted(() => vi.fn())
 const useDialerMock = vi.hoisted(() => vi.fn())
+const useGetCellStyles = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: { cellStyles: [] } })))
+const setCellStyleMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
+const useSetCellStyle = vi.hoisted(() => vi.fn(() => ({ mutateAsync: setCellStyleMutateAsync })))
 vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetFieldChanges, useGetActivity, useUpdateRecordValue, useCreateRecord }))
+vi.mock('@/hooks/cellStyles', () => ({ useGetCellStyles, useSetCellStyle }))
 vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => <div data-testid="record-note-composer" /> }))
 
 vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }))
@@ -127,6 +131,11 @@ beforeEach(() => {
   createMutateAsync.mockResolvedValue(undefined)
   useCreateRecord.mockReturnValue({ mutateAsync: createMutateAsync, isPending: false })
   useDialerMock.mockReturnValue({ activeCall: null, dialing: false })
+  useGetCellStyles.mockReset()
+  useGetCellStyles.mockReturnValue({ isPending: false, isError: false, data: { cellStyles: [] } })
+  setCellStyleMutateAsync.mockReset()
+  setCellStyleMutateAsync.mockResolvedValue(undefined)
+  useSetCellStyle.mockReturnValue({ mutateAsync: setCellStyleMutateAsync })
   dataEditorProps.current = null
   dataEditorScrollTo.mockReset()
   dataEditorProps.frozenRows = null
@@ -199,6 +208,35 @@ describe('RecordGrid', () => {
       />,
     ))
     expect(dataEditorProps.current!.rows).toBe(1)
+  })
+
+  it('tints a painted cell and offers paint only on stored scalar cells', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'record-1', firstName: 'Ada' }], totalCount: 1,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    useGetCellStyles.mockReturnValue({
+      isPending: false,
+      isError: false,
+      data: { cellStyles: [{ id: 'style-1', viewId: 'view-1', recordId: 'record-1', fieldId: 'firstName', backgroundToken: 'option-1', textToken: null }] },
+    })
+    const config = createViewConfig(ATTRIBUTES)
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewId="view-1" viewConfig={config} onViewConfigChange={vi.fn()} />,
+    )
+
+    const props = dataEditorProps.current!
+    const painted = (props.getCellContent as (item: [number, number]) => Record<string, unknown>)([0, 0])
+    expect(painted.themeOverride).toEqual(expect.objectContaining({ bgCell: expect.any(String) }))
+
+    const contextMenu = props.onCellContextMenu as (item: [number, number], event: { bounds: Record<string, unknown>; preventDefault: () => void }) => void
+    const preventDefault = vi.fn()
+    contextMenu([0, 0], { bounds: { x: 0, y: 0, width: 120, height: 32 }, preventDefault })
+    expect(preventDefault).toHaveBeenCalled()
+
+    preventDefault.mockClear()
+    contextMenu([2, 0], { bounds: { x: 0, y: 0, width: 120, height: 32 }, preventDefault })
+    expect(preventDefault).not.toHaveBeenCalled()
   })
 
   it('highlights and scrolls to the live Call record without changing selection', () => {

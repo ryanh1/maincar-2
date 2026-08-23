@@ -89,6 +89,7 @@ model Org {
   attributeDefs AttributeDef[]
   savedViews    SavedView[]
   detailLayouts DetailLayout[]
+  cellStyles    CellStyle[]
 
   // Custom objects (MAI-135 T7). Back-relations so a deleted org cascades its
   // custom-object rows and their links away — the same onDelete: Cascade the rest
@@ -1893,12 +1894,48 @@ model SavedView {
   // Soft delete preserves the short undo window while leaving CRM data untouched.
   deletedAt DateTime?
 
+  cellStyles CellStyle[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([orgId, objectId, sortOrder])
   @@index([orgId, objectId, isShared])
   @@index([orgId, objectId, ownerUserId])
+}
+
+// Manual cell paint (SPEC-CHUNK-2 J2.5 §D): display-only, view-scoped colour on
+// a single stored scalar cell. Keyed by (viewId, recordId, fieldId) so the same
+// record can be painted differently in two views, and never leaks into another
+// view, an export, or a record page. Tokens are muted palette names (e.g.
+// "option-1"), never hex, so dark mode and monochrome stay correct.
+model CellStyle {
+  id    String @id @default(cuid())
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  viewId String
+  view   SavedView @relation(fields: [viewId], references: [id], onDelete: Cascade)
+
+  // The record this paint sits on. A plain string, not a relation, matching the
+  // Record model: the row is generic and its shape is described by AttributeDef
+  // rows, not a foreign key. The service verifies the record belongs to the
+  // view's object on write.
+  recordId String
+  // The AttributeDef id this paint sits on. A plain string; the service verifies
+  // it is a stored scalar field of the view's object.
+  fieldId String
+
+  // Muted palette token names (--option-1…8), or null to leave that channel
+  // unpainted. Both null means the row is a no-op and is removed instead.
+  backgroundToken String?
+  textToken       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([viewId, recordId, fieldId])
+  @@index([orgId, viewId])
 }
 
 // One organization-wide record-page arrangement per object. The read route

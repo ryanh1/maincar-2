@@ -22,6 +22,8 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { useCreateRecord, useGetFieldChanges, useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
+import { useGetCellStyles, useSetCellStyle } from '@/hooks/cellStyles'
+import { isStoredScalarCell } from '@/lib/paintTokens'
 import { useWorkspaceUrlState } from '@/hooks/workspaceUrlState'
 import { useAuth } from '@/providers/useAuth'
 import { useDialer } from '@/components/dialer/dialerContext'
@@ -36,6 +38,7 @@ import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { RecordGridCreateRow } from './RecordGrid_CreateRow'
 import { GridRowFreezeMenu } from './GridRowFreezeMenu'
+import { CellPaintMenu } from './CellPaintMenu'
 import { CellExpandOverlay } from './CellExpandOverlay'
 import { CellCopyMenu } from './CellCopyMenu'
 import { formatCellValue } from './recordCellValue'
@@ -109,6 +112,8 @@ interface RecordGridProps {
   orgId: string
   object: ObjectDef
   attributes: AttributeDef[]
+  /** The active saved view, when one is selected; scopes manual cell paint. */
+  viewId?: string | null
   /** Opens the named loaded record once, used by trusted inbox deep links. */
   initialRecordId?: string | null
   viewConfig?: ViewConfig
@@ -187,7 +192,7 @@ function createdRecordId(response: unknown, object: ObjectDef): string | null {
     : null
 }
 
-export function RecordGrid({ orgId, object, attributes, initialRecordId, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken, layout = 'grid', onLayoutChange }: RecordGridProps) {
+export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken, layout = 'grid', onLayoutChange }: RecordGridProps) {
   const { user } = useAuth()
   const { activeCall, dialing } = useDialer()
   const [workspaceUrlState, updateWorkspaceUrlState] = useWorkspaceUrlState()
@@ -214,6 +219,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   const [headerMenu, setHeaderMenu] = useState<{ attribute: AttributeDef; anchor: GridMenuAnchor; columnIndex: number } | null>(null)
   const [rowFreezeMenu, setRowFreezeMenu] = useState<{ anchor: GridMenuAnchor; row: number } | null>(null)
   const [expandedCell, setExpandedCell] = useState<{ column: number; row: number; anchor: GridMenuAnchor; value: string } | null>(null)
+  const [paintMenu, setPaintMenu] = useState<{ anchor: GridMenuAnchor; recordId: string; attribute: AttributeDef } | null>(null)
   const [copyMenu, setCopyMenu] = useState<{ anchor: GridMenuAnchor; rawValue: string; displayValue: string } | null>(null)
 
   const configuredColumns = useMemo(() => new Map(config.columns.map((column) => [column.attributeId, column])), [config.columns])
@@ -256,6 +262,12 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   const listQuery = useMemo(() => toRecordListQuery(config, attributes), [config, attributes])
   const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
     useRecordWindow(orgId, object.id, listQuery)
+  const cellStylesQuery = useGetCellStyles(orgId, viewId ?? null)
+  const setCellStyle = useSetCellStyle()
+  const paintByCell = useMemo(
+    () => new Map((cellStylesQuery.data?.cellStyles ?? []).map((style) => [`${style.recordId}:${style.fieldId}`, style])),
+    [cellStylesQuery.data?.cellStyles],
+  )
   const changeHighlightEnabled = config.changeHighlight.mode === 'on'
   const fieldChangesQuery = useGetFieldChanges(orgId, object.id, config.changeHighlight.days, changeHighlightEnabled)
   const changesByCell = useMemo(
@@ -410,11 +422,21 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
         wrap: configuredColumns.get(attr.id)?.wrap === true,
       })
       const change = changesByCell.get(`${record.id}:${attr.id}`)
-      return change
-        ? { ...cell, themeOverride: { ...cell.themeOverride, bgCell: colors.changeHighlightTint } }
-        : cell
+      const paint = paintByCell.get(`${record.id}:${attr.id}`)
+      const paintOverride = paint
+        ? {
+            ...(paint.backgroundToken ? { bgCell: colors.paintColors[paint.backgroundToken] } : {}),
+            ...(paint.textToken ? { textDark: colors.paintColors[paint.textToken] } : {}),
+          }
+        : undefined
+      const override = change
+        ? { ...cell.themeOverride, ...paintOverride, bgCell: colors.changeHighlightTint }
+        : paintOverride
+          ? { ...cell.themeOverride, ...paintOverride }
+          : cell.themeOverride
+      return override ? { ...cell, themeOverride: override } : cell
     },
-    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups, orgId, configuredColumns, changesByCell, colors.changeHighlightTint],
+    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups, orgId, configuredColumns, changesByCell, colors.changeHighlightTint, paintByCell, colors.paintColors],
   )
 
   const drawCell = useCallback<DrawCellCallback>((args, drawContent) => {
@@ -1118,29 +1140,39 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
     })
   }, [displayRows, visibleColumns, configuredColumns, cellValue, user?.timeZone])
 
-  // Right-click on a phone cell offers Copy raw (E.164) vs Copy formatted, so a
-  // rep can paste the canonical number or the national one (MAI-365).
+// Right-click on a phone cell offers Copy raw (E.164) vs Copy formatted (MAI-365);
+  // on any other stored scalar cell it offers manual paint (MAI-354).
   const onCellContextMenu = useCallback(
     ([col, row]: Item, event: { bounds: Rectangle; preventDefault: () => void }) => {
       const displayRow = displayRows[row]
       const attribute = visibleColumns[col]
-      if (!displayRow || displayRow.kind !== 'record' || !attribute || attribute.type !== 'phone') return
-      const raw = cellValue(displayRow.record, attribute)
-      if (typeof raw !== 'string' || raw === '') return
+      if (!displayRow || displayRow.kind !== 'record' || !attribute) return
+      const anchor = {
+        x: event.bounds.x - window.scrollX,
+        y: event.bounds.y - window.scrollY,
+        width: event.bounds.width,
+        height: event.bounds.height,
+      }
+      if (attribute.type === 'phone') {
+        const raw = cellValue(displayRow.record, attribute)
+        if (typeof raw !== 'string' || raw === '') return
+        event.preventDefault()
+        setCopyMenu({ anchor, rawValue: raw, displayValue: formatEntry(raw) })
+        return
+      }
+      if (!viewId || !isStoredScalarCell(attribute)) return
       event.preventDefault()
-      setCopyMenu({
-        anchor: {
-          x: event.bounds.x - window.scrollX,
-          y: event.bounds.y - window.scrollY,
-          width: event.bounds.width,
-          height: event.bounds.height,
-        },
-        rawValue: raw,
-        displayValue: formatEntry(raw),
-      })
+      setPaintMenu({ recordId: displayRow.record.id, attribute, anchor })
     },
-    [displayRows, visibleColumns, cellValue],
+    [displayRows, visibleColumns, cellValue, viewId],
   )
+
+  const applyPaint = useCallback((recordId: string, attribute: AttributeDef, backgroundToken: string | null, textToken: string | null) => {
+    if (!viewId) return
+    void setCellStyle.mutateAsync({ orgId, viewId, recordId, fieldId: attribute.id, backgroundToken, textToken }).catch(() => {
+      toast.error('Could not save the paint. Try again.')
+    })
+  }, [orgId, viewId, setCellStyle])
 
   const [scrollOffsetX, setScrollOffsetX] = useState(0)
   const onGridVisibleRegionChanged = useCallback((range: Rectangle, tx: number) => {
@@ -1538,6 +1570,20 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
               if (!open) setRowFreezeMenu(null)
             }}
             onUnfreeze={() => onViewConfigChange((current) => ({ ...current, frozenRows: 0 }))}
+          />
+        )}
+
+        {paintMenu && (
+          <CellPaintMenu
+            anchor={paintMenu.anchor}
+            open
+            backgroundToken={paintByCell.get(`${paintMenu.recordId}:${paintMenu.attribute.id}`)?.backgroundToken ?? null}
+            textToken={paintByCell.get(`${paintMenu.recordId}:${paintMenu.attribute.id}`)?.textToken ?? null}
+            colors={colors.paintColors}
+            onPaint={(backgroundToken, textToken) => applyPaint(paintMenu.recordId, paintMenu.attribute, backgroundToken, textToken)}
+            onOpenChange={(open) => {
+              if (!open) setPaintMenu(null)
+            }}
           />
         )}
 

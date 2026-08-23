@@ -13,7 +13,11 @@ interface GridColors {
   recentCallTint: string
   changeHighlightTint: string
   changeHighlightDot: string
+  /** Muted palette token name ("option-1") → resolved hex, for painted cells. */
+  paintColors: Record<string, string>
 }
+
+const PAINT_TOKEN_NAMES = ['option-1', 'option-2', 'option-3', 'option-4', 'option-5', 'option-6', 'option-7', 'option-8']
 
 const FALLBACK: GridColors = {
   background: '#ffffff',
@@ -28,12 +32,26 @@ const FALLBACK: GridColors = {
   recentCallTint: '#f0f9ff',
   changeHighlightTint: '#eef2ff',
   changeHighlightDot: '#4f46e5',
+  paintColors: {
+    'option-1': '#0e7490',
+    'option-2': '#0369a1',
+    'option-3': '#4f46e5',
+    'option-4': '#7e22ce',
+    'option-5': '#be123c',
+    'option-6': '#b45309',
+    'option-7': '#0f766e',
+    'option-8': '#475569',
+  },
 }
 
 function readGridColors(): GridColors {
   if (typeof window === 'undefined') return FALLBACK
   const style = getComputedStyle(document.documentElement)
   const read = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback
+  const paintColors: Record<string, string> = {}
+  for (const token of PAINT_TOKEN_NAMES) {
+    paintColors[token] = read(`--${token}`, FALLBACK.paintColors[token])
+  }
   return {
     background: read('--background', FALLBACK.background),
     border: read('--border', FALLBACK.border),
@@ -47,6 +65,7 @@ function readGridColors(): GridColors {
     recentCallTint: read('--status-active-faded-tint', FALLBACK.recentCallTint),
     changeHighlightTint: read('--change-highlight-tint', FALLBACK.changeHighlightTint),
     changeHighlightDot: read('--change-highlight-dot', FALLBACK.changeHighlightDot),
+    paintColors,
   }
 }
 
