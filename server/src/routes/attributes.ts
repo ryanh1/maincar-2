@@ -262,6 +262,8 @@ interface OptionValueLocation {
   columnName?: string
   jsonColumn?: string
   objectId?: string
+  objectSlug?: string
+  hasDeletedAt: boolean
 }
 
 function resolveOptionValueLocation(
@@ -272,10 +274,10 @@ function resolveOptionValueLocation(
   if (attribute.storage === 'column') {
     const tableName = TABLE_STORAGE_TABLES[object.slug]
     if (!tableName) return null
-    return { tableName, kind: 'column', columnName: attribute.slug }
+    return { tableName, kind: 'column', columnName: attribute.slug, hasDeletedAt: true }
   }
   if (attribute.storage === 'list') {
-    return { tableName: 'ListEntry', kind: 'json', jsonColumn: 'valuesJson' }
+    return { tableName: 'ListEntry', kind: 'json', jsonColumn: 'valuesJson', objectSlug: object.slug, hasDeletedAt: false }
   }
   // custom storage
   const isRecord = object.storage === 'record'
@@ -286,6 +288,7 @@ function resolveOptionValueLocation(
     kind: 'json',
     jsonColumn: isRecord ? 'valuesJson' : 'customJson',
     ...(isRecord ? { objectId: object.id } : {}),
+    hasDeletedAt: true,
   }
 }
 
@@ -296,7 +299,7 @@ export async function countOptionValue(
   args: {
     orgId: string
     object: { id: string; slug: string; storage: string }
-    attribute: { slug: string; storage: string }
+    attribute: { slug: string; storage: string; isMulti?: boolean }
     value: string
   },
 ): Promise<number> {
@@ -315,14 +318,22 @@ export async function countOptionValue(
     return Number(rows[0]?.count ?? 0)
   }
 
-  const objectFilter = location.objectId ? Prisma.sql`AND "objectId" = ${location.objectId}` : Prisma.empty
+  const objectFilter = location.objectId
+    ? Prisma.sql`AND "objectId" = ${location.objectId}`
+    : location.objectSlug
+      ? Prisma.sql`AND "objectSlug" = ${location.objectSlug}`
+      : Prisma.empty
+  const deletedAtFilter = location.hasDeletedAt ? Prisma.sql`AND "deletedAt" IS NULL` : Prisma.empty
+  const valueFilter = args.attribute.isMulti
+    ? Prisma.sql`${Prisma.raw(`"${location.jsonColumn!}"`)} -> ${args.attribute.slug} ? ${value}`
+    : Prisma.sql`${Prisma.raw(`"${location.jsonColumn!}"`)} ->> ${args.attribute.slug} = ${value}`
   const rows = await client.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*) AS count
     FROM ${Prisma.raw(`"${location.tableName}"`)}
     WHERE "orgId" = ${orgId}
       ${objectFilter}
-      AND ${Prisma.raw(`"${location.jsonColumn!}"`)} ->> ${args.attribute.slug} = ${value}
-      AND "deletedAt" IS NULL
+      AND ${valueFilter}
+      ${deletedAtFilter}
   `
   return Number(rows[0]?.count ?? 0)
 }
@@ -335,7 +346,7 @@ export async function migrateOptionValue(
   args: {
     orgId: string
     object: { id: string; slug: string; storage: string }
-    attribute: { slug: string; storage: string }
+    attribute: { slug: string; storage: string; isMulti?: boolean }
     oldValue: string
     newValue: string
   },
@@ -354,7 +365,33 @@ export async function migrateOptionValue(
     `
   }
 
-  const objectFilter = location.objectId ? Prisma.sql`AND "objectId" = ${location.objectId}` : Prisma.empty
+  const objectFilter = location.objectId
+    ? Prisma.sql`AND "objectId" = ${location.objectId}`
+    : location.objectSlug
+      ? Prisma.sql`AND "objectSlug" = ${location.objectSlug}`
+      : Prisma.empty
+  const deletedAtFilter = location.hasDeletedAt ? Prisma.sql`AND "deletedAt" IS NULL` : Prisma.empty
+
+  if (args.attribute.isMulti) {
+    return client.$executeRaw`
+      UPDATE ${Prisma.raw(`"${location.tableName}"`)}
+      SET ${Prisma.raw(`"${location.jsonColumn!}"`)} = jsonb_set(
+        ${Prisma.raw(`"${location.jsonColumn!}"`)},
+        ARRAY[${args.attribute.slug}],
+        (
+          SELECT jsonb_agg(
+            CASE WHEN option_value = to_jsonb(${oldValue}::text) THEN to_jsonb(${newValue}::text) ELSE option_value END
+          )
+          FROM jsonb_array_elements(${Prisma.raw(`"${location.jsonColumn!}"`)} -> ${args.attribute.slug}) AS option_values(option_value)
+        )
+      )
+      WHERE "orgId" = ${orgId}
+        ${objectFilter}
+        AND ${Prisma.raw(`"${location.jsonColumn!}"`)} -> ${args.attribute.slug} ? ${oldValue}
+        ${deletedAtFilter}
+    `
+  }
+
   return client.$executeRaw`
     UPDATE ${Prisma.raw(`"${location.tableName}"`)}
     SET ${Prisma.raw(`"${location.jsonColumn!}"`)} = jsonb_set(
@@ -365,7 +402,7 @@ export async function migrateOptionValue(
     WHERE "orgId" = ${orgId}
       ${objectFilter}
       AND ${Prisma.raw(`"${location.jsonColumn!}"`)} ->> ${args.attribute.slug} = ${oldValue}
-      AND "deletedAt" IS NULL
+      ${deletedAtFilter}
   `
 }
 
