@@ -53,6 +53,13 @@ export type ChangeHighlightConfig = {
   onlyChangedRows: boolean
 }
 
+export type KanbanConfig = {
+  groupAttributeId: string
+  visibleOptionValues: string[]
+  cardAttributeIds: string[]
+  hiddenTerminalOptionValues?: string[]
+}
+
 /**
  * The live counterpart of SavedView.configJson. This route keeps the current
  * view state locally and uses the same shape the saved-view contract persists.
@@ -70,10 +77,7 @@ export type ViewConfig = {
   zoom: number
   columnWidths: Record<string, number>
   columnStyles: Array<{ attributeId: string; headerColor?: string }>
-  /** Fields shown on compact Kanban cards; omitted views use the first three visible fields. */
-  kanbanCardFieldIds?: string[]
-  /** Optional numeric or currency field summed in each Kanban column header. */
-  kanbanSummaryAttributeId?: string
+  kanban?: KanbanConfig
   changeHighlight: ChangeHighlightConfig
 }
 
@@ -119,12 +123,42 @@ export function createViewConfig(attributes: AttributeDef[]): ViewConfig {
   }
 }
 
-/** Deals normally group by pipeline stage; other objects use their first select-like field. */
-export function defaultKanbanGroupBy(attributes: AttributeDef[]): ViewSort[] {
-  const eligible = attributes.filter((attribute) => !attribute.isArchived && (attribute.type === 'select' || attribute.type === 'status'))
+function activeOptionValues(attribute: AttributeDef): string[] {
+  if (!Array.isArray(attribute.optionsJson)) return []
+  return attribute.optionsJson
+    .map((option, index) => ({ option, index }))
+    .filter(({ option }) => Boolean(option) && typeof option === 'object')
+    .map(({ option, index }) => {
+      const candidate = option as { value?: unknown; order?: unknown; isArchived?: unknown }
+      return typeof candidate.value === 'string' && !candidate.isArchived
+        ? { value: candidate.value, order: typeof candidate.order === 'number' ? candidate.order : index }
+        : null
+    })
+    .filter((option): option is { value: string; order: number } => option !== null)
+    .sort((left, right) => left.order - right.order)
+    .map((option) => option.value)
+}
+
+export function isKanbanGroupAttribute(attribute: AttributeDef): boolean {
+  return !attribute.isArchived && (attribute.type === 'select' || attribute.type === 'status') && activeOptionValues(attribute).length > 0
+}
+
+/** Deals normally group by pipeline stage; other objects use their first selectable field. */
+export function createKanbanConfig(attributes: AttributeDef[], groupAttributeId?: string): KanbanConfig | undefined {
+  const eligible = attributes.filter(isKanbanGroupAttribute)
   const pipelineStage = eligible.find((attribute) => /pipeline.?stage/i.test(attribute.slug) || /pipeline stage/i.test(attribute.name))
-  const groupAttribute = pipelineStage ?? eligible[0]
-  return groupAttribute ? [{ attributeId: groupAttribute.id, direction: 'asc' }] : []
+  const groupAttribute = eligible.find((attribute) => attribute.id === groupAttributeId) ?? pipelineStage ?? eligible[0]
+  return groupAttribute
+    ? {
+        groupAttributeId: groupAttribute.id,
+        visibleOptionValues: activeOptionValues(groupAttribute),
+        cardAttributeIds: attributes
+          .filter((attribute) => attribute.id !== groupAttribute.id && !attribute.isIdentity && !attribute.isArchived && attribute.storage !== 'list')
+          .sort((left, right) => left.sortOrder - right.sortOrder)
+          .slice(0, 3)
+          .map((attribute) => attribute.id),
+      }
+    : undefined
 }
 
 /** Reorder whole groups so their member columns always remain adjacent. */
@@ -249,7 +283,7 @@ export function sameViewConfig(left: ViewConfig, right: ViewConfig): boolean {
 
 type LocalViewState = Pick<
   ViewConfig,
-  'filterTree' | 'teamScope' | 'changeHighlight' | 'columnWidths' | 'columnStyles' | 'kanbanCardFieldIds' | 'kanbanSummaryAttributeId'
+  'filterTree' | 'teamScope' | 'changeHighlight' | 'columnWidths' | 'columnStyles' | 'kanban'
 > & {
   columns: Array<Pick<ViewColumn, 'attributeId' | 'visible' | 'order' | 'wrap' | 'group' | 'collapsed'>>
 }
@@ -261,8 +295,7 @@ function localViewState(config: ViewConfig): LocalViewState {
     changeHighlight: config.changeHighlight,
     columnWidths: config.columnWidths,
     columnStyles: config.columnStyles,
-    kanbanCardFieldIds: config.kanbanCardFieldIds,
-    kanbanSummaryAttributeId: config.kanbanSummaryAttributeId,
+    kanban: config.kanban,
     columns: config.columns.map(({ attributeId, visible, order, wrap, group, collapsed }) => ({
       attributeId,
       visible,
@@ -284,8 +317,7 @@ function mergeLocalViewState(config: ViewConfig, local: LocalViewState | null): 
     changeHighlight: local.changeHighlight,
     columnWidths: local.columnWidths,
     columnStyles: local.columnStyles,
-    kanbanCardFieldIds: local.kanbanCardFieldIds,
-    kanbanSummaryAttributeId: local.kanbanSummaryAttributeId,
+    kanban: local.kanban,
     columns: config.columns
       .map((column) => ({ ...column, ...columnsById.get(column.attributeId) }))
       .sort((left, right) => left.order - right.order),

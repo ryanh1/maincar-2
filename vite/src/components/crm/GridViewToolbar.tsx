@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import type { AttributeDef } from '@/lib/crmTypes'
 import { memberDisplayName, useGetMembers, useGetTeams } from '@/hooks/orgs'
-import type { TeamScope, ViewConfig } from './viewConfig'
+import { createKanbanConfig, isKanbanGroupAttribute, type TeamScope, type ViewConfig } from './viewConfig'
 import { GridFilterBuilder } from './GridFilterBuilder'
 import { GridSortPopover } from './GridSortPopover'
 import { KanbanCardFieldPicker } from './KanbanCardFieldPicker'
@@ -145,8 +145,8 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
     setColumnGroupName('')
   }
 
-  const kanbanGroupFields = attributes.filter((attribute) => attribute.type === 'select' || attribute.type === 'status')
-  const summaryFields = attributes.filter((attribute) => attribute.type === 'number' || attribute.type === 'currency')
+  const kanbanGroupFields = attributes.filter(isKanbanGroupAttribute)
+  const hasGrouping = layout === 'kanban' ? Boolean(config.kanban) : config.groupBy.length > 0
 
   function applyCustomChangeWindow() {
     const days = Number(customChangeDays)
@@ -324,7 +324,7 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm">
             <SlidersHorizontal size={16} />
-            Group{config.groupBy[0] ? ' · 1' : ''}
+            Group{hasGrouping ? ' · 1' : ''}
             <ChevronDown size={16} />
           </Button>
         </DropdownMenuTrigger>
@@ -333,15 +333,19 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
           {(layout === 'kanban' ? kanbanGroupFields : attributes).map((attribute) => (
             <DropdownMenuItem
               key={attribute.id}
-              onSelect={() => onConfigChange((current) => ({ ...current, groupBy: [{ attributeId: attribute.id, direction: 'asc' }] }))}
+              onSelect={() => onConfigChange((current) => {
+                if (layout !== 'kanban') return { ...current, groupBy: [{ attributeId: attribute.id, direction: 'asc' }] }
+                const kanban = createKanbanConfig(attributes, attribute.id)
+                return kanban ? { ...current, kanban } : current
+              })}
             >
               Group by {attribute.name}
             </DropdownMenuItem>
           ))}
-          {config.groupBy.length > 0 && (
+          {hasGrouping && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => onConfigChange((current) => ({ ...current, groupBy: [] }))}>
+              <DropdownMenuItem onSelect={() => onConfigChange((current) => layout === 'kanban' ? { ...current, kanban: undefined } : { ...current, groupBy: [] })}>
                 Clear grouping
               </DropdownMenuItem>
             </>
@@ -352,18 +356,6 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
       {layout === 'kanban' && (
         <>
           <KanbanCardFieldPicker attributes={attributes} config={config} onConfigChange={onConfigChange} />
-          {summaryFields.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="secondary" size="sm"><SlidersHorizontal size={16} />Summary<ChevronDown size={16} /></Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuLabel>Column total</DropdownMenuLabel>
-                {summaryFields.map((attribute) => <DropdownMenuItem key={attribute.id} onSelect={() => onConfigChange((current) => ({ ...current, kanbanSummaryAttributeId: attribute.id }))}>Sum {attribute.name}</DropdownMenuItem>)}
-                {config.kanbanSummaryAttributeId && <><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => onConfigChange((current) => ({ ...current, kanbanSummaryAttributeId: undefined }))}>No summary</DropdownMenuItem></>}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
         </>
       )}
 

@@ -29,12 +29,13 @@ function defaultCardFieldIds(attributes: AttributeDef[], config: ViewConfig): st
 
 /** Persists the fields shown below a Kanban card's identity field. */
 export function KanbanCardFieldPicker({ attributes, config, onConfigChange }: KanbanCardFieldPickerProps) {
-  const cardFieldIds = config.kanbanCardFieldIds ?? defaultCardFieldIds(attributes, config)
+  const cardFieldIds = config.kanban?.cardAttributeIds ?? defaultCardFieldIds(attributes, config)
 
   function toggleCardField(attributeId: string, checked: boolean) {
     onConfigChange((current) => {
-      const selected = current.kanbanCardFieldIds ?? defaultCardFieldIds(attributes, current)
-      return { ...current, kanbanCardFieldIds: checked ? [...selected, attributeId] : selected.filter((id) => id !== attributeId) }
+      if (!current.kanban) return current
+      const selected = current.kanban.cardAttributeIds
+      return { ...current, kanban: { ...current.kanban, cardAttributeIds: checked ? [...selected, attributeId] : selected.filter((id) => id !== attributeId) } }
     })
   }
 

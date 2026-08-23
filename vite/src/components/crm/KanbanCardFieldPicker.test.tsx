@@ -38,7 +38,10 @@ describe('KanbanCardFieldPicker', () => {
   it('writes picked fields into the shared view config and warns softly after five fields', async () => {
     const user = userEvent.setup()
     const onConfigChange = vi.fn()
-    const config = { ...createViewConfig(attributes), kanbanCardFieldIds: ['field-1', 'field-2', 'field-3', 'field-4', 'field-5'] }
+    const config = {
+      ...createViewConfig(attributes),
+      kanban: { groupAttributeId: 'field-1', visibleOptionValues: ['field-1'], cardAttributeIds: ['field-1', 'field-2', 'field-3', 'field-4', 'field-5'] },
+    }
 
     const view = renderWithProviders(<KanbanCardFieldPicker attributes={attributes} config={config} onConfigChange={onConfigChange} />)
 
@@ -47,7 +50,7 @@ describe('KanbanCardFieldPicker', () => {
 
     const update = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
     const nextConfig = update(config)
-    expect(nextConfig.kanbanCardFieldIds).toEqual(['field-1', 'field-2', 'field-3', 'field-4', 'field-5', 'field-6'])
+    expect(nextConfig.kanban?.cardAttributeIds).toEqual(['field-1', 'field-2', 'field-3', 'field-4', 'field-5', 'field-6'])
     view.rerender(<KanbanCardFieldPicker attributes={attributes} config={nextConfig} onConfigChange={onConfigChange} />)
     expect(screen.getByText('Cards get noisy with more than five fields.')).toBeInTheDocument()
   })

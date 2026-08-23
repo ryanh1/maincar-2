@@ -137,6 +137,23 @@ describe('GridViewToolbar', () => {
     expect(linesUpdate(config).gridLines).toBe(false)
   })
 
+  it('reconfigures a Kanban board from valid option metadata instead of grid grouping', async () => {
+    const user = userEvent.setup()
+    const onConfigChange = vi.fn()
+    const config = createViewConfig(attributes)
+
+    renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={onConfigChange} layout="kanban" />)
+
+    await user.click(screen.getByRole('button', { name: 'Group' }))
+    await user.click(await screen.findByText('Group by Status'))
+
+    const update = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(update(config)).toEqual(expect.objectContaining({
+      groupBy: [],
+      kanban: { groupAttributeId: 'status', visibleOptionValues: ['open'], cardAttributeIds: [] },
+    }))
+  })
+
   it('names a group for adjacent selected columns through the shared config', async () => {
     const user = userEvent.setup()
     const onConfigChange = vi.fn()

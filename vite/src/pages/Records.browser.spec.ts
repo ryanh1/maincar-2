@@ -450,14 +450,14 @@ test('renders Deals as a persisted Kanban board grouped by pipeline stage', asyn
   await page.goto('/__fixtures/records/deal')
   await expect(page.getByTestId('data-grid-canvas')).toBeVisible()
   await page.getByRole('button', { name: 'Kanban' }).click()
-  await expect(page.getByRole('heading', { name: 'Discovery 2' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Proposal 1' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'No value 1' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Discovery 2 records' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Proposal 1 records' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'No value 1 records' })).toBeVisible()
   await expect(page.getByText('Northstar')).toBeVisible()
   await page.getByRole('button', { name: 'Save changes' }).click()
   await expect.poll(() => patchBodies).toEqual([
     expect.objectContaining({ layout: 'kanban' }),
-    expect.objectContaining({ config: expect.objectContaining({ groupBy: [{ attributeId: 'pipeline-stage', direction: 'asc' }] }) }),
+    expect.objectContaining({ config: expect.objectContaining({ kanban: expect.objectContaining({ groupAttributeId: 'pipeline-stage' }) }) }),
   ])
 
   const discoveryCards = page.getByLabel('Discovery cards')
@@ -481,12 +481,12 @@ test('renders Deals as a persisted Kanban board grouped by pipeline stage', asyn
   await page.mouse.move(proposalBounds.x + (proposalBounds.width / 2), proposalBounds.y + (proposalBounds.height / 2), { steps: 8 })
   await page.mouse.up()
   await expect.poll(() => patchBodies.at(-1)).toEqual({ pipelineStage: 'proposal' })
-  await expect(page.getByRole('heading', { name: 'Discovery 1' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Proposal 2' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Discovery 1 records' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Proposal 2 records' })).toBeVisible()
 
   await page.reload()
-  await expect(page.getByRole('heading', { name: 'Discovery 1' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Proposal 2' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Discovery 1 records' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Proposal 2 records' })).toBeVisible()
   expect(consoleErrors).toEqual([])
 })
 

@@ -8,7 +8,7 @@ import {
 
 const ATTRIBUTES = [
   { id: 'attr-name', sortOrder: 0, storage: 'column' },
-  { id: 'attr-stage', sortOrder: 1, storage: 'custom' },
+  { id: 'attr-stage', sortOrder: 1, storage: 'custom', type: 'status', optionsJson: [{ value: 'open', label: 'Open' }, { value: 'closed', label: 'Closed' }] },
   { id: 'attr-archived', sortOrder: 2, storage: 'custom', isArchived: true },
 ]
 
@@ -77,14 +77,22 @@ describe('repairSavedViewConfig', () => {
     })
   })
 
-  it('retains valid Kanban card and summary fields while discarding stale fields', () => {
+  it('retains a valid Kanban config and removes stale attributes and option values', () => {
     const config = repairSavedViewConfig({
-      kanbanCardFieldIds: ['attr-name', 'missing-field', 'attr-stage', 'attr-name'],
-      kanbanSummaryAttributeId: 'attr-stage',
+      kanban: {
+        groupAttributeId: 'attr-stage',
+        visibleOptionValues: ['open', 'missing-option', 'closed', 'open'],
+        cardAttributeIds: ['attr-name', 'missing-field', 'attr-name'],
+        hiddenTerminalOptionValues: ['closed', 'missing-option', 'closed'],
+      },
     }, ATTRIBUTES)
 
-    expect(config.kanbanCardFieldIds).toEqual(['attr-name', 'attr-stage'])
-    expect(config.kanbanSummaryAttributeId).toBe('attr-stage')
+    expect(config.kanban).toEqual({
+      groupAttributeId: 'attr-stage',
+      visibleOptionValues: ['open', 'closed'],
+      cardAttributeIds: ['attr-name'],
+      hiddenTerminalOptionValues: ['closed'],
+    })
   })
 })
 
