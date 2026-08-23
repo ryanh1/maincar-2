@@ -61,7 +61,7 @@ grep -F "$SANDBOX/ticket|run typecheck|VITEST_MAX_WORKERS=2" "$SANDBOX/npm.log" 
 grep -F "$SANDBOX/ticket|run lint|VITEST_MAX_WORKERS=2" "$SANDBOX/npm.log" >/dev/null
 grep -F "$SANDBOX/ticket/server|exec vitest run src/example.test.ts|VITEST_MAX_WORKERS=2" "$SANDBOX/npm.log" >/dev/null
 grep -F "$SANDBOX/ticket/vite|exec vitest run src/example.test.tsx|VITEST_MAX_WORKERS=2" "$SANDBOX/npm.log" >/dev/null
-grep -F "$SANDBOX/ticket/server|exec vitest run --config vitest.integration.config.ts src/example.integration.test.ts|VITEST_MAX_WORKERS=2" "$SANDBOX/npm.log" >/dev/null
+grep -F "$SANDBOX/ticket/server|exec -- vitest run --config vitest.integration.config.ts src/example.integration.test.ts|VITEST_MAX_WORKERS=2" "$SANDBOX/npm.log" >/dev/null
 grep -F 'shell check ran' "$SANDBOX/npm.log" >/dev/null
 if grep -E '\|run (test|verify|test:server|test:web|test:integration)\|' "$SANDBOX/npm.log" >/dev/null; then
   echo 'a named check ran a broad suite' >&2

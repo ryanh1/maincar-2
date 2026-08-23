@@ -1,5 +1,6 @@
 import prisma from '../db.js'
-import { canEditSavedView, canViewSavedView, repairSavedViewConfig, type ViewAttribute, type ViewLayout } from './savedViews.js'
+import { canEditSavedView, canShareSavedView, canViewSavedView } from './savedViewPolicy.js'
+import { repairSavedViewConfig, type ViewAttribute, type ViewLayout } from './savedViews.js'
 import type { Prisma } from '../generated/prisma/client.js'
 
 export class SavedViewConfigValidationError extends Error {}
@@ -113,6 +114,9 @@ export class SavedViewService {
   async update(input: UpdateSavedViewInput) {
     const view = await this.findVisibleView(input)
     if (!canEditSavedView(view, input.userId)) throw new SavedViewNotFoundError('Saved view not found')
+    if (input.isShared !== undefined && !canShareSavedView(view, input.userId)) {
+      throw new SavedViewNotFoundError('Saved view not found')
+    }
     if (input.isShared !== undefined && input.isShared !== view.isShared && view.isDefault) {
       throw new SavedViewConflictError('Choose another default before changing this view’s visibility.')
     }
