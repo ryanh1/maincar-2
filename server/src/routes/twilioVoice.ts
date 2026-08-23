@@ -53,7 +53,7 @@ import prisma from '../db.js'
 import { queueUploadRecording } from '../jobs/uploadRecording.js'
 import { queueUploadVoicemail } from '../jobs/uploadVoicemail.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
-import { TERMINAL_CALL_STATUSES, TWILIO_TO_CALL_STATUS } from '../lib/callStatus.js'
+import { automaticDispositionValue, TERMINAL_CALL_STATUSES, TWILIO_TO_CALL_STATUS } from '../lib/callStatus.js'
 
 const router = Router()
 
@@ -355,6 +355,7 @@ router.post(
     const params = (req.body ?? {}) as Record<string, string>
     const callSid = params.CallSid
     const callStatus = params.CallStatus
+    const answeredBy = params.AnsweredBy
     const recordingSid = params.RecordingSid
     const mappedStatus = callStatus ? TWILIO_TO_CALL_STATUS[callStatus] : undefined
 
@@ -407,6 +408,28 @@ router.post(
     // write, so a bare ping does not churn updatedAt.
     if (Object.keys(data).length > 0) {
       await prisma.call.updateMany({ where: { id: call.id, orgId: call.orgId }, data })
+    }
+
+    // --- Apply a deterministic dead-call disposition ---
+    // This is intentionally a separate, compare-and-set write. The lifecycle
+    // update above must still accept Twilio retries after a disposition exists,
+    // while this write can only win if a rep has not already selected an outcome.
+    // A missing or archived configuration is an honest no-op: automation never
+    // invents a fallback business outcome.
+    const dispositionValue = call.dispositionId
+      ? null
+      : automaticDispositionValue(mappedStatus, answeredBy)
+    if (dispositionValue) {
+      const disposition = await prisma.dispositionDef.findFirst({
+        where: { orgId: call.orgId, value: dispositionValue, isArchived: false },
+        select: { id: true },
+      })
+      if (disposition) {
+        await prisma.call.updateMany({
+          where: { id: call.id, orgId: call.orgId, dispositionId: null },
+          data: { dispositionId: disposition.id },
+        })
+      }
     }
 
     // --- Chain the recording pipeline ---
