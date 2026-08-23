@@ -24,6 +24,7 @@ const {
   prismaMock: {
     call: {
       findFirst: vi.fn(),
+      upsert: vi.fn(),
       updateMany: vi.fn(),
       // Present only so a test can prove nothing ever calls them.
       update: vi.fn(),
@@ -114,6 +115,7 @@ beforeEach(() => {
   // Genuine Twilio request by default; the bad-signature test overrides this.
   verifySignatureMock.mockReturnValue(true)
   prismaMock.call.findFirst.mockResolvedValue(callRow())
+  prismaMock.call.upsert.mockResolvedValue(callRow({ direction: 'inbound', status: 'ringing' }))
   prismaMock.call.updateMany.mockResolvedValue({ count: 1 })
   queueUploadRecordingMock.mockResolvedValue('upload_job_1')
   // No recognized number and no voicemail by default; the inbound-voicemail
@@ -306,7 +308,9 @@ describe('inbound voicemail', () => {
   it('looks the org up by the called number (To)', async () => {
     await post({})
 
-    expect(prismaMock.phoneNumber.findFirst).toHaveBeenCalledWith({ where: { e164: '+13035550199' } })
+    expect(prismaMock.phoneNumber.findFirst).toHaveBeenCalledWith({
+      where: { e164: '+13035550199', status: 'active' },
+    })
   })
 
   it('plays the org’s personal greeting when one is uploaded', async () => {
@@ -370,6 +374,118 @@ describe('inbound voicemail', () => {
     // Both calls key on the same callSid — never a bare create that would collide.
     for (const call of prismaMock.voicemail.upsert.mock.calls) {
       expect(call[0].where).toEqual({ callSid: CALL_SID })
+    }
+  })
+})
+
+// ============================================================
+// A real inbound call — an assigned Maincar number rings its browser Device
+// ============================================================
+describe('inbound browser delivery', () => {
+  function post(body: Record<string, string>, signature: string | null = SIG) {
+    const req = request(app).post(URL).type('form')
+    if (signature !== null) req.set('X-Twilio-Signature', signature)
+    return req.send({ Direction: 'inbound', CallSid: CALL_SID, To: '+13035550199', From: '+12025550123', ...body })
+  }
+
+  beforeEach(() => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue({
+      id: 'pn-1',
+      orgId: 'org-a',
+      e164: '+13035550199',
+      assignedUserId: 'user-a',
+      status: 'active',
+    })
+    prismaMock.call.upsert.mockResolvedValue(
+      callRow({ direction: 'inbound', status: 'ringing', twilioCallSid: CALL_SID }),
+    )
+  })
+
+  it('creates or reuses the inbound Call then dials the assigned browser identity with its server-issued id', async () => {
+    const res = await post({})
+
+    expect(res.status).toBe(200)
+    expect(res.type).toBe('text/xml')
+    expect(res.text).toContain('<Dial')
+    expect(res.text).toContain('<Client')
+    expect(res.text).toContain('user-a')
+    expect(res.text).toContain('<Parameter name="callId" value="call-1"')
+    expect(res.text).not.toContain('<Record')
+    expect(prismaMock.call.upsert).toHaveBeenCalledWith({
+      where: { twilioCallSid: CALL_SID },
+      create: expect.objectContaining({
+        orgId: 'org-a',
+        userId: 'user-a',
+        fromE164: '+12025550123',
+        toE164: '+13035550199',
+        direction: 'inbound',
+        status: 'ringing',
+        twilioCallSid: CALL_SID,
+      }),
+      update: {},
+    })
+    expect(prismaMock.voicemail.upsert).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// POST /api/twilio/voice/inbound-result — browser device outcome
+// ============================================================
+const INBOUND_RESULT_URL = '/api/twilio/voice/inbound-result?callId=call-1'
+
+function postInboundResult(body: Record<string, string>, signature: string | null = SIG) {
+  const req = request(app).post(INBOUND_RESULT_URL).type('form')
+  if (signature !== null) req.set('X-Twilio-Signature', signature)
+  return req.send({ CallSid: CALL_SID, ...body })
+}
+
+describe('inbound browser result', () => {
+  beforeEach(() => {
+    prismaMock.call.findFirst.mockResolvedValue(
+      callRow({ direction: 'inbound', status: 'ringing', twilioCallSid: CALL_SID }),
+    )
+  })
+
+  it.each(['no-answer', 'busy', 'failed', 'canceled'])(
+    'continues a %s browser leg into greeting-and-record voicemail',
+    async (dialStatus) => {
+      const res = await postInboundResult({ DialCallStatus: dialStatus })
+
+      expect(res.status).toBe(200)
+      expect(res.text).toContain('<Record')
+      expect(prismaMock.call.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'call-1', orgId: 'org-a' },
+          data: expect.objectContaining({ status: dialStatus, endedAt: expect.any(Date) }),
+        }),
+      )
+      expect(prismaMock.voicemail.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { callSid: CALL_SID } }),
+      )
+    },
+  )
+
+  it('ends an answered browser leg instead of falling through to voicemail', async () => {
+    const res = await postInboundResult({ DialCallStatus: 'completed', DialCallDuration: '42' })
+
+    expect(res.status).toBe(200)
+    expect(res.text).toContain('<Response')
+    expect(res.text).not.toContain('<Record')
+    expect(prismaMock.call.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'completed', durationS: 42, endedAt: expect.any(Date) }),
+      }),
+    )
+    expect(prismaMock.voicemail.upsert).not.toHaveBeenCalled()
+  })
+
+  it('is idempotent when Twilio retries an unanswered browser-leg result', async () => {
+    await postInboundResult({ DialCallStatus: 'no-answer' })
+    await postInboundResult({ DialCallStatus: 'no-answer' })
+
+    expect(prismaMock.voicemail.upsert).toHaveBeenCalledTimes(2)
+    for (const invocation of prismaMock.voicemail.upsert.mock.calls) {
+      expect(invocation[0].where).toEqual({ callSid: CALL_SID })
     }
   })
 })
@@ -506,6 +622,30 @@ describe('status callback — lookup', () => {
     await postStatus({ CallSid: CALL_SID, CallStatus: 'ringing' })
 
     expect(prismaMock.call.findFirst).toHaveBeenCalledWith({ where: { twilioCallSid: CALL_SID } })
+  })
+
+  it('uses the signed parent CallSid to resolve a browser Device leg onto its inbound Call', async () => {
+    await postStatus({
+      CallSid: 'CAchildBrowserLeg',
+      ParentCallSid: CALL_SID,
+      CallStatus: 'ringing',
+    })
+
+    expect(prismaMock.call.findFirst).toHaveBeenCalledWith({
+      where: { OR: [{ twilioCallSid: 'CAchildBrowserLeg' }, { twilioCallSid: CALL_SID }] },
+    })
+  })
+
+  it('records an accepted browser Device leg on its inbound Call', async () => {
+    await postStatus({
+      CallSid: 'CAchildBrowserLeg',
+      ParentCallSid: CALL_SID,
+      CallStatus: 'in-progress',
+    })
+
+    const write = statusWrite()
+    expect(write?.where).toEqual({ id: 'call-1', orgId: 'org-a' })
+    expect(write?.data.status).toBe('in-progress')
   })
 
   it('404s when no call matches the CallSid, and writes nothing', async () => {
