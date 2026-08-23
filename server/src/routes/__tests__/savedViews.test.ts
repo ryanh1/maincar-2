@@ -91,6 +91,18 @@ describe('POST /api/orgs/:orgId/saved-views', () => {
   })
 })
 
+describe('GET /api/orgs/:orgId/saved-views/resolve', () => {
+  it('accepts the canonical view query key for a saved arrangement', async () => {
+    const response = await request(app)
+      .get(`${URL}/resolve?objectId=object-people&view=view-1`)
+      .set('Authorization', AUTH)
+
+    expect(response.status).toBe(200)
+    expect(response.body.view).toMatchObject({ id: 'view-1', name: 'Prospects' })
+    expect(response.body.hasUnsavedChanges).toBe(false)
+  })
+})
+
 describe('POST /api/orgs/:orgId/objects/:objectId/views', () => {
   it('persists a configJson that references this object’s known attributes', async () => {
     const response = await request(app)

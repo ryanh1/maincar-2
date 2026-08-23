@@ -117,6 +117,17 @@ export function Records() {
     }
   }
 
+  async function saveAsNewView(name: string) {
+    if (!orgId || !detail) return
+    try {
+      const result = await saveView.mutateAsync({ orgId, objectId: detail.id, name, config: viewConfig, layout, makeDefault: false })
+      selectView(result.view.id, result.view, true)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save the new view. Try again.')
+      throw error
+    }
+  }
+
   async function changeLayout(nextLayout: 'grid' | 'kanban') {
     if (!orgId || !detail || nextLayout === layout) return
     setLayoutOverride(nextLayout)
@@ -200,6 +211,7 @@ export function Records() {
                 isSaving={isSaving}
                 onSelectView={selectView}
                 onSave={() => void saveChanges()}
+                onSaveAsNew={(name) => saveAsNewView(name)}
                 onReset={resetViewConfig}
                 onRename={(name) => manageView(async () => {
                   if (!selectedView) return

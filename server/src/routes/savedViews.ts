@@ -32,6 +32,7 @@ const patchSchema = z.object({
 })
 const resolveQuerySchema = z.object({
   objectId: z.string().min(1),
+  view: z.string().min(1).optional(),
   viewId: z.string().min(1).optional(),
   v: z.string().optional(),
   reset: z.enum(['true', 'false']).optional(),
@@ -116,13 +117,14 @@ router.get('/resolve', wrapRoute('GET /api/orgs/:orgId/saved-views/resolve', asy
   const loaded = await loadObjectAndAttributes(orgId, parsed.data.objectId)
   if (!loaded) return void res.status(404).json({ error: 'Object not found' })
   const userId = authReq.user!.id
-  const view = parsed.data.viewId
-    ? await findVisibleView(orgId, parsed.data.viewId, userId)
+  const requestedViewId = parsed.data.view ?? parsed.data.viewId
+  const view = requestedViewId
+    ? await findVisibleView(orgId, requestedViewId, userId)
     : (await prisma.savedView.findMany({
       where: { orgId, objectId: loaded.object.id, deletedAt: null, isDefault: true },
       orderBy: [{ isShared: 'asc' }, { updatedAt: 'desc' }],
     })).find((candidate) => canViewSavedView(candidate, userId))
-  if (parsed.data.viewId && (!view || view.objectId !== loaded.object.id)) {
+  if (requestedViewId && (!view || view.objectId !== loaded.object.id)) {
     return void res.status(404).json({ error: 'Saved view not found' })
   }
   const persisted = view ? repairSavedViewConfig(view.configJson, loaded.attributes) : repairSavedViewConfig({}, loaded.attributes)
@@ -173,7 +175,12 @@ router.post('/reorder', wrapRoute('POST /api/orgs/:orgId/saved-views/reorder', a
   const loaded = await loadObjectAndAttributes(orgId, parsed.data.objectId)
   if (!loaded) return void res.status(422).json({ error: 'Object not found in this organization.' })
   const userId = authReq.user!.id
-  const editableWhere = { orgId, objectId: loaded.object.id, deletedAt: null }
+  const editableWhere = {
+    orgId,
+    objectId: loaded.object.id,
+    deletedAt: null,
+    OR: [{ ownerUserId: userId }, { isShared: true }],
+  }
   const editableViews = await prisma.savedView.findMany({ where: editableWhere, select: { id: true, ownerUserId: true, isShared: true } })
   const editableIds = new Set(editableViews.filter((view) => canEditSavedView(view, userId)).map((view) => view.id))
   const submittedIds = new Set(parsed.data.viewIds)

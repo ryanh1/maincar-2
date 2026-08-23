@@ -97,6 +97,37 @@ describe('Records_SavedViewControls', () => {
     expect(onSave).toHaveBeenCalledOnce()
   })
 
+  it('names a changed arrangement when saving it as a new Personal view', async () => {
+    const user = userEvent.setup()
+    const onSaveAsNew = vi.fn()
+
+    renderWithProviders(
+      <Records_SavedViewControls
+        views={[personalView]}
+        selectedViewId="personal"
+        hasUnsavedChanges
+        isSaving={false}
+        onSelectView={vi.fn()}
+        onSave={vi.fn()}
+        onSaveAsNew={onSaveAsNew}
+        onReset={vi.fn()}
+        onRename={vi.fn()}
+        onDuplicate={vi.fn()}
+        onDelete={vi.fn()}
+        onRestore={vi.fn()}
+        onVisibilityChange={vi.fn()}
+        onSetDefault={vi.fn()}
+        onReorder={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Save as new view' }))
+    await user.type(screen.getByRole('textbox', { name: 'New saved view name' }), 'Q3 prospects')
+    await user.click(screen.getByRole('button', { name: 'Save new view' }))
+
+    expect(onSaveAsNew).toHaveBeenCalledWith('Q3 prospects')
+  })
+
   it('renames, duplicates, shares with the workspace, and sets the selected view as default', async () => {
     const user = userEvent.setup()
     const onRename = vi.fn()

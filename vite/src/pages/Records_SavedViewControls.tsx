@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -10,6 +12,9 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent as ViewDialogContent, DialogDescription as ViewDialogDescription, DialogFooter as ViewDialogFooter, DialogHeader as ViewDialogHeader, DialogTitle as ViewDialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { SavedView } from '@/hooks/savedViews'
 
@@ -24,6 +29,7 @@ interface RecordsSavedViewControlsProps {
   isSaving: boolean
   onSelectView: (viewId: string | null) => void
   onSave: () => void
+  onSaveAsNew?: (name: string) => void | Promise<void>
   onReset: () => void
   onRename: (name: string) => void | Promise<void>
   onDuplicate: () => void | Promise<void>
@@ -42,6 +48,7 @@ export function Records_SavedViewControls({
   isSaving,
   onSelectView,
   onSave,
+  onSaveAsNew,
   onReset,
   onRename,
   onDuplicate,
@@ -52,6 +59,20 @@ export function Records_SavedViewControls({
   onReorder,
 }: RecordsSavedViewControlsProps) {
   const selectedView = views.find((view) => view.id === selectedViewId) ?? null
+  const [newViewName, setNewViewName] = useState('')
+  const [isNewViewDialogOpen, setIsNewViewDialogOpen] = useState(false)
+
+  function closeNewViewDialog() {
+    setIsNewViewDialogOpen(false)
+    setNewViewName('')
+  }
+
+  async function saveAsNewView() {
+    const name = newViewName.trim()
+    if (!name || !onSaveAsNew) return
+    await onSaveAsNew(name)
+    closeNewViewDialog()
+  }
 
   return (
     <div className="flex items-center gap-1">
@@ -100,9 +121,39 @@ export function Records_SavedViewControls({
           ) : (
             <Button size="sm" disabled={isSaving} onClick={onSave}>Save changes</Button>
           )}
+          {onSaveAsNew && (
+            <Button variant="secondary" size="sm" disabled={isSaving} onClick={() => setIsNewViewDialogOpen(true)}>
+              Save as new view
+            </Button>
+          )}
           <Button variant="secondary" size="sm" disabled={isSaving} onClick={onReset}>Reset</Button>
         </>
       )}
+
+      <Dialog open={isNewViewDialogOpen} onOpenChange={(open) => { if (!open) closeNewViewDialog() }}>
+        <ViewDialogContent size="sm">
+          <ViewDialogHeader>
+            <ViewDialogTitle>Save as new view</ViewDialogTitle>
+            <ViewDialogDescription>This saves the current arrangement as a new Personal view.</ViewDialogDescription>
+          </ViewDialogHeader>
+          <div className="grid gap-2">
+            <Label htmlFor="new-saved-view-name">View name</Label>
+            <Input
+              id="new-saved-view-name"
+              aria-label="New saved view name"
+              autoFocus
+              maxLength={120}
+              value={newViewName}
+              onChange={(event) => setNewViewName(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void saveAsNewView() } }}
+            />
+          </div>
+          <ViewDialogFooter>
+            <Button variant="secondary" size="sm" onClick={closeNewViewDialog} disabled={isSaving}>Cancel</Button>
+            <Button size="sm" onClick={() => void saveAsNewView()} disabled={!newViewName.trim() || isSaving}>Save new view</Button>
+          </ViewDialogFooter>
+        </ViewDialogContent>
+      </Dialog>
     </div>
   )
 }
