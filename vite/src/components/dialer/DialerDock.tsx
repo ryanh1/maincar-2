@@ -4,6 +4,7 @@ import { ChevronDown, Phone } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatElapsed } from '@/lib/duration'
 import { InCallWorkspace } from '@/components/dialer/InCallWorkspace'
+import { DialerDispositionBar } from '@/components/dialer/DialerDispositionBar'
 import { NumericKeypad } from '@/components/dialer/NumericKeypad'
 import { useDialer } from '@/components/dialer/dialerContext'
 
@@ -29,7 +30,7 @@ const BODY_ID = 'dialer-dock-body'
  * corner's width so the two never overlap.
  */
 export function DialerDock() {
-  const { view, mode, phase, elapsedSeconds, activeCall, prefilledNumber, toggleView, collapseDialer } = useDialer()
+  const { view, mode, phase, elapsedSeconds, activeCall, terminalStatus, prefilledNumber, toggleView, collapseDialer } = useDialer()
   const expanded = view === 'expanded'
   const inCall = mode === 'call'
 
@@ -82,6 +83,7 @@ export function DialerDock() {
         ) : (
           <NumericKeypad initialEntry={prefilledNumber} />
         )}
+        {activeCall ? <DialerDispositionBar orgId={activeCall.orgId} callId={activeCall.callId} terminalStatus={terminalStatus} /> : null}
       </div>
     </div>
   )

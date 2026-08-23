@@ -27,6 +27,11 @@ vi.mock('@/components/dialer/InCallWorkspace', () => ({
     />
   ),
 }))
+vi.mock('@/components/dialer/DialerDispositionBar', () => ({
+  DialerDispositionBar: (props: { orgId: string; callId: string; terminalStatus?: string | null }) => (
+    <div data-testid="disposition-bar" data-org={props.orgId} data-call={props.callId} data-terminal-status={props.terminalStatus ?? ''} />
+  ),
+}))
 
 function setDialer(overrides: Partial<DialerContextValue> = {}): DialerContextValue {
   const value: DialerContextValue = {
@@ -138,6 +143,20 @@ describe('DialerDock', () => {
     expect(controls).toHaveAttribute('data-number', '+12025550123')
     expect(controls).toHaveAttribute('data-recording', 'true')
     expect(screen.queryByTestId('keypad')).not.toBeInTheDocument()
+    expect(screen.getByTestId('disposition-bar')).toHaveAttribute('data-call', 'call-9')
+  })
+
+  it('keeps the disposition bar in the dock after a terminal call ends', () => {
+    setDialer({
+      view: 'expanded',
+      mode: 'keypad',
+      phase: 'completed',
+      terminalStatus: 'no-answer',
+      activeCall: { orgId: 'org-9', callId: 'call-9', recording: false },
+    })
+    render(<DialerDock />)
+
+    expect(screen.getByTestId('disposition-bar')).toHaveAttribute('data-terminal-status', 'no-answer')
   })
 
   it('shows the running duration in the title bar during a call', () => {
