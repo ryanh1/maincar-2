@@ -9,6 +9,10 @@ import { makeTestQueryClient, withProviders } from '@/test/utils'
 import { useGetViews } from '../useGetViews'
 import { useSaveView } from '../useSaveView'
 import { useUpdateView } from '../useUpdateView'
+import { useDuplicateView } from '../useDuplicateView'
+import { useDeleteView } from '../useDeleteView'
+import { useRestoreView } from '../useRestoreView'
+import { useSetDefaultView } from '../useSetDefaultView'
 
 const jsonFetch = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/api', async () => {
@@ -79,5 +83,29 @@ describe('saved view hooks', () => {
       method: 'PATCH', body: JSON.stringify({ config }),
     })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.savedViews.all('org-1') })
+  })
+
+  it('duplicates, deletes, restores, and makes saved views the default', async () => {
+    jsonFetch.mockResolvedValue({ view: { id: 'view-copy' } })
+    const client = makeTestQueryClient()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { result } = renderHook(() => ({
+      duplicate: useDuplicateView(),
+      remove: useDeleteView(),
+      restore: useRestoreView(),
+      setDefault: useSetDefaultView(),
+    }), { wrapper: wrapper(client) })
+
+    await result.current.duplicate.mutateAsync({ orgId: 'org-1', viewId: 'view-1' })
+    await result.current.remove.mutateAsync({ orgId: 'org-1', viewId: 'view-1' })
+    await result.current.restore.mutateAsync({ orgId: 'org-1', viewId: 'view-1' })
+    await result.current.setDefault.mutateAsync({ orgId: 'org-1', viewId: 'view-1' })
+
+    expect(jsonFetch).toHaveBeenNthCalledWith(1, '/api/orgs/org-1/saved-views/view-1/duplicate', { method: 'POST' })
+    expect(jsonFetch).toHaveBeenNthCalledWith(2, '/api/orgs/org-1/saved-views/view-1', { method: 'DELETE' })
+    expect(jsonFetch).toHaveBeenNthCalledWith(3, '/api/orgs/org-1/saved-views/view-1/restore', { method: 'POST' })
+    expect(jsonFetch).toHaveBeenNthCalledWith(4, '/api/orgs/org-1/saved-views/view-1/default', { method: 'POST' })
+    expect(invalidate).toHaveBeenCalledTimes(4)
+    expect(invalidate).toHaveBeenLastCalledWith({ queryKey: queryKeys.savedViews.all('org-1') })
   })
 })

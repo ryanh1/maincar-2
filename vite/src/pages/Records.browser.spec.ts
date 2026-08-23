@@ -301,3 +301,105 @@ test('renders Deals as a persisted Kanban board grouped by pipeline stage', asyn
   await expect(page.getByRole('heading', { name: 'Discovery 1' })).toBeVisible()
   expect(consoleErrors).toEqual([])
 })
+
+test('manages a saved view without changing its records', async ({ page }) => {
+  const consoleErrors: string[] = []
+  const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = []
+  let deletedView: Record<string, unknown> | null = null
+  const views: Array<Record<string, unknown>> = [
+    {
+      id: 'personal', objectId: 'company', name: 'My view', layout: 'grid', config: { version: 1, columns: [], sorts: [], groupBy: [], rowHeight: 'compact', gridLines: true, frozenRows: 0, frozenCols: 1, zoom: 100, columnWidths: {}, columnStyles: [] },
+      ownerUserId: 'user-fixture', isShared: false, isDefault: false, sortOrder: 0, createdAt: companyObject.createdAt, updatedAt: companyObject.updatedAt,
+    },
+    {
+      id: 'default', objectId: 'company', name: 'Default view', layout: 'grid', config: { version: 1, columns: [], sorts: [], groupBy: [], rowHeight: 'compact', gridLines: true, frozenRows: 0, frozenCols: 1, zoom: 100, columnWidths: {}, columnStyles: [] },
+      ownerUserId: 'user-fixture', isShared: false, isDefault: true, sortOrder: 1, createdAt: companyObject.createdAt, updatedAt: companyObject.updatedAt,
+    },
+  ]
+  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
+  await page.route('**/api/orgs/org-fixture/objects**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects')) return route.fulfill({ json: { objects: [companyObject] } })
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects/company')) return route.fulfill({ json: { object: { ...companyObject, attributes: [nameAttribute] } } })
+    if (route.request().method() === 'POST' && pathname.endsWith('/objects/company/list')) return route.fulfill({ json: { rows: [], nextCursor: null, totalCount: 0 } })
+    return route.fallback()
+  })
+  await page.route('**/api/orgs/org-fixture/saved-views**', async (route) => {
+    const request = route.request()
+    const pathname = new URL(request.url()).pathname
+    const body = request.postData() ? request.postDataJSON() as Record<string, unknown> : undefined
+    requests.push({ method: request.method(), path: pathname, body })
+    if (request.method() === 'GET' && pathname.endsWith('/saved-views')) return route.fulfill({ json: { views } })
+    const pathParts = pathname.split('/')
+    const viewId = pathParts.at(-2) === 'saved-views' ? pathParts.at(-1) : pathParts.at(-2)
+    const view = views.find((candidate) => candidate.id === viewId)
+    if (request.method() === 'PATCH' && view) {
+      Object.assign(view, body)
+      return route.fulfill({ json: { view } })
+    }
+    if (request.method() === 'POST' && pathname.endsWith('/duplicate') && view) {
+      const copy = { ...view, id: 'copy', name: `${view.name} copy`, isShared: false, isDefault: false, sortOrder: views.length }
+      views.push(copy)
+      return route.fulfill({ status: 201, json: { view: copy } })
+    }
+    if (request.method() === 'POST' && pathname.endsWith('/default') && view) {
+      views.forEach((candidate) => { candidate.isDefault = candidate.id === view.id })
+      return route.fulfill({ status: 204 })
+    }
+    if (request.method() === 'DELETE' && view) {
+      deletedView = { ...view }
+      views.splice(views.indexOf(view), 1)
+      return route.fulfill({ status: 204 })
+    }
+    if (request.method() === 'POST' && pathname.endsWith('/restore') && deletedView) {
+      views.push(deletedView)
+      return route.fulfill({ status: 204 })
+    }
+    return route.fallback()
+  })
+
+  await page.goto('/__fixtures/records/company')
+  await page.getByRole('combobox', { name: 'Saved view' }).click()
+  await page.getByRole('option', { name: 'My view' }).click()
+
+  await page.getByRole('button', { name: 'Show actions for My view view' }).click()
+  await page.getByRole('menuitem', { name: 'Rename view' }).click()
+  await page.getByRole('textbox', { name: 'Saved view name' }).fill('Q3 prospects')
+  await page.getByRole('textbox', { name: 'Saved view name' }).press('Enter')
+  await expect.poll(() => requests).toContainEqual(expect.objectContaining({ method: 'PATCH', path: '/api/orgs/org-fixture/saved-views/personal', body: { name: 'Q3 prospects' } }))
+
+  await page.getByRole('button', { name: 'Show actions for Q3 prospects view' }).click()
+  await page.getByRole('menuitem', { name: 'Share with everyone' }).click()
+  await page.getByRole('button', { name: 'Share view' }).click()
+  await expect.poll(() => requests).toContainEqual(expect.objectContaining({ method: 'PATCH', path: '/api/orgs/org-fixture/saved-views/personal', body: { isShared: true } }))
+
+  await page.getByRole('button', { name: 'Show actions for Q3 prospects view' }).click()
+  await page.getByRole('menuitem', { name: 'Set as default' }).click()
+  await expect.poll(() => requests).toContainEqual(expect.objectContaining({ method: 'POST', path: '/api/orgs/org-fixture/saved-views/personal/default' }))
+
+  await page.getByRole('button', { name: 'Show actions for Q3 prospects view' }).click()
+  await page.getByRole('menuitem', { name: 'Duplicate view' }).click()
+  await expect.poll(() => requests).toContainEqual(expect.objectContaining({ method: 'POST', path: '/api/orgs/org-fixture/saved-views/personal/duplicate' }))
+
+  await page.getByRole('button', { name: 'Show actions for Q3 prospects copy view' }).click()
+  await page.getByRole('menuitem', { name: 'Reorder views' }).click()
+  await expect(page.getByRole('dialog', { name: 'Reorder views' })).toBeVisible()
+  const copyHandle = page.getByRole('button', { name: 'Reorder Q3 prospects copy view' })
+  const defaultHandle = page.getByRole('button', { name: 'Reorder Default view view' })
+  const copyBounds = await copyHandle.boundingBox()
+  const defaultBounds = await defaultHandle.boundingBox()
+  if (!copyBounds || !defaultBounds) throw new Error('Saved-view reorder handles were not measurable.')
+  await page.mouse.move(copyBounds.x + (copyBounds.width / 2), copyBounds.y + (copyBounds.height / 2))
+  await page.mouse.down()
+  await page.mouse.move(defaultBounds.x + (defaultBounds.width / 2), defaultBounds.y + (defaultBounds.height / 2), { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(() => requests.filter((request) => request.method === 'PATCH' && request.body?.sortOrder !== undefined)).not.toHaveLength(0)
+  await page.getByRole('button', { name: 'Close' }).click()
+
+  await page.getByRole('combobox', { name: 'Saved view' }).click()
+  await page.getByRole('option', { name: 'Q3 prospects copy' }).click()
+  await page.getByRole('button', { name: 'Show actions for Q3 prospects copy view' }).click()
+  await page.getByRole('menuitem', { name: 'Delete view' }).click()
+  await expect.poll(() => requests).toContainEqual(expect.objectContaining({ method: 'DELETE', path: '/api/orgs/org-fixture/saved-views/copy' }))
+  expect(consoleErrors).toEqual([])
+})

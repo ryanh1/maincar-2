@@ -8,7 +8,15 @@ import { RecordGrid } from '@/components/crm/RecordGrid'
 import { createViewConfig, sameViewConfig, useViewConfig } from '@/components/crm/viewConfig'
 import { Button } from '@/components/ui/button'
 import { useGetObject, useGetObjects } from '@/hooks/crm'
-import { useGetViews, useSaveView, useUpdateView } from '@/hooks/savedViews'
+import {
+  useDeleteView,
+  useDuplicateView,
+  useGetViews,
+  useRestoreView,
+  useSaveView,
+  useSetDefaultView,
+  useUpdateView,
+} from '@/hooks/savedViews'
 import { useAuth } from '@/providers/useAuth'
 
 import { Records_SavedViewControls } from './Records_SavedViewControls'
@@ -43,7 +51,11 @@ export function Records() {
   const hasUnsavedChanges = !sameViewConfig(viewConfig, baselineConfig)
   const saveView = useSaveView()
   const updateView = useUpdateView()
-  const isSaving = saveView.isPending || updateView.isPending
+  const duplicateView = useDuplicateView()
+  const deleteView = useDeleteView()
+  const restoreView = useRestoreView()
+  const setDefaultView = useSetDefaultView()
+  const isSaving = saveView.isPending || updateView.isPending || duplicateView.isPending || deleteView.isPending || restoreView.isPending || setDefaultView.isPending
   const [createRequestToken, setCreateRequestToken] = useState(0)
 
   const isPending = objectsQuery.isPending || (!isUnavailable && object !== null && (objectQuery.isPending || viewsQuery.isPending))
@@ -90,6 +102,14 @@ export function Records() {
     } catch (error) {
       setLayoutOverride(null)
       toast.error(error instanceof Error ? error.message : 'Could not save the layout. Try again.')
+    }
+  }
+
+  async function manageView(action: () => Promise<void>) {
+    try {
+      await action()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update this view. Try again.')
     }
   }
 
@@ -148,6 +168,37 @@ export function Records() {
                 onSelectView={selectView}
                 onSave={() => void saveChanges()}
                 onReset={resetViewConfig}
+                onRename={(name) => manageView(async () => {
+                  if (!selectedView) return
+                  await updateView.mutateAsync({ orgId, viewId: selectedView.id, name })
+                })}
+                onDuplicate={() => manageView(async () => {
+                  if (!selectedView) return
+                  const duplicate = await duplicateView.mutateAsync({ orgId, viewId: selectedView.id })
+                  setSelectedViewId(duplicate.view.id)
+                })}
+                onDelete={() => manageView(async () => {
+                  if (!selectedView) return
+                  await deleteView.mutateAsync({ orgId, viewId: selectedView.id })
+                  setSelectedViewId(null)
+                  resetViewConfig()
+                })}
+                onRestore={() => manageView(async () => {
+                  if (!selectedView) return
+                  await restoreView.mutateAsync({ orgId, viewId: selectedView.id })
+                  setSelectedViewId(selectedView.id)
+                })}
+                onVisibilityChange={(isShared) => manageView(async () => {
+                  if (!selectedView) return
+                  await updateView.mutateAsync({ orgId, viewId: selectedView.id, isShared })
+                })}
+                onSetDefault={() => manageView(async () => {
+                  if (!selectedView) return
+                  await setDefaultView.mutateAsync({ orgId, viewId: selectedView.id })
+                })}
+                onReorder={(viewIds) => manageView(async () => {
+                  await Promise.all(viewIds.map((viewId, sortOrder) => updateView.mutateAsync({ orgId, viewId, sortOrder })))
+                })}
               />
             }
             createRequestToken={createRequestToken}
