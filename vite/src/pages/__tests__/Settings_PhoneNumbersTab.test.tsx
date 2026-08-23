@@ -20,11 +20,13 @@ const {
   useGetNumbersMock,
   useGetOrgNumbersMock,
   useSetActiveNumberMock,
+  useSetCallerNameMock,
   useReleaseNumberMock,
   useSearchAvailableNumbersMock,
   useBuyNumberMock,
   useAuthMock,
   setActiveMutateMock,
+  setCallerNameMutateMock,
   releaseMutateMock,
   searchMutateMock,
   buyMutateAsyncMock,
@@ -34,11 +36,13 @@ const {
   useGetNumbersMock: vi.fn(),
   useGetOrgNumbersMock: vi.fn(),
   useSetActiveNumberMock: vi.fn(),
+  useSetCallerNameMock: vi.fn(),
   useReleaseNumberMock: vi.fn(),
   useSearchAvailableNumbersMock: vi.fn(),
   useBuyNumberMock: vi.fn(),
   useAuthMock: vi.fn(),
   setActiveMutateMock: vi.fn(),
+  setCallerNameMutateMock: vi.fn(),
   releaseMutateMock: vi.fn(),
   searchMutateMock: vi.fn(),
   buyMutateAsyncMock: vi.fn(),
@@ -52,6 +56,7 @@ vi.mock('@/hooks/phoneNumbers', () => ({
   useGetOrgNumbers: useGetOrgNumbersMock,
   useAssignNumber: () => ({ mutate: vi.fn(), isPending: false }),
   useSetActiveNumber: useSetActiveNumberMock,
+  useSetCallerName: useSetCallerNameMock,
   useReleaseNumber: useReleaseNumberMock,
   useSearchAvailableNumbers: useSearchAvailableNumbersMock,
   useBuyNumber: useBuyNumberMock,
@@ -71,6 +76,9 @@ function number(overrides: Record<string, unknown> = {}) {
     twilioSid: 'PN1',
     status: 'active',
     isActiveForOutbound: true,
+    callerName: 'Acme Sales',
+    callerNameStatus: 'pending',
+    isCallerNameRequested: true,
     createdAt: '2026-08-01T12:00:00.000Z',
     ...overrides,
   }
@@ -131,6 +139,7 @@ beforeEach(() => {
   )
   useGetOrgNumbersMock.mockReturnValue({ isPending: false, isError: false, data: { numbers: [], total: 0, unassignedCount: 0 } })
   useSetActiveNumberMock.mockReturnValue({ mutate: setActiveMutateMock, isPending: false })
+  useSetCallerNameMock.mockReturnValue({ mutate: setCallerNameMutateMock, isPending: false })
   useReleaseNumberMock.mockReturnValue({ mutate: releaseMutateMock, isPending: false })
   useSearchAvailableNumbersMock.mockReturnValue(searchState())
   useBuyNumberMock.mockReturnValue({
@@ -176,6 +185,51 @@ describe('the numbers list', () => {
     expect(makePrimary[1]).toBeDisabled()
   })
 
+  it('keeps the primary number and caller-ID-name preference as distinct settings', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    expect(screen.getByText('Outbound caller ID')).toBeInTheDocument()
+    expect(screen.getAllByText('+12025550111')).toHaveLength(2)
+    expect(screen.getByRole('switch', { name: 'Show caller-ID name' })).toBeChecked()
+    expect(screen.getByLabelText('Caller-ID name')).toHaveValue('Acme Sales')
+    expect(screen.getByText('Pending carrier registration')).toBeInTheDocument()
+    expect(
+      screen.getByText('Recipient display is controlled by their carrier and can take 48–72 hours after approval.'),
+    ).toBeInTheDocument()
+
+    await user.clear(screen.getByLabelText('Caller-ID name'))
+    await user.type(screen.getByLabelText('Caller-ID name'), 'Acme Support')
+    await user.click(screen.getByRole('button', { name: 'Save caller-ID name' }))
+
+    expect(setCallerNameMutateMock).toHaveBeenCalledWith({
+      orgId: 'org-a',
+      id: 'num-active',
+      isCallerNameRequested: true,
+      callerName: 'Acme Support',
+    })
+  })
+
+  it.each([
+    ['not_requested', 'Not requested'],
+    ['pending', 'Pending carrier registration'],
+    ['active', 'Active with carrier'],
+    ['failed', 'Carrier request failed'],
+    ['unsupported', 'Not supported for this number'],
+  ] as const)('shows the truthful caller-ID lifecycle label for %s', (callerNameStatus, label) => {
+    useGetNumbersMock.mockImplementation(() =>
+      listState({
+        data: numbersResponse({
+          numbers: [number({ callerNameStatus, isCallerNameRequested: callerNameStatus !== 'not_requested' })],
+        }),
+      }),
+    )
+
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    expect(screen.getByText(label)).toBeInTheDocument()
+  })
+
   it('sends the chosen number id when Make primary is clicked', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)
@@ -219,12 +273,14 @@ describe('the numbers list', () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
-    expect(screen.getByText('+12025550999')).toBeInTheDocument()
-    expect(screen.queryByText('+12025550111')).not.toBeInTheDocument()
+    const orgTable = screen.getByRole('table', { name: 'Every phone number owned by Acme' })
+    expect(within(orgTable).getByText('+12025550999')).toBeInTheDocument()
+    expect(within(orgTable).queryByText('+12025550111')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('switch', { name: 'Show only my numbers' }))
-    expect(screen.getByText('+12025550111')).toBeInTheDocument()
-    expect(screen.queryByText('+12025550999')).not.toBeInTheDocument()
+    const myNumbersTable = screen.getByRole('table', { name: 'Phone numbers owned by Acme' })
+    expect(within(myNumbersTable).getByText('+12025550111')).toBeInTheDocument()
+    expect(within(myNumbersTable).queryByText('+12025550999')).not.toBeInTheDocument()
   })
 
   it('shows a loading state while the numbers load', () => {
@@ -233,6 +289,7 @@ describe('the numbers list', () => {
     renderWithProviders(<Settings_PhoneNumbersTab />)
 
     expect(screen.queryByText('+12025550111')).not.toBeInTheDocument()
+    expect(screen.getByText('Loading outbound caller ID.')).toBeInTheDocument()
   })
 
   it('offers a retry when the list fails to load', async () => {
@@ -287,7 +344,7 @@ describe('search', () => {
 
     await user.click(screen.getByRole('button', { name: 'Clear' }))
 
-    expect(screen.getByText('+12025550111')).toBeInTheDocument()
+    expect(screen.getAllByText('+12025550111')).toHaveLength(2)
   })
 })
 

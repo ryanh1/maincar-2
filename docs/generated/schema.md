@@ -1,7 +1,7 @@
 # Maincar schema
 
 > AUTO-GENERATED — DO NOT EDIT BY HAND.
-> Generated at: 2026-08-23T01:08:27.205Z
+> Generated at: 2026-08-23T02:33:41.616Z
 > Dynamic-object source: seeded standard-object definitions.
 > Journey: [4.S4 — Generate a Prisma-style schema markdown](../journeys/4-crm-data-and-views.md#journey-4s4--generate-a-prisma-style-schema-markdown-for-every-object-internal-engineering-tool).
 
@@ -362,6 +362,9 @@ model PhoneNumber {
   twilioSid                String?
   status                   String // default: "\"searching\""
   isActiveForOutbound      Boolean // default: "false"
+  callerName               String?
+  callerNameStatus         String // default: "\"not_requested\""
+  isCallerNameRequested    Boolean // default: "false"
   createdAt                DateTime // default: "now()"
   updatedAt                DateTime // updatedAt
 }

@@ -1016,6 +1016,89 @@ describe('POST /api/orgs/:orgId/phone-numbers — org isolation', () => {
 // PATCH /api/orgs/:orgId/phone-numbers/:id
 // ============================================================
 const PATCH_A = `${URL_A}/num-1`
+const CALLER_NAME_A = `${PATCH_A}/caller-name`
+
+// ============================================================
+// PATCH /api/orgs/:orgId/phone-numbers/:id/caller-name
+// ============================================================
+describe('PATCH /api/orgs/:orgId/phone-numbers/:id/caller-name', () => {
+  it('stores a valid desired name as a pending carrier request', async () => {
+    const res = await request(app)
+      .patch(CALLER_NAME_A)
+      .set('Authorization', AUTH)
+      .send({ isCallerNameRequested: true, callerName: 'Acme Sales' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.number).toMatchObject({
+      id: 'num-1',
+      isCallerNameRequested: true,
+      callerName: 'Acme Sales',
+      callerNameStatus: 'pending',
+    })
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith({
+      where: { id: 'num-1', orgId: ORG_A, assignedUserId: 'user-a' },
+      data: {
+        isCallerNameRequested: true,
+        callerName: 'Acme Sales',
+        callerNameStatus: 'pending',
+      },
+    })
+  })
+
+  it('keeps the desired name when a caller turns the request off', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      numberRow({
+        callerName: 'Acme Sales',
+        callerNameStatus: 'pending',
+        isCallerNameRequested: true,
+      }),
+    )
+
+    const res = await request(app)
+      .patch(CALLER_NAME_A)
+      .set('Authorization', AUTH)
+      .send({ isCallerNameRequested: false })
+
+    expect(res.status).toBe(200)
+    expect(res.body.number).toMatchObject({
+      isCallerNameRequested: false,
+      callerName: 'Acme Sales',
+      callerNameStatus: 'not_requested',
+    })
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith({
+      where: { id: 'num-1', orgId: ORG_A, assignedUserId: 'user-a' },
+      data: { isCallerNameRequested: false, callerNameStatus: 'not_requested' },
+    })
+  })
+
+  it('rejects a name that cannot be registered as CNAM', async () => {
+    const res = await request(app)
+      .patch(CALLER_NAME_A)
+      .set('Authorization', AUTH)
+      .send({ isCallerNameRequested: true, callerName: '123 Main Street' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe(
+      'Caller-ID name must start with a letter and use only letters, numbers, periods, commas, and spaces.',
+    )
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('does not write a number outside the caller’s organization', async () => {
+    prismaMock.phoneNumber.updateMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app)
+      .patch(CALLER_NAME_A)
+      .set('Authorization', AUTH)
+      .send({ isCallerNameRequested: true, callerName: 'Acme Sales' })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Phone number not found')
+    expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'num-1', orgId: ORG_A, assignedUserId: 'user-a' } }),
+    )
+  })
+})
 
 describe('PATCH /api/orgs/:orgId/phone-numbers/:id', () => {
   it('activates the number and returns it keyed, as active', async () => {

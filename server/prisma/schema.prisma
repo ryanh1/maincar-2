@@ -387,6 +387,18 @@ model PhoneNumber {
   // At most one true per user. Enforced in the route, in a transaction.
   isActiveForOutbound Boolean @default(false)
 
+  // The name this organization wants the carrier to display for calls from this
+  // number. It remains saved when the request is turned off, so a caller can
+  // re-enable the same desired name without retyping it.
+  callerName String?
+
+  // Allowed values: "not_requested", "pending", "active", "failed", "unsupported".
+  // This is the carrier-facing lifecycle, not a promise about a recipient's display.
+  callerNameStatus String @default("not_requested")
+
+  // Whether the organization currently wants the carrier to register callerName.
+  isCallerNameRequested Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

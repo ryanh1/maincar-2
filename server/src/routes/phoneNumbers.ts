@@ -44,6 +44,9 @@ function mapPhoneNumberToApi(number: PhoneNumber) {
     twilioSid: number.twilioSid,
     status: number.status,
     isActiveForOutbound: number.isActiveForOutbound,
+    callerName: number.callerName,
+    callerNameStatus: number.callerNameStatus,
+    isCallerNameRequested: number.isCallerNameRequested,
     createdAt: number.createdAt.toISOString(),
   }
 }
@@ -311,6 +314,35 @@ const activationBodySchema = z.object({
     error: 'Send isActiveForOutbound as true or false.',
   }),
 })
+
+// Twilio CNAM accepts at most 15 characters. It must start with a letter and
+// permits only letters, numbers, periods, commas, and spaces. Whether it is a
+// unique, non-generic business name is confirmed by the carrier submission in
+// MAI-399; this route persists only a valid requested value.
+const callerNameBodySchema = z
+  .object({
+    isCallerNameRequested: z.boolean({
+      error: 'Send isCallerNameRequested as true or false.',
+    }),
+    callerName: z
+      .string()
+      .trim()
+      .max(15, 'Caller-ID name can be at most 15 characters.')
+      .regex(
+        /^[A-Za-z][A-Za-z0-9., ]*$/,
+        'Caller-ID name must start with a letter and use only letters, numbers, periods, commas, and spaces.',
+      )
+      .optional(),
+  })
+  .superRefine((body, ctx) => {
+    if (body.isCallerNameRequested && !body.callerName) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['callerName'],
+        message: 'Enter the caller-ID name to request.',
+      })
+    }
+  })
 
 router.use(requireAuth)
 
@@ -665,6 +697,64 @@ router.post(
     // so the row the client just created is shaped exactly like the rows it will
     // poll — status "searching" until the job turns it active.
     res.status(201).json({ number: mapPhoneNumberToApi(created) })
+  }),
+)
+
+// ============================================================
+// PATCH /api/orgs/:orgId/phone-numbers/:id/caller-name — request a CNAM name
+// ============================================================
+// This records only what the caller wants the carrier to do. MAI-399 submits
+// and reconciles that request; until then, "pending" is deliberately honest
+// that no recipient display has been promised.
+router.patch(
+  '/:id/caller-name',
+  wrapRoute('PATCH /api/orgs/:orgId/phone-numbers/:id/caller-name', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = callerNameBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+
+    const data = parsed.data.isCallerNameRequested
+      ? {
+          isCallerNameRequested: true,
+          callerName: parsed.data.callerName!,
+          callerNameStatus: 'pending',
+        }
+      : {
+          isCallerNameRequested: false,
+          callerNameStatus: 'not_requested',
+        }
+
+    // --- Execute query ---
+    // updateMany carries both ownership boundaries. The returned API record is
+    // reconstructed from the known pre-write row and the exact values handed to
+    // the write, so the client never receives a value the server did not store.
+    const found = await prisma.phoneNumber.findFirst({ where: { id, orgId, assignedUserId: userId } })
+    if (!found) {
+      return void res.status(404).json({ error: NOT_FOUND_ERROR })
+    }
+    const updated = await prisma.phoneNumber.updateMany({
+      where: { id, orgId, assignedUserId: userId },
+      data,
+    })
+    if (updated.count === 0) {
+      return void res.status(404).json({ error: NOT_FOUND_ERROR })
+    }
+
+    logger.info({ orgId, userId, phoneNumberId: id }, 'updated caller-ID name preference')
+
+    // --- Return response ---
+    res.json({ number: mapPhoneNumberToApi({ ...found, ...data }) })
   }),
 )
 

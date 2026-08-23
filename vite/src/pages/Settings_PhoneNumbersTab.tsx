@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
 
 import { Settings_PhoneNumbers_BuyDialog } from './Settings_PhoneNumbers_BuyDialog'
+import { Settings_PhoneNumbers_CallerNamePreference } from './Settings_PhoneNumbers_CallerNamePreference'
 import { Settings_PhoneNumbers_OrgTable } from './Settings_PhoneNumbers_OrgTable'
 import { Settings_PhoneNumbers_Row } from './Settings_PhoneNumbers_Row'
 
@@ -69,6 +70,10 @@ export function Settings_PhoneNumbersTab() {
     ? (sort as SortColumn)
     : 'createdAt'
   const sortDir = dir === 'asc' ? 'asc' : 'desc'
+  // This unpaged query is deliberately distinct from the table query: the
+  // caller-name setting must always describe the currently primary number,
+  // even when that row is outside a searched or paged table view.
+  const callerNameNumbersQuery = useGetNumbers(orgId)
   const numbersQuery = useGetNumbers(orgId, {
     page,
     limit: PAGE_SIZE,
@@ -80,6 +85,7 @@ export function Settings_PhoneNumbersTab() {
   if (!org || !orgId) return null
 
   const data = numbersQuery.data
+  const primaryNumber = callerNameNumbersQuery.data?.numbers.find((number) => number.isActiveForOutbound)
   const numbers = data?.numbers ?? []
   const hasSearch = search.trim() !== ''
   const showMyNumbers = !isAdmin || myNumbersOnly
@@ -104,6 +110,13 @@ export function Settings_PhoneNumbersTab() {
           </Button>
         )}
       </div>
+
+      <Settings_PhoneNumbers_CallerNamePreference
+        orgId={orgId}
+        number={primaryNumber}
+        isPending={callerNameNumbersQuery.isPending}
+        isError={callerNameNumbersQuery.isError}
+      />
 
       <div className="flex items-center gap-2">
         <label htmlFor="my-numbers-only" className="text-sm font-medium">

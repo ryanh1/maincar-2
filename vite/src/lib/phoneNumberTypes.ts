@@ -19,6 +19,9 @@
  */
 export type PhoneNumberStatus = 'searching' | 'active' | 'releasing' | 'failed'
 
+/** The carrier-facing lifecycle for a requested caller-ID name. */
+export type CallerNameStatus = 'not_requested' | 'pending' | 'active' | 'failed' | 'unsupported'
+
 /**
  * One number the org owns (`mapPhoneNumberToApi`). `twilioSid` is null until the
  * provisioning job buys the number, so it is null for every `searching` row.
@@ -29,6 +32,12 @@ export interface PhoneNumber {
   twilioSid: string | null
   status: PhoneNumberStatus
   isActiveForOutbound: boolean
+  /** The desired CNAM value. It remains saved when the request is disabled. */
+  callerName?: string | null
+  /** The carrier-facing state, never a guarantee about a recipient display. */
+  callerNameStatus?: CallerNameStatus
+  /** Whether this number is currently queued for caller-name registration. */
+  isCallerNameRequested?: boolean
   createdAt: string
 }
 
