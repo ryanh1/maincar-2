@@ -194,4 +194,9 @@ export const queryKeys = {
     detail: (orgId: string, root: { type: 'company' | 'deal'; id: string }, eventId: string, params: Record<string, unknown> = {}) =>
       ['accountTimeline', orgId, root, 'detail', eventId, params] as const,
   },
+  calendar: {
+    all: (orgId: string) => ['calendar', orgId] as const,
+    sources: (orgId: string) => ['calendar', orgId, 'sources'] as const,
+    events: (orgId: string, query: Record<string, unknown>) => ['calendar', orgId, 'events', query] as const,
+  },
 } as const

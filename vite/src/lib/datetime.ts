@@ -72,6 +72,15 @@ export function formatTimeZoneName(value: Date, timeZone: string | null | undefi
     .find((part) => part.type === 'timeZoneName')?.value ?? zone
 }
 
+/** `6:00 PM EDT` — a time-of-day is never shown without its zone label. */
+export function formatTime(value: string | Date, timeZone: string | null | undefined): string {
+  const date = typeof value === 'string' ? new Date(value) : value
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: resolveZone(timeZone), hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  }).format(date)
+}
+
 function timeZoneOffset(value: Date, timeZone: string): number {
   const offset = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
     .formatToParts(value)
