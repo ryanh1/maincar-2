@@ -1,4 +1,6 @@
 export { useGetLists } from './useGetLists'
+export { useCreateList } from './useCreateList'
+export type { CreateListInput, CreateListResponse } from './useCreateList'
 export { useGetList } from './useGetList'
 export { useGetListEntries } from './useGetListEntries'
 export { useRemoveListEntry } from './useRemoveListEntry'

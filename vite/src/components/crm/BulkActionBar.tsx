@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Download, ListPlus, Trash2, UserRound } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -6,9 +6,11 @@ import { Button } from '@/components/ui/button'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { useBulkRecords, useGetLists } from '@/hooks/crm'
+import { useBulkRecords } from '@/hooks/crm'
 import { memberDisplayName, useGetMembers } from '@/hooks/orgs'
 import type { AttributeDef, BulkExportResponse, ObjectDef, RecordBulkSelection, RecordRow } from '@/lib/crmTypes'
+
+import { AddToListDialog } from './AddToListDialog'
 
 interface BulkActionBarProps {
   orgId: string
@@ -41,12 +43,9 @@ function downloadCsv(rows: RecordRow[], attributes: AttributeDef[], fileName: st
 /** The compact action surface for a server-side row selection. */
 export function BulkActionBar({ orgId, object, attributes, selection, selectedCount, canChangeOwner, onClear }: BulkActionBarProps) {
   const bulk = useBulkRecords()
-  const listsQuery = useGetLists(orgId)
   const membersQuery = useGetMembers(orgId, { limit: 200, sort: 'name' })
   const [dialog, setDialog] = useState<'list' | 'owner' | 'delete' | null>(null)
-  const [listId, setListId] = useState('')
   const [ownerUserId, setOwnerUserId] = useState('')
-  const compatibleLists = useMemo(() => (listsQuery.data?.lists ?? []).filter((list) => !list.isArchived && list.objectSlug === object.slug), [listsQuery.data?.lists, object.slug])
 
   const run = async (action: Parameters<typeof bulk.mutateAsync>[0]['action']) => {
     try {
@@ -77,12 +76,7 @@ export function BulkActionBar({ orgId, object, attributes, selection, selectedCo
         <Button size="sm" variant="ghost" onClick={onClear}>Clear</Button>
       </div>
 
-      <Dialog open={dialog === 'list'} onOpenChange={(open) => { if (!open && !bulk.isPending) setDialog(null) }}>
-        <DialogContent><DialogHeader><DialogTitle>Add to list</DialogTitle><DialogDescription>Add {selectedCount} selected {object.namePlural.toLowerCase()} to a list.</DialogDescription></DialogHeader>
-          <Select value={listId} onValueChange={setListId}><SelectTrigger className="w-full"><SelectValue placeholder="Choose a list" /></SelectTrigger><SelectContent>{compatibleLists.map((list) => <SelectItem key={list.id} value={list.id}>{list.name}</SelectItem>)}{!listsQuery.isPending && compatibleLists.length === 0 && <SelectItem value="none" disabled>No compatible lists</SelectItem>}</SelectContent></Select>
-          <DialogFooter><Button variant="secondary" onClick={() => setDialog(null)}>Cancel</Button><Button disabled={!listId || bulk.isPending} onClick={() => void run({ type: 'addToList', listId })}>{bulk.isPending ? 'Adding…' : 'Add to list'}</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AddToListDialog open={dialog === 'list'} onOpenChange={(open) => { if (!open && !bulk.isPending) setDialog(null) }} orgId={orgId} object={object} selection={selection} selectedCount={selectedCount} onAdded={onClear} />
 
       <Dialog open={dialog === 'owner'} onOpenChange={(open) => { if (!open && !bulk.isPending) setDialog(null) }}>
         <DialogContent><DialogHeader><DialogTitle>Change owner</DialogTitle><DialogDescription>Assign {selectedCount} selected {object.namePlural.toLowerCase()} to a teammate.</DialogDescription></DialogHeader>

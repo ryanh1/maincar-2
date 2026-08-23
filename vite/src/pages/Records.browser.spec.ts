@@ -69,6 +69,57 @@ test('selects loaded Companies, extends to the filtered view, and exports throug
   await expect.poll(() => actions).toEqual([{ selection: { mode: 'filter' }, action: { type: 'export' } }])
 })
 
+test('adds selected Companies to a newly created list', async ({ page }) => {
+  const rows = [
+    { id: 'company-1', name: 'Ada', createdAt: companyObject.createdAt, updatedAt: companyObject.updatedAt },
+    { id: 'company-2', name: 'Grace', createdAt: companyObject.createdAt, updatedAt: companyObject.updatedAt },
+  ]
+  const createdLists: Array<Record<string, unknown>> = []
+  const actions: Array<Record<string, unknown>> = []
+
+  await page.route('**/api/orgs/org-fixture/objects**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects')) return route.fulfill({ json: { objects: [companyObject] } })
+    if (route.request().method() === 'GET' && pathname.endsWith('/objects/company')) return route.fulfill({ json: { object: { ...companyObject, attributes: [nameAttribute] } } })
+    if (route.request().method() === 'POST' && pathname.endsWith('/objects/company/list')) return route.fulfill({ json: { rows, nextCursor: null, totalCount: rows.length } })
+    if (route.request().method() === 'POST' && pathname.endsWith('/objects/company/bulk')) {
+      actions.push(route.request().postDataJSON() as Record<string, unknown>)
+      return route.fulfill({ json: { affectedCount: rows.length } })
+    }
+    return route.fallback()
+  })
+  await page.route('**/api/orgs/org-fixture/lists**', async (route) => {
+    const request = route.request()
+    if (request.method() === 'GET') return route.fulfill({ json: { lists: createdLists, total: createdLists.length, page: 1, limit: 100 } })
+    if (request.method() === 'POST') {
+      const body = request.postDataJSON() as { name: string; objectSlug: string }
+      const list = { id: 'list-new', name: body.name, slug: 'priority-companies', objectSlug: body.objectSlug, description: null, icon: null, ownerUserId: 'user-fixture', isShared: false, sortOrder: 0, isArchived: false, createdAt: companyObject.createdAt, updatedAt: companyObject.updatedAt }
+      createdLists.push(list)
+      return route.fulfill({ status: 201, json: { list } })
+    }
+    return route.fallback()
+  })
+  await page.route('**/api/orgs/org-fixture/saved-views**', (route) => route.fulfill({ json: { views: [] } }))
+  await page.route('**/api/orgs/org-fixture/members**', (route) => route.fulfill({ json: { members: [], total: 0, page: 1, limit: 200, meta: { activeAdminCount: 0 }, viewerRoles: ['basic'] } }))
+
+  await page.goto('/__fixtures/records/company')
+  const canvas = page.getByTestId('data-grid-canvas')
+  await expect(canvas).toBeVisible()
+  const bounds = await canvas.boundingBox()
+  if (!bounds) throw new Error('The record grid canvas was not measurable.')
+  await page.mouse.click(bounds.x + 16, bounds.y + 18)
+  await page.getByRole('button', { name: 'Add to list' }).click()
+  await page.getByRole('button', { name: 'New list' }).click()
+  await page.getByRole('textbox', { name: 'List name' }).fill('Priority companies')
+  await page.getByRole('button', { name: 'Create list' }).click()
+
+  await expect.poll(() => createdLists).toEqual([expect.objectContaining({ name: 'Priority companies', objectSlug: 'company' })])
+  await expect.poll(() => actions).toEqual([{
+    selection: { mode: 'ids', ids: ['company-1', 'company-2'] },
+    action: { type: 'addToList', listId: 'list-new' },
+  }])
+})
+
 test('creates a Company from its grid after a recoverable validation error', async ({ page }) => {
   const consoleErrors: string[] = []
   const companies: Array<Record<string, unknown>> = []
