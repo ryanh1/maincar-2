@@ -1,5 +1,5 @@
 import prisma from '../db.js'
-import { canViewSavedView } from './savedViews.js'
+import { canViewSavedView } from './savedViewPolicy.js'
 
 export class CellStyleNotFoundError extends Error {}
 export class CellStyleValidationError extends Error {}
