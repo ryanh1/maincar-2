@@ -8,6 +8,12 @@ MIGRATE="$ROOT/.claude/scripts/coord/mc-migrate"
 SANDBOX="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/mc-environment-test-XXXXXX")" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
+grep -F './.claude/scripts/coord/mc-clone' "$ROOT/AGENTS.md" >/dev/null
+if grep -F 'git clone ~/code/maincar-2-coord/local-main.git' "$ROOT/AGENTS.md" >/dev/null; then
+  echo 'root workflow instructions still recommend a raw issue clone' >&2
+  exit 1
+fi
+
 git init --bare "$SANDBOX/upstream.git" --quiet
 git init "$SANDBOX/primary" --quiet
 git -C "$SANDBOX/primary" config user.name 'Environment test'
@@ -16,7 +22,18 @@ git -C "$SANDBOX/primary" checkout -b main --quiet
 printf '.env\n' > "$SANDBOX/primary/.gitignore"
 printf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5440/maincar2?schema=public\n' > "$SANDBOX/primary/.env"
 touch "$SANDBOX/primary/tracked-placeholder"
-git -C "$SANDBOX/primary" add .gitignore tracked-placeholder
+for package_root in . server vite firebase; do
+  package_dir="$SANDBOX/primary/$package_root"
+  mkdir -p "$package_dir"
+  printf '{"name":"%s","version":"1.0.0"}\n' "${package_root//\//-}" > "$package_dir/package.json"
+  printf '{"name":"%s","lockfileVersion":3,"requires":true,"packages":{}}\n' "${package_root//\//-}" > "$package_dir/package-lock.json"
+done
+mkdir -p "$SANDBOX/primary/server/prisma"
+touch "$SANDBOX/primary/server/prisma/schema.prisma"
+mkdir -p "$SANDBOX/primary/.claude/scripts/coord"
+cp "$ROOT/.claude/scripts/coord/mc-bootstrap" "$ROOT/.claude/scripts/coord/mc-common.sh" "$SANDBOX/primary/.claude/scripts/coord/"
+chmod +x "$SANDBOX/primary/.claude/scripts/coord/mc-bootstrap"
+git -C "$SANDBOX/primary" add .gitignore tracked-placeholder package.json package-lock.json server vite firebase .claude
 git -C "$SANDBOX/primary" commit -m 'Initial main' --quiet
 git -C "$SANDBOX/primary" remote add origin "$SANDBOX/upstream.git"
 git -C "$SANDBOX/primary" push origin main --quiet
@@ -28,17 +45,51 @@ test_env=(
 )
 (cd "$SANDBOX/primary" && env "${test_env[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" sync)
 
-env "${test_env[@]}" "$CLONE" "$SANDBOX/issue-clone"
+mkdir -p "$SANDBOX/bin"
+cat > "$SANDBOX/bin/npm" <<'EOF'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$PWD" "$*" >> "$MC_FAKE_NPM_LOG"
+case "$1" in
+  ci) mkdir -p node_modules; touch node_modules/.mc-bootstrap-installed ;;
+  --prefix)
+    [ -d "$2/node_modules" ] || exit 17
+    ;;
+esac
+EOF
+chmod +x "$SANDBOX/bin/npm"
+
+clone_env=("${test_env[@]}" MC_FAKE_NPM_LOG="$SANDBOX/npm.log" PATH="$SANDBOX/bin:$PATH")
+env "${clone_env[@]}" "$CLONE" "$SANDBOX/issue-clone"
 test -f "$SANDBOX/issue-clone/.env"
 test ! -L "$SANDBOX/issue-clone/.env"
 cmp -s "$SANDBOX/primary/.env" "$SANDBOX/issue-clone/.env"
+for package_root in . server vite firebase; do
+  test -f "$SANDBOX/issue-clone/$package_root/node_modules/.mc-bootstrap-installed"
+done
+if ! (cd "$SANDBOX/issue-clone" && env "${clone_env[@]}" "$ROOT/.claude/scripts/coord/mc-gate" --focused -- npm --prefix server exec vitest run src/example.test.ts); then
+  echo 'mc-clone did not provision the dependencies needed for Prisma generation' >&2
+  exit 1
+fi
+
+rm -rf "$SANDBOX/issue-clone/server/node_modules"
+: > "$SANDBOX/npm.log"
+if (cd "$SANDBOX/issue-clone" && env "${clone_env[@]}" "$ROOT/.claude/scripts/coord/mc-gate" --focused -- npm --prefix server exec vitest run src/example.test.ts >"$SANDBOX/incomplete-clone.out" 2>&1); then
+  echo 'mc-gate allowed an incomplete clone to run' >&2
+  exit 1
+fi
+grep -F 'Run ./.claude/scripts/coord/mc-bootstrap' "$SANDBOX/incomplete-clone.out" >/dev/null
+if grep -F 'run db:generate' "$SANDBOX/npm.log" >/dev/null; then
+  echo 'mc-gate attempted Prisma generation after detecting incomplete dependencies' >&2
+  exit 1
+fi
+
 printf 'MIGRATE_DATABASE_URL=postgresql://postgres:postgres@localhost:5440/primary-fallback\n' > "$SANDBOX/primary/.env"
 if cmp -s "$SANDBOX/primary/.env" "$SANDBOX/issue-clone/.env"; then
   echo 'mc-clone linked .env instead of copying it' >&2
   exit 1
 fi
 
-mkdir -p "$SANDBOX/bin" "$SANDBOX/migration-clone/server/prisma/migrations"
+mkdir -p "$SANDBOX/migration-clone/server/prisma/migrations"
 cat > "$SANDBOX/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MC_FAKE_DOCKER_LOG"

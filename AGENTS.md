@@ -33,10 +33,9 @@ Every time-of-day shown to a person MUST render in an explicit timezone and carr
 Ticket clones fetch from the local bare mirror. The mirror is a local copy of GitHub's Git history. It rejects direct pushes; `mc-deliver` is the only normal route to GitHub `main`.
 
 ```bash
-npm run gh-to-mirror
-cd ~/code/maincar-2-worktrees
-git clone ~/code/maincar-2-coord/local-main.git mai-123-short-title
-cd mai-123-short-title
+cd ~/Documents/Coding/My\ Projects/maincar-2
+./.claude/scripts/coord/mc-clone ~/code/maincar-2-worktrees/mai-123-short-title
+cd ~/code/maincar-2-worktrees/mai-123-short-title
 git checkout -b <Linear gitBranchName exactly>
 eval "$(./.claude/scripts/coord/mc-slot --env)"
 ```
