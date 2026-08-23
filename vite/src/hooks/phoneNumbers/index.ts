@@ -4,6 +4,7 @@ export { useGetNumbers } from './useGetNumbers'
 export { useSearchAvailableNumbers } from './useSearchAvailableNumbers'
 export { useBuyNumber } from './useBuyNumber'
 export { useSetActiveNumber } from './useSetActiveNumber'
+export { useSetCallerName } from './useSetCallerName'
 export { useGetOrgNumbers } from './useGetOrgNumbers'
 export { useAssignNumber } from './useAssignNumber'
 export { useReleaseNumber } from './useReleaseNumber'
@@ -14,6 +15,7 @@ export { useReleaseNumber } from './useReleaseNumber'
 export type { SearchAvailableNumbersVariables } from './useSearchAvailableNumbers'
 export type { BuyNumberVariables } from './useBuyNumber'
 export type { SetActiveNumberVariables } from './useSetActiveNumber'
+export type { SetCallerNameVariables } from './useSetCallerName'
 export type { AssignNumberVariables } from './useAssignNumber'
 export type { ReleaseNumberVariables } from './useReleaseNumber'
 
@@ -22,6 +24,7 @@ export type { ReleaseNumberVariables } from './useReleaseNumber'
 export type {
   PhoneNumber,
   PhoneNumberStatus,
+  CallerNameStatus,
   PhoneNumberSortColumn,
   GetPhoneNumbersParams,
   AvailableNumber,
