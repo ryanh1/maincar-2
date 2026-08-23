@@ -60,17 +60,26 @@ describe('RecordPeekDrawer', () => {
       id: 'companies', slug: 'company', name: 'Company', namePlural: 'Companies',
       attributes: [attribute({ slug: 'name', name: 'Name', isIdentity: true })],
     }
-    useGetRelatedRecords.mockReturnValue({
+    const deal: ObjectDef = {
+      ...object,
+      id: 'deals', slug: 'deal', name: 'Deal', namePlural: 'Deals',
+      attributes: [attribute({ slug: 'name', name: 'Name', isIdentity: true })],
+    }
+    const companyGroup: RelatedRecordGroup = {
+      id: 'outbound:company', label: 'Company', direction: 'outbound', object: company,
+      attributeName: 'Company', count: 1,
+      records: [{ id: 'company-1', name: 'Acme', createdAt: '', updatedAt: '' }],
+    }
+    const dealGroup: RelatedRecordGroup = {
+      id: 'outbound:deal', label: 'Deal', direction: 'outbound', object: deal,
+      attributeName: 'Deal', count: 1,
+      records: [{ id: 'deal-1', name: 'Renewal', createdAt: '', updatedAt: '' }],
+    }
+    useGetRelatedRecords.mockImplementation((_orgId, objectId) => ({
       isPending: false,
       isError: false,
-      data: {
-        related: [{
-          id: 'outbound:company', label: 'Company', direction: 'outbound', object: company,
-          attributeName: 'Company', count: 1,
-          records: [{ id: 'company-1', name: 'Acme', createdAt: '', updatedAt: '' }],
-        }],
-      },
-    })
+      data: { related: objectId === 'people' ? [companyGroup] : objectId === 'companies' ? [dealGroup] : [] },
+    }))
     const person: RecordRow = { id: 'person-1', name: 'Dana', createdAt: '', updatedAt: '' }
     render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={person} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
 
@@ -81,7 +90,11 @@ describe('RecordPeekDrawer', () => {
 
     expect(screen.getByRole('heading', { name: 'Acme' })).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Record path' })).toHaveTextContent('Dana›Acme')
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open Renewal' }))
+    expect(screen.getByRole('heading', { name: 'Renewal' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('heading', { name: 'Renewal' }), { key: 'Escape' })
+    expect(screen.getByRole('heading', { name: 'Acme' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('heading', { name: 'Acme' }), { key: 'Escape' })
     expect(screen.getByRole('heading', { name: 'Dana' })).toBeInTheDocument()
   })
 })
