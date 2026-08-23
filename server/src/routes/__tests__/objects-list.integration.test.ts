@@ -462,4 +462,53 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
       .send({ teamScope: { teamIds: [revenue.id] } })
     expect(unsupported.status).toBe(400)
   })
+
+  it('runs export, add-to-list, delete, and owner-change actions from compact selections', async () => {
+    const org = await seedOrgWithAdmin(prisma, { seed: true })
+    const objectId = await seedWidgetObject(org.orgId)
+    const object = await prisma.objectDef.findFirstOrThrow({ where: { id: objectId, orgId: org.orgId } })
+    const [activeOne, activeTwo, done] = await Promise.all([
+      prisma.record.create({ data: { orgId: org.orgId, objectId, valuesJson: { name: 'One', rank: 1, status: 'active' } } }),
+      prisma.record.create({ data: { orgId: org.orgId, objectId, valuesJson: { name: 'Two', rank: 2, status: 'active' } } }),
+      prisma.record.create({ data: { orgId: org.orgId, objectId, valuesJson: { name: 'Three', rank: 3, status: 'done' } } }),
+    ])
+    const list = await prisma.list.create({ data: { orgId: org.orgId, name: 'Priority widgets', slug: `priority-widgets-${Date.now()}`, objectSlug: object.slug } })
+    const activeSelection = { mode: 'filter', filter: { type: 'condition', field: 'status', operator: 'eq', value: 'active' } }
+
+    const exported = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${objectId}/bulk`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ selection: activeSelection, action: { type: 'export' } })
+    expect(exported.status).toBe(200)
+    expect(exported.body.totalCount).toBe(2)
+    expect(exported.body.rows.map((row: { id: string }) => row.id).sort()).toEqual([activeOne.id, activeTwo.id].sort())
+
+    const added = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${objectId}/bulk`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ selection: activeSelection, action: { type: 'addToList', listId: list.id } })
+    expect(added.status).toBe(200)
+    expect(added.body.affectedCount).toBe(2)
+    expect((await prisma.listEntry.findMany({ where: { orgId: org.orgId, listId: list.id } })).map((entry) => entry.targetId).sort()).toEqual([activeOne.id, activeTwo.id].sort())
+
+    const deleted = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${objectId}/bulk`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ selection: activeSelection, action: { type: 'delete' } })
+    expect(deleted.status).toBe(200)
+    expect(deleted.body.affectedCount).toBe(2)
+    expect((await prisma.record.findFirstOrThrow({ where: { id: done.id, orgId: org.orgId } })).deletedAt).toBeNull()
+    expect((await prisma.record.findFirstOrThrow({ where: { id: activeOne.id, orgId: org.orgId } })).deletedAt).not.toBeNull()
+
+    const personObject = await prisma.objectDef.findFirstOrThrow({ where: { orgId: org.orgId, slug: 'person' } })
+    const owner = await seedMember(prisma, org.orgId)
+    const person = await prisma.person.create({ data: { orgId: org.orgId, firstName: 'Ada' } })
+    const ownerChanged = await request(app)
+      .post(`/api/orgs/${org.orgId}/objects/${personObject.id}/bulk`)
+      .set('Authorization', as(org.adminFirebaseUid))
+      .send({ selection: { mode: 'ids', ids: [person.id] }, action: { type: 'changeOwner', ownerUserId: owner.userId } })
+    expect(ownerChanged.status).toBe(200)
+    expect(ownerChanged.body.affectedCount).toBe(1)
+    expect((await prisma.person.findFirstOrThrow({ where: { id: person.id, orgId: org.orgId } })).ownerUserId).toBe(owner.userId)
+  })
 })

@@ -21,6 +21,7 @@
  * (.claude/rules/database-and-prisma.md).
  */
 import { Router } from 'express'
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
 import prisma from '../db.js'
@@ -30,9 +31,9 @@ import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { getObjectSurfaceCapabilities } from '../crm/objectCapabilities.js'
 import { listFieldChangesInWindow } from '../crm/fieldHistory.js'
-import { isRecordGridCreateSupported, listRecords, ListQueryError } from '../crm/recordList.js'
+import { isRecordGridCreateSupported, listRecords, ListQueryError, type ListQuery } from '../crm/recordList.js'
 import { Prisma } from '../generated/prisma/client.js'
-import type { ObjectDef, AttributeDef } from '../generated/prisma/client.js'
+import type { ObjectDef, AttributeDef, PrismaClient } from '../generated/prisma/client.js'
 
 // mergeParams so :orgId from the mount path reaches req.params here — without it
 // the tenant filter would silently read undefined.
@@ -170,6 +171,56 @@ const listBodySchema = z.object({
   cursor: z.string().nullish(),
   limit: z.number().int().positive().optional(),
 })
+
+// A selection is either the small set of explicitly checked rows, or the
+// active filter itself. The latter is the critical large-grid contract: the
+// browser never has to fetch every matching id before acting on the set.
+const bulkSelectionSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('ids'),
+    ids: z.array(z.string().trim().min(1, 'Each record id must be non-empty.')).min(1).max(1_000),
+  }).strict(),
+  z.object({
+    mode: z.literal('filter'),
+    filter: filterNodeSchema.nullish(),
+    teamScope: teamScopeSchema.optional(),
+  }).strict(),
+])
+
+const bulkActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('delete') }).strict(),
+  z.object({ type: z.literal('changeOwner'), ownerUserId: z.string().trim().min(1).nullable() }).strict(),
+  z.object({ type: z.literal('addToList'), listId: z.string().trim().min(1) }).strict(),
+  z.object({ type: z.literal('export') }).strict(),
+])
+
+const bulkBodySchema = z.object({ selection: bulkSelectionSchema, action: bulkActionSchema }).strict()
+const BULK_PAGE_SIZE = 500
+const MAX_BULK_EXPORT_ROWS = 10_000
+
+type BulkSelection = z.infer<typeof bulkSelectionSchema>
+
+/** Pages through a compact selection server-side, so a full filtered set never becomes a client-side id list. */
+async function* selectedRowPages(
+  db: PrismaClient,
+  args: { orgId: string; object: ObjectDef; attributes: AttributeDef[]; selection: BulkSelection },
+) {
+  const selectionQuery: Omit<ListQuery, 'cursor' | 'limit' | 'sort'> = args.selection.mode === 'ids'
+    ? { filter: { type: 'condition', field: 'id', operator: 'in', value: args.selection.ids } }
+    : { filter: args.selection.filter ?? undefined, teamScope: args.selection.teamScope }
+  let cursor: string | null = null
+
+  do {
+    const page = await listRecords(db, {
+      orgId: args.orgId,
+      object: args.object,
+      attributes: args.attributes,
+      query: { ...selectionQuery, sort: { field: 'id', direction: 'asc' }, cursor, limit: BULK_PAGE_SIZE },
+    })
+    yield page
+    cursor = page.nextCursor
+  } while (cursor)
+}
 
 const fieldChangesQuerySchema = z.object({
   days: z.coerce.number().int().min(1, 'days must be at least 1.').max(365, 'days may not exceed 365.'),
@@ -446,6 +497,139 @@ router.post(
       const result = await listRecords(prisma, { orgId, object, attributes, query: parsed.data })
       // --- Return response ---
       res.json(result)
+    } catch (error) {
+      if (error instanceof ListQueryError) {
+        return void res.status(error.status).json({ error: error.message })
+      }
+      throw error
+    }
+  }),
+)
+
+// ============================================================
+// POST /api/orgs/:orgId/objects/:id/bulk — act on explicit ids or one filter
+// ============================================================
+// The filter selection is deliberately resolved on the server in 500-row pages.
+// A CRM view can contain 100k rows without the browser first materializing 100k
+// record ids just to export, delete, reassign, or add them to a list.
+router.post(
+  '/:id/bulk',
+  wrapRoute('POST /api/orgs/:orgId/objects/:id/bulk', async (req, res) => {
+    const authReq = req as unknown as AuthenticatedRequest
+    const orgId = String(req.params.orgId)
+    const id = String(req.params.id)
+    const userId = authReq.user!.id
+
+    // --- Verify ownership ---
+    const membership = await requireMembership(authReq, res, orgId)
+    if (!membership) return
+
+    // --- Parse & validate params ---
+    const parsed = bulkBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      return void res.status(400).json({ error: parsed.error.issues[0].message })
+    }
+    const { action, selection } = parsed.data
+
+    // --- Load the object + its live attributes (org-scoped) ---
+    const object = await prisma.objectDef.findFirst({ where: { id, orgId, deletedAt: null } })
+    if (!object) {
+      return void res.status(404).json({ error: 'Object not found' })
+    }
+    const attributes = await prisma.attributeDef.findMany({
+      where: { orgId, objectId: id, deletedAt: null, isArchived: false },
+    })
+
+    try {
+      // --- Execute query ---
+      if (action.type === 'export') {
+        const rows: Record<string, unknown>[] = []
+        let totalCount = 0
+        for await (const page of selectedRowPages(prisma, { orgId, object, attributes, selection })) {
+          totalCount = page.totalCount
+          if (totalCount > MAX_BULK_EXPORT_ROWS) {
+            return void res.status(422).json({ error: `Narrow this view before exporting more than ${MAX_BULK_EXPORT_ROWS.toLocaleString()} records.` })
+          }
+          rows.push(...page.rows)
+        }
+        return void res.json({ rows, totalCount })
+      }
+
+      if (action.type === 'changeOwner') {
+        const hasOwner = object.storage === 'table' && attributes.some(
+          (attribute) => attribute.slug === 'ownerUserId' && attribute.storage === 'column' && attribute.type === 'user_reference',
+        )
+        if (!hasOwner || !['person', 'company', 'deal'].includes(object.slug)) {
+          return void res.status(422).json({ error: `${object.name} does not support owner changes.` })
+        }
+        if (action.ownerUserId) {
+          const owner = await prisma.membership.findFirst({ where: { orgId, userId: action.ownerUserId, isActive: true } })
+          if (!owner) return void res.status(422).json({ error: 'That owner is not an active member of this organization.' })
+        }
+      }
+
+      let destinationList: { id: string } | null = null
+      if (action.type === 'addToList') {
+        const list = await prisma.list.findFirst({ where: { id: action.listId, orgId, deletedAt: null } })
+        if (!list) return void res.status(404).json({ error: 'List not found' })
+        if (list.objectSlug !== object.slug) return void res.status(422).json({ error: `Choose a list of ${object.namePlural.toLowerCase()}.` })
+        const requiredListField = attributes.find((attribute) => attribute.storage === 'list' && attribute.isRequired)
+        if (requiredListField) return void res.status(422).json({ error: `${requiredListField.name} is required before records can be added to this list.` })
+        destinationList = list
+      }
+
+      let affectedCount = 0
+      for await (const page of selectedRowPages(prisma, { orgId, object, attributes, selection })) {
+        const recordIds = page.rows.map((row) => String(row.id))
+        if (recordIds.length === 0) continue
+
+        if (action.type === 'delete') {
+          const data = { deletedAt: new Date() }
+          const where = { id: { in: recordIds }, orgId, deletedAt: null }
+          const result = object.storage === 'record'
+            ? await prisma.record.updateMany({ where: { ...where, objectId: object.id }, data })
+            : object.slug === 'person'
+              ? await prisma.person.updateMany({ where, data })
+              : object.slug === 'company'
+                ? await prisma.company.updateMany({ where, data })
+                : object.slug === 'deal'
+                  ? await prisma.deal.updateMany({ where, data })
+                  : object.slug === 'call'
+                    ? await prisma.call.updateMany({ where, data })
+                    : { count: 0 }
+          affectedCount += result.count
+        }
+
+        if (action.type === 'changeOwner') {
+          const data = { ownerUserId: action.ownerUserId }
+          const where = { id: { in: recordIds }, orgId, deletedAt: null }
+          const result = object.slug === 'person'
+            ? await prisma.person.updateMany({ where, data })
+            : object.slug === 'company'
+              ? await prisma.company.updateMany({ where, data })
+              : await prisma.deal.updateMany({ where, data })
+          affectedCount += result.count
+        }
+
+        if (action.type === 'addToList' && destinationList) {
+          const result = await prisma.listEntry.createMany({
+            data: recordIds.map((targetId) => ({
+              id: randomUUID(),
+              orgId,
+              listId: destinationList.id,
+              objectSlug: object.slug,
+              targetId,
+              valuesJson: {},
+              addedByUserId: userId,
+            })),
+            skipDuplicates: true,
+          })
+          affectedCount += result.count
+        }
+      }
+
+      logger.info({ orgId, userId, objectId: object.id, action: action.type, affectedCount }, 'ran a CRM bulk action')
+      return void res.json({ affectedCount })
     } catch (error) {
       if (error instanceof ListQueryError) {
         return void res.status(error.status).json({ error: error.message })
