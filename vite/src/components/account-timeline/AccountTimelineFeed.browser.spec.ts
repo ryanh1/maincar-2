@@ -8,6 +8,20 @@ const EVENT = {
   companyId: 'company-fixture', personId: 'person-fixture', dealId: 'deal-fixture',
 }
 
+const STAGE_EVENT = {
+  ...EVENT,
+  id: 'stage-fixture',
+  sourceType: 'stage_change',
+  sourceId: 'stage-fixture',
+  title: 'Moved to Proposal',
+  preview: null,
+  subtype: 'stage_changed',
+  intensity: 1,
+  marker: { type: 'stage_moved', before: 'Discovery', after: 'Proposal' },
+  direction: null,
+  occurredAt: '2026-08-22T20:00:00.000Z',
+}
+
 test('changes the one shared timeline query when an activity filter changes', async ({ page }) => {
   const timelineRequests: string[] = []
   const consoleErrors: string[] = []
@@ -24,7 +38,7 @@ test('changes the one shared timeline query when an activity filter changes', as
       } })
       return
     }
-    await route.fulfill({ json: { events: [EVENT], nextCursor: null, range: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', isDefault: true } } })
+    await route.fulfill({ json: { events: [EVENT, STAGE_EVENT], nextCursor: null, range: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', isDefault: true } } })
   })
 
   await page.goto('/__fixtures/account-timeline')
@@ -75,12 +89,51 @@ test('opens the selected event in the right-side detail panel without leaving th
       } })
       return
     }
-    await route.fulfill({ json: { events: [EVENT], nextCursor: null, range: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', isDefault: true } } })
+    await route.fulfill({ json: { events: [EVENT, STAGE_EVENT], nextCursor: null, range: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', isDefault: true } } })
   })
 
   await page.goto('/__fixtures/account-timeline')
-  await page.getByRole('button', { name: 'Called Ada Lovelace' }).click()
+  await page.getByRole('button', { name: /Call: Called Ada Lovelace/ }).click()
   const panel = page.getByRole('dialog', { name: 'call' })
   await expect(panel.getByText('Discussed the renewal plan.')).toBeVisible()
   await expect(panel.getByRole('link', { name: 'Open full call' })).toHaveAttribute('href', '/calls/call-fixture')
+})
+
+test('reframes the band and feed together and keeps the timeline keyboard-readable in light and dark themes', async ({ page }) => {
+  const listRequests: string[] = []
+  await page.route('**/api/orgs/org-fixture/account-timeline**', async (route) => {
+    if (route.request().url().includes('/stage-fixture?')) {
+      await route.fulfill({ json: {
+        event: STAGE_EVENT,
+        detail: { type: 'stage_change', id: 'stage-fixture', marker: STAGE_EVENT.marker },
+        navigation: { previousEventId: 'event-fixture', nextEventId: null },
+      } })
+      return
+    }
+    if (!route.request().url().includes('/event-fixture?')) listRequests.push(route.request().url())
+    await route.fulfill({ json: { events: [EVENT, STAGE_EVENT], nextCursor: null, range: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', isDefault: listRequests.length === 1 } } })
+  })
+
+  await page.goto('/__fixtures/account-timeline')
+  const band = page.getByRole('region', { name: 'Account momentum' })
+  await expect(band).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Deal stage moved from Discovery to Proposal' })).toBeVisible()
+  await expect(page.getByLabel('Future timeline region')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Month' }).click()
+  await expect.poll(() => listRequests.length).toBe(2)
+  const selectedRange = new URL(listRequests[1]).searchParams
+  expect(selectedRange.get('occurredFrom')).not.toBeNull()
+  expect(selectedRange.get('occurredTo')).not.toBeNull()
+
+  const callBubble = page.getByRole('button', { name: /Call: Called Ada Lovelace/ })
+  await callBubble.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByRole('button', { name: /Stage change: Moved to Proposal/ })).toBeFocused()
+
+  const lightBackground = await band.evaluate((element) => getComputedStyle(element).backgroundColor)
+  await page.evaluate(() => document.documentElement.classList.add('dark'))
+  const darkBackground = await band.evaluate((element) => getComputedStyle(element).backgroundColor)
+  expect(darkBackground).not.toBe(lightBackground)
+  await expect(page.getByRole('button', { name: 'Deal stage moved from Discovery to Proposal' })).toBeVisible()
 })
