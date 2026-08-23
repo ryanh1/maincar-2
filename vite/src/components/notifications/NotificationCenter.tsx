@@ -100,9 +100,11 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
     setSelectedIds(checked ? notifications.map((notification) => notification.id) : [])
   }
 
-  function runAction(action: NotificationAction, ids: string[], bulk = false): void {
+  function runAction(action: NotificationAction, ids: string[], bulk = false, snoozeDurationMs?: number): void {
     if (!org || ids.length === 0) return
-    const snoozedUntil = action === 'snooze' ? new Date(Date.now() + 86_400_000).toISOString() : undefined
+    const snoozedUntil = action === 'snooze' && snoozeDurationMs
+      ? new Date(Date.now() + snoozeDurationMs).toISOString()
+      : undefined
     update.mutate(
       { orgId: org.id, notificationIds: ids, bulk, action, snoozedUntil },
       {
@@ -179,7 +181,7 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
             </div>
 
             {selectedIds.length > 0 && (
-              <BulkActions count={selectedIds.length} view={notificationView} pending={update.isPending} onAction={(action) => runAction(action, selectedIds, true)} />
+              <BulkActions count={selectedIds.length} view={notificationView} pending={update.isPending} onAction={(action, snoozeDurationMs) => runAction(action, selectedIds, true, snoozeDurationMs)} />
             )}
 
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -209,7 +211,7 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
                       timeZone={user?.timeZone}
                       pending={update.isPending}
                       onSelect={(checked) => toggleSelection(notification.id, checked)}
-                      onAction={(action) => runAction(action, [notification.id])}
+                      onAction={(action, snoozeDurationMs) => runAction(action, [notification.id], false, snoozeDurationMs)}
                     />
                   ))}
                 </div>

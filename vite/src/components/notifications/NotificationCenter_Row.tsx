@@ -15,6 +15,14 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { formatDateTime } from '@/lib/datetime'
 import type { Notification, NotificationAction, NotificationView } from '@/lib/notificationTypes'
 
+const snoozeOptions = [
+  { label: 'In one hour', durationMs: 60 * 60 * 1000 },
+  { label: 'Tomorrow', durationMs: 24 * 60 * 60 * 1000 },
+  { label: 'Next week', durationMs: 7 * 24 * 60 * 60 * 1000 },
+] as const
+
+type SnoozeDuration = (typeof snoozeOptions)[number]['durationMs']
+
 export function NotificationRow({
   notification,
   view,
@@ -30,7 +38,7 @@ export function NotificationRow({
   timeZone: string | null | undefined
   pending: boolean
   onSelect: (checked: boolean) => void
-  onAction: (action: NotificationAction) => void
+  onAction: (action: NotificationAction, snoozeDurationMs?: SnoozeDuration) => void
 }) {
   const sourcePath = sourcePathFor(notification)
   const sourceLabel = sourceLabelFor(notification.source.type)
@@ -75,12 +83,12 @@ function sourceLabelFor(type: string): string {
   return 'item'
 }
 
-export function BulkActions({ count, view, pending, onAction }: { count: number; view: NotificationView; pending: boolean; onAction: (action: NotificationAction) => void }) {
+export function BulkActions({ count, view, pending, onAction }: { count: number; view: NotificationView; pending: boolean; onAction: (action: NotificationAction, snoozeDurationMs?: SnoozeDuration) => void }) {
   const actions = view === 'archived'
     ? [['Unarchive', 'unarchive']] as const
     : view === 'snoozed'
       ? [['Unsnooze', 'unsnooze']] as const
-      : [['Mark as read', 'read'], ['Mark as unread', 'unread'], ['Archive', 'archive'], ['Snooze for one day', 'snooze']] as const
+      : [['Mark as read', 'read'], ['Mark as unread', 'unread'], ['Archive', 'archive']] as const
 
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border bg-surface-2 px-4 py-2" role="status">
@@ -91,6 +99,9 @@ export function BulkActions({ count, view, pending, onAction }: { count: number;
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {actions.map(([label, action]) => <DropdownMenuItem key={action} onSelect={() => onAction(action)}>{label}</DropdownMenuItem>)}
+          {view === 'inbox' && snoozeOptions.map(({ label, durationMs }) => (
+            <DropdownMenuItem key={durationMs} onSelect={() => onAction('snooze', durationMs)}>{label}</DropdownMenuItem>
+          ))}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
@@ -107,7 +118,7 @@ export function NotificationLoading() {
   )
 }
 
-function RowActions({ notification, view, pending, onAction }: { notification: Notification; view: NotificationView; pending: boolean; onAction: (action: NotificationAction) => void }) {
+function RowActions({ notification, view, pending, onAction }: { notification: Notification; view: NotificationView; pending: boolean; onAction: (action: NotificationAction, snoozeDurationMs?: SnoozeDuration) => void }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -126,7 +137,9 @@ function RowActions({ notification, view, pending, onAction }: { notification: N
               Mark as {notification.readAt ? 'unread' : 'read'}
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => onAction('archive')}>Archive</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => onAction('snooze')}>Snooze for one day</DropdownMenuItem>
+            {snoozeOptions.map(({ label, durationMs }) => (
+              <DropdownMenuItem key={durationMs} onSelect={() => onAction('snooze', durationMs)}>{label}</DropdownMenuItem>
+            ))}
           </>
         )}
       </DropdownMenuContent>

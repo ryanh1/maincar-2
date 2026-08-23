@@ -144,6 +144,11 @@ describe('notification inbox API (integration, real Postgres)', () => {
       recipientUserId: recipient.userId,
       snoozedUntil: new Date('2099-01-01T00:00:00.000Z'),
     })
+    const returned = await createNotification({
+      orgId: org.orgId,
+      recipientUserId: recipient.userId,
+      snoozedUntil: new Date('2000-01-01T00:00:00.000Z'),
+    })
 
     const archivedRes = await request(app)
       .get(`/api/orgs/${org.orgId}/notifications?view=archived`)
@@ -161,6 +166,12 @@ describe('notification inbox API (integration, real Postgres)', () => {
       source: { status: 'unavailable', title: 'Comment on a call', preview: 'Please take a look.' },
     })
     expect(snoozedRes.body.notifications[0].source).not.toHaveProperty('route')
+
+    const inboxRes = await request(app)
+      .get(`/api/orgs/${org.orgId}/notifications`)
+      .set('Authorization', as(recipient.firebaseUid))
+    expect(inboxRes.status).toBe(200)
+    expect(inboxRes.body.notifications.map((row: { id: string }) => row.id)).toContain(returned.id)
   })
 
   it('filters the non-archived inbox by unread state, event type, and object type', async () => {
