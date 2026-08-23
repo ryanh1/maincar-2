@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Runs the test gate while holding one of a small number of global slots.
-# This prevents CPU thrashing when many sessions run tests at once.
+# Runs the test gate while holding a global slot. The safe default is serial:
+# a full gate can otherwise saturate this machine and make tests flaky.
 #
 #   mc-gate                       # run full gate (typecheck, lint, test, test:integration)
 #   mc-gate --classify            # print the scope decision and changed files, run nothing
 #   mc-gate npm test              # just that command, still queued
-#   MC_MAX_JOBS=2 mc-gate         # tighten the limit
+#   MC_MAX_JOBS=2 mc-gate         # deliberately allow two runners
 #   MC_GATE_FULL=1 mc-gate        # force the full gate, ignore the classifier
 #
 # SCOPE-AWARE GATE. With no arguments, mc-gate looks at what the diff actually
@@ -34,19 +34,41 @@ if [ "${1:-}" = "--classify" ]; then
   exit 0
 fi
 
-MAX="${MC_MAX_JOBS:-4}"
+MAX="${MC_MAX_JOBS:-1}"
+case "$MAX" in
+  ''|*[!0-9]*|0)
+    echo "[mc-gate] MC_MAX_JOBS must be a positive integer (got: $MAX)" >&2
+    exit 2
+    ;;
+esac
 SEM="$STATE/locks/gate"
 mkdir -p "$SEM"
 
 acquire() {
   local waited=0 timeout=3600
   while :; do
-    for n in $(seq 1 "$MAX"); do
-      local d="$SEM/slot-$n"
-      if mkdir "$d" 2>/dev/null; then echo $$ > "$d/pid"; SLOT_DIR="$d"; return 0; fi
-      local owner; owner=$(cat "$d/pid" 2>/dev/null || echo "")
-      if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then rm -rf "$d"; fi
+    # Clear dead slots before choosing one. A serial runner must also wait for
+    # an active old multi-slot runner; otherwise a transition from the former
+    # default (four) could still run two gates at once.
+    local active_runner=0 d owner
+    for d in "$SEM"/slot-*; do
+      [ -d "$d" ] || continue
+      owner=$(cat "$d/pid" 2>/dev/null || echo "")
+      if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+        rm -rf "$d"
+        continue
+      fi
+      active_runner=1
     done
+
+    if [ "$MAX" -ne 1 ] || [ "$active_runner" -eq 0 ]; then
+      for n in $(seq 1 "$MAX"); do
+        d="$SEM/slot-$n"
+        if mkdir "$d" 2>/dev/null; then echo $$ > "$d/pid"; SLOT_DIR="$d"; return 0; fi
+        owner=$(cat "$d/pid" 2>/dev/null || echo "")
+        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then rm -rf "$d"; fi
+      done
+    fi
     if [ "$waited" -eq 0 ]; then echo "[mc-gate] $MAX runners busy — queued. Waiting..."; fi
     [ "$waited" -ge "$timeout" ] && { echo "[mc-gate] waited an hour, giving up" >&2; return 1; }
     sleep 5; waited=$((waited+5))

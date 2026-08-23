@@ -94,7 +94,7 @@ Or run specific tests:
 | `mc-common.sh` | Shared toolbox (lock, log, local-mirror sync) | Never run directly; sourced by others |
 | `mc-local-main` | Creates/refreshes the local bare `main` mirror; `refresh` also safely updates the runnable primary checkout and changed dependencies | Before creating ticket clones; use `refresh` after a dependency-changing delivery |
 | `mc-slot` | Assigns stable ports for your worktree | `eval "$(mc-slot --env)"` at the start |
-| `mc-gate` | Runs tests with a queue (max 4 at once) | Before every merge |
+| `mc-gate` | Runs tests with a serial queue by default | Before every merge |
 | `mc-merge` | Merges your branch safely, with a lock | When work is done and tests pass |
 | `mc-closeout` | Proves GitHub delivery and clone cleanup | Immediately before Linear Done |
 | `mc-migrate` | Creates non-colliding database migrations | When you need a new migration |
@@ -123,7 +123,7 @@ git commit -m "MAI-123: Feature description"
 
 # Run tests (queued if needed)
 ./.claude/scripts/coord/mc-gate
-# [mc-gate] running (slot 1, limit 4)
+# [mc-gate] running (slot 1, limit 1)
 # ... typecheck, lint, build, tests run ...
 
 # If tests pass, merge
@@ -133,7 +133,7 @@ git commit -m "MAI-123: Feature description"
 # [mc-merge] merged and pushed. mai-123-feature is on main.
 ```
 
-**Example: Two sessions run in parallel**
+**Example: Two sessions use the queue**
 
 ```
 Session A (MAI-123):
@@ -144,14 +144,16 @@ Session A (MAI-123):
 
 Session B (MAI-124):
   mc-slot → slot 1 (API 3020, VITE 5184)
-  mc-gate → slot 2 (test runner 2, slot 1 still running)
-  mc-gate → done
+  mc-gate → waits for Session A's test runner
+  mc-gate → slot 1 after Session A finishes
   mc-merge → waits for lock (Session A holds it)
            → gets lock after Session A releases it
            → merges
 ```
 
-No port collisions, no test thrashing, no clobbered merges.
+No port collisions, no test thrashing, no clobbered merges. Full gates run
+serially by default because their parallel workers can already saturate a
+development machine.
 
 ## Configuration
 
@@ -159,7 +161,7 @@ No port collisions, no test thrashing, no clobbered merges.
 
 ```bash
 MC_MAX_JOBS=2 mc-gate
-# Only 2 tests run at a time (default is 4)
+# Deliberately allow 2 tests at a time (default is 1)
 ```
 
 ### Force full gate (skip scope detection)
