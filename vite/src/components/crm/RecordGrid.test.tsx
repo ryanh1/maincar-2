@@ -22,6 +22,7 @@ const useUpdateRecordValue = vi.hoisted(() => vi.fn(() => ({ mutateAsync })))
 const createMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 const useCreateRecord = vi.hoisted(() => vi.fn(() => ({ mutateAsync: createMutateAsync, isPending: false })))
 const dataEditorScrollTo = vi.hoisted(() => vi.fn())
+const dataEditorFocus = vi.hoisted(() => vi.fn())
 const useDialerMock = vi.hoisted(() => vi.fn())
 const useGetCellStyles = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: { cellStyles: [] } })))
 const setCellStyleMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
@@ -29,6 +30,7 @@ const useSetCellStyle = vi.hoisted(() => vi.fn(() => ({ mutateAsync: setCellStyl
 vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetFieldChanges, useGetActivity, useUpdateRecordValue, useCreateRecord }))
 vi.mock('@/hooks/cellStyles', () => ({ useGetCellStyles, useSetCellStyle }))
 vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => <div data-testid="record-note-composer" /> }))
+vi.mock('@/components/editor/useMentionSuggestions', () => ({ useMentionSuggestions: () => ({ items: [], isPending: false }) }))
 
 vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }))
 
@@ -60,8 +62,8 @@ vi.mock('@glideapps/glide-data-grid', () => ({
       return <div data-testid="frozen-rows-editor" />
     }
     dataEditorProps.current = props
-    const ref = props.ref as { current: { scrollTo: typeof dataEditorScrollTo } | null } | undefined
-    if (ref) ref.current = { scrollTo: dataEditorScrollTo }
+    const ref = props.ref as { current: { scrollTo: typeof dataEditorScrollTo; focus: typeof dataEditorFocus } | null } | undefined
+    if (ref) ref.current = { scrollTo: dataEditorScrollTo, focus: dataEditorFocus }
     return <div data-testid="data-editor" />
   },
   GridCellKind: { Loading: 'loading', Text: 'text', Number: 'number', Boolean: 'boolean', Custom: 'custom' },
@@ -138,6 +140,7 @@ beforeEach(() => {
   useSetCellStyle.mockReturnValue({ mutateAsync: setCellStyleMutateAsync })
   dataEditorProps.current = null
   dataEditorScrollTo.mockReset()
+  dataEditorFocus.mockReset()
   dataEditorProps.frozenRows = null
 })
 
@@ -792,6 +795,52 @@ describe('RecordGrid', () => {
     const getCellContent = dataEditorProps.current!.getCellContent as (item: [number, number]) => unknown
     expect(getCellContent([0, 0])).toMatchObject({ data: 'Ada', readonly: false, allowOverlay: true })
     expect(getCellContent([1, 0])).toMatchObject({ data: 'Lovelace', readonly: false, allowOverlay: true })
+  })
+
+  it('opens the canvas autocomplete at the active compatible cell and leaves unsupported fields alone', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', note: 'Call Ada', dueDate: null, stage: null, amount: 42 }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const attributes = [
+      attribute({ slug: 'note', name: 'Note', type: 'text', sortOrder: 0 }),
+      attribute({ slug: 'dueDate', name: 'Due date', type: 'date', sortOrder: 1 }),
+      attribute({ slug: 'stage', name: 'Stage', type: 'status', optionsJson: [{ value: 'open', label: 'Open' }], sortOrder: 2 }),
+      attribute({ slug: 'amount', name: 'Amount', type: 'currency', sortOrder: 3 }),
+    ]
+    renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={attributes} />)
+
+    const onKeyDown = dataEditorProps.current!.onKeyDown as (event: Record<string, unknown>) => void
+    const openAt = (key: '@' | '/', column: number) => {
+      const cancel = vi.fn()
+      act(() => onKeyDown({ key, location: [column, 0], bounds: { x: 24, y: 48, width: 160, height: 34 }, cancel, preventDefault: vi.fn(), stopPropagation: vi.fn() }))
+      return cancel
+    }
+
+    expect(openAt('@', 0)).toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Autocomplete for Note' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search Note suggestions' }), { key: 'Escape' })
+
+    expect(openAt('/', 0)).toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Autocomplete for Note' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search Note suggestions' }), { key: 'Escape' })
+
+    expect(openAt('@', 1)).toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Autocomplete for Due date' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search Due date suggestions' }), { key: 'Escape' })
+
+    expect(openAt('@', 2)).toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Autocomplete for Stage' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search Stage suggestions' }), { key: 'Escape' })
+
+    expect(openAt('@', 3)).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: 'Autocomplete for Amount' })).not.toBeInTheDocument()
   })
 
   it('round-trips a typed edit: the new value reads back on the next getCellContent call', () => {
