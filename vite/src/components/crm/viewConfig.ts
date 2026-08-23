@@ -45,6 +45,13 @@ export type ViewColumn = {
   collapsed?: boolean
 }
 
+/** The grid's non-destructive recent-change overlay and its optional row scope. */
+export type ChangeHighlightConfig = {
+  mode: 'off' | 'on'
+  days: number
+  onlyChangedRows: boolean
+}
+
 /**
  * The live counterpart of SavedView.configJson. This route keeps the current
  * view state locally and uses the same shape the saved-view contract persists.
@@ -66,6 +73,7 @@ export type ViewConfig = {
   kanbanCardFieldIds?: string[]
   /** Optional numeric or currency field summed in each Kanban column header. */
   kanbanSummaryAttributeId?: string
+  changeHighlight: ChangeHighlightConfig
 }
 
 export type RecordListFilter =
@@ -91,6 +99,7 @@ type SharedViewConfig = {
   version: 1
   sorts: ViewSort[]
   teamScope?: TeamScope
+  changeHighlight?: ChangeHighlightConfig
 }
 
 const EMPTY_CONFIG: Omit<ViewConfig, 'columns'> = {
@@ -103,6 +112,7 @@ const EMPTY_CONFIG: Omit<ViewConfig, 'columns'> = {
   zoom: 100,
   columnWidths: {},
   columnStyles: [],
+  changeHighlight: { mode: 'off', days: 7, onlyChangedRows: false },
 }
 
 export function createViewConfig(attributes: AttributeDef[]): ViewConfig {
@@ -172,6 +182,17 @@ function parseTeamScope(value: unknown): TeamScope | undefined {
     : undefined
 }
 
+function parseChangeHighlight(value: unknown): ChangeHighlightConfig | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const source = value as { mode?: unknown; days?: unknown; onlyChangedRows?: unknown }
+  if (
+    (source.mode !== 'off' && source.mode !== 'on') ||
+    typeof source.days !== 'number' || !Number.isInteger(source.days) || source.days < 1 || source.days > 365 ||
+    typeof source.onlyChangedRows !== 'boolean'
+  ) return undefined
+  return { mode: source.mode, days: source.days, onlyChangedRows: source.onlyChangedRows }
+}
+
 function decodeSharedConfig(encoded: string | null, attributes: AttributeDef[]): SharedViewConfig | null {
   if (!encoded) return null
 
@@ -183,7 +204,8 @@ function decodeSharedConfig(encoded: string | null, attributes: AttributeDef[]):
       ? (parsed as { sorts: unknown[] }).sorts.filter((sort) => isViewSort(sort, knownIds))
       : []
     const teamScope = parseTeamScope((parsed as { teamScope?: unknown }).teamScope)
-    return { version: 1, sorts, ...(teamScope ? { teamScope } : {}) }
+    const changeHighlight = parseChangeHighlight((parsed as { changeHighlight?: unknown }).changeHighlight)
+    return { version: 1, sorts, ...(teamScope ? { teamScope } : {}), ...(changeHighlight ? { changeHighlight } : {}) }
   } catch {
     return null
   }
@@ -191,8 +213,15 @@ function decodeSharedConfig(encoded: string | null, attributes: AttributeDef[]):
 
 function encodeSharedConfig(config: ViewConfig): string | null {
   const teamScope = parseTeamScope(config.teamScope)
-  if (config.sorts.length === 0 && !teamScope) return null
-  const shared: SharedViewConfig = { version: 1, sorts: config.sorts, ...(teamScope ? { teamScope } : {}) }
+  const changeHighlight = parseChangeHighlight(config.changeHighlight)
+  const hasChangeHighlight = changeHighlight?.mode === 'on' || changeHighlight?.onlyChangedRows === true || changeHighlight?.days !== 7
+  if (config.sorts.length === 0 && !teamScope && !hasChangeHighlight) return null
+  const shared: SharedViewConfig = {
+    version: 1,
+    sorts: config.sorts,
+    ...(teamScope ? { teamScope } : {}),
+    ...(hasChangeHighlight && changeHighlight ? { changeHighlight } : {}),
+  }
   return btoa(JSON.stringify(shared))
 }
 
@@ -278,7 +307,14 @@ export function useViewConfig(
     const defaults = createViewConfig(attributes)
     const saved = savedConfig ? mergeConfigWithAttributes(defaults, savedConfig) : defaults
     const shared = decodeSharedConfig(searchParams.get('v'), attributes)
-    return shared ? { ...saved, sorts: shared.sorts, ...(shared.teamScope ? { teamScope: shared.teamScope } : {}) } : saved
+    return shared
+      ? {
+          ...saved,
+          sorts: shared.sorts,
+          ...(shared.teamScope ? { teamScope: shared.teamScope } : {}),
+          ...(shared.changeHighlight ? { changeHighlight: shared.changeHighlight } : {}),
+        }
+      : saved
   }, [attributes, savedConfig, searchParams])
 
   const [localConfig, setLocalConfig] = useState<ViewConfig | null>(null)

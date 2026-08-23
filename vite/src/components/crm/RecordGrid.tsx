@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { DataEditor, GridCellKind, emptyGridSelection } from '@glideapps/glide-data-grid'
 import type {
   DataEditorRef,
+  DrawCellCallback,
   EditableGridCell,
   GridCell,
   GridColumn,
@@ -20,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { useCreateRecord, useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
+import { useCreateRecord, useGetFieldChanges, useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
 import { useAuth } from '@/providers/useAuth'
 import { useDialer } from '@/components/dialer/dialerContext'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
@@ -41,6 +42,8 @@ import { createViewConfig, defaultKanbanGroupBy, reorderColumnGroup, toRecordLis
 import { parseGridCommand } from './gridCommands'
 import { coerceCurrency, coerceNumber } from './cellCoercion'
 import { KanbanBoard } from './KanbanBoard'
+import { ChangeHighlightOverlay, FieldHistoryPopover, type ChangeHighlightTarget } from './ChangeHighlightOverlay'
+import { drawChangeDots } from './changeHighlightCanvas'
 
 const LEADING_COLUMN_WIDTH = 220
 const DEFAULT_COLUMN_WIDTH = 160
@@ -237,6 +240,22 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   const listQuery = useMemo(() => toRecordListQuery(config, attributes), [config, attributes])
   const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
     useRecordWindow(orgId, object.id, listQuery)
+  const changeHighlightEnabled = config.changeHighlight.mode === 'on'
+  const fieldChangesQuery = useGetFieldChanges(orgId, object.id, config.changeHighlight.days, changeHighlightEnabled)
+  const changesByCell = useMemo(
+    () => new Map((changeHighlightEnabled ? fieldChangesQuery.data?.changes ?? [] : []).map((change) => [`${change.recordId}:${change.attributeId}`, change])),
+    [changeHighlightEnabled, fieldChangesQuery.data?.changes],
+  )
+  const changedRecordIds = useMemo(
+    () => new Set((changeHighlightEnabled ? fieldChangesQuery.data?.changes ?? [] : []).map((change) => change.recordId)),
+    [changeHighlightEnabled, fieldChangesQuery.data?.changes],
+  )
+  const visibleRows = useMemo(
+    () => changeHighlightEnabled && config.changeHighlight.onlyChangedRows
+      ? rows.filter((record) => changedRecordIds.has(record.id))
+      : rows,
+    [changeHighlightEnabled, config.changeHighlight.onlyChangedRows, rows, changedRecordIds],
+  )
   const updateRecordValue = useUpdateRecordValue()
   const createRecord = useCreateRecord()
   const [isCreating, setIsCreating] = useState(false)
@@ -270,10 +289,10 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const groupAttribute = config.groupBy[0] ? columns.find((attribute) => attribute.id === config.groupBy[0]?.attributeId) : undefined
   const displayRows = useMemo<DisplayRow[]>(() => {
-    if (!groupAttribute) return rows.map((record) => ({ kind: 'record', record }))
+    if (!groupAttribute) return visibleRows.map((record) => ({ kind: 'record', record }))
 
     const groups = new Map<string, { label: string; records: RecordRow[] }>()
-    for (const record of rows) {
+    for (const record of visibleRows) {
       const value = record[groupAttribute.slug]
       const option = Array.isArray(groupAttribute.optionsJson)
         ? (groupAttribute.optionsJson as Array<{ value?: unknown; label?: unknown }>).find((candidate) => candidate.value === value)
@@ -289,7 +308,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
       { kind: 'group' as const, key, label: group.label, count: group.records.length },
       ...(collapsedGroups.has(key) ? [] : group.records.map((record) => ({ kind: 'record' as const, record }))),
     ])
-  }, [rows, groupAttribute, collapsedGroups])
+  }, [visibleRows, groupAttribute, collapsedGroups])
 
   const recordAtRow = useCallback((row: number) => {
     const displayRow = displayRows[row]
@@ -358,16 +377,29 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
       const record = displayRow.record
       const value = cellValue(record, attr)
       const flagged = flaggedCells.has(`${record.id}:${attr.slug}`)
-      return buildGridCell(attr, value, {
+      const cell = buildGridCell(attr, value, {
         orgId,
         timeZone: user?.timeZone,
         currencyCode: typeof record.currency === 'string' ? record.currency : undefined,
         flagged,
         wrap: configuredColumns.get(attr.id)?.wrap === true,
       })
+      const change = changesByCell.get(`${record.id}:${attr.id}`)
+      return change
+        ? { ...cell, themeOverride: { ...cell.themeOverride, bgCell: colors.changeHighlightTint } }
+        : cell
     },
-    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups, orgId, configuredColumns],
+    [displayRows, visibleColumns, user?.timeZone, cellValue, flaggedCells, collapsedGroups, orgId, configuredColumns, changesByCell, colors.changeHighlightTint],
   )
+
+  const drawCell = useCallback<DrawCellCallback>((args, drawContent) => {
+    drawContent()
+    const record = recordAtRow(args.row)
+    const attribute = visibleColumns[args.col]
+    if (!record || !attribute) return
+    const change = changesByCell.get(`${record.id}:${attribute.id}`)
+    if (change) drawChangeDots(args.ctx, args.rect, change.changeCount, colors.changeHighlightDot)
+  }, [recordAtRow, visibleColumns, changesByCell, colors.changeHighlightDot])
 
   // The single coercion seam: runs for a typed commit AND a paste (glide
   // calls this before either lands). Never returns `false` — the raw text
@@ -934,7 +966,9 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   // The ⤢ hover affordance (DECISIONS D3): a small button pinned to the
   // frozen leading column, following whichever row the pointer is over.
   const [hoveredRow, setHoveredRow] = useState<{ row: number; y: number; height: number } | null>(null)
-  const gridRowCount = groupAttribute ? displayRows.length : totalCount
+  const [changeHighlightHover, setChangeHighlightHover] = useState<ChangeHighlightTarget | null>(null)
+  const [historyTarget, setHistoryTarget] = useState<ChangeHighlightTarget | null>(null)
+  const gridRowCount = groupAttribute || (changeHighlightEnabled && config.changeHighlight.onlyChangedRows) ? displayRows.length : totalCount
 
   const onMouseMove = useCallback((args: GridMouseEventArgs) => {
     setExpandedCell((current) => {
@@ -943,11 +977,18 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
     })
     if (args.kind !== 'cell') {
       setHoveredRow(null)
+      setChangeHighlightHover(null)
       return
     }
-    const [, row] = args.location
+    const [col, row] = args.location
     setHoveredRow({ row, y: args.bounds.y, height: args.bounds.height })
-  }, [])
+    const record = recordAtRow(row)
+    const attribute = visibleColumns[col]
+    const change = record && attribute ? changesByCell.get(`${record.id}:${attribute.id}`) : undefined
+    setChangeHighlightHover(change && record && attribute
+      ? { recordId: record.id, attribute, change, bounds: args.bounds }
+      : null)
+  }, [recordAtRow, visibleColumns, changesByCell])
 
   const frozenColumnBoundary = useMemo(
     () => ROW_MARKER_WIDTH + gridColumns
@@ -1135,7 +1176,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
           onReorder={onColumnGroupReorder}
         />
       )}
-      <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => { setHoveredRow(null); setExpandedCell(null) }}>
+      <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => { setHoveredRow(null); setExpandedCell(null); setChangeHighlightHover(null) }}>
         <DataEditor
         ref={dataEditorRef}
         columns={gridColumns}
@@ -1145,6 +1186,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
         fillHandle
         onFillPattern={onFillPattern}
         customRenderers={[chipCellRenderer, fieldEditorCellRenderer]}
+        drawCell={drawCell}
         rows={gridRowCount}
         freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
         rowHeight={ROW_HEIGHTS[config.rowHeight]}
@@ -1165,6 +1207,21 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
         width="100%"
         height="100%"
         />
+
+        <ChangeHighlightOverlay
+          hover={changeHighlightHover}
+          timeZone={user?.timeZone}
+          onShowFullHistory={setHistoryTarget}
+        />
+        {historyTarget && (
+          <FieldHistoryPopover
+            key={`${historyTarget.recordId}:${historyTarget.attribute.id}`}
+            orgId={orgId}
+            target={historyTarget}
+            timeZone={user?.timeZone}
+            onClose={() => setHistoryTarget(null)}
+          />
+        )}
 
         {headerMenu && onViewConfigChange && (
           <GridColumnFilterMenu

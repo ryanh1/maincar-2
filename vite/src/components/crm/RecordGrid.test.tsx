@@ -15,6 +15,7 @@ import { RecordGrid } from './RecordGrid'
 import { createViewConfig } from './viewConfig'
 
 const useRecordWindow = vi.hoisted(() => vi.fn())
+const useGetFieldChanges = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: { changes: [] } })))
 const useGetActivity = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: undefined })))
 const mutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 const useUpdateRecordValue = vi.hoisted(() => vi.fn(() => ({ mutateAsync })))
@@ -22,7 +23,7 @@ const createMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 const useCreateRecord = vi.hoisted(() => vi.fn(() => ({ mutateAsync: createMutateAsync, isPending: false })))
 const dataEditorScrollTo = vi.hoisted(() => vi.fn())
 const useDialerMock = vi.hoisted(() => vi.fn())
-vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetActivity, useUpdateRecordValue, useCreateRecord }))
+vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetFieldChanges, useGetActivity, useUpdateRecordValue, useCreateRecord }))
 vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => <div data-testid="record-note-composer" /> }))
 
 vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }))
@@ -109,6 +110,8 @@ const ATTRIBUTES: AttributeDef[] = [
 
 beforeEach(() => {
   useRecordWindow.mockReset()
+  useGetFieldChanges.mockReset()
+  useGetFieldChanges.mockReturnValue({ isPending: false, isError: false, data: { changes: [] } })
   mutateAsync.mockReset()
   mutateAsync.mockResolvedValue(undefined)
   createMutateAsync.mockReset()
@@ -123,6 +126,48 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('RecordGrid', () => {
+  it('tints changed cells, caps their dot badge, shows the change hover, and can limit rows to changes', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'record-1', firstName: 'Ada' }, { id: 'record-2', firstName: 'Grace' }], totalCount: 2,
+      isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    })
+    useGetFieldChanges.mockReturnValue({
+      isPending: false,
+      isError: false,
+      data: { changes: [{ recordId: 'record-1', attributeId: 'firstName', changeCount: 5, previousValue: 'Analyst', currentValue: 'Director', changedAt: '2026-08-22T12:00:00.000Z' }] },
+    })
+    const config = {
+      ...createViewConfig(ATTRIBUTES),
+      changeHighlight: { mode: 'on' as const, days: 7, onlyChangedRows: false },
+    }
+    const view = renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={vi.fn()} />)
+
+    const props = dataEditorProps.current!
+    expect((props.getCellContent as (item: [number, number]) => Record<string, unknown>)([0, 0]).themeOverride).toEqual(expect.objectContaining({ bgCell: expect.any(String) }))
+    const ctx = { save: vi.fn(), restore: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), fill: vi.fn() } as unknown as CanvasRenderingContext2D
+    ;(props.drawCell as (args: Record<string, unknown>, draw: () => void) => void)(
+      { row: 0, col: 0, ctx, rect: { x: 0, y: 0, width: 120, height: 32 } },
+      vi.fn(),
+    )
+    expect(ctx.arc).toHaveBeenCalledTimes(3)
+
+    act(() => {
+      ;(props.onMouseMove as (args: Record<string, unknown>) => void)({ kind: 'cell', location: [0, 0], bounds: { x: 0, y: 0, width: 120, height: 32 } })
+    })
+    expect(screen.getByText('Analyst → Director')).toBeInTheDocument()
+
+    view.rerender(withProviders(
+      <RecordGrid
+        orgId="org-1"
+        object={TEST_OBJECT}
+        attributes={ATTRIBUTES}
+        viewConfig={{ ...config, changeHighlight: { ...config.changeHighlight, onlyChangedRows: true } }}
+        onViewConfigChange={vi.fn()}
+      />,
+    ))
+    expect(dataEditorProps.current!.rows).toBe(1)
+  })
+
   it('highlights and scrolls to the live Call record without changing selection', () => {
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'call-1', firstName: 'Ada' }, { id: 'call-2', firstName: 'Grace' }], totalCount: 2,

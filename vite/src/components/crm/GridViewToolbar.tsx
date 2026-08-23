@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from 'react'
-import { ChevronDown, Columns3Cog, LayoutList, PanelsTopLeft, Rows3, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
+import { ChevronDown, Columns3Cog, History, LayoutList, PanelsTopLeft, Rows3, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -109,6 +109,7 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
 export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange }: GridViewToolbarProps) {
   const [columnGroupName, setColumnGroupName] = useState('')
+  const [customChangeDays, setCustomChangeDays] = useState('')
   function setColumnVisible(attributeId: string, visible: boolean) {
     onConfigChange((current) => ({
       ...current,
@@ -156,6 +157,12 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
       const kanbanCardFieldIds = checked ? [...selected, attributeId] : selected.filter((id) => id !== attributeId)
       return { ...current, kanbanCardFieldIds }
     })
+  }
+
+  function applyCustomChangeWindow() {
+    const days = Number(customChangeDays)
+    if (!Number.isInteger(days) || days < 1 || days > 365) return
+    onConfigChange((current) => ({ ...current, changeHighlight: { ...current.changeHighlight, days } }))
   }
 
   return (
@@ -254,6 +261,72 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
       {teamScopeSupported && orgId && config.teamScope && <TeamScopeChip orgId={orgId} config={config} />}
 
       <GridFilterBuilder attributes={attributes} config={config} onConfigChange={onConfigChange} />
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="secondary" size="sm">
+            <History size={16} />
+            Changes
+            <ChevronDown size={16} />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuCheckboxItem
+            checked={config.changeHighlight.mode === 'on'}
+            onSelect={(event) => event.preventDefault()}
+            onCheckedChange={(checked) => onConfigChange((current) => ({
+              ...current,
+              changeHighlight: { ...current.changeHighlight, mode: checked ? 'on' : 'off' },
+            }))}
+          >
+            Highlight changes
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>Change window</DropdownMenuLabel>
+          {[1, 7, 30].map((days) => (
+            <DropdownMenuItem
+              key={days}
+              onSelect={(event) => {
+                event.preventDefault()
+                onConfigChange((current) => ({ ...current, changeHighlight: { ...current.changeHighlight, days } }))
+              }}
+            >
+              {days === 1 ? 'Last day' : `Last ${days} days`}
+            </DropdownMenuItem>
+          ))}
+          <label className="mx-2 mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+            Custom days
+            <Input
+              aria-label="Custom change window in days"
+              className="h-8 w-20"
+              min={1}
+              max={365}
+              type="number"
+              value={customChangeDays}
+              onChange={(event) => setCustomChangeDays(event.target.value)}
+              onBlur={applyCustomChangeWindow}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  applyCustomChangeWindow()
+                }
+              }}
+            />
+          </label>
+          <DropdownMenuSeparator />
+          <DropdownMenuCheckboxItem
+            checked={config.changeHighlight.onlyChangedRows}
+            disabled={config.changeHighlight.mode === 'off'}
+            onSelect={(event) => event.preventDefault()}
+            onCheckedChange={(onlyChangedRows) => onConfigChange((current) => ({
+              ...current,
+              changeHighlight: { ...current.changeHighlight, onlyChangedRows },
+            }))}
+          >
+            Show only changed rows
+          </DropdownMenuCheckboxItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

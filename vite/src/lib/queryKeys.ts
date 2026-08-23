@@ -147,6 +147,10 @@ export const queryKeys = {
     list: (orgId: string, objectId: string, query?: Record<string, unknown>) =>
       ['records', 'list', orgId, objectId, query ?? {}] as const,
     listAll: (orgId: string, objectId: string) => ['records', 'list', orgId, objectId] as const,
+    fieldChanges: (orgId: string, objectId: string, days: number) =>
+      ['records', 'fieldChanges', orgId, objectId, days] as const,
+    fieldHistory: (orgId: string, recordId: string, attribute: string) =>
+      ['records', 'fieldHistory', orgId, recordId, attribute] as const,
   },
   savedViews: {
     all: (orgId: string) => ['savedViews', orgId] as const,
