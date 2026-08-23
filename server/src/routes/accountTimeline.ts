@@ -254,36 +254,49 @@ router.get(
       ...(mine ? { createdByUserId: userId } : {}),
     }
 
-    // A caller that chooses a range gets it verbatim. Without one, a small scalar
-    // probe and the root's open-deal facts choose a durable server default; neither
-    // query is the event page below, which remains one indexed ActivityEntry read.
+    // A caller that chooses a range gets it verbatim. Without one, small indexed
+    // ActivityEntry probes and the root's open-deal facts choose a durable server
+    // default; the event page below remains one indexed ActivityEntry read.
     const isDefaultRange = !occurredFrom
     const range =
       occurredFrom && occurredTo
         ? { from: occurredFrom, to: occurredTo }
         : await (async () => {
-            const recentEvents = await prisma.activityEntry.findMany({
-              where: rootWhere,
-              orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
-              take: DENSE_TIMELINE_EVENT_COUNT,
-              select: { id: true },
-            })
             const activeDeal =
               rootType === 'company'
                 ? await prisma.deal.findFirst({
                     where: { orgId, companyId: rootId, status: 'open', deletedAt: null },
-                    orderBy: [{ closeDate: { sort: 'desc', nulls: 'last' } }, { createdAt: 'asc' }],
-                    select: { createdAt: true, closeDate: true },
+                    orderBy: [{ createdAt: 'asc' }],
+                    select: { createdAt: true },
                   })
                 : dealRoot?.status === 'open'
-                  ? { createdAt: dealRoot.createdAt, closeDate: dealRoot.closeDate }
+                  ? { createdAt: dealRoot.createdAt }
                   : null
+            const now = new Date()
+            const farthestScheduledActivity = await prisma.activityEntry.findFirst({
+              where: {
+                ...rootWhere,
+                sourceType: { in: ['call', 'meeting', 'task'] },
+                timelineSubtype: 'scheduled',
+                occurredAt: { gt: now },
+              },
+              orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+              select: { occurredAt: true },
+            })
+            const recentEvents = activeDeal
+              ? []
+              : await prisma.activityEntry.findMany({
+                  where: { ...rootWhere, occurredAt: { lte: now } },
+                  orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+                  take: DENSE_TIMELINE_EVENT_COUNT,
+                  select: { occurredAt: true },
+                })
             return resolveSmartTimelineRange({
               accountCreatedAt: root.createdAt,
               activeDealCreatedAt: activeDeal?.createdAt ?? null,
-              farthestCommitmentAt: activeDeal?.closeDate ?? null,
-              recentEventCount: recentEvents.length,
-              now: new Date(),
+              farthestScheduledAt: farthestScheduledActivity?.occurredAt ?? null,
+              recentEventOccurredAt: recentEvents.map((event) => event.occurredAt),
+              now,
             })
           })()
 

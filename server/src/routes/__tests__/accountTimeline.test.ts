@@ -89,6 +89,7 @@ beforeEach(() => {
   authAs()
   prismaMock.company.findFirst.mockResolvedValue(companyRow())
   prismaMock.deal.findFirst.mockResolvedValue({ id: 'deal-1', createdAt: NOW, status: 'open', closeDate: null })
+  prismaMock.activityEntry.findFirst.mockResolvedValue(null)
   prismaMock.activityEntry.findMany.mockResolvedValue([eventRow()])
 })
 
@@ -212,12 +213,47 @@ describe('GET /api/orgs/:orgId/account-timeline — explicit account range', () 
 })
 
 describe('GET /api/orgs/:orgId/account-timeline — smart default range', () => {
+  it('snaps an open deal through the farthest scheduled ActivityEntry without a source join', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    prismaMock.deal.findFirst.mockResolvedValue({ id: 'deal-1', createdAt: new Date('2026-08-01T00:00:00.000Z') })
+    prismaMock.activityEntry.findFirst.mockResolvedValue({ occurredAt: new Date('2026-09-20T09:00:00.000Z') })
+    prismaMock.activityEntry.findMany.mockResolvedValue([eventRow()])
+
+    try {
+      const res = await request(app)
+        .get(`${URL_A}?rootType=company&rootId=co-1`)
+        .set('Authorization', AUTH)
+
+      expect(res.status).toBe(200)
+      expect(prismaMock.activityEntry.findFirst).toHaveBeenCalledWith({
+        where: {
+          orgId: ORG_A,
+          companyId: 'co-1',
+          sourceType: { in: ['call', 'meeting', 'task'] },
+          timelineSubtype: 'scheduled',
+          occurredAt: { gt: NOW },
+        },
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+        select: { occurredAt: true },
+      })
+      expect(prismaMock.activityEntry.findMany).toHaveBeenCalledTimes(1)
+      expect(res.body.range).toEqual({
+        from: '2026-06-23T09:00:00.000Z',
+        to: '2026-09-21T09:00:00.000Z',
+        isDefault: true,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('uses the dense company frame before reading the event page', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
     prismaMock.deal.findFirst.mockResolvedValue(null)
     prismaMock.activityEntry.findMany
-      .mockResolvedValueOnce(Array.from({ length: 12 }, (_, index) => eventRow({ id: `recent-${index}` })))
+      .mockResolvedValueOnce(Array.from({ length: 10 }, (_, index) => eventRow({ id: `recent-${index}`, occurredAt: new Date('2026-08-21T12:00:00.000Z') })))
       .mockResolvedValueOnce([eventRow()])
 
     try {
@@ -228,22 +264,48 @@ describe('GET /api/orgs/:orgId/account-timeline — smart default range', () => 
       expect(res.status).toBe(200)
       expect(prismaMock.activityEntry.findMany).toHaveBeenCalledTimes(2)
       expect(prismaMock.activityEntry.findMany.mock.calls[0][0]).toEqual({
-        where: { orgId: ORG_A, companyId: 'co-1' },
+        where: { orgId: ORG_A, companyId: 'co-1', occurredAt: { lte: NOW } },
         orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
-        take: 12,
-        select: { id: true },
+        take: 10,
+        select: { occurredAt: true },
       })
       expect(prismaMock.activityEntry.findMany.mock.calls[1][0].where).toEqual({
         orgId: ORG_A,
         companyId: 'co-1',
         occurredAt: {
-          gte: new Date('2026-07-23T18:30:00.000Z'),
-          lt: new Date('2026-08-29T18:30:00.000Z'),
+          gte: new Date('2026-08-15T18:30:00.000Z'),
+          lt: new Date('2026-08-22T18:30:00.000Z'),
         },
       })
       expect(res.body.range).toEqual({
-        from: '2026-07-23T18:30:00.000Z',
-        to: '2026-08-29T18:30:00.000Z',
+        from: '2026-08-15T18:30:00.000Z',
+        to: '2026-08-22T18:30:00.000Z',
+        isDefault: true,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('treats a completed deal as no open deal and falls back to its all-time history when sparse', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    const closedAt = new Date('2024-01-15T00:00:00.000Z')
+    prismaMock.deal.findFirst.mockResolvedValue({ id: 'deal-1', createdAt: closedAt, status: 'won', closeDate: null })
+    prismaMock.activityEntry.findMany
+      .mockResolvedValueOnce([eventRow({ id: 'recent-1' }), eventRow({ id: 'recent-2' })])
+      .mockResolvedValueOnce([eventRow()])
+
+    try {
+      const res = await request(app)
+        .get(`${URL_A}?rootType=deal&rootId=deal-1`)
+        .set('Authorization', AUTH)
+
+      expect(res.status).toBe(200)
+      expect(prismaMock.deal.findFirst).toHaveBeenCalledTimes(1)
+      expect(res.body.range).toEqual({
+        from: closedAt.toISOString(),
+        to: NOW.toISOString(),
         isDefault: true,
       })
     } finally {
