@@ -17,6 +17,7 @@ const {
   getPriceMock,
   queueProvisionMock,
   queueReleaseMock,
+  queueCallerNameMock,
 } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
@@ -43,6 +44,7 @@ const {
   getPriceMock: vi.fn(),
   queueProvisionMock: vi.fn(),
   queueReleaseMock: vi.fn(),
+  queueCallerNameMock: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
@@ -77,6 +79,10 @@ vi.mock('../../jobs/provisionNumber.js', () => ({
 // and hand it over, and a real queue here would prove nothing about that.
 vi.mock('../../jobs/releaseNumber.js', () => ({
   queueReleaseNumber: queueReleaseMock,
+}))
+
+vi.mock('../../jobs/reconcileCallerName.js', () => ({
+  queueCallerNameReconciliation: queueCallerNameMock,
 }))
 
 import app from '../../app.js'
@@ -195,6 +201,7 @@ beforeEach(() => {
   getPriceMock.mockResolvedValue({ amount: '1.15', currency: 'USD' })
   queueProvisionMock.mockResolvedValue('job-1')
   queueReleaseMock.mockResolvedValue('job-2')
+  queueCallerNameMock.mockResolvedValue('job-3')
 })
 
 /** What the Twilio wrapper hands back for one number Twilio has for sale. */
@@ -1052,6 +1059,8 @@ const CALLER_NAME_A = `${PATCH_A}/caller-name`
 // ============================================================
 describe('PATCH /api/orgs/:orgId/phone-numbers/:id/caller-name', () => {
   it('stores a valid desired name as a pending carrier request', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow({ isActiveForOutbound: true }))
+
     const res = await request(app)
       .patch(CALLER_NAME_A)
       .set('Authorization', AUTH)
@@ -1070,13 +1079,17 @@ describe('PATCH /api/orgs/:orgId/phone-numbers/:id/caller-name', () => {
         isCallerNameRequested: true,
         callerName: 'Acme Sales',
         callerNameStatus: 'pending',
+        callerNameRequestId: null,
+        callerNameFailureReason: null,
       },
     })
+    expect(queueCallerNameMock).toHaveBeenCalledWith('num-1')
   })
 
   it('keeps the desired name when a caller turns the request off', async () => {
     prismaMock.phoneNumber.findFirst.mockResolvedValue(
       numberRow({
+        isActiveForOutbound: true,
         callerName: 'Acme Sales',
         callerNameStatus: 'pending',
         isCallerNameRequested: true,
@@ -1096,8 +1109,48 @@ describe('PATCH /api/orgs/:orgId/phone-numbers/:id/caller-name', () => {
     })
     expect(prismaMock.phoneNumber.updateMany).toHaveBeenCalledWith({
       where: { id: 'num-1', orgId: ORG_A, assignedUserId: 'user-a' },
-      data: { isCallerNameRequested: false, callerNameStatus: 'not_requested' },
+      data: {
+        isCallerNameRequested: false,
+        callerNameStatus: 'not_requested',
+        callerNameRequestId: null,
+        callerNameFailureReason: null,
+      },
     })
+  })
+
+  it('reconciles an unchanged pending request instead of clearing its carrier request id', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(
+      numberRow({
+        isActiveForOutbound: true,
+        callerName: 'Acme Sales',
+        callerNameStatus: 'pending',
+        isCallerNameRequested: true,
+        callerNameRequestId: 'CNAM-1',
+      }),
+    )
+
+    const res = await request(app)
+      .patch(CALLER_NAME_A)
+      .set('Authorization', AUTH)
+      .send({ isCallerNameRequested: true, callerName: 'Acme Sales' })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+    expect(queueCallerNameMock).toHaveBeenCalledWith('num-1')
+  })
+
+  it('refuses to queue a caller-ID name for a number that is not the active outbound number', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow({ isActiveForOutbound: false }))
+
+    const res = await request(app)
+      .patch(CALLER_NAME_A)
+      .set('Authorization', AUTH)
+      .send({ isCallerNameRequested: true, callerName: 'Acme Sales' })
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('Make this number your active outbound number before you request a caller-ID name.')
+    expect(prismaMock.phoneNumber.updateMany).not.toHaveBeenCalled()
+    expect(queueCallerNameMock).not.toHaveBeenCalled()
   })
 
   it('rejects a name that cannot be registered as CNAM', async () => {
@@ -1114,6 +1167,7 @@ describe('PATCH /api/orgs/:orgId/phone-numbers/:id/caller-name', () => {
   })
 
   it('does not write a number outside the caller’s organization', async () => {
+    prismaMock.phoneNumber.findFirst.mockResolvedValue(numberRow({ isActiveForOutbound: true }))
     prismaMock.phoneNumber.updateMany.mockResolvedValue({ count: 0 })
 
     const res = await request(app)

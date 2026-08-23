@@ -27,6 +27,7 @@ import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { queueProvisionNumber } from '../jobs/provisionNumber.js'
 import { queueReleaseNumber } from '../jobs/releaseNumber.js'
+import { queueCallerNameReconciliation } from '../jobs/reconcileCallerName.js'
 import type { PhoneNumber } from '../generated/prisma/client.js'
 
 // mergeParams, or :orgId from the mount path never reaches req.params here —
@@ -46,6 +47,7 @@ function mapPhoneNumberToApi(number: PhoneNumber) {
     isActiveForOutbound: number.isActiveForOutbound,
     callerName: number.callerName,
     callerNameStatus: number.callerNameStatus,
+    callerNameFailureReason: number.callerNameFailureReason,
     isCallerNameRequested: number.isCallerNameRequested,
     createdAt: number.createdAt.toISOString(),
   }
@@ -724,17 +726,6 @@ router.patch(
       return void res.status(400).json({ error: parsed.error.issues[0].message })
     }
 
-    const data = parsed.data.isCallerNameRequested
-      ? {
-          isCallerNameRequested: true,
-          callerName: parsed.data.callerName!,
-          callerNameStatus: 'pending',
-        }
-      : {
-          isCallerNameRequested: false,
-          callerNameStatus: 'not_requested',
-        }
-
     // --- Execute query ---
     // updateMany carries both ownership boundaries. The returned API record is
     // reconstructed from the known pre-write row and the exact values handed to
@@ -743,12 +734,46 @@ router.patch(
     if (!found) {
       return void res.status(404).json({ error: NOT_FOUND_ERROR })
     }
+    if (parsed.data.isCallerNameRequested && (!found.isActiveForOutbound || found.status !== 'active' || !found.twilioSid)) {
+      return void res
+        .status(409)
+        .json({ error: 'Make this number your active outbound number before you request a caller-ID name.' })
+    }
+    if (
+      parsed.data.isCallerNameRequested &&
+      found.isCallerNameRequested &&
+      found.callerNameStatus === 'pending' &&
+      found.callerNameRequestId &&
+      found.callerName === parsed.data.callerName
+    ) {
+      await queueCallerNameReconciliation(id)
+      return void res.json({ number: mapPhoneNumberToApi(found) })
+    }
+
+    const data = parsed.data.isCallerNameRequested
+      ? {
+          isCallerNameRequested: true,
+          callerName: parsed.data.callerName!,
+          callerNameStatus: 'pending',
+          callerNameRequestId: null,
+          callerNameFailureReason: null,
+        }
+      : {
+          isCallerNameRequested: false,
+          callerNameStatus: 'not_requested',
+          callerNameRequestId: null,
+          callerNameFailureReason: null,
+        }
     const updated = await prisma.phoneNumber.updateMany({
       where: { id, orgId, assignedUserId: userId },
       data,
     })
     if (updated.count === 0) {
       return void res.status(404).json({ error: NOT_FOUND_ERROR })
+    }
+
+    if (parsed.data.isCallerNameRequested) {
+      await queueCallerNameReconciliation(id)
     }
 
     logger.info({ orgId, userId, phoneNumberId: id }, 'updated caller-ID name preference')

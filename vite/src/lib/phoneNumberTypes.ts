@@ -36,6 +36,8 @@ export interface PhoneNumber {
   callerName?: string | null
   /** The carrier-facing state, never a guarantee about a recipient display. */
   callerNameStatus?: CallerNameStatus
+  /** Actionable carrier explanation when registration failed or is unsupported. */
+  callerNameFailureReason?: string | null
   /** Whether this number is currently queued for caller-name registration. */
   isCallerNameRequested?: boolean
   createdAt: string
