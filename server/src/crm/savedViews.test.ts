@@ -94,6 +94,18 @@ describe('repairSavedViewConfig', () => {
       hiddenTerminalOptionValues: ['closed'],
     })
   })
+
+  it('restores all active options when a saved Kanban has no surviving visible values', () => {
+    const config = repairSavedViewConfig({
+      kanban: {
+        groupAttributeId: 'attr-stage',
+        visibleOptionValues: ['stale-option'],
+        cardAttributeIds: [],
+      },
+    }, ATTRIBUTES)
+
+    expect(config.kanban?.visibleOptionValues).toEqual(['open', 'closed'])
+  })
 })
 
 describe('decodeUrlViewOverlay', () => {
