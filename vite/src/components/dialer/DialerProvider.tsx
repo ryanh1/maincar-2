@@ -10,6 +10,7 @@ import { callOutcomeMessage } from '@/lib/callOutcomeMessage'
 import {
   DialerContext,
   type ActiveCall,
+  type AutoDispositionStatus,
   type CallPhase,
   type DialerContextValue,
   type DialerMode,
@@ -88,6 +89,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
   // phase they move to.
   const [dialing, setDialing] = useState(false)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const [terminalStatus, setTerminalStatus] = useState<AutoDispositionStatus | null>(null)
   // The live call's identity, so the in-call controls can hang it up. Set when a
   // call is placed, cleared at reset.
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null)
@@ -133,6 +135,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     serverStartedAtRef.current = null
     canceledRef.current = false
     terminalRef.current = false
+    setTerminalStatus(null)
     setActiveCall(call ?? null)
     setCanControlAudio(false)
     setPhase('ringing')
@@ -147,6 +150,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     setElapsedSeconds(0)
     answeredRef.current = false
     serverStartedAtRef.current = null
+    setTerminalStatus(null)
     setActiveCall(call)
     setCanControlAudio(false)
     setPhase(status === 'in-progress' ? 'in-progress' : 'ringing')
@@ -172,7 +176,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     setPhase('in-progress')
   }, [])
 
-  const endCall = useCallback((durationS?: number) => {
+  const endCall = useCallback((durationS?: number, nextTerminalStatus?: AutoDispositionStatus | null) => {
     // `dialing` goes false, which tears down the interval below and freezes
     // `elapsedSeconds` at the call's final length. When the caller knows the
     // server's billed duration, show that exact value instead of the local
@@ -181,16 +185,20 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     setPhase('completed')
     setDialing(false)
     if (typeof durationS === 'number') setElapsedSeconds(durationS)
+    if (nextTerminalStatus) setTerminalStatus(nextTerminalStatus)
     callRef.current = null
     setCanControlAudio(false)
   }, [])
 
   const finishCall = useCallback(
-    (message?: string, durationS?: number) => {
+    (status?: CallStatus | 'dropped', durationS?: number) => {
       if (terminalRef.current) return
       terminalRef.current = true
+      const message = status === 'busy' || status === 'no-answer' || status === 'failed' || status === 'dropped'
+        ? callOutcomeMessage(status)
+        : undefined
       if (message && !canceledRef.current) toast.error(message)
-      endCall(durationS)
+      endCall(durationS, status === 'busy' || status === 'no-answer' || status === 'failed' ? status : null)
     },
     [endCall],
   )
@@ -206,6 +214,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     setElapsedSeconds(0)
     answeredRef.current = false
     serverStartedAtRef.current = null
+    setTerminalStatus(null)
     setActiveCall(null)
     callRef.current = null
     setCanControlAudio(false)
@@ -300,12 +309,11 @@ export function DialerProvider({ children }: { children: ReactNode }) {
     queueMicrotask(() => {
       if (call.status === 'in-progress') {
         connectCall(call.startedAt)
-      } else if (TERMINAL_CALL_STATUSES.has(call.status) && phase !== 'completed') {
-        const message =
-          call.status === 'busy' || call.status === 'no-answer' || call.status === 'failed'
-            ? callOutcomeMessage(call.status)
-            : undefined
-        finishCall(message, call.durationS ?? undefined)
+      } else if (TERMINAL_CALL_STATUSES.has(call.status)) {
+        if (call.status === 'busy' || call.status === 'no-answer' || call.status === 'failed') {
+          setTerminalStatus(call.status)
+        }
+        if (phase !== 'completed') finishCall(call.status, call.durationS ?? undefined)
       }
     })
   }, [liveCallDetail, phase, connectCall, finishCall])
@@ -367,10 +375,10 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       setCanControlAudio(true)
       call.on('accept', () => connectCall())
       call.on('disconnect', () => finishCall())
-      call.on('cancel', () => finishCall(callOutcomeMessage('no-answer')))
-      call.on('reject', () => finishCall(callOutcomeMessage('busy')))
+      call.on('cancel', () => finishCall('no-answer'))
+      call.on('reject', () => finishCall('busy'))
       call.on('error', () =>
-        finishCall(callOutcomeMessage(answeredRef.current ? 'dropped' : 'failed')),
+        finishCall(answeredRef.current ? 'dropped' : 'failed'),
       )
     },
     [connectCall, finishCall],
@@ -393,6 +401,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       mode,
       dialing,
       elapsedSeconds,
+      terminalStatus,
       activeCall,
       canControlAudio,
       prefilledNumber,
@@ -415,6 +424,7 @@ export function DialerProvider({ children }: { children: ReactNode }) {
       mode,
       dialing,
       elapsedSeconds,
+      terminalStatus,
       activeCall,
       canControlAudio,
       prefilledNumber,

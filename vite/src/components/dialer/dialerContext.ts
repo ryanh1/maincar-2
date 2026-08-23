@@ -21,6 +21,7 @@ export type DialerView = 'collapsed' | 'expanded'
  * is any ended call, and `idle` is the rest state with no call at all.
  */
 export type CallPhase = 'idle' | 'ringing' | 'in-progress' | 'completed'
+export type AutoDispositionStatus = Extract<CallStatus, 'busy' | 'failed' | 'no-answer'>
 
 /**
  * What the expanded dialer shows. Derived from `phase`, never set directly: the
@@ -56,6 +57,8 @@ export interface DialerContextValue {
   dialing: boolean
   /** Whole seconds since the live call started. 0 when idle; frozen once it ends. */
   elapsedSeconds: number
+  /** Terminal provider outcome eligible for deterministic disposition. */
+  terminalStatus?: AutoDispositionStatus | null
   /** The live call's identity, or null when none is up. Read by the in-call controls. */
   activeCall: ActiveCall | null
   /** Whether this browser has a Voice SDK Call it can mute or send DTMF through. */
@@ -108,7 +111,7 @@ export interface DialerContextValue {
    * (see `placeDeviceCall`) — the browser's own signal that its leg of the call
    * ended, ahead of whatever the server has recorded yet.
    */
-  endCall: (durationS?: number) => void
+  endCall: (durationS?: number, terminalStatus?: AutoDispositionStatus | null) => void
   /**
    * Stops a browser call immediately, including one whose SDK setup promise has
    * not resolved yet. `useEndCall` calls this as soon as the rep presses End;

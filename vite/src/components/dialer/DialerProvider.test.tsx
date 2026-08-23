@@ -350,6 +350,16 @@ describe('DialerProvider', () => {
       expect(result.current.dialing).toBe(false)
     })
 
+    it('keeps a deterministic terminal outcome for the dock after the call ends', async () => {
+      const { result, rerender } = renderDialer()
+      act(() => result.current.startCall({ orgId: 'org-1', callId: 'call-1', recording: false }))
+
+      useGetCallDetailMock.mockReturnValue(detail('no-answer'))
+      rerender()
+
+      await waitFor(() => expect(result.current.terminalStatus).toBe('no-answer'))
+    })
+
     it.each([
       ['busy', 'The number is busy. Try again later.'],
       ['no-answer', 'No one answered. Try again later.'],

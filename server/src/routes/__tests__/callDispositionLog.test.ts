@@ -45,6 +45,7 @@ describe('logging a call disposition', () => {
 
     expect(response.status).toBe(200)
     expect(response.body.call).toEqual(expect.objectContaining({ noteText: 'Asked for a demo.', disposition: expect.objectContaining({ category: 'connected' }) }))
+    expect(prismaMock.call.updateMany).toHaveBeenCalledTimes(1)
     expect(prismaMock.call.updateMany).toHaveBeenCalledWith({ where: { id: 'call-1', orgId: ORG_ID }, data: { dispositionId: 'disposition-1', noteText: 'Asked for a demo.' } })
   })
 
