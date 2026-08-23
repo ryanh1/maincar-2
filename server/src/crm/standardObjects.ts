@@ -113,7 +113,10 @@ function opt(value: string, label: string, color: string, order: number): SeedOp
 }
 
 // A fixed system enum the app branches on — user cannot add values (spec §5.6a),
-// but the option list still carries labels/colors for rendering.
+// but the option list still carries labels/colors for rendering. These are
+// SEMANTIC status colors (success/warning/muted/danger), not the muted option
+// palette — a status field means the same thing on every screen (design-system.md
+// → Color), so they deliberately stay out of --option-1…8.
 const ATTENTION_STATUS_OPTIONS: SeedOption[] = [
   opt('on_deck', 'On deck', '#10b981', 0),
   opt('on_hold', 'On hold', '#f59e0b', 1),
@@ -133,32 +136,34 @@ const CALL_DIRECTION_OPTIONS: SeedOption[] = [
 ]
 
 // User-owned picklists — the user may add/rename/recolor/retire options over time.
+// Colors are muted palette token names (--option-1…8), never hex, so a swatch edit
+// recolours every chip/board column and dark mode stays correct (journey 4b.5.1).
 const COMPANY_TYPE_OPTIONS: SeedOption[] = [
-  opt('saas', 'SaaS', '#6366f1', 0),
-  opt('agency', 'Agency', '#ec4899', 1),
-  opt('manufacturer', 'Manufacturer', '#f59e0b', 2),
-  opt('retailer', 'Retailer', '#10b981', 3),
-  opt('services', 'Services', '#3b82f6', 4),
-  opt('non_profit', 'Non-profit', '#14b8a6', 5),
-  opt('other', 'Other', '#94a3b8', 6),
+  opt('saas', 'SaaS', 'option-1', 0),
+  opt('agency', 'Agency', 'option-2', 1),
+  opt('manufacturer', 'Manufacturer', 'option-3', 2),
+  opt('retailer', 'Retailer', 'option-4', 3),
+  opt('services', 'Services', 'option-5', 4),
+  opt('non_profit', 'Non-profit', 'option-6', 5),
+  opt('other', 'Other', 'option-7', 6),
 ]
 
 const SOURCE_OPTIONS: SeedOption[] = [
-  opt('manual', 'Manual', '#94a3b8', 0),
-  opt('import', 'Import', '#64748b', 1),
-  opt('enrichment', 'Enrichment', '#8b5cf6', 2),
-  opt('inbound_call', 'Inbound call', '#10b981', 3),
-  opt('referral', 'Referral', '#f59e0b', 4),
-  opt('other', 'Other', '#cbd5e1', 5),
+  opt('manual', 'Manual', 'option-1', 0),
+  opt('import', 'Import', 'option-2', 1),
+  opt('enrichment', 'Enrichment', 'option-3', 2),
+  opt('inbound_call', 'Inbound call', 'option-4', 3),
+  opt('referral', 'Referral', 'option-5', 4),
+  opt('other', 'Other', 'option-6', 5),
 ]
 
 const LOST_REASON_OPTIONS: SeedOption[] = [
-  opt('price', 'Price', '#ef4444', 0),
-  opt('timing', 'Timing', '#f59e0b', 1),
-  opt('competitor', 'Competitor', '#ec4899', 2),
-  opt('no_budget', 'No budget', '#eab308', 3),
-  opt('no_decision', 'No decision', '#64748b', 4),
-  opt('other', 'Other', '#94a3b8', 5),
+  opt('price', 'Price', 'option-1', 0),
+  opt('timing', 'Timing', 'option-2', 1),
+  opt('competitor', 'Competitor', 'option-3', 2),
+  opt('no_budget', 'No budget', 'option-4', 3),
+  opt('no_decision', 'No decision', 'option-5', 4),
+  opt('other', 'Other', 'option-6', 5),
 ]
 
 // The canonical Deal segment used by standard reporting. The values remain
@@ -171,20 +176,20 @@ const DEAL_SEGMENT_OPTIONS: SeedOption[] = [
 ]
 
 const ATTENTION_REASON_OPTIONS: SeedOption[] = [
-  opt('other_stakeholder', 'Other stakeholder', '#6366f1', 0),
-  opt('cooled', 'Cooled', '#3b82f6', 1),
-  opt('timing', 'Timing', '#f59e0b', 2),
-  opt('bad_fit', 'Bad fit', '#ef4444', 3),
-  opt('other', 'Other', '#94a3b8', 4),
+  opt('other_stakeholder', 'Other stakeholder', 'option-1', 0),
+  opt('cooled', 'Cooled', 'option-2', 1),
+  opt('timing', 'Timing', 'option-3', 2),
+  opt('bad_fit', 'Bad fit', 'option-4', 3),
+  opt('other', 'Other', 'option-5', 4),
 ]
 
 const PERSONA_OPTIONS: SeedOption[] = [
-  opt('decision_maker', 'Decision maker', '#6366f1', 0),
-  opt('gatekeeper', 'Gatekeeper', '#f59e0b', 1),
-  opt('champion', 'Champion', '#10b981', 2),
-  opt('influencer', 'Influencer', '#8b5cf6', 3),
-  opt('user', 'User', '#3b82f6', 4),
-  opt('other', 'Other', '#94a3b8', 5),
+  opt('decision_maker', 'Decision maker', 'option-1', 0),
+  opt('gatekeeper', 'Gatekeeper', 'option-2', 1),
+  opt('champion', 'Champion', 'option-3', 2),
+  opt('influencer', 'Influencer', 'option-4', 3),
+  opt('user', 'User', 'option-5', 4),
+  opt('other', 'Other', 'option-6', 5),
 ]
 
 // --- Standard objects ----------------------------------------------------------

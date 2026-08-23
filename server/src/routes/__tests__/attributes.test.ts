@@ -10,6 +10,8 @@ import request from 'supertest'
 const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   prismaMock: {
     $queryRaw: vi.fn(),
+    $executeRaw: vi.fn(),
+    $transaction: vi.fn(),
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
     objectDef: { findFirst: vi.fn() },
@@ -422,6 +424,193 @@ describe('DELETE /api/orgs/:orgId/attributes/:id', () => {
     prismaMock.attributeDef.findFirst.mockResolvedValue(null)
 
     const res = await request(app).delete(`${URL_A}/gone`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Field not found')
+  })
+})
+
+// ============================================================
+// Option CRUD (MAI-351) — add / relabel / recolor / archive / restore / rename / reassign-remove
+// ============================================================
+describe('option CRUD', () => {
+  const SELECT_OPTIONS = [
+    { value: 'open', label: 'Open', color: 'option-1', order: 0, isArchived: false },
+    { value: 'closed', label: 'Closed', color: 'option-2', order: 1, isArchived: false },
+  ]
+
+  function selectAttributeRow(overrides: Record<string, unknown> = {}) {
+    return attributeRow({
+      id: 'attr-select',
+      type: 'select',
+      optionsJson: SELECT_OPTIONS,
+      ...overrides,
+    })
+  }
+
+  beforeEach(() => {
+    // The option routes load the object too (for the value migration's storage).
+    prismaMock.objectDef.findFirst.mockResolvedValue({ id: 'obj-person', slug: 'person', storage: 'table' })
+    prismaMock.attributeDef.findFirst.mockResolvedValue(selectAttributeRow())
+    prismaMock.attributeDef.updateMany.mockResolvedValue({ count: 1 })
+    prismaMock.$executeRaw.mockResolvedValue(2)
+    prismaMock.$transaction.mockImplementation(async (callback: (tx: unknown) => unknown) =>
+      callback({ attributeDef: prismaMock.attributeDef, $executeRaw: prismaMock.$executeRaw, $queryRaw: prismaMock.$queryRaw }),
+    )
+  })
+
+  it('adds an option and auto-assigns the next muted token', async () => {
+    prismaMock.attributeDef.findFirst
+      .mockResolvedValueOnce(selectAttributeRow())
+      .mockResolvedValueOnce(selectAttributeRow({ optionsJson: [...SELECT_OPTIONS, { value: 'won', label: 'Won', color: 'option-3', order: 2, isArchived: false }] }))
+
+    const res = await request(app)
+      .post(`${URL_A}/attr-select/options`)
+      .set('Authorization', AUTH)
+      .send({ value: 'won', label: 'Won' })
+
+    expect(res.status).toBe(201)
+    const data = prismaMock.attributeDef.updateMany.mock.calls[0][0].data
+    const options = data.optionsJson as Array<{ value: string; color: string }>
+    expect(options).toHaveLength(3)
+    expect(options[2]).toMatchObject({ value: 'won', label: 'Won', color: 'option-3' })
+  })
+
+  it('409s adding an option whose value already exists', async () => {
+    const res = await request(app)
+      .post(`${URL_A}/attr-select/options`)
+      .set('Authorization', AUTH)
+      .send({ value: 'open', label: 'Open again' })
+
+    expect(res.status).toBe(409)
+    expect(prismaMock.attributeDef.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('422s adding an option to a non-option field', async () => {
+    prismaMock.attributeDef.findFirst.mockResolvedValue(attributeRow({ id: 'attr-text', type: 'text' }))
+
+    const res = await request(app)
+      .post(`${URL_A}/attr-text/options`)
+      .set('Authorization', AUTH)
+      .send({ value: 'x', label: 'X' })
+
+    expect(res.status).toBe(422)
+    expect(prismaMock.attributeDef.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('archives an option (hides from new choice, keeps historic rendering)', async () => {
+    const res = await request(app)
+      .patch(`${URL_A}/attr-select/options/closed`)
+      .set('Authorization', AUTH)
+      .send({ isArchived: true })
+
+    expect(res.status).toBe(200)
+    const data = prismaMock.attributeDef.updateMany.mock.calls[0][0].data
+    const options = data.optionsJson as Array<{ value: string; isArchived: boolean }>
+    expect(options.find((option) => option.value === 'closed')?.isArchived).toBe(true)
+    expect(options.find((option) => option.value === 'open')?.isArchived).toBe(false)
+  })
+
+  it('restores an archived option', async () => {
+    prismaMock.attributeDef.findFirst.mockResolvedValue(
+      selectAttributeRow({ optionsJson: [{ value: 'open', label: 'Open', color: 'option-1', order: 0, isArchived: false }, { value: 'closed', label: 'Closed', color: 'option-2', order: 1, isArchived: true }] }),
+    )
+
+    const res = await request(app)
+      .patch(`${URL_A}/attr-select/options/closed`)
+      .set('Authorization', AUTH)
+      .send({ isArchived: false })
+
+    expect(res.status).toBe(200)
+    const data = prismaMock.attributeDef.updateMany.mock.calls[0][0].data
+    const options = data.optionsJson as Array<{ value: string; isArchived: boolean }>
+    expect(options.find((option) => option.value === 'closed')?.isArchived).toBe(false)
+  })
+
+  it('recolors an option to a muted token', async () => {
+    const res = await request(app)
+      .patch(`${URL_A}/attr-select/options/open`)
+      .set('Authorization', AUTH)
+      .send({ color: 'option-5' })
+
+    expect(res.status).toBe(200)
+    const data = prismaMock.attributeDef.updateMany.mock.calls[0][0].data
+    const options = data.optionsJson as Array<{ value: string; color: string }>
+    expect(options.find((option) => option.value === 'open')?.color).toBe('option-5')
+  })
+
+  it('400s recoloring to a raw hex', async () => {
+    const res = await request(app)
+      .patch(`${URL_A}/attr-select/options/open`)
+      .set('Authorization', AUTH)
+      .send({ color: '#0e7490' })
+
+    expect(res.status).toBe(400)
+    expect(prismaMock.attributeDef.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('renames a value, migrating records atomically and returning the count', async () => {
+    const res = await request(app)
+      .post(`${URL_A}/attr-select/options/closed/rename`)
+      .set('Authorization', AUTH)
+      .send({ value: 'closed_won' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.valueCount).toBe(2)
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1)
+    const data = prismaMock.attributeDef.updateMany.mock.calls[0][0].data
+    const options = data.optionsJson as Array<{ value: string }>
+    expect(options.map((option) => option.value)).toEqual(['open', 'closed_won'])
+  })
+
+  it('409s renaming to a value that already exists', async () => {
+    const res = await request(app)
+      .post(`${URL_A}/attr-select/options/closed/rename`)
+      .set('Authorization', AUTH)
+      .send({ value: 'open' })
+
+    expect(res.status).toBe(409)
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('reassigns records to another option, then removes the option', async () => {
+    const res = await request(app)
+      .delete(`${URL_A}/attr-select/options/closed`)
+      .set('Authorization', AUTH)
+      .send({ reassignTo: 'open' })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+    expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1)
+    const data = prismaMock.attributeDef.updateMany.mock.calls[0][0].data
+    const options = data.optionsJson as Array<{ value: string }>
+    expect(options.map((option) => option.value)).toEqual(['open'])
+  })
+
+  it('422s reassigning to a value that is not an option', async () => {
+    const res = await request(app)
+      .delete(`${URL_A}/attr-select/options/closed`)
+      .set('Authorization', AUTH)
+      .send({ reassignTo: 'nope' })
+
+    expect(res.status).toBe(422)
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('returns the record count for a value via the impact endpoint', async () => {
+    prismaMock.$queryRaw.mockResolvedValue([{ count: 7n }])
+
+    const res = await request(app).get(`${URL_A}/attr-select/options/closed/impact`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ valueCount: 7 })
+  })
+
+  it('404s an option route on a field in another org', async () => {
+    prismaMock.attributeDef.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).patch(`${URL_A}/attr-in-b/options/open`).set('Authorization', AUTH).send({ isArchived: true })
 
     expect(res.status).toBe(404)
     expect(res.body.error).toBe('Field not found')

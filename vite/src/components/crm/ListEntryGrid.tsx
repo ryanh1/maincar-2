@@ -47,8 +47,8 @@ export function ListEntryGrid({ orgId, object, attributes, entries, totalCount, 
     if (!attribute) return { kind: GridCellKind.Loading, allowOverlay: false }
     if (!entry.target && column === 0) return { kind: GridCellKind.Text, data: 'Unavailable record', displayData: 'Unavailable record', readonly: true, allowOverlay: false }
     const value = attribute.storage === 'list' ? entry.values[attribute.slug] : entry.target?.[attribute.slug]
-    return buildGridCell({ ...attribute, isReadOnly: true }, value, { timeZone: user?.timeZone })
-  }, [columns, entries, gridColumns, user?.timeZone])
+    return buildGridCell({ ...attribute, isReadOnly: true }, value, { timeZone: user?.timeZone, paintColors: colors.paintColors })
+  }, [columns, entries, gridColumns, user?.timeZone, colors.paintColors])
   const requestRemoval = useCallback(([column, row]: Item) => {
     if (gridColumns[column]?.id !== '__remove-entry') return
     const entry = entries[row]
