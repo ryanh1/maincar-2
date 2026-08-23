@@ -414,8 +414,8 @@ describe('GET /api/orgs/:orgId/people', () => {
     expect(res.status).toBe(200)
     expect(res.body.people.map((p: { id: string }) => p.id)).toEqual(['p1', 'p2'])
     expect(res.body.total).toBe(2)
-    expect(prismaMock.person.count).toHaveBeenCalledWith({ where: { orgId: ORG_A, deletedAt: null } })
-    expect(prismaMock.person.findMany.mock.calls[0][0].where).toEqual({ orgId: ORG_A, deletedAt: null })
+    expect(prismaMock.person.count).toHaveBeenCalledWith({ where: { orgId: ORG_A, deletedAt: null, isArchived: false } })
+    expect(prismaMock.person.findMany.mock.calls[0][0].where).toEqual({ orgId: ORG_A, deletedAt: null, isArchived: false })
   })
 
   it('searches name parts by q', async () => {
@@ -424,6 +424,7 @@ describe('GET /api/orgs/:orgId/people', () => {
     expect(prismaMock.person.findMany.mock.calls[0][0].where).toEqual({
       orgId: ORG_A,
       deletedAt: null,
+      isArchived: false,
       OR: [
         { firstName: { contains: 'jan', mode: 'insensitive' } },
         { lastName: { contains: 'jan', mode: 'insensitive' } },
@@ -438,6 +439,7 @@ describe('GET /api/orgs/:orgId/people', () => {
     expect(prismaMock.person.findMany.mock.calls[0][0].where).toEqual({
       orgId: ORG_A,
       deletedAt: null,
+      isArchived: false,
       companyId: 'co-9',
     })
   })

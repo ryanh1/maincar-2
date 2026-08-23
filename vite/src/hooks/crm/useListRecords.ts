@@ -8,6 +8,7 @@ import type { RecordListFilter } from '@/components/crm/viewConfig'
 export interface UseListRecordsParams {
   sort?: RecordSort[]
   filter?: RecordListFilter
+  includeArchived?: boolean
 }
 
 /**
@@ -33,6 +34,7 @@ export function useListRecords(
           cursor: pageParam,
           ...(params.sort ? { sort: params.sort } : {}),
           ...(params.filter ? { filter: params.filter } : {}),
+          ...(params.includeArchived ? { includeArchived: true } : {}),
         }),
       }),
     getNextPageParam: (lastPage) => lastPage.nextCursor,

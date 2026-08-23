@@ -26,6 +26,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
       deleteMany: vi.fn(),
     },
     activityEntry: { upsert: vi.fn() },
+    person: { count: vi.fn() },
     $transaction: vi.fn(),
   },
   verifyTokenMock: vi.fn(),
@@ -321,10 +322,11 @@ describe('GET /api/orgs/:orgId/companies', () => {
     expect(res.body.companies.map((c: { id: string }) => c.id)).toEqual(['c1', 'c2'])
     expect(res.body.total).toBe(2)
     // Both the count and the page are scoped to the org and hide the trash.
-    expect(prismaMock.company.count).toHaveBeenCalledWith({ where: { orgId: ORG_A, deletedAt: null } })
+    expect(prismaMock.company.count).toHaveBeenCalledWith({ where: { orgId: ORG_A, deletedAt: null, isArchived: false } })
     expect(prismaMock.company.findMany.mock.calls[0][0].where).toEqual({
       orgId: ORG_A,
       deletedAt: null,
+      isArchived: false,
     })
   })
 
@@ -334,6 +336,7 @@ describe('GET /api/orgs/:orgId/companies', () => {
     expect(prismaMock.company.findMany.mock.calls[0][0].where).toEqual({
       orgId: ORG_A,
       deletedAt: null,
+      isArchived: false,
       OR: [
         { name: { contains: 'goog', mode: 'insensitive' } },
         { domain: { contains: 'goog', mode: 'insensitive' } },
@@ -455,6 +458,35 @@ describe('PATCH /api/orgs/:orgId/companies/:id', () => {
     expect(res.status).toBe(200)
     // The cleared field is written as NULL (empty → absent), not "".
     expect(prismaMock.company.updateMany.mock.calls[0][0].data.name).toBeNull()
+  })
+
+  it('requires confirmation before archiving a company with active people and never cascades', async () => {
+    prismaMock.company.findFirst.mockResolvedValueOnce(companyRow({ id: 'co-1' }))
+    prismaMock.person.count.mockResolvedValue(2)
+
+    const res = await request(app)
+      .patch(`${URL_A}/co-1`)
+      .set('Authorization', AUTH)
+      .send({ isArchived: true })
+
+    expect(res.status).toBe(409)
+    expect(res.body).toMatchObject({ code: 'ARCHIVE_PARENT_CONFIRMATION_REQUIRED', relatedCount: 2 })
+    expect(prismaMock.company.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('archives a company after confirmation without archiving its people', async () => {
+    prismaMock.company.findFirst
+      .mockResolvedValueOnce(companyRow({ id: 'co-1' }))
+      .mockResolvedValueOnce(companyRow({ id: 'co-1', isArchived: true }))
+    prismaMock.person.count.mockResolvedValue(2)
+
+    const res = await request(app)
+      .patch(`${URL_A}/co-1`)
+      .set('Authorization', AUTH)
+      .send({ isArchived: true, confirmArchive: true })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.company.updateMany.mock.calls[0][0].data).toEqual({ isArchived: true })
   })
 
   it('422s making a company its own parent', async () => {

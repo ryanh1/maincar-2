@@ -8,6 +8,7 @@ import { RecordGrid } from '@/components/crm/RecordGrid'
 import { NewListDialog } from '@/components/crm/NewListDialog'
 import { createViewConfig, sameViewConfig, useViewConfig } from '@/components/crm/viewConfig'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useGetObject, useGetObjects } from '@/hooks/crm'
 import {
   useDeleteView,
@@ -65,6 +66,7 @@ export function Records() {
   const isSaving = saveView.isPending || updateView.isPending || duplicateView.isPending || deleteView.isPending || restoreView.isPending || reorderViews.isPending || setDefaultView.isPending
   const [createRequestToken, setCreateRequestToken] = useState(0)
   const [newListOpen, setNewListOpen] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
 
   const isPending = objectsQuery.isPending || (!isUnavailable && object !== null && (objectQuery.isPending || viewsQuery.isPending))
   const isError = objectsQuery.isError || (!isUnavailable && (objectQuery.isError || viewsQuery.isError))
@@ -203,8 +205,10 @@ export function Records() {
             initialRecordId={searchParams.get('recordId')}
             viewConfig={viewConfig}
             onViewConfigChange={setViewConfig}
+            includeArchived={showArchived}
             toolbarLeading={
-              <Records_SavedViewControls
+              <div className="flex items-center gap-3">
+                <Records_SavedViewControls
                 views={views}
                 selectedViewId={selectedView?.id ?? null}
                 hasUnsavedChanges={hasUnsavedChanges}
@@ -244,7 +248,12 @@ export function Records() {
                 onReorder={(viewIds) => manageView(async () => {
                   await reorderViews.mutateAsync({ orgId, objectId: detail.id, viewIds })
                 })}
-              />
+                />
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox checked={showArchived} onCheckedChange={(checked) => setShowArchived(checked === true)} />
+                  Show archived
+                </label>
+              </div>
             }
             createRequestToken={createRequestToken}
             layout={layout}

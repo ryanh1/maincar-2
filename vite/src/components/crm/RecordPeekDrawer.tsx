@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { useGetActivity, useGetRelatedRecords, type ActivityScope } from '@/hooks/crm'
 import type { AttributeDef, ObjectDef, RecordRow, RelatedRecordGroup } from '@/lib/crmTypes'
 import { resolveOptionColor } from '@/lib/optionPalette'
+import { useUpdateRecordLifecycle } from '@/hooks/crm'
 import { parseOptions } from './cellBuilder'
 import { FieldValueEditor } from './FieldValueEditor'
 import { OptionChip } from './OptionChip'
@@ -35,6 +36,7 @@ interface RecordPeekDrawerProps {
   position: { index: number; total: number } | null
   onEdit: (attribute: AttributeDef, value: unknown) => void
   onOpenFullPage?: () => void
+  onLifecycleChanged?: () => void
 }
 
 interface PeekEntry {
@@ -64,6 +66,7 @@ export function RecordPeekDrawer({
   position,
   onEdit,
   onOpenFullPage,
+  onLifecycleChanged,
 }: RecordPeekDrawerProps) {
   const rootEntry = useMemo<PeekEntry | null>(() => record ? { object, attributes, record, scrollTop: 0 } : null, [attributes, object, record])
   const [stack, setStack] = useState<PeekEntry[]>(() => rootEntry ? [rootEntry] : [])
@@ -97,6 +100,7 @@ export function RecordPeekDrawer({
   const scope: ActivityScope | null = scopeKey && activeRecord ? ({ [scopeKey]: activeRecord.id } as ActivityScope) : null
   const activityQuery = useGetActivity(orgId, scope)
   const relatedQuery = useGetRelatedRecords(orgId, activeObject.id, activeRecord?.id)
+  const lifecycleMutation = useUpdateRecordLifecycle()
   const fieldButtonRefs = useRef(new Map<string, HTMLButtonElement>())
   const detailAttributes = activeAttributes
     .filter((attr) => attr.storage !== 'list' && !attr.isArchived && attr.slug !== identityAttr?.slug)
@@ -136,6 +140,22 @@ export function RecordPeekDrawer({
     popTo(stack.length - 2)
   }
 
+  async function toggleArchive() {
+    if (!activeRecord) return
+    let confirmArchive = false
+    if (!activeRecord.isArchived && activeObject.slug === 'company') {
+      confirmArchive = window.confirm('Archive this company without archiving its people?')
+      if (!confirmArchive) return
+    }
+    try {
+      await lifecycleMutation.mutateAsync({ orgId, object: activeObject, recordId: activeRecord.id, isArchived: !activeRecord.isArchived, confirmArchive })
+      onLifecycleChanged?.()
+    } catch {
+      // The route owns the exact guard message; keep this action non-destructive
+      // when a parent archive is rejected.
+    }
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-[540px]" onEscapeKeyDown={handleEscape}>
@@ -157,7 +177,15 @@ export function RecordPeekDrawer({
             {activeObject.namePlural}
             {stack.length === 1 && position ? ` · ${position.index} of ${position.total}` : ''}
           </p>
-          <SheetTitle className="text-base">{title}</SheetTitle>
+          <div className="flex items-center justify-between gap-3">
+            <SheetTitle className="truncate text-base">{title}</SheetTitle>
+            {activeRecord?.isArchived && <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">Archived</span>}
+          </div>
+          {activeRecord && (
+            <Button type="button" variant="ghost" size="sm" className="mt-2 w-fit px-0 text-muted-foreground" disabled={lifecycleMutation.isPending} onClick={() => void toggleArchive()}>
+              {lifecycleMutation.isPending ? 'Saving…' : activeRecord.isArchived ? 'Unarchive' : 'Archive'}
+            </Button>
+          )}
           <SheetDescription className="sr-only">Record details. Click a field value to edit it.</SheetDescription>
           {onOpenFullPage && (
             <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" onClick={onOpenFullPage}>
@@ -298,7 +326,8 @@ function RelatedRecordRow({
         onFocus={() => setPreviewOpen(true)}
         onBlur={() => setPreviewOpen(false)}
       >
-        <span className="min-w-0 truncate font-medium">{title}</span>
+        <span className={record.isArchived ? 'min-w-0 truncate font-medium text-muted-foreground opacity-70' : 'min-w-0 truncate font-medium'}>{title}</span>
+        {record.isArchived && <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">Archived</span>}
         <span className="shrink-0 text-xs text-muted-foreground">Open</span>
       </button>
       {previewOpen && (
