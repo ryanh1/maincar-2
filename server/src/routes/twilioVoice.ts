@@ -19,9 +19,11 @@
  * the `callId` param that connect() carries, not by Twilio's `Direction`, because
  * that param can only be present on a request WE built. The same URL is where
  * purchased numbers point their INBOUND calls: a request with no `callId` and
- * `Direction: "inbound"` for a `To` we recognize (handleInboundCall below) plays
+ * `Direction: "inbound"` for a `To` we recognize (handleInboundCall below) rings
+ * that number's assigned browser Device, then sends an unanswered browser leg to
  * the org's personal voicemail greeting — or a default, if it has none — and
- * records the caller with `<Record>`. Anything else with no `callId` (a stray
+ * records the caller with `<Record>`. An unassigned recognized number goes
+ * straight to that voicemail flow. Anything else with no `callId` (a stray
  * request, an unrecognized `To`) hears an honest "not accepting calls" message
  * instead. POST /voice tells Twilio to record the bridged call only when the
  * row's server-resolved `recordingPlanned` decision is true. POST /voice/status is the call-progress
@@ -39,6 +41,8 @@ import express, { Router, type NextFunction, type Request, type Response } from 
 import { logger } from '../../dependencies/logger.js'
 import {
   buildBridgeTwiml,
+  buildEmptyTwiml,
+  buildInboundBrowserTwiml,
   buildInboundUnavailableTwiml,
   buildVoicemailTwiml,
   verifyTwilioSignature,
@@ -94,10 +98,12 @@ function verifyTwilioWebhook(routeLabel: string) {
  * to a purchased number, or anything else that isn't one of our browser-originated
  * calls.
  *
- * Only a genuine inbound call (`Direction === 'inbound'`, and `To` matching a
- * `PhoneNumber` row we know about) gets the voicemail flow. Anything else — a
- * stray request, an unrecognized `To` — gets the same honest "not accepting
- * calls" TwiML the outbound handler already returned here, and touches no row.
+ * A genuine inbound call (`Direction === 'inbound'`, and `To` matching an active
+ * `PhoneNumber` row we know about) rings its assigned browser Device. If the
+ * number is unassigned, or that browser leg does not complete, the caller enters
+ * the voicemail flow. Anything else — a stray request, an unrecognized `To` —
+ * gets the same honest "not accepting calls" TwiML the outbound handler already
+ * returned here, and touches no row.
  */
 async function handleInboundCall(
   req: Request,
@@ -110,7 +116,7 @@ async function handleInboundCall(
 
   const phoneNumber =
     params.Direction === 'inbound' && toE164
-      ? await prisma.phoneNumber.findFirst({ where: { e164: toE164 } })
+      ? await prisma.phoneNumber.findFirst({ where: { e164: toE164, status: 'active' } })
       : null
 
   if (!phoneNumber || !callSid) {
@@ -122,11 +128,56 @@ async function handleInboundCall(
     return
   }
 
+  // --- Ring the assigned browser Device ---
+  // The CallSid for the inbound PSTN leg is already known, making it the
+  // idempotency key for Twilio's at-least-once webhook delivery. A held but
+  // unassigned number remains voicemail-only until an admin assigns it.
+  if (phoneNumber.assignedUserId) {
+    const call = await prisma.call.upsert({
+      where: { twilioCallSid: callSid },
+      create: {
+        orgId: phoneNumber.orgId,
+        userId: phoneNumber.assignedUserId,
+        fromE164: fromE164 ?? '',
+        toE164,
+        direction: 'inbound',
+        status: 'ringing',
+        twilioCallSid: callSid,
+        startedAt: new Date(),
+      },
+      update: {},
+    })
+
+    logger.info(
+      { route: 'POST /api/twilio/voice', requestId: req.id, orgId: call.orgId, callId: call.id },
+      'inbound call ringing assigned browser Device',
+    )
+
+    res.status(200).type('text/xml').send(
+      buildInboundBrowserTwiml({ identity: call.userId, callId: call.id }),
+    )
+    return
+  }
+
+  await respondWithInboundVoicemail(req, res, {
+    callSid,
+    fromE164: fromE164 ?? '',
+    orgId: phoneNumber.orgId,
+    toE164,
+  })
+}
+
+/** Continue an inbound caller into the existing greeting-and-record flow. */
+async function respondWithInboundVoicemail(
+  req: Request,
+  res: Response,
+  inbound: { callSid: string; fromE164: string; orgId: string; toE164: string },
+): Promise<void> {
   // --- Fetch the org's personal greeting, or fall back to the default ---
   // A presigned GET URL, not the bare S3 key: Twilio's <Play> fetches it directly
   // over HTTPS, exactly as a browser would a recording download link.
   const greeting = await prisma.voicemailGreeting.findFirst({
-    where: { orgId: phoneNumber.orgId, status: 'active' },
+    where: { orgId: inbound.orgId, status: 'active' },
   })
   const greetingAudioUrl = greeting?.storageKey ? await getRecordingDownloadUrl(greeting.storageKey) : null
 
@@ -136,19 +187,19 @@ async function handleInboundCall(
   // bare S3 key the caller actually heard, not a relation, since the org's
   // greeting can be replaced later (see schema.prisma).
   await prisma.voicemail.upsert({
-    where: { callSid },
+    where: { callSid: inbound.callSid },
     create: {
-      orgId: phoneNumber.orgId,
-      callSid,
-      fromE164: fromE164 ?? '',
-      toE164,
+      orgId: inbound.orgId,
+      callSid: inbound.callSid,
+      fromE164: inbound.fromE164,
+      toE164: inbound.toE164,
       greeting: greeting?.storageKey ?? null,
     },
     update: {},
   })
 
   logger.info(
-    { route: 'POST /api/twilio/voice', requestId: req.id, orgId: phoneNumber.orgId, callSid },
+    { route: 'POST /api/twilio/voice', requestId: req.id, orgId: inbound.orgId, callSid: inbound.callSid },
     'inbound call answered; playing greeting and recording voicemail',
   )
 
@@ -225,6 +276,67 @@ router.post(
 )
 
 // ============================================================
+// POST /api/twilio/voice/inbound-result — browser leg terminal result
+// ============================================================
+// `<Dial action>` delivers the outcome of the assigned browser Device attempt.
+// A completed browser call ends cleanly; every other outcome continues the
+// original PSTN caller into the existing voicemail flow, so there is no silence.
+router.post(
+  '/voice/inbound-result',
+  express.urlencoded({ extended: false }),
+  verifyTwilioWebhook('POST /api/twilio/voice/inbound-result'),
+  wrapRoute('POST /api/twilio/voice/inbound-result', async (req, res) => {
+    // --- Parse & validate params ---
+    const params = (req.body ?? {}) as Record<string, string>
+    const callId = typeof req.query.callId === 'string' ? req.query.callId : undefined
+    const parentCallSid = params.CallSid
+    const dialStatus = params.DialCallStatus
+
+    // --- Find the inbound call ---
+    // Both callId (server-issued inside the Client parameter and action URL) and
+    // the parent CallSid (Twilio-signed) must match. This keeps a valid callback
+    // for one inbound call from ever advancing another organization's row.
+    const call = callId && parentCallSid
+      ? await prisma.call.findFirst({
+          where: { id: callId, direction: 'inbound', twilioCallSid: parentCallSid },
+        })
+      : null
+    if (!call) {
+      logger.warn(
+        { route: 'POST /api/twilio/voice/inbound-result', requestId: req.id, callId },
+        'inbound browser result for an unknown call',
+      )
+      return void res.status(200).type('text/xml').send(buildInboundUnavailableTwiml())
+    }
+
+    // --- Persist the terminal browser-leg result ---
+    const mappedStatus = dialStatus ? TWILIO_TO_CALL_STATUS[dialStatus] : undefined
+    const status = mappedStatus ?? 'failed'
+    const durationS = Number.parseInt(params.DialCallDuration ?? '', 10)
+    await prisma.call.updateMany({
+      where: { id: call.id, orgId: call.orgId },
+      data: {
+        status,
+        endedAt: new Date(),
+        ...(Number.isFinite(durationS) ? { durationS } : {}),
+      },
+    })
+
+    // --- Return the next TwiML ---
+    if (status === 'completed') {
+      return void res.status(200).type('text/xml').send(buildEmptyTwiml())
+    }
+
+    await respondWithInboundVoicemail(req, res, {
+      callSid: call.twilioCallSid!,
+      fromE164: call.fromE164,
+      orgId: call.orgId,
+      toE164: call.toE164,
+    })
+  }),
+)
+
+// ============================================================
 // POST /api/twilio/voice/status — call-progress status callback
 // ============================================================
 // Twilio POSTs here as a call moves through its lifecycle (initiated → ringing →
@@ -247,10 +359,16 @@ router.post(
     const mappedStatus = callStatus ? TWILIO_TO_CALL_STATUS[callStatus] : undefined
 
     // --- Find the call ---
-    // By twilioCallSid alone, exactly as the voice webhook does: it is unique and
-    // is the only key Twilio hands us. An unknown SID is a 404 — Twilio is asking
-    // about a call we have no row for.
-    const call = await prisma.call.findFirst({ where: { twilioCallSid: callSid } })
+    // A browser Device callback names its child leg in CallSid and its inbound
+    // PSTN parent in ParentCallSid. Prefer the parent so it reaches the inbound
+    // Call row; otherwise the unique CallSid is the lifecycle key. Neither is a
+    // caller-controlled application id.
+    const parentCallSid = params.ParentCallSid
+    const call = await prisma.call.findFirst({
+      where: parentCallSid
+        ? { OR: [{ twilioCallSid: callSid }, { twilioCallSid: parentCallSid }] }
+        : { twilioCallSid: callSid },
+    })
     if (!call) {
       logger.warn(
         { route: 'POST /api/twilio/voice/status', requestId: req.id, callSid },

@@ -32,6 +32,8 @@ const {
   validateRequestMock,
   dialMock,
   numberMock,
+  clientMock,
+  parameterMock,
   accessTokenCtor,
   accessTokenAddGrantMock,
   voiceGrantCtor,
@@ -42,7 +44,9 @@ const {
   const recordingsFnMock = vi.fn((_sid: string) => ({ remove: recordingsRemoveMock }))
   const validateRequestMock = vi.fn()
   const numberMock = vi.fn()
-  const dialMock = vi.fn(() => ({ number: numberMock }))
+  const parameterMock = vi.fn()
+  const clientMock = vi.fn(() => ({ parameter: parameterMock }))
+  const dialMock = vi.fn(() => ({ number: numberMock, client: clientMock }))
   const twilioCtor = vi.fn(() => ({
     calls: callsFnMock,
     recordings: recordingsFnMock,
@@ -64,6 +68,8 @@ const {
     validateRequestMock,
     dialMock,
     numberMock,
+    clientMock,
+    parameterMock,
     accessTokenCtor,
     accessTokenAddGrantMock,
     accessTokenToJwtMock,
@@ -95,6 +101,7 @@ vi.mock('twilio', () => {
 
 import {
   buildBridgeTwiml,
+  buildInboundBrowserTwiml,
   deleteRecording,
   fetchRecordingMp3,
   hangUpCall,
@@ -186,8 +193,30 @@ describe('buildBridgeTwiml', () => {
   })
 })
 
+describe('buildInboundBrowserTwiml', () => {
+  it('rings the assigned browser identity and sends the server-issued call id to its Device', () => {
+    buildInboundBrowserTwiml({ identity: 'user-assigned', callId: 'call-inbound-1' })
+
+    expect(dialMock).toHaveBeenCalledWith({
+      action: 'https://api.test.example.com/api/twilio/voice/inbound-result?callId=call-inbound-1',
+      answerOnBridge: true,
+      method: 'POST',
+      timeout: 25,
+    })
+    expect(clientMock).toHaveBeenCalledWith(
+      {
+        statusCallback: 'https://api.test.example.com/api/twilio/voice/status',
+        statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+        statusCallbackMethod: 'POST',
+      },
+      'user-assigned',
+    )
+    expect(parameterMock).toHaveBeenCalledWith({ name: 'callId', value: 'call-inbound-1' })
+  })
+})
+
 describe('mintVoiceAccessToken', () => {
-  it('mints a token for the identity, granting only outgoing calls through our TwiML App', () => {
+  it('mints a token for the identity, granting incoming and outgoing calls through our TwiML App', () => {
     const result = mintVoiceAccessToken('user-1')
 
     expect(result).toEqual({ token: 'fake.jwt.token', identity: 'user-1', ttlSeconds: 3600 })
@@ -197,7 +226,7 @@ describe('mintVoiceAccessToken', () => {
     })
     expect(voiceGrantCtor).toHaveBeenCalledWith({
       outgoingApplicationSid: 'APtesttwimlappsid',
-      incomingAllow: false,
+      incomingAllow: true,
     })
     expect(accessTokenAddGrantMock).toHaveBeenCalledTimes(1)
   })

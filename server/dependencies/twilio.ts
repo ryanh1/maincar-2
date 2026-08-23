@@ -246,6 +246,12 @@ export const OUTBOUND_STATUS_WEBHOOK_PATH = '/api/twilio/voice/status'
  */
 export const OUTBOUND_RECORDING_STATUS_WEBHOOK_PATH = '/api/twilio/voice/recording-status'
 
+/** The post-dial decision point for an inbound browser leg. */
+export const INBOUND_BROWSER_RESULT_WEBHOOK_PATH = '/api/twilio/voice/inbound-result'
+
+/** A browser Device gets 25 seconds to answer an inbound Maincar call. */
+const INBOUND_BROWSER_TIMEOUT_SECONDS = 25
+
 /**
  * Raised when PUBLIC_BASE_URL is not set, so no absolute webhook URL can be built.
  *
@@ -319,11 +325,50 @@ export function mintVoiceAccessToken(identity: string): VoiceAccessToken {
   token.addGrant(
     new twilio.jwt.AccessToken.VoiceGrant({
       outgoingApplicationSid: TWILIO_TWIML_APP_SID,
-      incomingAllow: false,
+      incomingAllow: true,
     }),
   )
 
   return { token: token.toJwt(), identity, ttlSeconds: VOICE_ACCESS_TOKEN_TTL_SECONDS }
+}
+
+/** What Twilio needs to ring an assigned member's registered browser Device. */
+export interface InboundBrowserCallRequest {
+  /** The Voice SDK identity, which is the receiving member's immutable user id. */
+  identity: string
+  /** The server-owned Call primary key supplied to the browser as a custom parameter. */
+  callId: string
+}
+
+/**
+ * Ring one assigned browser Device for an inbound PSTN call.
+ *
+ * `<Dial action>` is deliberately the branch point: Twilio posts the final
+ * `DialCallStatus` there, so rejected, timed-out, unavailable, and failed Device
+ * attempts can continue into the existing voicemail TwiML instead of ending in
+ * silence. The Client status callback carries `ParentCallSid`, which is the
+ * inbound Call's persisted Twilio SID; the route uses it to update that row.
+ */
+export function buildInboundBrowserTwiml(request: InboundBrowserCallRequest): string {
+  if (!PUBLIC_BASE_URL) throw new WebhookBaseUrlMissingError()
+
+  const response = new twilio.twiml.VoiceResponse()
+  const dial = response.dial({
+    action: `${PUBLIC_BASE_URL}${INBOUND_BROWSER_RESULT_WEBHOOK_PATH}?callId=${encodeURIComponent(request.callId)}`,
+    answerOnBridge: true,
+    method: 'POST',
+    timeout: INBOUND_BROWSER_TIMEOUT_SECONDS,
+  })
+  const client = dial.client(
+    {
+      statusCallback: `${PUBLIC_BASE_URL}${OUTBOUND_STATUS_WEBHOOK_PATH}`,
+      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+      statusCallbackMethod: 'POST',
+    },
+    request.identity,
+  )
+  client.parameter({ name: 'callId', value: request.callId })
+  return response.toString()
 }
 
 // --- Voice webhook (Twilio → us) -------------------------------------------
