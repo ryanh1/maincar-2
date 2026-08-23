@@ -98,18 +98,17 @@ npm run gh-to-mirror
 npm run mirror-to-main
 ```
 
-After every green delivery, `mc-deliver` automatically attempts the full chain. A clean, idle primary checkout fast-forwards. Changed package roots receive `npm ci`; tracked Prisma schema/migrations receive `prisma migrate deploy`.
+After every green delivery, `mc-deliver` automatically attempts the full chain. A clean, non-divergent primary checkout fast-forwards even while Maincar processes run.
 
 The refresh changes nothing when any of these is true:
 
 - personal staged, unstaged, or untracked work exists;
 - the primary checkout is not on `main`;
-- local `main` contains a commit absent from delivered `main`;
-- a Maincar process whose working directory is the primary checkout is listening on a project port.
+- local `main` contains a commit absent from delivered `main`.
 
-Every block writes `state/primary-refresh-pending.tsv`, prints a plain reason, and records the exact follow-up command `npm run mirror-to-main`. `mc-doctor` stays nonzero until the blocker is reconciled. A later delivery checks and retries the blocker but never moves or overwrites personal work.
+Every blocker or deferred environment update writes `state/primary-refresh-pending.tsv`, prints a plain reason, and records the exact follow-up command `npm run mirror-to-main`. `mc-doctor` stays nonzero until the work is reconciled. A later delivery checks and retries it but never moves or overwrites personal work.
 
-Manual refresh has the same safety checks as automatic refresh. The difference is timing: automatic refresh happens immediately after delivery only when the primary checkout is safe; manual refresh lets a person first finish, commit, or remove whatever caused the block. Neither form overwrites personal files.
+An active process gets a warning, not a block. Source files fast-forward immediately; the process may reload or continue using code it already loaded. If package files or tracked Prisma migrations changed, Git still fast-forwards, but `npm ci` and `prisma migrate deploy` are recorded as pending until all detected Maincar processes stop. A later delivery or `npm run mirror-to-main` completes that environment work. Neither automatic nor manual refresh overwrites personal files.
 
 ## Close out an issue
 

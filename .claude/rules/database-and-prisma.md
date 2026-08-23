@@ -23,11 +23,12 @@ paths:
   3. Prisma generates the SQL
 - For a complex data migration, edit the generated file AFTER Prisma creates it.
 - **Never run `prisma migrate reset` or `prisma db push`.**
-- **After the train lands a schema change**, it automatically refreshes an idle,
-  clean primary checkout and runs `prisma migrate deploy` before declaring the
-  runnable copy current. Personal work or an active Maincar process blocks the
-  refresh without changing source or data; after resolving the blocker, run
-  `npm run mirror-to-main` exactly as recorded in the durable receipt.
+- **After delivery lands a schema change**, it automatically fast-forwards a
+  clean, non-divergent primary checkout. An active Maincar process does not
+  block the Git update, but `prisma migrate deploy` is recorded as pending until
+  the process stops. Personal work, a non-`main` branch, or divergent commits
+  still block the refresh. Run `npm run mirror-to-main` as recorded to finish
+  pending environment work.
 - **Never `DELETE FROM` a user-data table to satisfy a migration warning.** If Prisma warns
   that a column still holds non-null values, the right move is `UPDATE <table> SET
   <column> = NULL` or a proper data migration. Ask before any destructive SQL.

@@ -131,9 +131,10 @@ mc_clear_primary_refresh_pending() {
   rm -f "$(mc_primary_refresh_pending_file)"
 }
 
-# A runnable checkout must not change under a local dev process. Tests inject a
-# deterministic PID list; normal operation checks only this project's default
-# listener ports and therefore does not mistake unrelated processes for Maincar.
+# Tests inject a deterministic PID list. Normal operation checks only this
+# project's default listener ports and therefore does not mistake unrelated
+# processes for Maincar. Active processes do not block a Git fast-forward; they
+# only defer dependency installation and database migrations.
 mc_primary_active_process_pids() {
   local primary="${1:-$PRIMARY_CHECKOUT}" pid cwd
   if [ -n "${MC_PRIMARY_ACTIVE_PROCESS_PIDS:-}" ]; then
@@ -151,8 +152,7 @@ mc_primary_active_process_pids() {
 
 # The primary checkout is for running and inspecting the application, never for
 # delivery. After GitHub accepts a delivery and the bare mirror is refreshed,
-# it can fast-forward only when the checkout is clean and no Maincar process is
-# actively using it.
+# it can fast-forward whenever the checkout is clean and has no divergent work.
 mc_refresh_primary_checkout() {
   local primary branch target dependency_roots dependency_roots_csv refresh_requirements prisma_refresh_required=0 active_pids local_changes
   local pending_file pending_at pending_head pending_target pending_reason pending_command details retry_roots retry_prisma
@@ -193,10 +193,7 @@ mc_refresh_primary_checkout() {
 
   active_pids="$(mc_primary_active_process_pids "$primary")"
   if [ -n "$active_pids" ]; then
-    echo "[mc-primary] not refreshed: active local process(es) are using the runnable checkout: $active_pids" >&2
-    echo "[mc-primary] stop those processes, then run $(mc_primary_refresh_command)." >&2
-    mc_record_primary_refresh_pending "active local process(es): $active_pids" "$primary" "$target"
-    return 0
+    echo "[mc-primary] active local process(es) detected: $active_pids; Git source will still refresh." >&2
   fi
 
   # Delivery and runnable-environment provisioning are separate durable facts.
@@ -207,13 +204,19 @@ mc_refresh_primary_checkout() {
     IFS=$'\t' read -r pending_at pending_head pending_target pending_reason pending_command < "$pending_file" || true
     if [ "$(git -C "$primary" rev-parse --short HEAD)" = "$pending_target" ]; then
       case "$pending_reason" in
-        'provisioning failed (roots='*)
-          details="${pending_reason#provisioning failed (roots=}"
+        'provisioning failed (roots='*|'provisioning deferred (roots='*)
+          details="${pending_reason#* (roots=}"
           retry_roots="${details%%; prisma=*}"
-          retry_prisma="${details##*; prisma=}"
+          details="${details#*; prisma=}"
+          retry_prisma="${details%%;*}"
           retry_prisma="${retry_prisma%)}"
           case "$retry_roots" in -|.|server|vite|firebase|*,*) ;; *) retry_roots="-" ;; esac
           case "$retry_prisma" in 0|1) ;; *) retry_prisma=0 ;; esac
+          if [ -n "$active_pids" ]; then
+            echo "[mc-primary] environment update remains deferred while process(es) run: $active_pids" >&2
+            mc_record_primary_refresh_pending "provisioning deferred (roots=$retry_roots; prisma=$retry_prisma; active=$active_pids)" "$primary" "$target"
+            return 0
+          fi
           echo "[mc-primary] retrying pending runnable-environment provisioning."
           if mc_provision_primary_checkout "$primary" "$retry_roots" "$retry_prisma"; then
             mc_clear_primary_refresh_pending
@@ -245,6 +248,11 @@ mc_refresh_primary_checkout() {
 
   if git -C "$primary" merge --ff-only "$target" >/dev/null; then
     echo "[mc-primary] fast-forwarded runnable checkout to $(git -C "$primary" rev-parse --short HEAD)."
+    if [ -n "$active_pids" ] && { [ "$dependency_roots_csv" != "-" ] || [ "$prisma_refresh_required" = "1" ]; }; then
+      echo "[mc-primary] source is current; dependency installation or database migration is deferred until active process(es) stop: $active_pids" >&2
+      mc_record_primary_refresh_pending "provisioning deferred (roots=$dependency_roots_csv; prisma=$prisma_refresh_required; active=$active_pids)" "$primary" "$target"
+      return 0
+    fi
     if [ -n "$dependency_roots" ]; then
       echo "[mc-primary] synchronizing dependencies for: $(tr '\n' ' ' <<< "$dependency_roots")"
     fi

@@ -40,7 +40,7 @@ We do not require a browser test. We do not run every server, web, or database t
 
 | Folder | What it is | Branch | What happens there |
 | --- | --- | --- | --- |
-| `~/Documents/Coding/My Projects/maincar-2` | Primary checkout: an independent clone used to run the current app | `main` only | Automatically refreshed only when clean, idle, and safe. Never edit or commit issue work here. |
+| `~/Documents/Coding/My Projects/maincar-2` | Primary checkout: an independent clone used to run the current app | `main` only | Automatically refreshed when clean and non-divergent, even while Maincar runs. Never edit or commit issue work here. |
 | `~/code/maincar-2-coord/local-main.git` | Bare local mirror: Git history only, with no visible project files | local copy of GitHub `main` | Receives updates from GitHub. New issue clones copy from it. Direct pushes are blocked. |
 | `~/code/maincar-2-worktrees/mai-123-name` | One independent issue clone | the exact Linear branch name | One agent edits, tests, and commits one issue here. Despite the parent folder's old name, these are clones, not Git worktrees. |
 | a temporary `mc-deliver-*` folder | One throwaway independent clone | starts at `main`; then contains one merge commit | Combines and checks one issue. It is removed afterward. |
@@ -166,16 +166,17 @@ Automatic refresh stops without changing anything if the primary checkout:
 
 - has uncommitted or untracked files;
 - is not on `main`;
-- has a local commit that GitHub does not have; or
-- is currently running a Maincar process.
+- has a local commit that GitHub does not have.
 
-This prevents an automatic operation from moving files underneath a person or running app. The command records the reason and prints:
+An active Maincar process does not block the Git update. Source files fast-forward immediately. The running process may reload or keep using code it already loaded.
+
+If package files or Prisma migrations changed, Git still fast-forwards, but the system does not run `npm ci` or `prisma migrate deploy` under the active process. It records that environment work as pending and prints:
 
 ```bash
 npm run mirror-to-main
 ```
 
-Manual refresh uses the same safety rules. It is not inherently safer than automatic refresh. The practical difference is that a person runs it after resolving the reason for the block—for example, after committing personal files or stopping the app. Neither automatic nor manual refresh overwrites uncommitted files.
+After the processes stop, a later delivery or that command completes the pending installation or migration. Neither automatic nor manual refresh overwrites uncommitted files.
 
 The primary checkout can temporarily remain behind GitHub without harming issue clones or delivery because those use the synchronized mirror. It becomes a problem only if someone expects the primary checkout to run the newest code; `npm run mirror-to-main` resolves that after it is safe.
 

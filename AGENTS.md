@@ -81,15 +81,15 @@ Do not call an issue complete after only committing, testing, enqueueing, or ope
 
 ## Primary checkout refresh
 
-Every successful delivery attempts `GitHub → local mirror → primary checkout`. A clean, idle primary checkout fast-forwards automatically; changed package roots receive `npm ci`, and tracked Prisma migrations receive `prisma migrate deploy`.
+Every successful delivery attempts `GitHub → local mirror → primary checkout`. A clean, non-divergent primary checkout fast-forwards automatically, even while Maincar processes are running.
 
-Any personal uncommitted/untracked work, non-`main` branch, divergent commit, or active Maincar process blocks the primary refresh without changing it. The blocker is durable and always records this exact recovery command:
+Personal uncommitted/untracked work, a non-`main` branch, or a divergent commit blocks the primary refresh without changing it. Active processes do not block the Git fast-forward. If package files or tracked Prisma migrations changed, Git still fast-forwards, but `npm ci` and `prisma migrate deploy` wait until the processes stop. That deferred environment work is durable and always records this exact recovery command:
 
 ```bash
 npm run mirror-to-main
 ```
 
-A later delivery checks the blocker before delivery and retries only the same safe refresh. Never overwrite or move a person's work automatically.
+A later delivery checks pending environment work and completes it after the processes stop. Never overwrite or move a person's work automatically.
 
 ## Before commit and delivery
 
