@@ -198,10 +198,8 @@ if [ -f "$SANDBOX/state/state/primary-refresh-pending.tsv" ]; then
   exit 1
 fi
 
-# A running local app can observe source, dependencies, and migrations halfway
-# through an update. Automatic refresh must leave the primary unchanged and
-# persist the exact follow-up command; a later safe refresh clears the blocker.
-primary_before_active_process_delivery="$(git -C "$SANDBOX/primary" rev-parse HEAD)"
+# A running local app does not block a source-only fast-forward. It may reload
+# or keep its already-loaded code, but local main must still become current.
 git clone "$SANDBOX/state/local-main.git" "$SANDBOX/issue-active-process" --quiet
 git -C "$SANDBOX/issue-active-process" config user.name 'Coordination test'
 git -C "$SANDBOX/issue-active-process" config user.email 'coordination-test@example.test'
@@ -214,13 +212,11 @@ record_delivery_gate "$SANDBOX/issue-active-process"
   cd "$SANDBOX/issue-active-process"
   MC_PRIMARY_ACTIVE_PROCESS_PIDS=4242 env "${env_for_test[@]}" "$LEGACY_MERGE" -m 'Deliver while local app runs'
 )
-if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$primary_before_active_process_delivery" ]; then
-  echo 'primary checkout refreshed while a local process was active' >&2
+if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
+  echo 'active process incorrectly blocked a source-only primary refresh' >&2
   exit 1
 fi
-grep -F 'active local process(es): 4242' "$SANDBOX/state/state/primary-refresh-pending.tsv" >/dev/null
-grep -F 'npm run mirror-to-main' "$SANDBOX/state/state/primary-refresh-pending.tsv" >/dev/null
-env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
+test -e "$SANDBOX/primary/active-process-change"
 test ! -f "$SANDBOX/state/state/primary-refresh-pending.tsv"
 
 # A dependency manifest or lockfile changes the runnable environment, not just
@@ -245,25 +241,34 @@ if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$primary_before_dependenc
   exit 1
 fi
 
-# An explicit refresh opts into the coupled source-and-dependency update. Stub
-# npm so this script test proves the selected workspace receives `npm ci`
-# without downloading packages.
+# A refresh while an app is running still advances Git, but defers `npm ci`.
+# Stub npm so the test proves it did not run prematurely.
 mkdir -p "$SANDBOX/fake-bin"
 cat > "$SANDBOX/fake-bin/npm" <<'EOF'
 #!/usr/bin/env bash
 [ -z "${MC_NPM_LOG:-}" ] || printf '%s|%s\n' "$PWD" "$*" >> "$MC_NPM_LOG"
 EOF
 chmod +x "$SANDBOX/fake-bin/npm"
-MC_NPM_LOG="$SANDBOX/npm.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
+MC_PRIMARY_ACTIVE_PROCESS_PIDS=4242 MC_NPM_LOG="$SANDBOX/npm.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
 if [ "$(git -C "$SANDBOX/primary" rev-parse HEAD)" != "$(git -C "$SANDBOX/upstream.git" rev-parse main)" ]; then
-  echo 'explicit primary refresh did not fast-forward the delivered dependency change' >&2
+  echo 'active process incorrectly blocked a dependency-source fast-forward' >&2
   exit 1
 fi
 primary_real="$(cd "$SANDBOX/primary" && pwd -P)"
-if ! grep -Fx -- "$primary_real/vite|ci" "$SANDBOX/npm.log" >/dev/null; then
-  echo 'explicit primary refresh did not reinstall the changed frontend dependency root' >&2
+if [ -s "$SANDBOX/npm.log" ]; then
+  echo 'dependency installation ran while a primary process was active' >&2
   exit 1
 fi
+grep -F 'provisioning deferred (roots=vite; prisma=0; active=4242)' "$SANDBOX/state/state/primary-refresh-pending.tsv" >/dev/null
+
+# Once the process stops, pending environment work runs without moving Git
+# again, and the pending marker is cleared.
+MC_NPM_LOG="$SANDBOX/npm.log" PATH="$SANDBOX/fake-bin:$PATH" env "${env_for_test[@]}" "$ROOT/.claude/scripts/coord/mc-local-main" refresh
+if ! grep -Fx -- "$primary_real/vite|ci" "$SANDBOX/npm.log" >/dev/null; then
+  echo 'stopped process did not release the deferred dependency installation' >&2
+  exit 1
+fi
+test ! -f "$SANDBOX/state/state/primary-refresh-pending.tsv"
 
 # A receipt is bound to both the ticket head and the main tip. Once another
 # ticket advances main, mc-merge must reject the stale receipt rather than
