@@ -21,6 +21,7 @@ import { Settings_TeamsTab } from './Settings_TeamsTab'
 import { Settings_NextStepsTab } from './Settings_NextStepsTab'
 import { Settings_DataModelTab } from './Settings_DataModelTab'
 import { Settings_KeyboardTab } from './Settings_KeyboardTab'
+import { Settings_AlertsTab } from './Settings_AlertsTab'
 
 type TabId = SettingsSection
 
@@ -39,6 +40,7 @@ integrations: Settings_IntegrationsTab,
   teams: Settings_TeamsTab,
   'data-model': Settings_DataModelTab,
   keyboard: Settings_KeyboardTab,
+  alerts: Settings_AlertsTab,
 }
 
 /**

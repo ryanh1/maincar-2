@@ -24,6 +24,8 @@ export interface AuthUser {
   roles: UserRole[]
   enabled: boolean
   timeZone: string | null
+  /** Private foreground call-alert preferences, read only by the owner's route. */
+  callAlertSettings: unknown
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -215,6 +217,7 @@ export async function requireAuth(
     roles: user.roles as UserRole[],
     enabled: user.enabled,
     timeZone: user.timeZone,
+    callAlertSettings: user.callAlertSettings,
   }
 
   next()

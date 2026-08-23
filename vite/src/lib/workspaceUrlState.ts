@@ -18,6 +18,7 @@ export const SETTINGS_SECTIONS = [
   'integrations',
   'data-model',
   'keyboard',
+  'alerts',
 ] as const
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]

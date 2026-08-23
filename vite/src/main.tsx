@@ -23,6 +23,7 @@ import { Settings_EmailTemplatesFixture } from './pages/Settings_EmailTemplatesF
 import { MentionEditorFixture } from './components/editor/MentionEditorFixture'
 import { Settings_DispositionsFixture } from './pages/Settings_DispositionsFixture'
 import { Settings_NextStepsFixture } from './pages/Settings_NextStepsFixture'
+import { Settings_AlertsFixture } from './pages/Settings_AlertsFixture'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -73,6 +74,8 @@ createRoot(document.getElementById('root')!).render(
       <Settings_DispositionsFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/next-steps' ? (
       <Settings_NextStepsFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/call-alerts' ? (
+      <Settings_AlertsFixture />
     ) : (
       <QueryClientProvider client={queryClient}>
         <App />

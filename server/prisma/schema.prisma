@@ -201,6 +201,10 @@ model User {
   // (CLAUDE.md → Dates & Times).
   timeZone String?
 
+  // Per-user foreground inbound-call alert controls (MAI-388). Null means the
+  // application defaults until the rep saves an explicit preference set.
+  callAlertSettings Json?
+
   // The org this user currently has selected (for UI context; not used for auth).
   // Nullable — the user may not have any org yet (edge case after account creation).
   currentOrgId String?
