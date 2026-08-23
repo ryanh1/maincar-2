@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { Loader2 } from 'lucide-react'
 
 import { ActivityFeedRow } from '@/components/activity-feed/ActivityFeedRow'
@@ -15,6 +16,9 @@ export function AccountTimelineFeed({
   hasNextPage = false,
   isFetchingNextPage = false,
   onLoadMore,
+  scrollToEventId,
+  scrollRequestKey,
+  onVisibleEventChange,
 }: {
   items: ActivityFeedItem[]
   state: 'loading' | 'error' | 'empty' | 'ready'
@@ -25,7 +29,20 @@ export function AccountTimelineFeed({
   hasNextPage?: boolean
   isFetchingNextPage?: boolean
   onLoadMore?: () => void
+  scrollToEventId?: string | null
+  scrollRequestKey?: number
+  onVisibleEventChange?: (eventId: string) => void
 }) {
+  const feedRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!scrollToEventId) return
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    feedRef.current
+      ?.querySelector<HTMLElement>(`[data-event-id="${CSS.escape(scrollToEventId)}"]`)
+      ?.scrollIntoView({ block: 'nearest', behavior })
+  }, [scrollRequestKey, scrollToEventId])
+
   if (state === 'loading') {
     return <div className="flex items-center gap-2 p-3 text-sm text-text-muted"><Loader2 className="size-4 animate-spin" /> Loading activity…</div>
   }
@@ -40,7 +57,23 @@ export function AccountTimelineFeed({
   if (state === 'empty') return <p className="p-3 text-sm text-text-muted">No activity in this range.</p>
 
   return (
-    <div role="feed" aria-label="Account activity" className="border border-border bg-bg">
+    <div
+      ref={feedRef}
+      role="feed"
+      aria-label="Account activity"
+      tabIndex={0}
+      className="max-h-96 overflow-y-auto border border-border bg-bg"
+      onScroll={(scrollEvent) => {
+        if (!onVisibleEventChange) return
+        const feedTop = scrollEvent.currentTarget.getBoundingClientRect().top
+        const closest = [...scrollEvent.currentTarget.querySelectorAll<HTMLElement>('[data-event-id]')]
+          .reduce<{ row: HTMLElement | null; distance: number }>((current, row) => {
+            const distance = Math.abs(row.getBoundingClientRect().top - feedTop)
+            return distance < current.distance ? { row, distance } : current
+          }, { row: null, distance: Number.POSITIVE_INFINITY }).row
+        if (closest?.dataset.eventId) onVisibleEventChange(closest.dataset.eventId)
+      }}
+    >
       {groupFeedItemsByDay(items, timeZone).map((group) => (
         <section key={group.label} aria-label={group.label}>
           <h3 className="border-b border-border bg-surface px-3 py-2 text-xs font-medium text-text-muted">{group.label}</h3>

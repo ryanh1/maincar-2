@@ -2,10 +2,9 @@ import { useMemo, useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { useGetAccountTimeline, useGetAccountTimelineDetail } from '@/hooks/accountTimeline'
-import { mapAccountTimelineEvent } from '@/components/activity-feed/activityFeed'
+import { useAccountTimelineRangePreference, useGetAccountTimeline, useGetAccountTimelineDetail } from '@/hooks/accountTimeline'
 import type { AccountTimelineParams } from '@/lib/accountTimelineTypes'
-import { AccountTimelineFeed } from './AccountTimelineFeed'
+import { AccountTimelineWorkspace } from './AccountTimelineWorkspace'
 import { TimelineFilters, type TimelineFilterValue } from './TimelineFilters'
 import { AccountTimelineDetailPanel } from './AccountTimelineDetailPanel'
 
@@ -23,8 +22,16 @@ export function AccountTimelineFixture() {
 function TimelineFixtureContent() {
   const [filters, setFilters] = useState<TimelineFilterValue>({})
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
-  const query = useGetAccountTimeline('org-fixture', ROOT, filters as AccountTimelineParams)
-  const detailQuery = useGetAccountTimelineDetail('org-fixture', ROOT, selectedEventId, filters as AccountTimelineParams)
+  const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null)
+  const rangePreference = useAccountTimelineRangePreference('org-fixture', ROOT)
+  const params: AccountTimelineParams = { ...filters, ...(rangePreference.range ?? {}) }
+  const query = useGetAccountTimeline('org-fixture', ROOT, params)
+  const detailQuery = useGetAccountTimelineDetail('org-fixture', ROOT, selectedEventId, params)
+  const range = query.data?.pages[0]?.range ?? null
+  const selectEvent = (eventId: string) => {
+    setSelectedEventId(eventId)
+    setHighlightedEventId(eventId)
+  }
 
   return (
     <main className="min-h-dvh bg-bg p-6">
@@ -39,12 +46,17 @@ function TimelineFixtureContent() {
           people={[{ id: 'person-fixture', label: 'Ada Lovelace' }]}
           deals={[{ id: 'deal-fixture', label: 'Enterprise renewal' }]}
         />
-        <AccountTimelineFeed
-          items={query.events.map(mapAccountTimelineEvent)}
+        <AccountTimelineWorkspace
+          events={query.events}
           state={query.state}
+          range={range}
           timeZone="America/New_York"
           selectedEventId={selectedEventId}
-          onEventSelect={setSelectedEventId}
+          highlightedEventId={highlightedEventId}
+          onEventSelect={selectEvent}
+          onHighlightedEventChange={setHighlightedEventId}
+          onRangeChange={rangePreference.setRange}
+          onResetRange={rangePreference.reset}
           onRetry={() => void query.refetch()}
           hasNextPage={query.hasNextPage}
           isFetchingNextPage={query.isFetchingNextPage}
@@ -56,7 +68,7 @@ function TimelineFixtureContent() {
           orgId="org-fixture"
           detail={detailQuery.data?.detail ?? null}
           navigation={detailQuery.data?.navigation ?? null}
-          onNavigate={setSelectedEventId}
+          onNavigate={selectEvent}
         />
       </section>
     </main>
