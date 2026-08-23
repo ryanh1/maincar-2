@@ -219,6 +219,7 @@ model User {
   calendarAttendees   CalendarEventAttendee[]
   reportsOwned        Report[] @relation("ReportOwner")
   reportsDeleted      Report[] @relation("ReportDeletedBy")
+  keyboardBindings    KeyboardBinding[]
 
   // Texts sent or received on this rep's number (SmsMessage.mailboxUserId →
   // User). SetNull on that side, so deleting a user never destroys the org's
@@ -250,6 +251,23 @@ model User {
   updatedAt DateTime @updatedAt
 
   @@index([currentOrgId])
+}
+
+// A user-owned override for a keyboard action. Actions and their default keys
+// live in code so new actions do not require rows for every existing user.
+model KeyboardBinding {
+  id       String @id @default(cuid())
+  userId   String
+  actionId String
+  keys     String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, actionId])
+  @@index([userId])
 }
 
 // Join table: users can belong to multiple orgs, each with their own role set.

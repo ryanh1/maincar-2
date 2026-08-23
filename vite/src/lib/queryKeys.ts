@@ -9,6 +9,7 @@ import type { EmailTemplateListQuery } from './emailTypes'
  * (CLAUDE.md → Frontend Data Fetching Patterns → Query Keys).
  */
 export const queryKeys = {
+  keyboardBindings: ['keyboardBindings'] as const,
   auth: {
     all: ['auth'] as const,
     me: () => ['auth', 'me'] as const,

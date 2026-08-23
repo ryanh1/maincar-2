@@ -1,22 +1,9 @@
 import type { ComponentType } from 'react'
 import { Navigate, NavLink, useLocation, useParams } from 'react-router-dom'
-import {
-  Building2,
-  FileText,
-  FileSignature,
-  Phone,
-  Radio,
-  ListChecks,
-  Plug,
-  UsersRound,
-  User as UserIcon,
-  Users,
-  Database,
-  type LucideIcon,
-} from 'lucide-react'
 
 import { Separator } from '@/components/ui/separator'
 import { legacySettingsPath, settingsPath, type SettingsSection } from '@/lib/workspaceUrlState'
+import { visibleSettingsTabs } from '@/lib/settingsRegistry'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
 
@@ -33,38 +20,9 @@ import { Settings_DispositionsTab } from './Settings_DispositionsTab'
 import { Settings_TeamsTab } from './Settings_TeamsTab'
 import { Settings_NextStepsTab } from './Settings_NextStepsTab'
 import { Settings_DataModelTab } from './Settings_DataModelTab'
+import { Settings_KeyboardTab } from './Settings_KeyboardTab'
 
 type TabId = SettingsSection
-
-interface TabDef {
-  id: TabId
-  label: string
-  icon: LucideIcon
-  /** Requires an active org to have anything to show. */
-  needsOrg?: boolean
-  /** Requires admin authority in the active org. */
-  adminOnly?: boolean
-}
-
-const TABS: TabDef[] = [
-  { id: 'profile', label: 'Profile', icon: UserIcon },
-  { id: 'organization', label: 'Organization', icon: Building2, needsOrg: true },
-  { id: 'members', label: 'Members', icon: Users, needsOrg: true, adminOnly: true },
-  { id: 'teams', label: 'Teams', icon: UsersRound, needsOrg: true },
-  { id: 'numbers', label: 'Phone numbers', icon: Phone, needsOrg: true },
-  { id: 'call-recordings', label: 'Call recordings', icon: Radio, needsOrg: true },
-  { id: 'dispositions', label: 'Call dispositions', icon: ListChecks, needsOrg: true },
-  { id: 'next-steps', label: 'Next steps', icon: ListChecks, needsOrg: true, adminOnly: true },
-  { id: 'voicemail-greeting', label: 'Voicemail greeting', icon: Radio, needsOrg: true, adminOnly: true },
-  // Not adminOnly: a template belongs to the ORG and any member may write, edit,
-  // or delete any of them (SPEC-composer-templates.md § 2).
-  { id: 'email-templates', label: 'Email templates', icon: FileText, needsOrg: true },
-  { id: 'signatures', label: 'Signatures', icon: FileSignature, needsOrg: true },
-// Hidden for a user with no org, like Organization and Members: connections belong to
-  // an org, so there is nothing to show without one.
-  { id: 'integrations', label: 'Integrations', icon: Plug, needsOrg: true },
-  { id: 'data-model', label: 'Data model', icon: Database, needsOrg: true, adminOnly: true },
-]
 
 const TAB_CONTENT: Record<TabId, ComponentType> = {
   profile: Settings_ProfileTab,
@@ -80,6 +38,7 @@ const TAB_CONTENT: Record<TabId, ComponentType> = {
 integrations: Settings_IntegrationsTab,
   teams: Settings_TeamsTab,
   'data-model': Settings_DataModelTab,
+  keyboard: Settings_KeyboardTab,
 }
 
 /**
@@ -94,11 +53,7 @@ export function Settings() {
   const { org, isAdmin } = useAuth()
   const { section } = useParams<{ section: string }>()
 
-  const visibleTabs = TABS.filter((tab) => {
-    if (tab.needsOrg && !org) return false
-    if (tab.adminOnly && !isAdmin) return false
-    return true
-  })
+  const visibleTabs = visibleSettingsTabs({ hasOrg: !!org, isAdmin })
 
   const activeTab: TabId = visibleTabs.find((tab) => tab.id === section)?.id ?? 'profile'
   const ActiveTabContent = TAB_CONTENT[activeTab]

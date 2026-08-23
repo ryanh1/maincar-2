@@ -97,9 +97,9 @@ export function KeyboardSystem({ commands, children }: KeyboardSystemProps) {
         return
       }
 
-      if (event.defaultPrevented || hasModifier(event) || isTypingTarget(event.target)) return
+      if (event.defaultPrevented || isTypingTarget(event.target)) return
 
-      const command = allCommands.find((candidate) => candidate.shortcut?.toLowerCase() === event.key.toLowerCase())
+      const command = allCommands.find((candidate) => candidate.shortcut && shortcutMatchesEvent(candidate.shortcut, event))
       if (!command) return
 
       event.preventDefault()
@@ -234,6 +234,20 @@ function Shortcut({ keys }: { keys: string }) {
 
 function hasModifier(event: KeyboardEvent) {
   return event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
+}
+
+function shortcutMatchesEvent(shortcut: string, event: KeyboardEvent) {
+  const parts = shortcut.split('+')
+  const key = parts.at(-1)?.toLowerCase()
+  if (!key || key !== event.key.toLowerCase()) return false
+
+  const modifiers = new Set(parts.slice(0, -1))
+  return (
+    modifiers.has('Cmd') === event.metaKey &&
+    modifiers.has('Ctrl') === event.ctrlKey &&
+    modifiers.has('Alt') === event.altKey &&
+    modifiers.has('Shift') === event.shiftKey
+  )
 }
 
 function isTypingTarget(target: EventTarget | null) {

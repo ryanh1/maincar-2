@@ -2,9 +2,11 @@ import { useMemo, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { useComposer } from '@/components/composer/composerContext'
+import { useGetKeyboardBindings } from '@/hooks/keyboardBindings'
 import { useAuth } from '@/providers/useAuth'
 
 import { KeyboardSystem, type KeyboardCommand } from './KeyboardSystem'
+import { applyKeyboardBindings, keyboardActionDefinitions, mergeKeyboardBindings } from './keyboardRegistry'
 
 interface KeyboardProviderProps {
   children: ReactNode
@@ -18,6 +20,7 @@ export function KeyboardProvider({ children }: KeyboardProviderProps) {
   const navigate = useNavigate()
   const { org, isAdmin } = useAuth()
   const { openComposer } = useComposer()
+  const bindingsQuery = useGetKeyboardBindings()
 
   const commands = useMemo<KeyboardCommand[]>(() => {
     function visit(path: string) {
@@ -25,32 +28,20 @@ export function KeyboardProvider({ children }: KeyboardProviderProps) {
       requestAnimationFrame(() => document.getElementById('app-main')?.focus())
     }
 
-    const settings: KeyboardCommand[] = [
-      { id: 'settings-profile', title: 'Profile', group: 'Settings', keywords: ['settings account'], execute: () => visit('/settings/profile') },
-    ]
+    const commands = keyboardActionDefinitions({ hasOrg: !!org, isAdmin }).map((action): KeyboardCommand => ({
+      ...action,
+      execute: () => {
+        if (action.id === 'compose-email') return void openComposer()
+        if (action.id === 'view-home') return visit('/home')
+        if (action.id === 'view-calls') return visit('/calls')
+        if (action.id === 'view-tasks') return visit('/tasks')
+        if (action.id === 'settings') return visit('/settings')
+        if (action.id.startsWith('settings-')) return visit(`/settings/${action.id.slice('settings-'.length)}`)
+      },
+    }))
 
-    if (org) {
-      settings.push(
-        { id: 'settings-organization', title: 'Organization', group: 'Settings', keywords: ['settings'], execute: () => visit('/settings/organization') },
-        { id: 'settings-phone-numbers', title: 'Phone numbers', group: 'Settings', keywords: ['settings calling'], execute: () => visit('/settings/numbers') },
-        { id: 'settings-email-templates', title: 'Email templates', group: 'Settings', keywords: ['settings compose'], execute: () => visit('/settings/email-templates') },
-        { id: 'settings-integrations', title: 'Integrations', group: 'Settings', keywords: ['settings email'], execute: () => visit('/settings/integrations') },
-      )
-    }
-
-    if (org && isAdmin) {
-      settings.push({ id: 'settings-members', title: 'Members', group: 'Settings', keywords: ['settings team'], execute: () => visit('/settings/members') })
-    }
-
-    return [
-      { id: 'compose-email', title: 'Compose email', group: 'Actions', shortcut: 'C', keywords: ['new email message'], execute: () => void openComposer() },
-      { id: 'view-home', title: 'Home', group: 'Views', keywords: ['dashboard'], execute: () => visit('/home') },
-      { id: 'view-calls', title: 'Calls', group: 'Views', keywords: ['call history'], execute: () => visit('/calls') },
-      { id: 'view-tasks', title: 'Tasks', group: 'Views', keywords: ['my tasks follow-up reminders'], execute: () => visit('/tasks') },
-      { id: 'settings', title: 'Settings', group: 'Settings', execute: () => visit('/settings') },
-      ...settings,
-    ]
-  }, [isAdmin, navigate, openComposer, org])
+    return applyKeyboardBindings(commands, mergeKeyboardBindings(bindingsQuery.data?.bindings))
+  }, [bindingsQuery.data?.bindings, isAdmin, navigate, openComposer, org])
 
   return <KeyboardSystem commands={commands}>{children}</KeyboardSystem>
 }
