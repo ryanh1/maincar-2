@@ -97,6 +97,9 @@ describe('seedOrg (integration, real Postgres)', () => {
     expect(dispositions).toHaveLength(STANDARD_DISPOSITIONS.length)
     expect(dispositions.map((disposition) => disposition.value)).toEqual(STANDARD_DISPOSITIONS.map((disposition) => disposition.value))
     expect(dispositions.every((disposition) => disposition.isStandard)).toBe(true)
+    expect(dispositions.map((disposition) => ({ isPinned: disposition.isPinned, pinOrder: disposition.pinOrder }))).toEqual(
+      STANDARD_DISPOSITIONS.map((disposition) => ({ isPinned: disposition.isPinned, pinOrder: disposition.pinOrder })),
+    )
 
     // seedVersion is stamped.
     const org = await prisma.org.findUniqueOrThrow({ where: { id: orgId } })
