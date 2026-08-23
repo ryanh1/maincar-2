@@ -36,6 +36,8 @@ export type SavedViewConfig = {
   zoom: number
   columnWidths: Record<string, number>
   columnStyles: Array<{ attributeId: string; headerColor?: string; auto?: { kind: 'relation-source'; objectId: string } }>
+  kanbanCardFieldIds?: string[]
+  kanbanSummaryAttributeId?: string
 }
 
 export type UrlViewOverlay = Partial<Pick<SavedViewConfig, 'columns' | 'sorts' | 'teamScope' | 'groupBy' | 'rowHeight' | 'gridLines' | 'frozenRows' | 'frozenCols' | 'zoom'>> & {
@@ -77,6 +79,8 @@ const configShape = z.object({
     headerColor: z.string().trim().min(1).max(64).optional(),
     auto: z.object({ kind: z.literal('relation-source'), objectId: z.string().min(1) }).optional(),
   })).optional(),
+  kanbanCardFieldIds: z.array(z.string().min(1)).max(50).optional(),
+  kanbanSummaryAttributeId: z.string().min(1).optional(),
 })
 
 function activeAttributes(attributes: ViewAttribute[]): ViewAttribute[] {
@@ -144,6 +148,10 @@ export function repairSavedViewConfig(raw: unknown, attributes: ViewAttribute[])
     })),
   ]
   const teamScope = repairTeamScope(source.teamScope)
+  const kanbanCardFieldIds = [...new Set(source.kanbanCardFieldIds ?? [])].filter((id) => knownIds.has(id))
+  const kanbanSummaryAttributeId = source.kanbanSummaryAttributeId && knownIds.has(source.kanbanSummaryAttributeId)
+    ? source.kanbanSummaryAttributeId
+    : undefined
 
   return {
     version: VIEW_CONFIG_VERSION,
@@ -159,6 +167,8 @@ export function repairSavedViewConfig(raw: unknown, attributes: ViewAttribute[])
     zoom: source.zoom ?? 100,
     columnWidths: Object.fromEntries(Object.entries(source.columnWidths ?? {}).filter(([id]) => knownIds.has(id))),
     columnStyles: uniqueByAttribute((source.columnStyles ?? []).filter((style) => knownIds.has(style.attributeId))),
+    ...(kanbanCardFieldIds.length ? { kanbanCardFieldIds } : {}),
+    ...(kanbanSummaryAttributeId ? { kanbanSummaryAttributeId } : {}),
   }
 }
 

@@ -10,16 +10,17 @@ export type UpdateViewVariables = {
   orgId: string
   viewId: string
   config: ViewConfig
+  layout?: 'list' | 'grid' | 'kanban'
 }
 
 /** Persists configuration edits to an existing view. */
 export function useUpdateView() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ orgId, viewId, config }: UpdateViewVariables) =>
+    mutationFn: ({ orgId, viewId, config, layout }: UpdateViewVariables) =>
       jsonFetch<SavedViewResponse>(`/api/orgs/${orgId}/saved-views/${viewId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ config }),
+        body: JSON.stringify({ config, ...(layout ? { layout } : {}) }),
       }),
     onSuccess: (_data, variables) =>
       queryClient.invalidateQueries({ queryKey: queryKeys.savedViews.all(variables.orgId) }),

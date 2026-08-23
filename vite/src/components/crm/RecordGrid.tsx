@@ -36,9 +36,10 @@ import { RecordGridCreateRow } from './RecordGrid_CreateRow'
 import { GridRowFreezeMenu } from './GridRowFreezeMenu'
 import { formatCellValue } from './recordCellValue'
 import { ColumnGroupHeaders } from './ColumnGroupHeaders'
-import { createViewConfig, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
+import { createViewConfig, defaultKanbanGroupBy, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
 import { parseGridCommand } from './gridCommands'
 import { coerceCurrency, coerceNumber } from './cellCoercion'
+import { KanbanBoard } from './KanbanBoard'
 
 const LEADING_COLUMN_WIDTH = 220
 const DEFAULT_COLUMN_WIDTH = 160
@@ -105,6 +106,8 @@ interface RecordGridProps {
   toolbarLeading?: ReactNode
   /** Increments when the page-level New action should open this grid's create flow. */
   createRequestToken?: number
+  layout?: 'grid' | 'kanban'
+  onLayoutChange?: (layout: 'grid' | 'kanban') => void
 }
 
 const HEADER_MENU_UNSUPPORTED_TYPES = new Set(['multiselect', 'record_reference', 'user_reference', 'location', 'ai'])
@@ -159,7 +162,7 @@ function createdRecordId(response: unknown, object: ObjectDef): string | null {
     : null
 }
 
-export function RecordGrid({ orgId, object, attributes, initialRecordId, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken }: RecordGridProps) {
+export function RecordGrid({ orgId, object, attributes, initialRecordId, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken, layout = 'grid', onLayoutChange }: RecordGridProps) {
   const { user } = useAuth()
   const { activeCall, dialing } = useDialer()
   const colors = useGridColors()
@@ -1023,6 +1026,33 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
 
   const peekBaseRecord = peekIndex !== null ? recordAtRow(peekIndex) : null
   const peekRecord = peekBaseRecord ? { ...peekBaseRecord, ...edits.get(peekBaseRecord.id) } : null
+  const setLayout = (nextLayout: 'grid' | 'kanban') => {
+    if (nextLayout === 'kanban' && !columns.some((attribute) => attribute.id === config.groupBy[0]?.attributeId && (attribute.type === 'select' || attribute.type === 'status'))) {
+      onViewConfigChange?.((current) => ({ ...current, groupBy: defaultKanbanGroupBy(columns) }))
+    }
+    onLayoutChange?.(nextLayout)
+  }
+
+  if (layout === 'kanban') {
+    return (
+      <div className="flex h-full min-h-0 flex-col border border-border bg-bg">
+        {onViewConfigChange && (
+          <GridViewToolbar
+            leading={toolbarLeading}
+            orgId={orgId}
+            attributes={columns}
+            config={config}
+            onConfigChange={onViewConfigChange}
+            teamScopeSupported={teamScopeSupported}
+            layout={layout}
+            onLayoutChange={setLayout}
+          />
+        )}
+        <KanbanBoard attributes={columns} config={config} rows={rows} />
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col border border-border bg-bg">
       {onViewConfigChange && (
@@ -1034,6 +1064,8 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
           onConfigChange={onViewConfigChange}
           teamScopeSupported={teamScopeSupported}
           selectedColumnIds={selectedColumnIds}
+          layout={layout}
+          onLayoutChange={setLayout}
         />
       )}
       {isCreating && (

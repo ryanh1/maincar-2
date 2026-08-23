@@ -37,6 +37,8 @@ vi.mock('@/components/crm/RecordGrid', () => ({
     onViewConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
     toolbarLeading: ReactNode
     createRequestToken?: number
+    layout: 'grid' | 'kanban'
+    onLayoutChange: (layout: 'grid' | 'kanban') => void
   }) => {
     recordGridMock(props)
     return (
@@ -44,6 +46,8 @@ vi.mock('@/components/crm/RecordGrid', () => ({
         {props.toolbarLeading}
         <div role="grid" aria-label="People grid" data-sort={props.viewConfig.sorts.map((sort) => `${sort.attributeId}:${sort.direction}`).join(',')} />
         <button onClick={() => props.onViewConfigChange((current) => ({ ...current, sorts: [{ attributeId: 'name', direction: 'asc' }] }))}>Change sort</button>
+        <button onClick={() => props.onLayoutChange('kanban')}>Show Kanban</button>
+        <output>{props.layout}</output>
       </>
     )
   },
@@ -152,6 +156,23 @@ describe('Records', () => {
 
     await user.click(screen.getByRole('button', { name: 'Change sort' }))
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
-    await waitFor(() => expect(update).toHaveBeenCalledWith({ orgId: 'org-1', viewId: 'view-1', config: expect.objectContaining({ sorts: [{ attributeId: 'name', direction: 'asc' }] }) }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith({ orgId: 'org-1', viewId: 'view-1', layout: 'grid', config: expect.objectContaining({ sorts: [{ attributeId: 'name', direction: 'asc' }] }) }))
+  })
+
+  it('persists a selected Kanban layout on the saved view', async () => {
+    const user = userEvent.setup()
+    const person = object()
+    const view = { id: 'view-1', objectId: 'person', name: 'Deals', layout: 'grid' as const, config: createViewConfig([]), ownerUserId: 'user-1', isShared: false, isDefault: true, sortOrder: 0, createdAt: '', updatedAt: '' }
+    const update = vi.fn().mockResolvedValue({ view: { ...view, layout: 'kanban' } })
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetViewsMock.mockReturnValue({ data: { views: [view] }, isPending: false, isError: false, refetch: vi.fn() })
+    useUpdateViewMock.mockReturnValue({ isPending: false, mutateAsync: update })
+
+    renderRecords('/records/person')
+    await user.click(screen.getByRole('button', { name: 'Show Kanban' }))
+
+    expect(screen.getByText('kanban')).toBeInTheDocument()
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org-1', viewId: 'view-1', layout: 'kanban' })))
   })
 })
