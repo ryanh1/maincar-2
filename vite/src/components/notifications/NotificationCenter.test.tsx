@@ -142,4 +142,20 @@ describe('NotificationCenter', () => {
       method: 'POST', body: JSON.stringify({ action: 'archive', notificationIds: ['notification-1'] }),
     })
   })
+
+  it('uses Unread as a tab and sends type and object filters to the inbox API', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationCenter />)
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 2 unread.' }))
+
+    await user.click(screen.getByRole('tab', { name: 'Unread' }))
+    await waitFor(() => expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/notifications?read=false&limit=25'))
+
+    await user.click(screen.getByLabelText('Filter notifications by type'))
+    await user.click(await screen.findByRole('option', { name: 'Mention' }))
+    await user.click(screen.getByLabelText('Filter notifications by object'))
+    await user.click(await screen.findByRole('option', { name: 'Companies' }))
+
+    await waitFor(() => expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/notifications?read=false&type=mentioned&objectType=company&limit=25'))
+  })
 })

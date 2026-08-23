@@ -8,6 +8,8 @@ function buildNotificationsQuery(params: GetNotificationsParams): string {
   const search = new URLSearchParams()
   if (params.view && params.view !== 'inbox') search.set('view', params.view)
   if (params.read && params.read !== 'all') search.set('read', params.read === 'read' ? 'true' : 'false')
+  if (params.type && params.type !== 'all') search.set('type', params.type)
+  if (params.objectType && params.objectType !== 'all') search.set('objectType', params.objectType)
   if (params.page && params.page > 1) search.set('page', String(params.page))
   if (params.limit) search.set('limit', String(params.limit))
   const qs = search.toString()

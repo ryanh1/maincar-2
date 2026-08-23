@@ -6,6 +6,8 @@ export type {
   Notification,
   NotificationAction,
   NotificationActionVariables,
+  NotificationEventType,
+  NotificationObjectFilter,
   NotificationReadFilter,
   NotificationView,
 } from '@/lib/notificationTypes'

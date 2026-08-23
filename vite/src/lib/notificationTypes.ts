@@ -1,5 +1,7 @@
 export type NotificationView = 'inbox' | 'archived' | 'snoozed'
 export type NotificationReadFilter = 'all' | 'unread' | 'read'
+export type NotificationEventType = 'all' | 'mentioned' | 'assigned' | 'commented' | 'status_changed'
+export type NotificationObjectFilter = 'all' | 'person' | 'company' | 'deal' | 'task' | 'call' | 'note'
 export type NotificationAction = 'read' | 'unread' | 'archive' | 'unarchive' | 'snooze' | 'unsnooze'
 
 export interface NotificationSource {
@@ -28,6 +30,8 @@ export interface Notification {
 export interface GetNotificationsParams {
   view?: NotificationView
   read?: NotificationReadFilter
+  type?: NotificationEventType
+  objectType?: NotificationObjectFilter
   page?: number
   limit?: number
 }

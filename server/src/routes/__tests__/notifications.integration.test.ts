@@ -32,6 +32,7 @@ function as(firebaseUid: string): string {
 async function createNotification(args: {
   orgId: string
   recipientUserId: string
+  verb?: string
   objectType?: string
   objectId?: string
   actorUserId?: string | null
@@ -45,7 +46,7 @@ async function createNotification(args: {
       orgId: args.orgId,
       eventKey: `notification-${Date.now()}-${Math.random()}`,
       actorUserId: args.actorUserId ?? null,
-      verb: 'mentioned',
+      verb: args.verb ?? 'mentioned',
       objectType: args.objectType ?? 'call',
       objectId: args.objectId ?? 'missing-call',
       sourceSnapshot: { title: 'Comment on a call', preview: 'Please take a look.' },
@@ -100,6 +101,7 @@ describe('notification inbox API (integration, real Postgres)', () => {
       orgId: org.orgId,
       recipientUserId: recipient.userId,
       snoozedUntil: new Date('2099-01-01T00:00:00.000Z'),
+      createdAt: new Date('2026-08-01T08:00:00.000Z'),
     })
 
     const res = await request(app)
@@ -107,7 +109,7 @@ describe('notification inbox API (integration, real Postgres)', () => {
       .set('Authorization', as(recipient.firebaseUid))
 
     expect(res.status).toBe(200)
-    expect(res.body).toMatchObject({ total: 2, page: 1, limit: 1 })
+    expect(res.body).toMatchObject({ total: 3, page: 1, limit: 1 })
     expect(res.body.notifications).toHaveLength(1)
     expect(res.body.notifications[0]).toMatchObject({
       id: visible.id,
@@ -159,6 +161,55 @@ describe('notification inbox API (integration, real Postgres)', () => {
       source: { status: 'unavailable', title: 'Comment on a call', preview: 'Please take a look.' },
     })
     expect(snoozedRes.body.notifications[0].source).not.toHaveProperty('route')
+  })
+
+  it('filters the non-archived inbox by unread state, event type, and object type', async () => {
+    const org = await seedOrgWithAdmin(prisma)
+    const recipient = await seedMember(prisma, org.orgId)
+    const matching = await createNotification({
+      orgId: org.orgId,
+      recipientUserId: recipient.userId,
+      verb: 'mentioned',
+      objectType: 'company',
+    })
+    await createNotification({
+      orgId: org.orgId,
+      recipientUserId: recipient.userId,
+      verb: 'assigned',
+      objectType: 'company',
+    })
+    await createNotification({
+      orgId: org.orgId,
+      recipientUserId: recipient.userId,
+      verb: 'mentioned',
+      objectType: 'deal',
+    })
+    await createNotification({
+      orgId: org.orgId,
+      recipientUserId: recipient.userId,
+      verb: 'mentioned',
+      objectType: 'company',
+      readAt: new Date(),
+    })
+    const snoozed = await createNotification({
+      orgId: org.orgId,
+      recipientUserId: recipient.userId,
+      verb: 'mentioned',
+      objectType: 'company',
+      snoozedUntil: new Date('2099-01-01T00:00:00.000Z'),
+    })
+
+    const inbox = await request(app)
+      .get(`/api/orgs/${org.orgId}/notifications`)
+      .set('Authorization', as(recipient.firebaseUid))
+    expect(inbox.body.notifications.map((row: { id: string }) => row.id)).toEqual(expect.arrayContaining([matching.id, snoozed.id]))
+
+    const filtered = await request(app)
+      .get(`/api/orgs/${org.orgId}/notifications?read=false&type=mentioned&objectType=company`)
+      .set('Authorization', as(recipient.firebaseUid))
+    expect(filtered.status).toBe(200)
+    expect(filtered.body.notifications.map((row: { id: string }) => row.id)).toEqual(expect.arrayContaining([matching.id, snoozed.id]))
+    expect(filtered.body.notifications).toHaveLength(2)
   })
 
   it('resolves a live note mention to the record link that gives it context', async () => {
