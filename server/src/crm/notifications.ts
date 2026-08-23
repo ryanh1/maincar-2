@@ -21,7 +21,7 @@ export type NotificationWriterClient = Pick<PrismaClient, '$transaction'>
  */
 export type NotificationWriterTransactionClient = Pick<
   Prisma.TransactionClient,
-  'membership' | 'notificationObject' | 'notification'
+  '$executeRaw' | 'membership' | 'notificationObject' | 'notification'
 >
 
 /**
@@ -52,6 +52,13 @@ export interface NotificationEvent {
   }
   // Candidate IDs, commonly resolved from validated structured mention nodes.
   recipientUserIds: readonly string[]
+  // Optional server-derived grouping key for one noisy action spanning many
+  // objects, such as a bulk stage change. It is never supplied by an end user.
+  batchKey?: string
+  // A server-derived action identity shared by a mention and assignment emitted
+  // by the same source write. The assignment replaces the mention as the card's
+  // representative object while both durable object ids remain in the bundle.
+  dedupeKey?: string
 }
 
 export interface FanOutNotificationResult {
@@ -70,6 +77,11 @@ export class NotificationEventError extends Error {
 }
 
 const HTML_TAG = /<\/?[a-z!][^>]*>/i
+const BATCH_WINDOW_MS = 5 * 60 * 1000
+const BATCH_CAP_MS = 30 * 60 * 1000
+const MAX_NOISY_BUNDLES_PER_RECIPIENT = 20
+const IMMEDIATE_VERBS = new Set(['mention', 'mentioned', 'assignment', 'assigned'])
+const NOISY_VERBS = new Set(['comment', 'commented', 'status_change', 'bulk_edit'])
 
 function requiredString(value: unknown, field: string, maxLength: number): string {
   if (typeof value !== 'string') throw new NotificationEventError(`${field} must be a string.`)
@@ -97,6 +109,26 @@ function normalizeSnapshot(snapshot: NotificationSourceSnapshot): NotificationSo
   const title = snapshotText(snapshot.title, 'title', 200)
   if (snapshot.preview === undefined || snapshot.preview === null) return { title }
   return { title, preview: snapshotText(snapshot.preview, 'preview', 500) }
+}
+
+function isAssignment(verb: string): boolean {
+  return verb === 'assignment' || verb === 'assigned'
+}
+
+function isImmediate(verb: string): boolean {
+  return IMMEDIATE_VERBS.has(verb)
+}
+
+function isNoisy(verb: string): boolean {
+  return NOISY_VERBS.has(verb)
+}
+
+function notificationBatchKey(recipientUserId: string, verb: string, objectKey: string): string {
+  return `${recipientUserId}:${verb}:${objectKey}`
+}
+
+function containsObjectId(bundle: { notificationObjectId: string; objectIds: string[] }, objectId: string): boolean {
+  return bundle.notificationObjectId === objectId || bundle.objectIds.includes(objectId)
 }
 
 /**
@@ -131,6 +163,18 @@ export async function fanOutNotificationInTransaction(
   const objectType = requiredString(event.object?.type, 'object type', 80)
   const objectId = requiredString(event.object?.id, 'object id', 191)
   const sourceSnapshot = normalizeSnapshot(event.object?.sourceSnapshot)
+  const noisyObjectKey = event.batchKey === undefined
+    ? undefined
+    : requiredString(event.batchKey, 'batchKey', 400)
+  const dedupeKey = event.dedupeKey === undefined
+    ? undefined
+    : requiredString(event.dedupeKey, 'dedupeKey', 400)
+  if (isNoisy(verb) && noisyObjectKey === undefined) {
+    throw new NotificationEventError('batchKey is required for noisy notification events.')
+  }
+  if ((verb === 'mention' || verb === 'assignment') && dedupeKey === undefined) {
+    throw new NotificationEventError('dedupeKey is required for mention and assignment notification events.')
+  }
 
   if (!Array.isArray(event.recipientUserIds)) {
     throw new NotificationEventError('recipientUserIds must be an array.')
@@ -152,6 +196,9 @@ export async function fanOutNotificationInTransaction(
   const validRecipientUserIds = recipientUserIds.filter(
     (userId) => userId !== actorUserId && activeUserIds.has(userId),
   )
+  // Acquire advisory locks in one stable order. Two bulk writes that share
+  // recipients can then never hold each other's next lock indefinitely.
+  const recipientUserIdsForWrites = [...validRecipientUserIds].sort()
   const rejectedRecipientUserIds = recipientUserIds.filter(
     (userId) => userId !== actorUserId && !activeUserIds.has(userId),
   )
@@ -173,18 +220,163 @@ export async function fanOutNotificationInTransaction(
     select: { id: true },
   })
 
-  if (validRecipientUserIds.length > 0) {
+  if (validRecipientUserIds.length === 0) {
+    return {
+      notificationObjectId: notificationObject.id,
+      recipientUserIds: validRecipientUserIds,
+      rejectedRecipientUserIds,
+    }
+  }
+
+  if (isImmediate(verb) && dedupeKey === undefined) {
     await tx.notification.createMany({
       data: validRecipientUserIds.map((recipientUserId) => ({
         orgId,
         notificationObjectId: notificationObject.id,
         recipientUserId,
+        batchKey: notificationBatchKey(recipientUserId, verb, `${objectType}:${objectId}`),
+        objectIds: [notificationObject.id],
+        deliveryMode: 'immediate',
         readAt: null,
         archivedAt: null,
         snoozedUntil: null,
       })),
       // The database's per-object recipient key is the race-safe idempotency
       // guard when two retries pass membership validation concurrently.
+      skipDuplicates: true,
+    })
+  } else if (isImmediate(verb)) {
+    for (const recipientUserId of recipientUserIdsForWrites) {
+      const mentionBatchKey = notificationBatchKey(recipientUserId, 'mention', dedupeKey!)
+      const assignmentBatchKey = notificationBatchKey(recipientUserId, 'assignment', dedupeKey!)
+      const batchKey = isAssignment(verb) ? assignmentBatchKey : mentionBatchKey
+      // Lock on the logical user action so concurrently emitted mention and
+      // assignment events cannot become two cards.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`notification-action:${orgId}:${recipientUserId}:${dedupeKey}`}))`
+      const existing = await tx.notification.findFirst({
+        where: {
+          orgId,
+          recipientUserId,
+          batchKey: { in: [mentionBatchKey, assignmentBatchKey] },
+          deliveryMode: 'immediate',
+          archivedAt: null,
+        },
+        select: {
+          id: true,
+          notificationObjectId: true,
+          objectIds: true,
+          notificationObject: { select: { verb: true } },
+        },
+      })
+
+      if (!existing) {
+        await tx.notification.createMany({
+          data: [{
+            orgId,
+            notificationObjectId: notificationObject.id,
+            recipientUserId,
+            batchKey,
+            objectIds: [notificationObject.id],
+            deliveryMode: 'immediate',
+            readAt: null,
+            archivedAt: null,
+            snoozedUntil: null,
+          }],
+          skipDuplicates: true,
+        })
+        continue
+      }
+
+      if (containsObjectId(existing, notificationObject.id)) continue
+      const assignmentWins = isAssignment(verb) && !isAssignment(existing.notificationObject.verb)
+      await tx.notification.updateMany({
+        where: {
+          id: existing.id,
+          orgId,
+          recipientUserId,
+          NOT: { objectIds: { has: notificationObject.id } },
+        },
+        data: {
+          objectIds: { push: notificationObject.id },
+          ...(assignmentWins
+            ? { notificationObjectId: notificationObject.id, batchKey: assignmentBatchKey }
+            : {}),
+        },
+      })
+    }
+  } else if (isNoisy(verb)) {
+    const now = new Date()
+    const slidingWindowStart = new Date(now.getTime() - BATCH_WINDOW_MS)
+    const capStart = new Date(now.getTime() - BATCH_CAP_MS)
+
+    for (const recipientUserId of recipientUserIdsForWrites) {
+      const batchKey = notificationBatchKey(recipientUserId, verb, noisyObjectKey!)
+      // The rate cap applies across every noisy object key, so its lock must be
+      // recipient-wide. This also serializes find/update/create for each bundle.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`notification-rate:${orgId}:${recipientUserId}`}))`
+      const existing = await tx.notification.findFirst({
+        where: {
+          orgId,
+          recipientUserId,
+          batchKey,
+          deliveryMode: { in: ['batched', 'digest'] },
+          archivedAt: null,
+          createdAt: { gte: capStart },
+          updatedAt: { gte: slidingWindowStart },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, notificationObjectId: true, objectIds: true },
+      })
+      if (existing) {
+        if (containsObjectId(existing, notificationObject.id)) continue
+        await tx.notification.updateMany({
+          where: {
+            id: existing.id,
+            orgId,
+            recipientUserId,
+            NOT: { objectIds: { has: notificationObject.id } },
+          },
+          data: { objectIds: { push: notificationObject.id } },
+        })
+        continue
+      }
+
+      const noisyBundleCount = await tx.notification.count({
+        where: {
+          orgId,
+          recipientUserId,
+          deliveryMode: { in: ['batched', 'digest'] },
+          createdAt: { gte: capStart },
+        },
+      })
+      await tx.notification.createMany({
+        data: [{
+          orgId,
+          notificationObjectId: notificationObject.id,
+          recipientUserId,
+          batchKey,
+          objectIds: [notificationObject.id],
+          deliveryMode: noisyBundleCount >= MAX_NOISY_BUNDLES_PER_RECIPIENT ? 'digest' : 'batched',
+          readAt: null,
+          archivedAt: null,
+          snoozedUntil: null,
+        }],
+        skipDuplicates: true,
+      })
+    }
+  } else {
+    await tx.notification.createMany({
+      data: validRecipientUserIds.map((recipientUserId) => ({
+        orgId,
+        notificationObjectId: notificationObject.id,
+        recipientUserId,
+        batchKey: notificationBatchKey(recipientUserId, verb, `${objectType}:${objectId}`),
+        objectIds: [notificationObject.id],
+        deliveryMode: 'immediate',
+        readAt: null,
+        archivedAt: null,
+        snoozedUntil: null,
+      })),
       skipDuplicates: true,
     })
   }
