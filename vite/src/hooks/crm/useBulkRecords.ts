@@ -6,7 +6,7 @@ import type { BulkExportResponse, BulkRecordsResponse, ObjectDef, RecordBulkActi
 
 export interface BulkRecordsInput {
   orgId: string
-  object: ObjectDef
+  object: Pick<ObjectDef, 'id'>
   selection: RecordBulkSelection
   action: RecordBulkAction
 }

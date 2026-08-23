@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Table2 } from 'lucide-react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/PageHeader'
 import { RecordGrid } from '@/components/crm/RecordGrid'
+import { NewListDialog } from '@/components/crm/NewListDialog'
 import { createViewConfig, sameViewConfig, useViewConfig } from '@/components/crm/viewConfig'
 import { Button } from '@/components/ui/button'
 import { useGetObject, useGetObjects } from '@/hooks/crm'
@@ -30,6 +31,7 @@ import { Records_SavedViewControls } from './Records_SavedViewControls'
 export function Records() {
   const { slug } = useParams<{ slug: string }>()
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const { org } = useAuth()
   const orgId = org?.id ?? null
 
@@ -59,6 +61,7 @@ export function Records() {
   const setDefaultView = useSetDefaultView()
   const isSaving = saveView.isPending || updateView.isPending || duplicateView.isPending || deleteView.isPending || restoreView.isPending || reorderViews.isPending || setDefaultView.isPending
   const [createRequestToken, setCreateRequestToken] = useState(0)
+  const [newListOpen, setNewListOpen] = useState(false)
 
   const isPending = objectsQuery.isPending || (!isUnavailable && object !== null && (objectQuery.isPending || viewsQuery.isPending))
   const isError = objectsQuery.isError || (!isUnavailable && (objectQuery.isError || viewsQuery.isError))
@@ -120,8 +123,11 @@ export function Records() {
       <PageHeader
         icon={Table2}
         title={detail?.namePlural ?? object?.namePlural ?? slug ?? 'Records'}
-        action={detail?.isGridCreateSupported ? (
-          <Button size="sm" onClick={() => setCreateRequestToken((current) => current + 1)}>New</Button>
+        action={detail ? (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setNewListOpen(true)}>New list</Button>
+            {detail.isGridCreateSupported && <Button size="sm" onClick={() => setCreateRequestToken((current) => current + 1)}>New</Button>}
+          </div>
         ) : undefined}
       />
 
@@ -209,6 +215,7 @@ export function Records() {
           />
         )}
       </div>
+      {newListOpen && orgId && detail && <NewListDialog open onOpenChange={setNewListOpen} orgId={orgId} object={detail} onCreated={(list) => navigate(`/lists/${list.id}`)} />}
     </div>
   )
 }
