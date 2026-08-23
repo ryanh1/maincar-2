@@ -59,6 +59,22 @@ export const REQUIRED_SCOPES: Record<Provider, readonly RequiredScope[]> = {
       capability: 'calendar',
     },
     {
+      // Event access does not grant calendar inventory access. Calendar must be
+      // able to show the calendars the connected account has actually shared.
+      param: 'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+      label: 'See your calendar list',
+      consequence: 'see your calendar list',
+      capability: 'calendar',
+    },
+    {
+      // Free/busy has its own narrow Google consent scope. Do not substitute the
+      // broader Calendar scope merely because event access is also requested.
+      param: 'https://www.googleapis.com/auth/calendar.freebusy',
+      label: 'See your availability',
+      consequence: 'see your availability',
+      capability: 'calendar',
+    },
+    {
       param: 'https://www.googleapis.com/auth/userinfo.email',
       label: 'Know which account this is',
       consequence: 'confirm which account this is',

@@ -48,8 +48,10 @@ import {
 const G_READ = 'https://www.googleapis.com/auth/gmail.readonly'
 const G_SEND = 'https://www.googleapis.com/auth/gmail.send'
 const G_CAL = 'https://www.googleapis.com/auth/calendar.events'
+const G_CALENDAR_LIST = 'https://www.googleapis.com/auth/calendar.calendarlist.readonly'
+const G_FREE_BUSY = 'https://www.googleapis.com/auth/calendar.freebusy'
 const G_ID = 'https://www.googleapis.com/auth/userinfo.email'
-const G_ALL = [G_READ, G_SEND, G_CAL, G_ID]
+const G_ALL = [G_READ, G_SEND, G_CAL, G_CALENDAR_LIST, G_FREE_BUSY, G_ID]
 
 const NOW = Date.now()
 const PROVIDER = 'google'
@@ -74,7 +76,7 @@ function connectionRow(overrides: Record<string, unknown> = {}) {
     refreshToken: encryptToken(REFRESH_PLAINTEXT, AAD),
     accessToken: encryptToken(ACCESS_PLAINTEXT, AAD),
     expiresAt: new Date(NOW - 1000), // expired by default → a refresh is due
-    scopes: ['https://www.googleapis.com/auth/gmail.send'],
+    scopes: G_ALL,
     status: 'connected',
     errorCode: null,
     statusDetail: null,
@@ -276,6 +278,19 @@ describe('serializeConnection', () => {
   it('the public select declares no token field', () => {
     expect(CONNECTION_PUBLIC_SELECT).not.toHaveProperty('refreshToken')
     expect(CONNECTION_PUBLIC_SELECT).not.toHaveProperty('accessToken')
+  })
+
+  it('shows an older connected Google grant as limited until it reconnects', () => {
+    const result = serializeConnection(connectionRow({
+      scopes: [G_READ, G_SEND, G_CAL, G_ID],
+      status: 'connected',
+    }))
+
+    expect(result).toMatchObject({
+      status: 'limited',
+      errorCode: 'partial_access',
+      statusDetail: 'Maincar cannot see your calendar list or see your availability.',
+    })
   })
 })
 

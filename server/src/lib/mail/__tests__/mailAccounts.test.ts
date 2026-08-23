@@ -46,7 +46,13 @@ import {
   MailboxNotFoundError,
   RateLimitedError,
 } from '../mailErrors.js'
-import { deleteMailbox, setPrimaryMailbox, upsertMailAccount } from '../mailAccounts.js'
+import {
+  deleteMailbox,
+  getHealthyPrimaryMailbox,
+  NoHealthyPrimaryMailboxError,
+  setPrimaryMailbox,
+  upsertMailAccount,
+} from '../mailAccounts.js'
 
 const ORG_ID = 'org-a'
 const USER_ID = 'user-a'
@@ -62,6 +68,19 @@ function mailboxRow(overrides: Record<string, unknown> = {}) {
     emailAddress: 'rep@example.com',
     displayName: null,
     isPrimary: false,
+    connection: {
+      status: 'connected',
+      errorCode: null,
+      statusDetail: null,
+      scopes: [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/calendar.events',
+        'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+        'https://www.googleapis.com/auth/calendar.freebusy',
+        'https://www.googleapis.com/auth/userinfo.email',
+      ],
+    },
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -204,6 +223,54 @@ describe('setPrimaryMailbox', () => {
 
     expect(result).toBeNull()
     expect(mailAccount.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('getHealthyPrimaryMailbox', () => {
+  it('resolves the current healthy primary at request time', async () => {
+    const first = mailboxRow({ id: 'box-first', isPrimary: true })
+    const switched = mailboxRow({ id: 'box-switched', isPrimary: true })
+    mailAccount.findFirst.mockResolvedValueOnce(first).mockResolvedValueOnce(switched)
+
+    await expect(getHealthyPrimaryMailbox(ORG_ID, USER_ID)).resolves.toMatchObject({ id: 'box-first' })
+    await expect(getHealthyPrimaryMailbox(ORG_ID, USER_ID)).resolves.toMatchObject({ id: 'box-switched' })
+
+    expect(mailAccount.findFirst).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: { orgId: ORG_ID, userId: USER_ID, isPrimary: true },
+      select: expect.anything(),
+    }))
+    expect(mailAccount.findFirst).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: { orgId: ORG_ID, userId: USER_ID, isPrimary: true },
+      select: expect.anything(),
+    }))
+  })
+
+  it('names the Settings connection path when no healthy primary exists', async () => {
+    mailAccount.findFirst.mockResolvedValue(null)
+
+    await expect(getHealthyPrimaryMailbox(ORG_ID, USER_ID)).rejects.toMatchObject({
+      name: 'NoHealthyPrimaryMailboxError',
+      message: 'Connect a healthy primary mailbox in Settings → Integrations to use Calendar.',
+    })
+    await expect(getHealthyPrimaryMailbox(ORG_ID, USER_ID)).rejects.toBeInstanceOf(NoHealthyPrimaryMailboxError)
+  })
+
+  it('requires the added Google calendar permissions from an older primary grant', async () => {
+    mailAccount.findFirst.mockResolvedValue(mailboxRow({
+      connection: {
+        status: 'connected',
+        errorCode: null,
+        statusDetail: null,
+        scopes: [
+          'https://www.googleapis.com/auth/gmail.readonly',
+          'https://www.googleapis.com/auth/gmail.send',
+          'https://www.googleapis.com/auth/calendar.events',
+          'https://www.googleapis.com/auth/userinfo.email',
+        ],
+      },
+    }))
+
+    await expect(getHealthyPrimaryMailbox(ORG_ID, USER_ID)).rejects.toBeInstanceOf(NoHealthyPrimaryMailboxError)
   })
 })
 

@@ -14,9 +14,13 @@ import {
 const G = {
   read: 'https://www.googleapis.com/auth/gmail.readonly',
   send: 'https://www.googleapis.com/auth/gmail.send',
-  calendar: 'https://www.googleapis.com/auth/calendar.events',
+  calendarEvents: 'https://www.googleapis.com/auth/calendar.events',
+  calendarList: 'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+  calendarFreeBusy: 'https://www.googleapis.com/auth/calendar.freebusy',
   identity: 'https://www.googleapis.com/auth/userinfo.email',
 }
+
+const GOOGLE_CALENDAR_SCOPES = [G.calendarEvents, G.calendarList, G.calendarFreeBusy]
 
 describe('REQUIRED_SCOPES', () => {
   it('lists read, send, and calendar (plus identity) per provider, each fully shaped', () => {
@@ -36,7 +40,7 @@ describe('REQUIRED_SCOPES', () => {
 
 describe('evaluateGrant', () => {
   it('full grant → connected, no error, empty detail', () => {
-    const result = evaluateGrant('google', [G.read, G.send, G.calendar, G.identity])
+    const result = evaluateGrant('google', [G.read, G.send, ...GOOGLE_CALENDAR_SCOPES, G.identity])
     expect(result).toEqual({ status: 'connected', errorCode: null, statusDetail: '' })
   })
 
@@ -44,7 +48,7 @@ describe('evaluateGrant', () => {
     const result = evaluateGrant('google', [
       G.read,
       G.send,
-      G.calendar,
+      ...GOOGLE_CALENDAR_SCOPES,
       G.identity,
       'https://www.googleapis.com/auth/some.unrequested.scope',
     ])
@@ -53,13 +57,23 @@ describe('evaluateGrant', () => {
 
   it('two of three (send refused) → limited / partial_access naming the third consequence', () => {
     // read + calendar granted, identity granted, send refused.
-    const result = evaluateGrant('google', [G.read, G.calendar, G.identity])
+    const result = evaluateGrant('google', [G.read, ...GOOGLE_CALENDAR_SCOPES, G.identity])
     expect(result.status).toBe('limited')
     expect(result.errorCode).toBe('partial_access')
     expect(result.statusDetail).toBe('Maincar cannot send email as you.')
     // The other two capabilities are NOT named — only what actually broke.
     expect(result.statusDetail).not.toContain('read your email')
     expect(result.statusDetail).not.toContain('calendar')
+  })
+
+  it('requires calendar-list and free/busy from an existing Google grant', () => {
+    const result = evaluateGrant('google', [G.read, G.send, G.calendarEvents, G.identity])
+
+    expect(result).toEqual({
+      status: 'limited',
+      errorCode: 'partial_access',
+      statusDetail: 'Maincar cannot see your calendar list or see your availability.',
+    })
   })
 
   it('zero granted → limited with every consequence named', () => {
@@ -89,12 +103,19 @@ describe('evaluateGrant', () => {
 
 describe('missingScopeParams', () => {
   it('returns exactly the missing param, and only that one', () => {
-    const missing = missingScopeParams('google', [G.read, G.calendar, G.identity])
+    const missing = missingScopeParams('google', [G.read, ...GOOGLE_CALENDAR_SCOPES, G.identity])
     expect(missing).toEqual([G.send])
   })
 
   it('returns [] when the grant is complete', () => {
-    expect(missingScopeParams('google', [G.read, G.send, G.calendar, G.identity])).toEqual([])
+    expect(missingScopeParams('google', [G.read, G.send, ...GOOGLE_CALENDAR_SCOPES, G.identity])).toEqual([])
+  })
+
+  it('returns only the new calendar scopes for an older Google grant', () => {
+    expect(missingScopeParams('google', [G.read, G.send, G.calendarEvents, G.identity])).toEqual([
+      G.calendarList,
+      G.calendarFreeBusy,
+    ])
   })
 
   it('returns every required param when nothing was granted', () => {

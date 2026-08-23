@@ -101,11 +101,14 @@ const AUTH = 'Bearer fake-token'
 const ORG_A = 'org-a'
 const URL_A = `/api/integrations/orgs/${ORG_A}`
 
-// The four Google scope params, verbatim from oauthScopes.ts.
+// The six Google scope params, verbatim from oauthScopes.ts.
 const G_READ = 'https://www.googleapis.com/auth/gmail.readonly'
 const G_SEND = 'https://www.googleapis.com/auth/gmail.send'
 const G_CAL = 'https://www.googleapis.com/auth/calendar.events'
+const G_CALENDAR_LIST = 'https://www.googleapis.com/auth/calendar.calendarlist.readonly'
+const G_FREE_BUSY = 'https://www.googleapis.com/auth/calendar.freebusy'
 const G_ID = 'https://www.googleapis.com/auth/userinfo.email'
+const G_ALL = [G_READ, G_SEND, G_CAL, G_CALENDAR_LIST, G_FREE_BUSY, G_ID]
 
 function userRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -151,7 +154,7 @@ function connectionRow(overrides: Record<string, unknown> = {}) {
     emailAddress: 'rep@acme.com',
     refreshToken: 'SECRET-REFRESH-TOKEN',
     accessToken: 'SECRET-ACCESS-TOKEN',
-    scopes: [G_READ, G_SEND, G_CAL, G_ID],
+    scopes: G_ALL,
     status: 'connected',
     errorCode: null,
     statusDetail: null,
@@ -197,7 +200,7 @@ describe('POST /api/integrations/orgs/:orgId/:provider/authorize', () => {
     // State is present and non-empty; scopes are the full requested set.
     expect((url.searchParams.get('state') ?? '').length).toBeGreaterThan(0)
     const scope = url.searchParams.get('scope') ?? ''
-    for (const s of [G_READ, G_SEND, G_CAL, G_ID]) expect(scope).toContain(s)
+    for (const s of G_ALL) expect(scope).toContain(s)
     // PKCE S256 challenge went out; the verifier did not.
     expect(url.searchParams.get('code_challenge_method')).toBe('S256')
     expect((url.searchParams.get('code_challenge') ?? '').length).toBeGreaterThan(0)
@@ -222,11 +225,11 @@ describe('POST /api/integrations/orgs/:orgId/:provider/authorize', () => {
   })
 
   it('fix asks for ONLY the missing scope and sets login_hint to the existing address', async () => {
-    // Granted three of four; gmail.send is missing.
+    // Every Calendar permission is granted; gmail.send alone is missing.
     prismaMock.oAuthConnection.findFirst.mockResolvedValue({
       id: 'conn-google',
       emailAddress: 'rep@acme.com',
-      scopes: [G_READ, G_CAL, G_ID],
+      scopes: [G_READ, G_CAL, G_CALENDAR_LIST, G_FREE_BUSY, G_ID],
     })
 
     const res = await request(app)
@@ -262,7 +265,7 @@ describe('POST /api/integrations/orgs/:orgId/:provider/authorize', () => {
     expect(res.status).toBe(200)
     const url = new URL(res.body.url as string)
     expect(url.searchParams.get('login_hint')).toBe('rep@acme.com')
-    for (const scope of [G_READ, G_SEND, G_CAL, G_ID]) {
+    for (const scope of G_ALL) {
       expect(url.searchParams.get('scope')).toContain(scope)
     }
     const verified = verifyState(url.searchParams.get('state') ?? '')
@@ -297,7 +300,7 @@ describe('POST /api/integrations/orgs/:orgId/:provider/authorize', () => {
     prismaMock.oAuthConnection.findFirst.mockResolvedValue({
       id: 'conn-google',
       emailAddress: 'rep@acme.com',
-      scopes: [G_READ, G_SEND, G_CAL, G_ID],
+      scopes: G_ALL,
     })
 
     const res = await request(app)
@@ -548,7 +551,7 @@ const TEST_URL = `${URL_A}/conn-google/test`
 
 /** Arrange a testable connection: this rep's row, its mailbox, and the given verdict. */
 function arrangeTest(capabilities: Cap[], connectionOverrides: Record<string, unknown> = {}) {
-  prismaMock.oAuthConnection.findFirst.mockResolvedValue({ id: 'conn-google', scopes: [G_READ, G_SEND, G_CAL, G_ID] })
+  prismaMock.oAuthConnection.findFirst.mockResolvedValue({ id: 'conn-google', scopes: G_ALL })
   prismaMock.mailAccount.findFirst.mockResolvedValue({ id: 'mail-1' })
   getMailProviderMock.mockResolvedValue({ provider: 'google' })
   testConnectionMock.mockResolvedValue(capabilities)
@@ -786,7 +789,7 @@ function serializedConn(overrides: Record<string, unknown> = {}) {
     provider: 'google',
     providerAccountId: 'sub-1',
     emailAddress: 'rep@acme.com',
-    scopes: [G_READ, G_SEND, G_CAL, G_ID],
+    scopes: G_ALL,
     status: 'connected',
     errorCode: null,
     statusDetail: null,
@@ -816,7 +819,7 @@ function grant(overrides: Record<string, unknown> = {}) {
     accessToken: 'ACCESS-1',
     refreshToken: 'REFRESH-1',
     expiresAt: new Date(NOW.getTime() + 3600_000),
-    grantedScopes: [G_READ, G_SEND, G_CAL, G_ID],
+    grantedScopes: G_ALL,
     ...overrides,
   }
 }
@@ -854,10 +857,10 @@ describe('GET /api/integrations/:provider/callback', () => {
   })
 
   it('renders limited when the provider granted only some scopes', async () => {
-    vi.spyOn(googleOAuth, 'exchangeCode').mockResolvedValue(grant({ grantedScopes: [G_READ, G_CAL, G_ID] }))
+    vi.spyOn(googleOAuth, 'exchangeCode').mockResolvedValue(grant({ grantedScopes: [G_READ, G_CAL, G_CALENDAR_LIST, G_FREE_BUSY, G_ID] }))
     vi.spyOn(googleOAuth, 'fetchIdentity').mockResolvedValue({ providerAccountId: 'sub-1', emailAddress: 'rep@acme.com' })
     saveConnectionMock.mockResolvedValue(
-      serializedConn({ status: 'limited', errorCode: 'partial_access', statusDetail: 'Maincar cannot send email as you.', scopes: [G_READ, G_CAL, G_ID] }),
+      serializedConn({ status: 'limited', errorCode: 'partial_access', statusDetail: 'Maincar cannot send email as you.', scopes: [G_READ, G_CAL, G_CALENDAR_LIST, G_FREE_BUSY, G_ID] }),
     )
 
     const res = await request(app).get(CB('google')).query({ code: 'the-code', state: state() })
