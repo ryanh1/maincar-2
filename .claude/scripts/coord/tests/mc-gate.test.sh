@@ -13,6 +13,7 @@ mkdir -p "$SANDBOX/primary"
 cat > "$SANDBOX/bin/npm" <<'EOF'
 #!/usr/bin/env bash
 printf '%s|VITEST_MAX_WORKERS=%s\n' "$*" "${VITEST_MAX_WORKERS:-}" >> "$MC_FAKE_NPM_LOG"
+[ -z "${MC_FAKE_NPM_CWD_LOG:-}" ] || printf '%s|%s\n' "$PWD" "$*" >> "$MC_FAKE_NPM_CWD_LOG"
 sleep 2
 EOF
 chmod +x "$SANDBOX/bin/npm"
@@ -24,18 +25,21 @@ git init "$SANDBOX/ticket" --quiet
 git -C "$SANDBOX/ticket" config user.name 'Gate test'
 git -C "$SANDBOX/ticket" config user.email 'gate-test@example.test'
 git -C "$SANDBOX/ticket" checkout -b main --quiet
-touch "$SANDBOX/ticket/fixture"
-git -C "$SANDBOX/ticket" add fixture
+mkdir -p "$SANDBOX/ticket/server" "$SANDBOX/ticket/vite"
+touch "$SANDBOX/ticket/fixture" "$SANDBOX/ticket/server/.gitkeep" "$SANDBOX/ticket/vite/.gitkeep"
+git -C "$SANDBOX/ticket" add fixture server/.gitkeep vite/.gitkeep
 git -C "$SANDBOX/ticket" commit -m 'Initial main' --quiet
 git -C "$SANDBOX/ticket" remote add origin "$SANDBOX/upstream.git"
 git -C "$SANDBOX/ticket" push -u origin main --quiet
 git -C "$SANDBOX/ticket" checkout -b gate-receipt-test --quiet
 git -C "$SANDBOX/ticket" commit --allow-empty -m 'Gate receipt fixture' --quiet
+ticket_real="$(cd "$SANDBOX/ticket" && pwd -P)"
 
 gate_env=(
   MC_STATE_HOME="$SANDBOX/state"
   MC_MAIN_CHECKOUT="$SANDBOX/primary"
   MC_FAKE_NPM_LOG="$SANDBOX/npm.log"
+  MC_FAKE_NPM_CWD_LOG="$SANDBOX/npm-cwd.log"
   PATH="$SANDBOX/bin:$PATH"
 )
 
@@ -76,6 +80,7 @@ grep -F 'choose --focused or --train explicitly' "$SANDBOX/no-class.out" >/dev/n
 run_gate --focused -- npm --prefix vite exec vitest run src/pages/Records.test.tsx >"$SANDBOX/focused.out"
 grep -F 'class focused' "$SANDBOX/focused.out" >/dev/null
 grep -F 'VITEST_MAX_WORKERS=1' "$SANDBOX/npm.log" >/dev/null
+grep -Fx "$ticket_real/vite|exec vitest run src/pages/Records.test.tsx" "$SANDBOX/npm-cwd.log" >/dev/null
 
 # A live slot from the serial scheduler has no worker metadata. During rollout
 # it must block new gates rather than be treated as free capacity.
@@ -137,7 +142,8 @@ fi
 
 : > "$SANDBOX/npm.log"
 run_gate --train --risk normal --scope server --coverage 'server routes' --test server:src/routes/__tests__/auth.test.ts >"$SANDBOX/normal.out"
-grep -F -- '--prefix server exec vitest run src/routes/__tests__/auth.test.ts' "$SANDBOX/npm.log" >/dev/null
+grep -F -- 'exec vitest run src/routes/__tests__/auth.test.ts' "$SANDBOX/npm.log" >/dev/null
+grep -Fx "$ticket_real/server|exec vitest run src/routes/__tests__/auth.test.ts" "$SANDBOX/npm-cwd.log" >/dev/null
 grep -F 'run test:server' "$SANDBOX/npm.log" >/dev/null
 
 : > "$SANDBOX/npm.log"
