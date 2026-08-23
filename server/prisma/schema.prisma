@@ -175,6 +175,7 @@ model Org {
   captureSettings    CaptureSettings?
   mailCaptureOptOuts  MailCaptureOptOut[]
   auditLogs          AuditLog[]
+  undoEntries        UndoEntry[]
 }
 
 model User {
@@ -266,6 +267,7 @@ model User {
   // removed user's opt-out row is meaningless without the user.
   mailCaptureOptOuts MailCaptureOptOut[]
   webPushSubscriptions WebPushSubscription[]
+  undoEntries        UndoEntry[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3499,4 +3501,29 @@ model AuditLog {
 
   @@unique([orgId, batchId])
   @@index([orgId, createdAt])
+}
+
+// Durable mirror of one user's in-memory undo stack for a browser session.
+// `inverseJson` and `redoJson` contain the ordered compensating writes; the
+// following issue applies them without treating this table as a DB rollback log.
+model UndoEntry {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sessionId   String
+  seq         Int
+  label       String
+  inverseJson Json
+  redoJson    Json
+  undone      Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, userId, sessionId, seq])
 }
