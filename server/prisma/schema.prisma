@@ -435,6 +435,14 @@ model PhoneNumber {
   // Whether the organization currently wants the carrier to register callerName.
   isCallerNameRequested Boolean @default(false)
 
+  // The carrier's opaque registration identifier. It never reaches the browser;
+  // reconciliation uses it instead of creating a second registration request.
+  callerNameRequestId String?
+
+  // A concise, actionable explanation for a failed or unsupported request.
+  // Null for pending, active, and not-requested states.
+  callerNameFailureReason String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

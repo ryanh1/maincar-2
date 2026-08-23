@@ -97,7 +97,9 @@ function CallerNameForm({ orgId, number }: { orgId: string; number: PhoneNumber 
 
       <p className="text-sm text-text-muted">{CALLER_NAME_STATUS_LABELS[status]}</p>
 
-      {unsupported ? (
+      {number.callerNameFailureReason ? (
+        <p className="text-xs text-text-muted">{number.callerNameFailureReason}</p>
+      ) : unsupported ? (
         <p className="text-xs text-text-muted">This number does not support caller-ID name registration.</p>
       ) : (
         <Button

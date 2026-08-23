@@ -4,6 +4,7 @@ import app from './app.js'
 import { APP_NAME, PORT } from './config.js'
 import { registerProvisionNumberWorker } from './jobs/provisionNumber.js'
 import { registerReleaseNumberWorker } from './jobs/releaseNumber.js'
+import { registerCallerNameReconciliationWorker } from './jobs/reconcileCallerName.js'
 import { registerUploadRecordingWorker } from './jobs/uploadRecording.js'
 import { registerTranscribeRecordingWorker } from './jobs/transcribeRecording.js'
 import { registerReapStaleCallsWorker, scheduleReapStaleCalls } from './jobs/reapStaleCalls.js'
@@ -49,6 +50,7 @@ async function startWorkers(): Promise<void> {
   await startQueue()
   await registerProvisionNumberWorker()
   await registerReleaseNumberWorker()
+  await registerCallerNameReconciliationWorker()
   await registerUploadRecordingWorker()
   await registerTranscribeRecordingWorker()
   await registerReapStaleCallsWorker()
@@ -67,6 +69,8 @@ async function startWorkers(): Promise<void> {
     {
       workers: [
         'provision-number',
+        'release-number',
+        'reconcile-caller-name',
         'upload-recording',
         'transcribe-recording',
         'reap-stale-calls',

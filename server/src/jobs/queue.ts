@@ -22,6 +22,8 @@ export const JOB_PROVISION_NUMBER = 'provision-number'
 
 export const JOB_RELEASE_NUMBER = 'release-number'
 
+export const JOB_RECONCILE_CALLER_NAME = 'reconcile-caller-name'
+
 export const JOB_UPLOAD_RECORDING = 'upload-recording'
 
 export const JOB_TRANSCRIBE_RECORDING = 'transcribe-recording'
@@ -46,6 +48,7 @@ export const JOB_MAIL_BACKFILL = 'mail-backfill'
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
   JOB_RELEASE_NUMBER,
+  JOB_RECONCILE_CALLER_NAME,
   JOB_UPLOAD_RECORDING,
   JOB_TRANSCRIBE_RECORDING,
   JOB_REAP_STALE_CALLS,
@@ -77,6 +80,9 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number; 
   // nothing, while a retry that fails to RELEASE leaves the org renting a number
   // it has already given up. See jobs/releaseNumber.ts.
   [JOB_RELEASE_NUMBER]: { retryLimit: 3, retryDelay: 60 },
+  // Carrier registration can be asynchronous. The handler is compare-and-set,
+  // so retrying a transient provider error cannot overwrite a newer preference.
+  [JOB_RECONCILE_CALLER_NAME]: { retryLimit: 2, retryDelay: 60 },
   // One retry, thirty seconds later — long enough for a Twilio or S3 blip to
   // pass. See jobs/uploadRecording.ts: a second retry buys nothing a first does
   // not, and the recording is safe on Twilio until the upload finally succeeds.
@@ -182,6 +188,17 @@ export async function sendJob(
 ): Promise<string | null> {
   const instance = await startQueue()
   return instance.send(name, data, options)
+}
+
+/** Enqueue one job after a delay without teaching handlers about pg-boss. */
+export async function sendJobAfter(
+  name: JobName,
+  data: object,
+  options: SendOptions,
+  seconds: number,
+): Promise<string | null> {
+  const instance = await startQueue()
+  return instance.sendAfter(name, data, options, seconds)
 }
 
 /**

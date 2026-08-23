@@ -230,6 +230,25 @@ describe('the numbers list', () => {
     expect(screen.getByText(label)).toBeInTheDocument()
   })
 
+  it('shows an actionable carrier failure reason beside the latest caller-ID status', () => {
+    useGetNumbersMock.mockImplementation(() =>
+      listState({
+        data: numbersResponse({
+          numbers: [
+            number({
+              callerNameStatus: 'failed',
+              callerNameFailureReason: 'The carrier rejected this caller-ID name.',
+            }),
+          ],
+        }),
+      }),
+    )
+
+    renderWithProviders(<Settings_PhoneNumbersTab />)
+
+    expect(screen.getByText('The carrier rejected this caller-ID name.')).toBeInTheDocument()
+  })
+
   it('sends the chosen number id when Make primary is clicked', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Settings_PhoneNumbersTab />)
