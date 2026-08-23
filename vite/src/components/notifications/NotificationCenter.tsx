@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Bell } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -26,6 +26,11 @@ import type {
 import { useAuth } from '@/providers/useAuth'
 
 const PAGE_SIZE = 25
+const TOMORROW_SNOOZE_DURATION_MS = 24 * 60 * 60 * 1000
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+}
 
 type NotificationTab = NotificationView | 'unread'
 
@@ -69,6 +74,7 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
   const [type, setType] = useState<NotificationEventType>('all')
   const [objectType, setObjectType] = useState<NotificationObjectFilter>('all')
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [focusedId, setFocusedId] = useState<string | null>(null)
   const unread = useGetNotifications(org?.id, { read: 'unread', limit: 1 })
   const notificationView = view === 'unread' ? 'inbox' : view
   const notificationRead = view === 'unread' ? 'unread' : read
@@ -76,6 +82,7 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
   const update = useUpdateNotifications()
   const unreadCount = unread.data?.total ?? 0
   const notifications = inbox.data?.notifications ?? []
+  const focusedNotification = notifications.find((notification) => notification.id === focusedId)
   const selected = new Set(selectedIds)
   const allSelected = notifications.length > 0 && notifications.every((notification) => selected.has(notification.id))
 
@@ -85,11 +92,17 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
     setView(next)
     setRead(next === 'unread' ? 'unread' : 'all')
     setSelectedIds([])
+    setFocusedId(null)
   }
 
   function openInbox(): void {
     setOpen(true)
     onOpen?.()
+  }
+
+  function changeOpen(nextOpen: boolean): void {
+    setOpen(nextOpen)
+    if (!nextOpen) setFocusedId(null)
   }
 
   function toggleSelection(id: string, checked: boolean): void {
@@ -100,7 +113,7 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
     setSelectedIds(checked ? notifications.map((notification) => notification.id) : [])
   }
 
-  function runAction(action: NotificationAction, ids: string[], bulk = false, snoozeDurationMs?: number): void {
+  const runAction = useCallback((action: NotificationAction, ids: string[], bulk = false, snoozeDurationMs?: number): void => {
     if (!org || ids.length === 0) return
     const snoozedUntil = action === 'snooze' && snoozeDurationMs
       ? new Date(Date.now() + snoozeDurationMs).toISOString()
@@ -112,7 +125,36 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
         onError: (error) => toast.error(error instanceof ApiError ? error.message : 'Could not update notifications. Check your connection and try again.'),
       },
     )
-  }
+  }, [org, update])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        event.defaultPrevented ||
+        !open ||
+        notificationView !== 'inbox' ||
+        update.isPending ||
+        !focusedNotification ||
+        isTypingTarget(event.target) ||
+        event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+      ) return
+
+      const key = event.key.toLowerCase()
+      if (key === 'u') {
+        event.preventDefault()
+        runAction(focusedNotification.readAt ? 'unread' : 'read', [focusedNotification.id])
+      } else if (key === 'e') {
+        event.preventDefault()
+        runAction('archive', [focusedNotification.id])
+      } else if (key === 'h') {
+        event.preventDefault()
+        runAction('snooze', [focusedNotification.id], false, TOMORROW_SNOOZE_DURATION_MS)
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [focusedNotification, notificationView, open, runAction, update.isPending])
 
   return (
     <>
@@ -136,7 +178,7 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
         </button>
       </div>
 
-      <Sheet open={open} onOpenChange={setOpen}>
+      <Sheet open={open} onOpenChange={changeOpen}>
         <SheetContent aria-describedby="notification-center-description" className="w-full gap-0 bg-bg p-0 sm:max-w-xl">
           <SheetHeader className="border-b border-border p-4 pr-12">
             <SheetTitle>Notifications</SheetTitle>
@@ -210,6 +252,8 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
                       selected={selected.has(notification.id)}
                       timeZone={user?.timeZone}
                       pending={update.isPending}
+                      focused={notification.id === focusedId}
+                      onFocus={() => setFocusedId(notification.id)}
                       onSelect={(checked) => toggleSelection(notification.id, checked)}
                       onAction={(action, snoozeDurationMs) => runAction(action, [notification.id], false, snoozeDurationMs)}
                     />

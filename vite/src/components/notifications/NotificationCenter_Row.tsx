@@ -29,6 +29,8 @@ export function NotificationRow({
   selected,
   timeZone,
   pending,
+  focused,
+  onFocus,
   onSelect,
   onAction,
 }: {
@@ -37,6 +39,8 @@ export function NotificationRow({
   selected: boolean
   timeZone: string | null | undefined
   pending: boolean
+  focused: boolean
+  onFocus: () => void
   onSelect: (checked: boolean) => void
   onAction: (action: NotificationAction, snoozeDurationMs?: SnoozeDuration) => void
 }) {
@@ -44,7 +48,12 @@ export function NotificationRow({
   const sourceLabel = sourceLabelFor(notification.source.type)
 
   return (
-    <article role="listitem" className="flex gap-3 border-b border-border px-4 py-3 last:border-0">
+    <article
+      role="listitem"
+      className={`flex gap-3 border-b border-border px-4 py-3 last:border-0 ${focused ? 'bg-surface-2' : ''}`}
+      onClick={onFocus}
+      onFocusCapture={onFocus}
+    >
       <Checkbox
         aria-label={`Select ${notification.source.title}`}
         checked={selected}
