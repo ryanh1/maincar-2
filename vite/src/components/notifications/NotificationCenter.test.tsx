@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
@@ -142,6 +142,70 @@ describe('NotificationCenter', () => {
     expect(body.action).toBe('snooze')
     expect(new Date(body.snoozedUntil).getTime() - beforeSnooze).toBeGreaterThanOrEqual(86_399_000)
     expect(new Date(body.snoozedUntil).getTime() - beforeSnooze).toBeLessThanOrEqual(86_401_000)
+  })
+
+  it('triages a focused inbox row with u, e, and h without handling shortcuts outside the drawer or while typing', async () => {
+    const focusedNotification = { ...notification, id: 'notification-2', readAt: '2026-08-22T17:00:00.000Z' }
+    jsonFetchMock.mockImplementation((url: string) => {
+      if (url.includes('read=false')) return Promise.resolve({ notifications: [], total: 2, page: 1, limit: 1 })
+      return Promise.resolve({ notifications: [notification, focusedNotification], total: 2, page: 1, limit: 25 })
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<><input aria-label="Outside the inbox" /><NotificationCenter /></>)
+
+    fireEvent.keyDown(document, { key: 'e' })
+    expect(jsonFetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('/notifications/notification-1'),
+      expect.objectContaining({ method: 'PATCH' }),
+    )
+
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 2 unread.' }))
+    const [unreadRow] = await screen.findAllByRole('listitem')
+
+    fireEvent.click(unreadRow)
+    fireEvent.keyDown(document, { key: 'u' })
+    await waitFor(() => expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/notifications/notification-1', {
+      method: 'PATCH', body: JSON.stringify({ action: 'read' }),
+    }))
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Notifications' })).not.toBeInTheDocument())
+    fireEvent.keyDown(document, { key: 'e' })
+    expect(jsonFetchMock).not.toHaveBeenCalledWith('/api/orgs/org-1/notifications/notification-1', {
+      method: 'PATCH', body: JSON.stringify({ action: 'archive' }),
+    })
+
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 2 unread.' }))
+    fireEvent.keyDown(document, { key: 'e' })
+    expect(jsonFetchMock).not.toHaveBeenCalledWith('/api/orgs/org-1/notifications/notification-1', {
+      method: 'PATCH', body: JSON.stringify({ action: 'archive' }),
+    })
+
+    const [reopenedUnreadRow, reopenedReadRow] = await screen.findAllByRole('listitem')
+
+    fireEvent.click(reopenedReadRow)
+    fireEvent.keyDown(document, { key: 'u' })
+    await waitFor(() => expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/notifications/notification-2', {
+      method: 'PATCH', body: JSON.stringify({ action: 'unread' }),
+    }))
+
+    fireEvent.keyDown(screen.getByLabelText('Outside the inbox'), { key: 'e' })
+    expect(jsonFetchMock).not.toHaveBeenCalledWith('/api/orgs/org-1/notifications/notification-2', {
+      method: 'PATCH', body: JSON.stringify({ action: 'archive' }),
+    })
+
+    fireEvent.click(reopenedUnreadRow)
+    fireEvent.keyDown(document, { key: 'e' })
+    await waitFor(() => expect(jsonFetchMock).toHaveBeenCalledWith('/api/orgs/org-1/notifications/notification-1', {
+      method: 'PATCH', body: JSON.stringify({ action: 'archive' }),
+    }))
+
+    fireEvent.click(reopenedReadRow)
+    fireEvent.keyDown(document, { key: 'h' })
+    await waitFor(() => expect(jsonFetchMock).toHaveBeenCalledWith(
+      '/api/orgs/org-1/notifications/notification-2',
+      expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('"action":"snooze"') }),
+    ))
   })
 
   it('links a note mention back to the record that owns the note', async () => {
