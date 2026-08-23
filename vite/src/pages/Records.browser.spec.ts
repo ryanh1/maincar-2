@@ -433,6 +433,12 @@ test('manages a saved view without changing its records', async ({ page }) => {
     const body = request.postData() ? request.postDataJSON() as Record<string, unknown> : undefined
     requests.push({ method: request.method(), path: pathname, body })
     if (request.method() === 'GET' && pathname.endsWith('/saved-views')) return route.fulfill({ json: { views } })
+    if (request.method() === 'POST' && pathname.endsWith('/saved-views/reorder')) {
+      const viewIds = body?.viewIds as string[]
+      const order = new Map(viewIds.map((id, index) => [id, index]))
+      views.sort((left, right) => order.get(String(left.id))! - order.get(String(right.id))!)
+      return route.fulfill({ status: 204 })
+    }
     const pathParts = pathname.split('/')
     const viewId = pathParts.at(-2) === 'saved-views' ? pathParts.at(-1) : pathParts.at(-2)
     const view = views.find((candidate) => candidate.id === viewId)
@@ -496,7 +502,9 @@ test('manages a saved view without changing its records', async ({ page }) => {
   await page.mouse.down()
   await page.mouse.move(defaultBounds.x + (defaultBounds.width / 2), defaultBounds.y + (defaultBounds.height / 2), { steps: 8 })
   await page.mouse.up()
-  await expect.poll(() => requests.filter((request) => request.method === 'PATCH' && request.body?.sortOrder !== undefined)).not.toHaveLength(0)
+  await expect.poll(() => requests).toContainEqual(expect.objectContaining({
+    method: 'POST', path: '/api/orgs/org-fixture/saved-views/reorder', body: { objectId: 'company', viewIds: ['personal', 'copy', 'default'] },
+  }))
   await page.getByRole('button', { name: 'Close' }).click()
 
   await page.getByRole('combobox', { name: 'Saved view' }).click()

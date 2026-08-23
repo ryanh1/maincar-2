@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MoreHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -63,6 +63,18 @@ export function Records_SavedViewControls_Menu({
   const [isRenaming, setIsRenaming] = useState(false)
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
   const [isReordering, setIsReordering] = useState(false)
+  const renameInputRef = useRef<HTMLInputElement>(null)
+  const menuTriggerRef = useRef<HTMLButtonElement>(null)
+  const shouldRestoreMenuFocus = useRef(false)
+
+  useEffect(() => {
+    if (isRenaming) {
+      renameInputRef.current?.focus()
+    } else if (shouldRestoreMenuFocus.current) {
+      shouldRestoreMenuFocus.current = false
+      menuTriggerRef.current?.focus()
+    }
+  }, [isRenaming])
 
   if (!view) return null
   const selectedView = view
@@ -109,18 +121,25 @@ export function Records_SavedViewControls_Menu({
       {isRenaming ? (
         <form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); rename() }}>
           <Input
+            ref={renameInputRef}
             aria-label="Saved view name"
             className="h-8 w-40 text-sm"
             disabled={disabled}
             maxLength={120}
             value={renameValue}
             onChange={(event) => setRenameValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return
+              event.preventDefault()
+              shouldRestoreMenuFocus.current = true
+              setIsRenaming(false)
+            }}
           />
         </form>
       ) : (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <IconButton disabled={disabled} tooltip={`Show actions for ${selectedView.name} view`}>
+            <IconButton ref={menuTriggerRef} disabled={disabled} tooltip={`Show actions for ${selectedView.name} view`}>
               <MoreHorizontal />
             </IconButton>
           </DropdownMenuTrigger>

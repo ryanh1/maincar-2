@@ -12,6 +12,7 @@ import {
   useDeleteView,
   useDuplicateView,
   useGetViews,
+  useReorderViews,
   useRestoreView,
   useSaveView,
   useSetDefaultView,
@@ -54,8 +55,9 @@ export function Records() {
   const duplicateView = useDuplicateView()
   const deleteView = useDeleteView()
   const restoreView = useRestoreView()
+  const reorderViews = useReorderViews()
   const setDefaultView = useSetDefaultView()
-  const isSaving = saveView.isPending || updateView.isPending || duplicateView.isPending || deleteView.isPending || restoreView.isPending || setDefaultView.isPending
+  const isSaving = saveView.isPending || updateView.isPending || duplicateView.isPending || deleteView.isPending || restoreView.isPending || reorderViews.isPending || setDefaultView.isPending
   const [createRequestToken, setCreateRequestToken] = useState(0)
 
   const isPending = objectsQuery.isPending || (!isUnavailable && object !== null && (objectQuery.isPending || viewsQuery.isPending))
@@ -197,7 +199,7 @@ export function Records() {
                   await setDefaultView.mutateAsync({ orgId, viewId: selectedView.id })
                 })}
                 onReorder={(viewIds) => manageView(async () => {
-                  await Promise.all(viewIds.map((viewId, sortOrder) => updateView.mutateAsync({ orgId, viewId, sortOrder })))
+                  await reorderViews.mutateAsync({ orgId, objectId: detail.id, viewIds })
                 })}
               />
             }

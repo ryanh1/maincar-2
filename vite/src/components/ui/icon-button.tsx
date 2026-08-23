@@ -37,7 +37,7 @@ type IconButtonProps = Omit<React.ComponentProps<'button'>, 'aria-label' | 'titl
     tooltipSide?: React.ComponentProps<typeof TooltipContent>['side']
   }
 
-function IconButton({
+const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton({
   tooltip,
   tooltipSide,
   variant = 'ghost',
@@ -45,9 +45,9 @@ function IconButton({
   disabled,
   children,
   ...props
-}: IconButtonProps) {
+}, ref) {
   const button = (
-    <Button variant={variant} size={size} disabled={disabled} aria-label={tooltip} {...props}>
+    <Button ref={ref} variant={variant} size={size} disabled={disabled} aria-label={tooltip} {...props}>
       {children}
     </Button>
   )
@@ -60,6 +60,6 @@ function IconButton({
       <TooltipContent side={tooltipSide}>{tooltip}</TooltipContent>
     </Tooltip>
   )
-}
+})
 
 export { IconButton }

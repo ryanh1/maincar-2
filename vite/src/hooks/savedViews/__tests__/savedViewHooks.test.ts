@@ -13,6 +13,7 @@ import { useDuplicateView } from '../useDuplicateView'
 import { useDeleteView } from '../useDeleteView'
 import { useRestoreView } from '../useRestoreView'
 import { useSetDefaultView } from '../useSetDefaultView'
+import { useReorderViews } from '../useReorderViews'
 
 const jsonFetch = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/api', async () => {
@@ -107,5 +108,19 @@ describe('saved view hooks', () => {
     expect(jsonFetch).toHaveBeenNthCalledWith(4, '/api/orgs/org-1/saved-views/view-1/default', { method: 'POST' })
     expect(invalidate).toHaveBeenCalledTimes(4)
     expect(invalidate).toHaveBeenLastCalledWith({ queryKey: queryKeys.savedViews.all('org-1') })
+  })
+
+  it('persists the whole visible view order through the transactional reorder endpoint', async () => {
+    jsonFetch.mockResolvedValue(undefined)
+    const client = makeTestQueryClient()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { result } = renderHook(() => useReorderViews(), { wrapper: wrapper(client) })
+
+    await result.current.mutateAsync({ orgId: 'org-1', objectId: 'company', viewIds: ['view-2', 'view-1'] })
+
+    expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/saved-views/reorder', {
+      method: 'POST', body: JSON.stringify({ objectId: 'company', viewIds: ['view-2', 'view-1'] }),
+    })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.savedViews.all('org-1') })
   })
 })
