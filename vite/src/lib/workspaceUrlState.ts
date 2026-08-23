@@ -16,6 +16,7 @@ export const SETTINGS_SECTIONS = [
   'email-templates',
   'signatures',
   'integrations',
+  'data-model',
 ] as const
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]

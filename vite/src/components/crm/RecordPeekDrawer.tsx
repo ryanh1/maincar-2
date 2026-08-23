@@ -221,5 +221,5 @@ function FieldValue({
     )
   }
 
-  return <span>{formatCellValue(rawValue, attr.type, timeZone, currencyCode, attr.slug === 'amountMinor')}</span>
+  return <span>{formatCellValue(rawValue, attr.type, timeZone, currencyCode, attr.slug === 'amountMinor', attr.formatJson)}</span>
 }

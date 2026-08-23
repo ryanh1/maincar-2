@@ -36,6 +36,9 @@ export interface ValidatorAttribute {
   // Picklist options for select/multiselect/status: [{ value, ... }]. When present,
   // a value must be one of the non-archived option values.
   optionsJson?: unknown
+  // Admin-configured validation rules (MAI-365): { min, max, pattern, message,
+  // strict }. Enforced here so built-in AND custom fields share one path.
+  validationJson?: unknown
 }
 
 export type RecordValues = Record<string, unknown>
@@ -63,7 +66,7 @@ export interface ValidateArgs {
 }
 
 export type ValidateResult =
-  | { ok: true; values: RecordValues }
+  | { ok: true; values: RecordValues; warnings?: string[] }
   | { ok: false; error: string }
 
 // --- Empty normalization (spec §5.14) ----------------------------------------
@@ -210,6 +213,68 @@ export function checkValueShape(attr: ValidatorAttribute, value: unknown): strin
   return null
 }
 
+// --- Admin validation rules (MAI-365) -----------------------------------------
+// validationJson is a per-field object the admin sets in field settings. It is
+// enforced here — the ONE validator — so a built-in field and a custom field obey
+// the same rules. Shape:
+//   { min?: number, max?: number, pattern?: string, message?: string, strict?: boolean }
+// `strict` decides the failure mode: hard-block (error) vs accept-but-flag (warning).
+
+export interface ValidationRule {
+  min?: number
+  max?: number
+  pattern?: string
+  message?: string
+  strict?: boolean
+}
+
+function parseValidation(attr: ValidatorAttribute): ValidationRule | null {
+  const raw = attr.validationJson
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const rule = raw as Record<string, unknown>
+  const parsed: ValidationRule = {}
+  if (typeof rule.min === 'number' && Number.isFinite(rule.min)) parsed.min = rule.min
+  if (typeof rule.max === 'number' && Number.isFinite(rule.max)) parsed.max = rule.max
+  if (typeof rule.pattern === 'string' && rule.pattern.trim() !== '') parsed.pattern = rule.pattern
+  if (typeof rule.message === 'string' && rule.message.trim() !== '') parsed.message = rule.message
+  if (typeof rule.strict === 'boolean') parsed.strict = rule.strict
+  return Object.keys(parsed).length > 0 ? parsed : null
+}
+
+/** True when the admin marked this field's rules strict (hard-block on violation). */
+export function isStrictValidation(attr: ValidatorAttribute): boolean {
+  return parseValidation(attr)?.strict === true
+}
+
+/**
+ * The admin-rule half of validation, on its own: returns an error string when the
+ * (already type-checked, non-empty) value violates min/max/pattern, or null when it
+ * is fine. A malformed stored pattern is treated as "no rule" rather than blocking
+ * every write.
+ */
+export function checkValidationRule(attr: ValidatorAttribute, value: unknown): string | null {
+  const rule = parseValidation(attr)
+  if (!rule) return null
+  const label = attr.name
+
+  if (typeof value === 'number') {
+    if (rule.min !== undefined && value < rule.min) return `${label} must be at least ${rule.min}.`
+    if (rule.max !== undefined && value > rule.max) return `${label} must be at most ${rule.max}.`
+  }
+
+  if (typeof value === 'string' && rule.pattern) {
+    let regex: RegExp
+    try {
+      regex = new RegExp(rule.pattern)
+    } catch {
+      return null
+    }
+    if (!regex.test(value)) return rule.message ?? `${label} does not match the required format.`
+  }
+
+  return null
+}
+
 // --- The validator ------------------------------------------------------------
 
 export async function validateRecordValues(args: ValidateArgs): Promise<ValidateResult> {
@@ -220,6 +285,9 @@ export async function validateRecordValues(args: ValidateArgs): Promise<Validate
   // Start from the current row on update (so unspecified keys survive), or empty on
   // create. Only the keys the caller actually sent are then applied over the top.
   const values: RecordValues = mode === 'update' ? { ...current } : {}
+  // Non-strict admin-rule violations: accepted (stored) but flagged, never silently
+  // dropped. Strict violations return an error instead (see the single-value path).
+  const warnings: string[] = []
 
   // --- Apply and type-check every key the caller sent -----------------------
   for (const [slug, rawValue] of Object.entries(input)) {
@@ -276,6 +344,12 @@ export async function validateRecordValues(args: ValidateArgs): Promise<Validate
       const optionError = checkOptionMembership(attr, norm)
       if (optionError) return { ok: false, error: optionError }
     }
+    // Admin validation rules (MAI-365): strict hard-blocks, non-strict flags.
+    const ruleError = checkValidationRule(attr, norm)
+    if (ruleError) {
+      if (isStrictValidation(attr)) return { ok: false, error: ruleError }
+      warnings.push(ruleError)
+    }
     values[slug] = norm
   }
 
@@ -299,5 +373,5 @@ export async function validateRecordValues(args: ValidateArgs): Promise<Validate
     }
   }
 
-  return { ok: true, values }
+  return { ok: true, values, warnings: warnings.length > 0 ? warnings : undefined }
 }

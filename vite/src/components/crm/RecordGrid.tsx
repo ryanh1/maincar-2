@@ -37,11 +37,13 @@ import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { RecordGridCreateRow } from './RecordGrid_CreateRow'
 import { GridRowFreezeMenu } from './GridRowFreezeMenu'
 import { CellExpandOverlay } from './CellExpandOverlay'
+import { CellCopyMenu } from './CellCopyMenu'
 import { formatCellValue } from './recordCellValue'
 import { ColumnGroupHeaders } from './ColumnGroupHeaders'
 import { createViewConfig, defaultKanbanGroupBy, reorderColumnGroup, toRecordListQuery, type ViewConfig } from './viewConfig'
 import { parseGridCommand } from './gridCommands'
 import { coerceCurrency, coerceNumber } from './cellCoercion'
+import { formatEntry } from '@/lib/dialPad'
 import { KanbanBoard } from './KanbanBoard'
 import { ChangeHighlightOverlay, FieldHistoryPopover, type ChangeHighlightTarget } from './ChangeHighlightOverlay'
 import { drawChangeDots } from './changeHighlightCanvas'
@@ -212,6 +214,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
   const [headerMenu, setHeaderMenu] = useState<{ attribute: AttributeDef; anchor: GridMenuAnchor; columnIndex: number } | null>(null)
   const [rowFreezeMenu, setRowFreezeMenu] = useState<{ anchor: GridMenuAnchor; row: number } | null>(null)
   const [expandedCell, setExpandedCell] = useState<{ column: number; row: number; anchor: GridMenuAnchor; value: string } | null>(null)
+  const [copyMenu, setCopyMenu] = useState<{ anchor: GridMenuAnchor; rawValue: string; displayValue: string } | null>(null)
 
   const configuredColumns = useMemo(() => new Map(config.columns.map((column) => [column.attributeId, column])), [config.columns])
   const orderedVisibleColumns = useMemo(() => {
@@ -1112,6 +1115,30 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
     })
   }, [displayRows, visibleColumns, configuredColumns, cellValue, user?.timeZone])
 
+  // Right-click on a phone cell offers Copy raw (E.164) vs Copy formatted, so a
+  // rep can paste the canonical number or the national one (MAI-365).
+  const onCellContextMenu = useCallback(
+    ([col, row]: Item, event: { bounds: Rectangle; preventDefault: () => void }) => {
+      const displayRow = displayRows[row]
+      const attribute = visibleColumns[col]
+      if (!displayRow || displayRow.kind !== 'record' || !attribute || attribute.type !== 'phone') return
+      const raw = cellValue(displayRow.record, attribute)
+      if (typeof raw !== 'string' || raw === '') return
+      event.preventDefault()
+      setCopyMenu({
+        anchor: {
+          x: event.bounds.x - window.scrollX,
+          y: event.bounds.y - window.scrollY,
+          width: event.bounds.width,
+          height: event.bounds.height,
+        },
+        rawValue: raw,
+        displayValue: formatEntry(raw),
+      })
+    },
+    [displayRows, visibleColumns, cellValue],
+  )
+
   const [scrollOffsetX, setScrollOffsetX] = useState(0)
   const onGridVisibleRegionChanged = useCallback((range: Rectangle, tx: number) => {
     onVisibleRegionChanged(range)
@@ -1262,6 +1289,7 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
         onVisibleRegionChanged={onGridVisibleRegionChanged}
         onHeaderMenuClick={onHeaderMenuClick}
         onCellClicked={onCellClicked}
+        onCellContextMenu={onCellContextMenu}
         gridSelection={finderSelection ?? gridSelection}
         onGridSelectionChange={(nextSelection) => {
           setGridSelection(nextSelection)
@@ -1320,6 +1348,15 @@ export function RecordGrid({ orgId, object, attributes, initialRecordId, viewCon
             onClose={() => setExpandedCell(null)}
             open
             value={expandedCell.value}
+          />
+        )}
+
+        {copyMenu && (
+          <CellCopyMenu
+            anchor={copyMenu.anchor}
+            rawValue={copyMenu.rawValue}
+            displayValue={copyMenu.displayValue}
+            onClose={() => setCopyMenu(null)}
           />
         )}
 

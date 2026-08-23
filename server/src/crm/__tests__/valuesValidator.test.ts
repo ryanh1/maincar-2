@@ -6,7 +6,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  checkValidationRule,
   checkValueShape,
+  isStrictValidation,
   validateRecordValues,
   type ValidatorAttribute,
 } from '../valuesValidator.js'
@@ -317,5 +319,75 @@ describe('checkValueShape', () => {
     })
     expect(checkValueShape(stage, 'new')).toBeNull()
     expect(checkValueShape(stage, 'old')).toContain('is not an option')
+  })
+})
+
+// Admin validation rules (MAI-365): min/max/pattern/message/strict, enforced in
+// the ONE validator so built-in and custom fields share the same path.
+describe('validateRecordValues — admin validation rules (validationJson)', () => {
+  it('hard-blocks a strict min/max violation', async () => {
+    const res = await validateRecordValues({
+      attributes: [attr({ slug: 'count', name: 'Count', type: 'number', validationJson: { min: 1, max: 10, strict: true } })],
+      mode: 'create',
+      input: { count: 0 },
+    })
+    expect(res).toEqual({ ok: false, error: 'Count must be at least 1.' })
+  })
+
+  it('accepts-but-flags a non-strict pattern violation', async () => {
+    const res = await validateRecordValues({
+      attributes: [attr({ slug: 'sku', name: 'SKU', type: 'text', validationJson: { pattern: '^[A-Z]{3}-[0-9]+$', message: 'Use a SKU like ABC-123.' } })],
+      mode: 'create',
+      input: { sku: 'nope' },
+    })
+    expect(res.ok).toBe(true)
+    expect(res).toMatchObject({ ok: true, values: { sku: 'nope' } })
+    expect((res as { warnings?: string[] }).warnings).toEqual(['Use a SKU like ABC-123.'])
+  })
+
+  it('hard-blocks a strict pattern violation with the human message', async () => {
+    const res = await validateRecordValues({
+      attributes: [attr({ slug: 'sku', name: 'SKU', type: 'text', validationJson: { pattern: '^[A-Z]{3}-[0-9]+$', message: 'Use a SKU like ABC-123.', strict: true } })],
+      mode: 'create',
+      input: { sku: 'nope' },
+    })
+    expect(res).toEqual({ ok: false, error: 'Use a SKU like ABC-123.' })
+  })
+
+  it('accepts a value that satisfies the rules, with no warnings', async () => {
+    const res = await validateRecordValues({
+      attributes: [attr({ slug: 'count', name: 'Count', type: 'number', validationJson: { min: 1, max: 10 } })],
+      mode: 'create',
+      input: { count: 5 },
+    })
+    expect(res).toEqual({ ok: true, values: { count: 5 } })
+  })
+
+  it('ignores a malformed stored pattern rather than blocking every write', async () => {
+    const res = await validateRecordValues({
+      attributes: [attr({ slug: 'code', name: 'Code', type: 'text', validationJson: { pattern: '([unclosed', strict: true } })],
+      mode: 'create',
+      input: { code: 'anything' },
+    })
+    expect(res.ok).toBe(true)
+  })
+})
+
+describe('checkValidationRule / isStrictValidation', () => {
+  it('reports min/max for numbers and pattern for text', () => {
+    const num = attr({ slug: 'n', name: 'N', type: 'number', validationJson: { min: 0, max: 5 } })
+    expect(checkValidationRule(num, -1)).toBe('N must be at least 0.')
+    expect(checkValidationRule(num, 6)).toBe('N must be at most 5.')
+    expect(checkValidationRule(num, 3)).toBeNull()
+
+    const text = attr({ slug: 't', name: 'T', type: 'text', validationJson: { pattern: '^[0-9]+$' } })
+    expect(checkValidationRule(text, 'abc')).toBe('T does not match the required format.')
+    expect(checkValidationRule(text, '123')).toBeNull()
+  })
+
+  it('reads the strict flag', () => {
+    expect(isStrictValidation(attr({ slug: 'a', type: 'text', validationJson: { strict: true } }))).toBe(true)
+    expect(isStrictValidation(attr({ slug: 'a', type: 'text', validationJson: { min: 1 } }))).toBe(false)
+    expect(isStrictValidation(attr({ slug: 'a', type: 'text' }))).toBe(false)
   })
 })
