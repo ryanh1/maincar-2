@@ -92,6 +92,8 @@ export interface GraphClient {
   }): Promise<unknown>
   /** Create one calendar event and return the provider's stored copy. */
   createEvent(event: unknown): Promise<unknown>
+  createSubscription?(subscription: unknown): Promise<unknown>
+  renewSubscription?(id: string, expirationDateTime: string): Promise<unknown>
 }
 
 /** Calendar-specific Graph operations. Kept separate so the legacy mail adapter's focused fakes stay small. */
@@ -194,6 +196,14 @@ export function graphClient(accessToken: string): GraphCalendarClient {
 
     createEvent(event) {
       return run(() => client.api('/me/events').post(event))
+    },
+
+    createSubscription(subscription) {
+      return run(() => client.api('/subscriptions').post(subscription))
+    },
+
+    renewSubscription(id, expirationDateTime) {
+      return run(() => client.api(`/subscriptions/${encodeURIComponent(id)}`).patch({ expirationDateTime }))
     },
 
     listCalendars(opts = {}) {

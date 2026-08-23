@@ -39,6 +39,7 @@ import { listBrokenConnections } from '../lib/mail/connectionHealth.js'
 import { testConnection, type CapabilityResult } from '../lib/mail/connectionTest.js'
 import { getMailProvider } from '../lib/mail/getMailProvider.js'
 import { queueMailBackfillForConnection } from '../jobs/mailBackfill.js'
+import { queueMailPushSubscription } from '../jobs/mailPushSubscriptions.js'
 import { mapProviderError, type IntegrationErrorCode } from '../lib/mail/integrationErrors.js'
 import {
   CONNECTION_PUBLIC_SELECT,
@@ -735,6 +736,9 @@ callbackRouter.get(
     void Promise.resolve(queueMailBackfillForConnection(connection.id, payload.orgId)).catch((error) => {
       logger.error({ error, connectionId: connection.id, orgId: payload.orgId }, 'mail backfill enqueue failed')
     })
+    void prisma.mailAccount.findFirst({ where: { connectionId: connection.id, orgId: payload.orgId }, select: { id: true } })
+      .then((mailbox) => mailbox && queueMailPushSubscription(mailbox.id))
+      .catch((error) => logger.error({ error, connectionId: connection.id, orgId: payload.orgId }, 'mail push subscription enqueue failed'))
 
     return void sendCallbackPage(res, successOutcome(provider, connection))
   }),

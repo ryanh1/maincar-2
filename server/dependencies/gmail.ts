@@ -95,6 +95,8 @@ export interface GmailClient {
     requestBody: calendar_v3.Schema$Event,
     params?: Omit<calendar_v3.Params$Resource$Events$Insert, 'requestBody'>,
   ): Promise<calendar_v3.Schema$Event>
+  watchMailbox?(topicName: string): Promise<{ historyId?: string | null; expiration?: string | null }>
+  watchCalendar?(input: { id: string; address: string; token: string }): Promise<{ id?: string | null; resourceId?: string | null; expiration?: string | null }>
 }
 
 /**
@@ -177,6 +179,14 @@ export function gmailClient(accessToken: string): GoogleClient {
       return run(() =>
         calendar.events.insert({ calendarId: PRIMARY, ...params, requestBody }, NO_RETRY),
       )
+    },
+
+    watchMailbox(topicName) {
+      return run(() => gmail.users.watch({ userId: ME, requestBody: { topicName } }, NO_RETRY))
+    },
+
+    watchCalendar(input) {
+      return run(() => calendar.events.watch({ calendarId: PRIMARY, requestBody: { ...input, type: 'web_hook' } }, NO_RETRY))
     },
 
     listCalendarList(params = {}) {

@@ -17,6 +17,7 @@ import { registerMailSyncWorker, scheduleMailSync } from './jobs/mailSync.js'
 import { registerMailBackfillWorker } from './jobs/mailBackfill.js'
 import { registerMailRematchWorker } from './jobs/mailRematch.js'
 import { registerCapturePurgeWorker } from './jobs/capturePurge.js'
+import { registerMailPushSubscriptionWorker, scheduleMailPushSubscriptions } from './jobs/mailPushSubscriptions.js'
 import { startQueue, stopQueue } from './jobs/queue.js'
 import { registerOAuthTokenRefresher } from './lib/mail/oauthProviders.js'
 
@@ -67,6 +68,8 @@ async function startWorkers(): Promise<void> {
   await scheduleMailSync()
   await registerMailBackfillWorker()
   await registerMailRematchWorker()
+  await registerMailPushSubscriptionWorker()
+  await scheduleMailPushSubscriptions()
   logger.info(
     {
       workers: [
@@ -84,6 +87,7 @@ async function startWorkers(): Promise<void> {
         'mail-backfill',
         'mail-rematch',
         'capture-purge',
+        'mail-push-subscription',
       ],
     },
     'job queue workers started',

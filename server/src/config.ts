@@ -38,6 +38,9 @@ export const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:5183'
 // Every externally-facing callback URL is built from it, so the host is never
 // hardcoded anywhere else.
 export const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, '')
+// Gmail watches deliver through this configured Cloud Pub/Sub topic. It is optional
+// at boot so local/unit environments do not pretend they can receive push traffic.
+export const GOOGLE_PUBSUB_TOPIC = process.env.GOOGLE_PUBSUB_TOPIC ?? ''
 
 // --- Database ---
 export const DATABASE_URL = required('DATABASE_URL')

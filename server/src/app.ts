@@ -21,6 +21,7 @@ import fieldHistoryRouter from './routes/fieldHistory.js'
 import attributesRouter from './routes/attributes.js'
 import integrationsRouter, { callbackRouter as integrationsCallbackRouter } from './routes/integrations.js'
 import mailboxesRouter from './routes/mailboxes.js'
+import mailPushRouter from './routes/mailPush.js'
 import invitationsRouter from './routes/invitations.js'
 import keyboardBindingsRouter from './routes/keyboardBindings.js'
 import listsRouter from './routes/lists.js'
@@ -194,6 +195,10 @@ app.use('/api/integrations/orgs/:orgId', integrationsRouter)
 // whose consent it is (see the route's own header). Its /:provider/callback path never
 // collides with the /orgs/:orgId router above, whose third segment is literally "orgs".
 app.use('/api/integrations', integrationsCallbackRouter)
+
+// Provider push callbacks authenticate with the provider-specific proofs inside
+// this router; they cannot carry a user session and are intentionally unscoped.
+app.use('/api/mail-push', mailPushRouter)
 
 // The rep's mailboxes: list, rename, promote to primary, disconnect. Org in the path,
 // so membership is re-proven per request; every action is scoped to (orgId, userId).
