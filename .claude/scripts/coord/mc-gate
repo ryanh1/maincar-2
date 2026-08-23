@@ -156,6 +156,14 @@ echo "[mc-gate] running (class $CLASS, slot $(basename "$SLOT_DIR"), limit $JOB_
 mc_log "gate acquire $(basename "$SLOT_DIR") class=$CLASS workers=$VITEST_WORKERS"
 cd "$(mc_worktree)"
 
+missing_dependency_root="$(mc_first_missing_issue_clone_dependency_root "$(mc_worktree)" || true)"
+if [ -n "$missing_dependency_root" ]; then
+  echo "[mc-gate] Clone dependencies are incomplete at $missing_dependency_root/node_modules." >&2
+  echo '[mc-gate] Run ./.claude/scripts/coord/mc-bootstrap, then rerun this named check.' >&2
+  mc_log "gate refused (missing dependency root=$missing_dependency_root)"
+  exit 3
+fi
+
 if ! mc_ensure_prisma_client; then
   echo '[mc-gate] Could not bring the Prisma client in sync.' >&2
   mc_log 'gate refused (prisma client regenerate failed)'

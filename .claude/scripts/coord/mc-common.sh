@@ -93,6 +93,37 @@ mc_sync_dependencies() {
   done
 }
 
+# Every issue clone owns its dependency trees.  Bootstrap each committed npm
+# package root independently so a clone never borrows node_modules from the
+# runnable primary checkout.
+mc_issue_clone_dependency_roots() {
+  local checkout="$1" root
+  for root in . server vite firebase; do
+    [ -f "$checkout/$root/package-lock.json" ] && printf '%s\n' "$root"
+  done
+}
+
+mc_bootstrap_issue_clone() {
+  local checkout="$1" roots
+  roots="$(mc_issue_clone_dependency_roots "$checkout")"
+  [ -n "$roots" ] || {
+    echo "mc-bootstrap: no committed package locks found in $checkout" >&2
+    return 1
+  }
+  printf '%s\n' "$roots" | mc_sync_dependencies "$checkout"
+}
+
+mc_first_missing_issue_clone_dependency_root() {
+  local checkout="$1" root
+  while IFS= read -r root; do
+    [ -d "$checkout/$root/node_modules" ] || {
+      printf '%s\n' "$root"
+      return 0
+    }
+  done < <(mc_issue_clone_dependency_roots "$checkout")
+  return 1
+}
+
 mc_provision_primary_checkout() {
   local primary="$1" roots_csv="$2" prisma_required="$3"
   if [ "$roots_csv" != "-" ]; then

@@ -25,8 +25,9 @@ trap cleanup EXIT
 
 git clone "$LOCAL_MAIN_REPO" "$tmp/repo" --quiet
 cp "$source_env" "$tmp/repo/.env"
+"$tmp/repo/.claude/scripts/coord/mc-bootstrap"
 mv "$tmp/repo" "$destination"
 rmdir "$tmp"
 tmp=''
 
-echo "[mc-clone] created $destination with an independent .env copy"
+echo "[mc-clone] created $destination with an independent .env copy and locked dependencies"

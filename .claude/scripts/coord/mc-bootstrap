@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Provisions the dependency trees owned by the current issue clone.
+set -euo pipefail
+source "$(dirname "$0")/mc-common.sh"
+cd "$(cd "$(dirname "$0")/../../.." && pwd -P)"
+mc_assert_ticket_checkout || exit 2
+
+worktree="$(mc_worktree)"
+echo "[mc-bootstrap] installing locked dependencies in $worktree"
+mc_bootstrap_issue_clone "$worktree"
+echo "[mc-bootstrap] ready: $worktree"

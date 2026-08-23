@@ -29,10 +29,13 @@ eval "$(./.claude/scripts/coord/mc-slot --env)"
 npm run hooks:install
 ```
 
-`mc-clone` syncs the local mirror and copies the primary checkout's ignored `.env`
-into the new clone. The clone owns that file: it is not a symlink and later primary
-environment changes do not modify it. Use one clone per issue. Never edit or commit
-in the normal `maincar-2` folder.
+`mc-clone` syncs the local mirror, copies the primary checkout's ignored `.env`, and
+runs `npm ci` in each committed package root (`.`, `server`, `vite`, and `firebase`)
+before declaring the clone ready. The clone owns those dependency trees and its `.env`:
+neither is a symlink or relies on the runnable primary checkout. If a clone was
+created without bootstrap or its dependencies are incomplete, run
+`./.claude/scripts/coord/mc-bootstrap` from that clone before using `mc-gate`. Use one
+clone per issue. Never edit or commit in the normal `maincar-2` folder.
 
 ## Develop with focused tests
 
@@ -133,7 +136,8 @@ Move Linear to Done only after `LINEAR_DONE_ALLOWED` prints.
 | Script | Purpose |
 | --- | --- |
 | `mc-common.sh` | Shared locks, mirror, safe primary refresh, small delivery record |
-| `mc-clone` | Create an issue clone with an independent local `.env` copy |
+| `mc-clone` | Create an issue clone with an independent local `.env` copy and locked dependencies |
+| `mc-bootstrap` | Provision the current issue clone's dependency trees from committed locks |
 | `mc-local-main` | GitHub → mirror sync and explicit mirror → primary refresh |
 | `mc-slot` | Stable per-clone ports |
 | `mc-gate` | Three-job check scheduler with one or two test workers per job |
