@@ -3,20 +3,39 @@ import { MoreHorizontal, PanelTop, GripVertical, Plus, X } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { ActivityFeedRow } from '@/components/activity-feed/ActivityFeedRow'
+import { mapActivityEntry } from '@/components/activity-feed/activityFeed'
 import { PageHeader } from '@/components/PageHeader'
 import { FieldValueEditor } from '@/components/crm/FieldValueEditor'
 import { OptionChip } from '@/components/crm/OptionChip'
 import { parseOptions } from '@/components/crm/cellBuilder'
 import { formatCellValue } from '@/components/crm/recordCellValue'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { useGetDetailLayout, useGetObject, useGetObjects, useListRecords, useSaveDetailLayout, useUpdateRecordValue, type DetailLayoutSection } from '@/hooks/crm'
+import { useGetActivity, useGetDetailLayout, useGetObject, useGetObjects, useListRecords, useSaveDetailLayout, useUpdateRecordValue, type ActivityScope, type DetailLayoutSection } from '@/hooks/crm'
 import type { AttributeDef, RecordRow } from '@/lib/crmTypes'
 import { useAuth } from '@/providers/useAuth'
 
 type DragLocation = { slug: string; sectionIndex: number | null }
+
+const ACTIVITY_SCOPE_SLUG: Record<string, 'companyId' | 'personId' | 'dealId'> = {
+  company: 'companyId',
+  person: 'personId',
+  deal: 'dealId',
+}
+
+const FEED_KIND_OPTIONS = [
+  { value: 'call', label: 'Calls' },
+  { value: 'email', label: 'Emails' },
+  { value: 'sms', label: 'Texts' },
+  { value: 'meeting', label: 'Meetings' },
+  { value: 'note', label: 'Notes' },
+  { value: 'task', label: 'Tasks' },
+  { value: 'stage_change', label: 'Changes' },
+] as const
 
 function defaultSections(attributes: AttributeDef[]): DetailLayoutSection[] {
   return [{
@@ -60,13 +79,23 @@ export function RecordPage() {
   const layoutQuery = useGetDetailLayout(orgId, object?.id ?? null)
   const saveLayout = useSaveDetailLayout()
   const updateRecord = useUpdateRecordValue()
+  const activityScopeKey = object && record ? ACTIVITY_SCOPE_SLUG[object.slug] : undefined
+  const activityScope: ActivityScope | null = activityScopeKey && record ? { [activityScopeKey]: record.id } as ActivityScope : null
+  const activityQuery = useGetActivity(orgId, activityScope, { limit: 20 })
   const [editingLayout, setEditingLayout] = useState(false)
   const [draftSections, setDraftSections] = useState<DetailLayoutSection[]>([])
+  const [draftRailObjects, setDraftRailObjects] = useState<string[]>([])
+  const [draftFeedKinds, setDraftFeedKinds] = useState<string[]>([])
   const [localValues, setLocalValues] = useState<Record<string, unknown>>({})
   const dragLocation = useRef<DragLocation | null>(null)
 
-  const savedSections = normalizeSections(layoutQuery.data?.layout.id ? layoutQuery.data.layout.sections : defaultSections(attributes ?? []), attributes ?? [])
+  const savedLayout = layoutQuery.data?.layout
+  const savedSections = normalizeSections(savedLayout?.id ? savedLayout.sections : defaultSections(attributes ?? []), attributes ?? [])
+  const savedRailObjects = savedLayout?.railObjects ?? []
+  const savedFeedKinds = savedLayout?.feedKinds ?? []
   const activeSections = editingLayout ? draftSections : savedSections
+  const activeRailObjects = editingLayout ? draftRailObjects : savedRailObjects
+  const activeFeedKinds = editingLayout ? draftFeedKinds : savedFeedKinds
   const placedSlugs = new Set(activeSections.flatMap((section) => section.fields.map((field) => field.slug)))
   const hiddenAttributes = (attributes ?? []).filter((attribute) => attribute.storage !== 'list' && !attribute.isArchived && !placedSlugs.has(attribute.slug))
   const displayedRecord = record ? { ...record, ...localValues } : null
@@ -75,18 +104,28 @@ export function RecordPage() {
 
   function startEditingLayout() {
     setDraftSections(savedSections)
+    setDraftRailObjects(savedRailObjects)
+    setDraftFeedKinds(savedFeedKinds)
     setEditingLayout(true)
   }
 
   function discardLayout() {
     setDraftSections(savedSections)
+    setDraftRailObjects(savedRailObjects)
+    setDraftFeedKinds(savedFeedKinds)
     setEditingLayout(false)
   }
 
   async function persistLayout() {
     if (!orgId || !object) return
     try {
-      await saveLayout.mutateAsync({ orgId, objectId: object.id, sections: normalizeSections(draftSections, attributes ?? []) })
+      await saveLayout.mutateAsync({
+        orgId,
+        objectId: object.id,
+        sections: normalizeSections(draftSections, attributes ?? []),
+        railObjects: draftRailObjects,
+        feedKinds: draftFeedKinds,
+      })
       setEditingLayout(false)
       toast.success('Record layout saved for everyone.')
     } catch {
@@ -156,13 +195,13 @@ export function RecordPage() {
         {!isPending && isError && <p className="text-sm text-destructive">Could not load this record.</p>}
         {!isPending && !isError && (!object || !displayedRecord) && <p className="text-sm text-muted-foreground">This record no longer exists.</p>}
         {!isPending && !isError && object && displayedRecord && (
-          <div className="mx-auto flex max-w-5xl flex-col gap-6">
+          <div className="mx-auto flex max-w-6xl flex-col gap-6">
             {editingLayout && (
               <div className="border border-border bg-surface p-3 text-sm text-muted-foreground">
-                Editing the shared {object.name.toLowerCase()} layout. Drag fields between a section and Hidden fields; the two-column grid snaps each field to half or full width.
+                Editing the shared {object.name.toLowerCase()} layout. Drag fields between sections and Hidden fields; the two-column grid snaps each field to half or full width.
               </div>
             )}
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_16rem]">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(16rem,0.9fr)_16rem]">
               <div className="flex flex-col gap-6">
                 {activeSections.map((section, sectionIndex) => (
                   <section
@@ -222,33 +261,196 @@ export function RecordPage() {
                   </Button>
                 )}
               </div>
-              {editingLayout && (
-                <aside
-                  className="h-fit border border-border bg-surface p-3"
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={() => {
+              <ActivityRegion activity={activityQuery.data?.activity ?? []} isPending={activityQuery.isPending} isError={activityQuery.isError} scope={activityScope} feedKinds={activeFeedKinds} timeZone={user?.timeZone} />
+              {editingLayout ? (
+                <LayoutEditorRail
+                  hiddenAttributes={hiddenAttributes}
+                  draftRailObjects={draftRailObjects}
+                  draftFeedKinds={draftFeedKinds}
+                  objects={objectsQuery.data?.objects ?? []}
+                  currentObjectId={object.id}
+                  onDropField={() => {
                     const drag = dragLocation.current
                     if (drag) moveField(drag.slug, null)
                     dragLocation.current = null
                   }}
-                >
-                  <h2 className="mb-3 text-sm font-semibold">Hidden fields</h2>
-                  <div className="flex flex-col gap-2">
-                    {hiddenAttributes.map((attribute) => (
-                      <div key={attribute.id} draggable onDragStart={() => { dragLocation.current = { slug: attribute.slug, sectionIndex: null } }} className="flex items-center justify-between border border-border bg-bg p-2 text-sm">
-                        <span className="flex items-center gap-1"><GripVertical aria-label={`Drag ${attribute.name}`} size={16} />{attribute.name}</span>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => moveField(attribute.slug, 0)}>Show</Button>
-                      </div>
-                    ))}
-                    {hiddenAttributes.length === 0 && <p className="text-sm text-muted-foreground">No hidden fields.</p>}
-                  </div>
-                </aside>
+                  onDragStart={(slug) => { dragLocation.current = { slug, sectionIndex: null } }}
+                  onShowField={(slug) => moveField(slug, 0)}
+                  onRailObjectsChange={setDraftRailObjects}
+                  onFeedKindsChange={setDraftFeedKinds}
+                />
+              ) : (
+                <RelatedRail objects={objectsQuery.data?.objects ?? []} activeRailObjects={activeRailObjects} currentObjectId={object.id} />
               )}
             </div>
           </div>
         )}
       </div>
     </div>
+  )
+}
+
+function ActivityRegion({
+  activity,
+  isPending,
+  isError,
+  scope,
+  feedKinds,
+  timeZone,
+}: {
+  activity: Array<Parameters<typeof mapActivityEntry>[0]>
+  isPending: boolean
+  isError: boolean
+  scope: ActivityScope | null
+  feedKinds: string[]
+  timeZone: string | null | undefined
+}) {
+  const visibleActivity = feedKinds.length === 0
+    ? activity
+    : activity.filter((entry) => feedKinds.includes(entry.sourceType))
+
+  return (
+    <section className="border border-border bg-bg">
+      <div className="border-b border-border p-4">
+        <h2 className="text-sm font-semibold">Activity</h2>
+        <p className="mt-1 text-xs text-text-muted">Recent activity for this record.</p>
+      </div>
+      <div>
+        {!scope && <p className="p-4 text-sm text-text-muted">Activity is not available for this object yet.</p>}
+        {scope && isPending && <p className="p-4 text-sm text-text-muted">Loading activity…</p>}
+        {scope && isError && <p className="p-4 text-sm text-destructive">Could not load activity.</p>}
+        {scope && !isPending && !isError && visibleActivity.length === 0 && (
+          <p className="p-4 text-sm text-text-muted">No matching activity yet.</p>
+        )}
+        {scope && !isPending && !isError && visibleActivity.length > 0 && (
+          <div>
+            {visibleActivity.map((entry) => (
+              <ActivityFeedRow key={entry.id} item={mapActivityEntry(entry)} timeZone={timeZone} />
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function RelatedRail({
+  objects,
+  activeRailObjects,
+  currentObjectId,
+}: {
+  objects: Array<{ id: string; slug: string; namePlural: string }>
+  activeRailObjects: string[]
+  currentObjectId: string
+}) {
+  const relatedObjects = objects.filter((candidate) =>
+    candidate.id !== currentObjectId && (activeRailObjects.includes(candidate.id) || activeRailObjects.includes(candidate.slug)),
+  )
+
+  return (
+    <aside className="h-fit border border-border bg-surface">
+      <div className="border-b border-border p-4">
+        <h2 className="text-sm font-semibold">Related</h2>
+        <p className="mt-1 text-xs text-text-muted">Objects selected for this record page.</p>
+      </div>
+      {relatedObjects.length > 0 ? (
+        <ul className="divide-y divide-border">
+          {relatedObjects.map((relatedObject) => (
+            <li key={relatedObject.id} className="p-3 text-sm">{relatedObject.namePlural}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="p-4 text-sm text-text-muted">No related objects configured.</p>
+      )}
+    </aside>
+  )
+}
+
+function LayoutEditorRail({
+  hiddenAttributes,
+  draftRailObjects,
+  draftFeedKinds,
+  objects,
+  currentObjectId,
+  onDropField,
+  onDragStart,
+  onShowField,
+  onRailObjectsChange,
+  onFeedKindsChange,
+}: {
+  hiddenAttributes: AttributeDef[]
+  draftRailObjects: string[]
+  draftFeedKinds: string[]
+  objects: Array<{ id: string; slug: string; namePlural: string }>
+  currentObjectId: string
+  onDropField: () => void
+  onDragStart: (slug: string) => void
+  onShowField: (slug: string) => void
+  onRailObjectsChange: (values: string[]) => void
+  onFeedKindsChange: (values: string[]) => void
+}) {
+  const availableObjects = objects.filter((candidate) => candidate.id !== currentObjectId)
+
+  function toggleValue(values: string[], value: string, checked: boolean, update: (next: string[]) => void) {
+    update(checked ? [...values, value] : values.filter((candidate) => candidate !== value))
+  }
+
+  return (
+    <aside
+      className="h-fit border border-border bg-surface p-3"
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={() => {
+        onDropField()
+      }}
+    >
+      <h2 className="mb-3 text-sm font-semibold">Layout options</h2>
+      <div className="flex flex-col gap-4">
+        <div>
+          <p className="mb-2 text-xs font-medium text-text-muted">Hidden fields</p>
+          <div className="flex flex-col gap-2">
+            {hiddenAttributes.map((attribute) => (
+              <div key={attribute.id} draggable onDragStart={() => onDragStart(attribute.slug)} className="flex items-center justify-between border border-border bg-bg p-2 text-sm">
+                <span className="flex items-center gap-1"><GripVertical aria-label={`Drag ${attribute.name}`} size={16} />{attribute.name}</span>
+                <Button type="button" variant="ghost" size="sm" onClick={() => onShowField(attribute.slug)}>Show</Button>
+              </div>
+            ))}
+            {hiddenAttributes.length === 0 && <p className="text-sm text-text-muted">No hidden fields.</p>}
+          </div>
+        </div>
+
+        <fieldset>
+          <legend className="mb-2 text-xs font-medium text-text-muted">Related objects</legend>
+          <div className="flex flex-col gap-2">
+            {availableObjects.map((candidate) => (
+              <label key={candidate.id} className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={draftRailObjects.includes(candidate.slug) || draftRailObjects.includes(candidate.id)}
+                  onCheckedChange={(checked) => toggleValue(draftRailObjects.filter((value) => value !== candidate.id && value !== candidate.slug), candidate.slug, checked === true, onRailObjectsChange)}
+                />
+                {candidate.namePlural}
+              </label>
+            ))}
+            {availableObjects.length === 0 && <p className="text-sm text-text-muted">No other objects available.</p>}
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend className="mb-2 text-xs font-medium text-text-muted">Activity feed</legend>
+          <div className="flex flex-col gap-2">
+            {FEED_KIND_OPTIONS.map((option) => (
+              <label key={option.value} className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={draftFeedKinds.includes(option.value)}
+                  onCheckedChange={(checked) => toggleValue(draftFeedKinds, option.value, checked === true, onFeedKindsChange)}
+                />
+                {option.label}
+              </label>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-text-muted">Clear all to show every activity type.</p>
+        </fieldset>
+      </div>
+    </aside>
   )
 }
 

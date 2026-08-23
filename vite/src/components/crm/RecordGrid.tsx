@@ -16,6 +16,7 @@ import type {
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
 import { ChevronDown, ChevronUp, CornerRightUp, Ellipsis, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -203,6 +204,7 @@ function createdRecordId(response: unknown, object: ObjectDef): string | null {
 
 export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId, viewConfig, onViewConfigChange, toolbarLeading, createRequestToken, layout = 'grid', onLayoutChange }: RecordGridProps) {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const { activeCall, dialing } = useDialer()
   const [workspaceUrlState, updateWorkspaceUrlState] = useWorkspaceUrlState()
   const colors = useGridColors()
@@ -1749,6 +1751,10 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         onEdit={(attribute, value) => {
           if (peekRecord) commitValue(peekRecord, attribute, value)
         }}
+        onOpenFullPage={peekRecord ? () => {
+          closePeek()
+          navigate(`/records/${object.slug}/${peekRecord.id}`)
+        } : undefined}
         />
       </div>
       {onViewConfigChange && (
