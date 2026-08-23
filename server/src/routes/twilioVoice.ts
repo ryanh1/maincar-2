@@ -42,7 +42,10 @@ import { logger } from '../../dependencies/logger.js'
 import {
   buildBridgeTwiml,
   buildEmptyTwiml,
-  buildInboundBrowserTwiml,
+  buildInboundDeliveryTwiml,
+  buildInboundMobileRejectTwiml,
+  buildInboundMobileTwiml,
+  buildInboundMobileWhisperTwiml,
   buildInboundUnavailableTwiml,
   buildVoicemailTwiml,
   verifyTwilioSignature,
@@ -154,13 +157,30 @@ async function handleInboundCall(
       update: {},
     })
 
+    const forwarding = await prisma.inboundForwarding.findFirst({
+      where: { orgId: phoneNumber.orgId, userId: phoneNumber.assignedUserId, enabled: true },
+    })
+    const mobileE164 = forwarding?.mobileE164
+
     logger.info(
       { route: 'POST /api/twilio/voice', requestId: req.id, orgId: call.orgId, callId: call.id },
       'inbound call ringing assigned browser Device',
     )
 
     res.status(200).type('text/xml').send(
-      buildInboundBrowserTwiml({ identity: call.userId, callId: call.id }),
+      buildInboundDeliveryTwiml({
+        identity: call.userId,
+        callId: call.id,
+        ...(mobileE164
+          ? {
+              forwarding: {
+                mobileE164,
+                strategy: forwarding.strategy === 'simultaneous' ? 'simultaneous' : 'browser_fallback',
+                callerId: phoneNumber.e164,
+              },
+            }
+          : {}),
+      }),
     )
     return
   }
@@ -295,6 +315,7 @@ router.post(
     // --- Parse & validate params ---
     const params = (req.body ?? {}) as Record<string, string>
     const callId = typeof req.query.callId === 'string' ? req.query.callId : undefined
+    const leg = typeof req.query.leg === 'string' ? req.query.leg : 'browser'
     const parentCallSid = params.CallSid
     const dialStatus = params.DialCallStatus
 
@@ -333,12 +354,73 @@ router.post(
       return void res.status(200).type('text/xml').send(buildEmptyTwiml())
     }
 
+    if (leg === 'browser') {
+      const forwarding = await prisma.inboundForwarding.findFirst({
+        where: {
+          orgId: call.orgId,
+          userId: call.userId,
+          enabled: true,
+          strategy: 'browser_fallback',
+          mobileE164: { not: null },
+        },
+      })
+      if (forwarding?.mobileE164) {
+        return void res.status(200).type('text/xml').send(
+          buildInboundMobileTwiml({
+            callId: call.id,
+            mobileE164: forwarding.mobileE164,
+            callerId: call.toE164,
+          }),
+        )
+      }
+    }
+
     await respondWithInboundVoicemail(req, res, {
       callSid: call.twilioCallSid!,
       fromE164: call.fromE164,
       orgId: call.orgId,
       toE164: call.toE164,
     })
+  }),
+)
+
+// ============================================================
+// POST /api/twilio/voice/mobile-whisper — private mobile-leg acceptance prompt
+// ============================================================
+router.post(
+  '/voice/mobile-whisper',
+  express.urlencoded({ extended: false }),
+  verifyTwilioWebhook('POST /api/twilio/voice/mobile-whisper'),
+  wrapRoute('POST /api/twilio/voice/mobile-whisper', async (req, res) => {
+    const callId = typeof req.query.callId === 'string' ? req.query.callId : undefined
+    const call = callId
+      ? await prisma.call.findFirst({ where: { id: callId, direction: 'inbound' } })
+      : null
+    if (!call) return void res.status(200).type('text/xml').send(buildInboundMobileRejectTwiml())
+
+    return void res.status(200).type('text/xml').send(
+      buildInboundMobileWhisperTwiml({ callerE164: call.fromE164, callId: call.id }),
+    )
+  }),
+)
+
+// ============================================================
+// POST /api/twilio/voice/mobile-accept — evaluate the private whisper keypress
+// ============================================================
+router.post(
+  '/voice/mobile-accept',
+  express.urlencoded({ extended: false }),
+  verifyTwilioWebhook('POST /api/twilio/voice/mobile-accept'),
+  wrapRoute('POST /api/twilio/voice/mobile-accept', async (req, res) => {
+    const callId = typeof req.query.callId === 'string' ? req.query.callId : undefined
+    const call = callId
+      ? await prisma.call.findFirst({ where: { id: callId, direction: 'inbound' } })
+      : null
+    const digits = (req.body as Record<string, string> | undefined)?.Digits
+
+    return void res.status(200).type('text/xml').send(
+      call && digits === '1' ? buildEmptyTwiml() : buildInboundMobileRejectTwiml(),
+    )
   }),
 )
 

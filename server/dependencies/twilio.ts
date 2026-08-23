@@ -249,6 +249,12 @@ export const OUTBOUND_RECORDING_STATUS_WEBHOOK_PATH = '/api/twilio/voice/recordi
 /** The post-dial decision point for an inbound browser leg. */
 export const INBOUND_BROWSER_RESULT_WEBHOOK_PATH = '/api/twilio/voice/inbound-result'
 
+/** Private TwiML for a mobile leg before it is bridged to the caller. */
+export const INBOUND_MOBILE_WHISPER_WEBHOOK_PATH = '/api/twilio/voice/mobile-whisper'
+
+/** The result of the mobile leg's required whisper keypress. */
+export const INBOUND_MOBILE_ACCEPT_WEBHOOK_PATH = '/api/twilio/voice/mobile-accept'
+
 /** A browser Device gets 25 seconds to answer an inbound Maincar call. */
 const INBOUND_BROWSER_TIMEOUT_SECONDS = 25
 
@@ -340,6 +346,14 @@ export interface InboundBrowserCallRequest {
   callId: string
 }
 
+export type InboundForwardingStrategy = 'simultaneous' | 'browser_fallback'
+
+export interface InboundMobileForwarding {
+  mobileE164: string
+  strategy: InboundForwardingStrategy
+  callerId: string
+}
+
 /**
  * Ring one assigned browser Device for an inbound PSTN call.
  *
@@ -350,12 +364,20 @@ export interface InboundBrowserCallRequest {
  * inbound Call's persisted Twilio SID; the route uses it to update that row.
  */
 export function buildInboundBrowserTwiml(request: InboundBrowserCallRequest): string {
+  return buildInboundDeliveryTwiml(request)
+}
+
+/** Ring the browser and, for a simultaneous strategy, the configured mobile. */
+export function buildInboundDeliveryTwiml(
+  request: InboundBrowserCallRequest & { forwarding?: InboundMobileForwarding },
+): string {
   if (!PUBLIC_BASE_URL) throw new WebhookBaseUrlMissingError()
 
   const response = new twilio.twiml.VoiceResponse()
   const dial = response.dial({
     action: `${PUBLIC_BASE_URL}${INBOUND_BROWSER_RESULT_WEBHOOK_PATH}?callId=${encodeURIComponent(request.callId)}`,
     answerOnBridge: true,
+    ...(request.forwarding?.strategy === 'simultaneous' ? { callerId: request.forwarding.callerId } : {}),
     method: 'POST',
     timeout: INBOUND_BROWSER_TIMEOUT_SECONDS,
   })
@@ -368,6 +390,68 @@ export function buildInboundBrowserTwiml(request: InboundBrowserCallRequest): st
     request.identity,
   )
   client.parameter({ name: 'callId', value: request.callId })
+  if (request.forwarding?.strategy === 'simultaneous') {
+    dial.number(
+      {
+        url: `${PUBLIC_BASE_URL}${INBOUND_MOBILE_WHISPER_WEBHOOK_PATH}?callId=${encodeURIComponent(request.callId)}`,
+        method: 'POST',
+        statusCallback: `${PUBLIC_BASE_URL}${OUTBOUND_STATUS_WEBHOOK_PATH}`,
+        statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+        statusCallbackMethod: 'POST',
+      },
+      request.forwarding.mobileE164,
+    )
+  }
+  return response.toString()
+}
+
+/** Ring only a mobile number after a browser-fallback attempt did not connect. */
+export function buildInboundMobileTwiml(request: { callId: string; mobileE164: string; callerId: string }): string {
+  if (!PUBLIC_BASE_URL) throw new WebhookBaseUrlMissingError()
+
+  const response = new twilio.twiml.VoiceResponse()
+  const dial = response.dial({
+    action: `${PUBLIC_BASE_URL}${INBOUND_BROWSER_RESULT_WEBHOOK_PATH}?callId=${encodeURIComponent(request.callId)}&leg=mobile`,
+    answerOnBridge: true,
+    callerId: request.callerId,
+    method: 'POST',
+    timeout: INBOUND_BROWSER_TIMEOUT_SECONDS,
+  })
+  dial.number(
+    {
+      url: `${PUBLIC_BASE_URL}${INBOUND_MOBILE_WHISPER_WEBHOOK_PATH}?callId=${encodeURIComponent(request.callId)}`,
+      method: 'POST',
+      statusCallback: `${PUBLIC_BASE_URL}${OUTBOUND_STATUS_WEBHOOK_PATH}`,
+      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+      statusCallbackMethod: 'POST',
+    },
+    request.mobileE164,
+  )
+  return response.toString()
+}
+
+/** Play the caller's number privately and require the mobile rep to press 1. */
+export function buildInboundMobileWhisperTwiml(request: { callerE164: string; callId: string }): string {
+  if (!PUBLIC_BASE_URL) throw new WebhookBaseUrlMissingError()
+
+  const response = new twilio.twiml.VoiceResponse()
+  const gather = response.gather({
+    action: `${PUBLIC_BASE_URL}${INBOUND_MOBILE_ACCEPT_WEBHOOK_PATH}?callId=${encodeURIComponent(request.callId)}`,
+    actionOnEmptyResult: true,
+    input: ['dtmf'],
+    method: 'POST',
+    numDigits: 1,
+    timeout: 5,
+  })
+  gather.say(`Call from ${request.callerE164}. Press 1 to answer.`)
+  response.hangup()
+  return response.toString()
+}
+
+/** End a mobile leg that declined the private whisper. */
+export function buildInboundMobileRejectTwiml(): string {
+  const response = new twilio.twiml.VoiceResponse()
+  response.hangup()
   return response.toString()
 }
 

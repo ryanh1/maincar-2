@@ -37,6 +37,9 @@ const {
     personPhone: {
       findMany: vi.fn(),
     },
+    inboundForwarding: {
+      findFirst: vi.fn(),
+    },
     voicemailGreeting: {
       findFirst: vi.fn(),
     },
@@ -152,7 +155,8 @@ beforeEach(() => {
   // No recognized number and no voicemail by default; the inbound-voicemail
   // tests override these to prove the recognized-number path.
   prismaMock.phoneNumber.findFirst.mockResolvedValue(null)
-  prismaMock.personPhone.findMany.mockResolvedValue([])
+    prismaMock.personPhone.findMany.mockResolvedValue([])
+    prismaMock.inboundForwarding.findFirst.mockResolvedValue(null)
   prismaMock.voicemailGreeting.findFirst.mockResolvedValue(null)
   prismaMock.voicemail.findFirst.mockResolvedValue(null)
   prismaMock.voicemail.upsert.mockResolvedValue({ id: 'voicemail-1' })
@@ -474,6 +478,40 @@ describe('inbound browser delivery', () => {
       create: expect.objectContaining({ personId: 'person-1', companyId: 'company-1' }),
     }))
   })
+
+  it('rings the browser and configured mobile together when simultaneous forwarding is enabled', async () => {
+    prismaMock.inboundForwarding.findFirst.mockResolvedValue({
+      orgId: 'org-a',
+      userId: 'user-a',
+      enabled: true,
+      mobileE164: '+12025550188',
+      strategy: 'simultaneous',
+    })
+
+    const res = await post({})
+
+    expect(res.status).toBe(200)
+    expect(res.text).toContain('<Client')
+    expect(res.text).toContain('user-a')
+    expect(res.text).toContain('<Number')
+    expect(res.text).toContain('+12025550188')
+    expect(res.text).toContain('callerId="+13035550199"')
+    expect(res.text).toMatch(/url="[^"]*\/mobile-whisper\?callId=call-1"/)
+    expect(prismaMock.inboundForwarding.findFirst).toHaveBeenCalledWith({
+      where: { orgId: 'org-a', userId: 'user-a', enabled: true },
+    })
+  })
+
+  it('starts the browser only for browser-fallback forwarding', async () => {
+    prismaMock.inboundForwarding.findFirst.mockResolvedValue({
+      orgId: 'org-a', userId: 'user-a', enabled: true, mobileE164: '+12025550188', strategy: 'browser_fallback',
+    })
+
+    const res = await post({})
+
+    expect(res.text).toContain('<Client')
+    expect(res.text).not.toContain('<Number')
+  })
 })
 
 // ============================================================
@@ -535,6 +573,43 @@ describe('inbound browser result', () => {
     for (const invocation of prismaMock.voicemail.upsert.mock.calls) {
       expect(invocation[0].where).toEqual({ callSid: CALL_SID })
     }
+  })
+
+  it('rings the mobile after an unanswered browser-fallback attempt', async () => {
+    prismaMock.inboundForwarding.findFirst.mockResolvedValue({
+      orgId: 'org-a', userId: 'user-a', enabled: true, mobileE164: '+12025550188', strategy: 'browser_fallback',
+    })
+
+    const res = await postInboundResult({ DialCallStatus: 'no-answer' })
+
+    expect(res.status).toBe(200)
+    expect(res.text).toContain('<Number')
+    expect(res.text).toContain('+12025550188')
+    expect(res.text).toContain('callerId="+13035550199"')
+    expect(res.text).toContain('leg=mobile')
+    expect(res.text).not.toContain('<Record')
+  })
+})
+
+const MOBILE_WHISPER_URL = '/api/twilio/voice/mobile-whisper?callId=call-1'
+
+function postMobileWhisper(body: Record<string, string> = {}, signature: string | null = SIG) {
+  const req = request(app).post(MOBILE_WHISPER_URL).type('form')
+  if (signature !== null) req.set('X-Twilio-Signature', signature)
+  return req.send(body)
+}
+
+describe('inbound mobile whisper', () => {
+  it('privately says the caller number and requires a keypress before bridging', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(callRow({ direction: 'inbound', twilioCallSid: CALL_SID }))
+
+    const res = await postMobileWhisper()
+
+    expect(res.status).toBe(200)
+    expect(res.text).toContain('<Gather')
+    expect(res.text).toContain('numDigits="1"')
+    expect(res.text).toContain('Call from +12025550123. Press 1 to answer.')
+    expect(res.text).toContain('<Hangup')
   })
 })
 
