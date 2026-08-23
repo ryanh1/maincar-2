@@ -32,6 +32,7 @@ import membersRouter from './routes/members.js'
 import messagesRouter from './routes/messages.js'
 import notesRouter from './routes/notes.js'
 import notificationsRouter from './routes/notifications.js'
+import notificationDeliverySettingsRouter from './routes/notificationDeliverySettings.js'
 import notificationPreferencesRouter from './routes/notificationPreferences.js'
 import objectsRouter from './routes/objects.js'
 import peopleRouter from './routes/people.js'
@@ -87,6 +88,7 @@ app.use('/api', invitationsRouter)
 
 app.use('/api/auth', authRouter)
 app.use('/api/call-alert-settings', callAlertSettingsRouter)
+app.use('/api/notification-delivery-settings', notificationDeliverySettingsRouter)
 app.use('/api/notification-preferences', notificationPreferencesRouter)
 app.use('/api/web-push', webPushSubscriptionsRouter)
 app.use('/api/team', teamRouter)

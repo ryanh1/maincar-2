@@ -11,6 +11,7 @@ import {
   type NotificationEventKind,
   type NotificationPreference,
 } from '@/lib/notificationPreferences'
+import { Settings_NotificationsTiming } from './Settings_NotificationsTiming'
 
 const eventLabels: Record<NotificationEventKind, string> = {
   mention: 'Mentions',
@@ -94,6 +95,7 @@ export function Settings_NotificationsTab() {
           <p className="text-xs text-text-muted">In-app inbox stays on. Slack delivery will be available after the Slack integration ships.</p>
         </CardContent>
       </Card>
+      <Settings_NotificationsTiming />
     </section>
   )
 }
