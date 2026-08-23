@@ -39,7 +39,7 @@ export const callAlertDefaults: CallAlertSettings = {
   doNotDisturb: { enabled: false, startTime: '18:00', endTime: '08:00' },
 }
 
-function readSettings(value: unknown): CallAlertSettings {
+export function readCallAlertSettings(value: unknown): CallAlertSettings {
   const parsed = settingsSchema.safeParse(value)
   return parsed.success ? parsed.data : callAlertDefaults
 }
@@ -51,7 +51,7 @@ router.get(
     const { user } = req as AuthenticatedRequest
     if (!user) return void res.status(401).json({ error: 'Not signed in' })
 
-    return void res.json({ callAlertSettings: readSettings(user.callAlertSettings) })
+    return void res.json({ callAlertSettings: readCallAlertSettings(user.callAlertSettings) })
   }),
 )
 

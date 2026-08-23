@@ -48,6 +48,7 @@ export const JOB_MAIL_REMATCH = 'mail-rematch'
 
 export const JOB_CAPTURE_PURGE = 'capture-purge'
 export const JOB_MAIL_PUSH_SUBSCRIPTION = 'mail-push-subscription'
+export const JOB_DELIVER_CALL_WEB_PUSH = 'deliver-call-web-push'
 
 export const JOB_NAMES = [
   JOB_PROVISION_NUMBER,
@@ -67,6 +68,7 @@ export const JOB_NAMES = [
   JOB_MAIL_REMATCH,
   JOB_CAPTURE_PURGE,
   JOB_MAIL_PUSH_SUBSCRIPTION,
+  JOB_DELIVER_CALL_WEB_PUSH,
 ] as const
 
 export type JobName = (typeof JOB_NAMES)[number]
@@ -130,6 +132,7 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number; 
   // safe because the purge handler compare-and-sets each source's deletedAt.
   [JOB_CAPTURE_PURGE]: { retryLimit: 3, retryDelay: 60, policy: 'singleton' },
   [JOB_MAIL_PUSH_SUBSCRIPTION]: { retryLimit: 3, retryDelay: 300, policy: 'singleton' },
+  [JOB_DELIVER_CALL_WEB_PUSH]: { retryLimit: 3, retryDelay: 30, policy: 'singleton' },
 }
 
 let boss: PgBoss | null = null

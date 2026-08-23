@@ -21,6 +21,7 @@ const {
   verifySignatureMock,
   queueUploadRecordingMock,
   queueUploadVoicemailMock,
+  queueCallWebPushMock,
   getRecordingDownloadUrlMock,
 } = vi.hoisted(() => ({
   prismaMock: {
@@ -54,6 +55,7 @@ const {
   verifySignatureMock: vi.fn(),
   queueUploadRecordingMock: vi.fn(),
   queueUploadVoicemailMock: vi.fn(),
+  queueCallWebPushMock: vi.fn(),
   getRecordingDownloadUrlMock: vi.fn(),
 }))
 
@@ -67,6 +69,9 @@ vi.mock('../../jobs/uploadRecording.js', () => ({
 // Same reasoning, for the inbound voicemail upload job.
 vi.mock('../../jobs/uploadVoicemail.js', () => ({
   queueUploadVoicemail: queueUploadVoicemailMock,
+}))
+vi.mock('../../jobs/callWebPush.js', () => ({
+  queueCallWebPush: queueCallWebPushMock,
 }))
 // Swap the S3 presigner for a mock: signing a real URL needs real S3/MinIO
 // credentials, and the assertion only needs to prove the route asked for one.
@@ -152,6 +157,7 @@ beforeEach(() => {
   prismaMock.call.upsert.mockResolvedValue(callRow({ direction: 'inbound', status: 'ringing' }))
   prismaMock.call.updateMany.mockResolvedValue({ count: 1 })
   queueUploadRecordingMock.mockResolvedValue('upload_job_1')
+  queueCallWebPushMock.mockResolvedValue(undefined)
   // No recognized number and no voicemail by default; the inbound-voicemail
   // tests override these to prove the recognized-number path.
   prismaMock.phoneNumber.findFirst.mockResolvedValue(null)

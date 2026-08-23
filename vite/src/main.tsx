@@ -24,6 +24,9 @@ import { MentionEditorFixture } from './components/editor/MentionEditorFixture'
 import { Settings_DispositionsFixture } from './pages/Settings_DispositionsFixture'
 import { Settings_NextStepsFixture } from './pages/Settings_NextStepsFixture'
 import { Settings_AlertsFixture } from './pages/Settings_AlertsFixture'
+import { registerCallPushServiceWorker } from './lib/webPush'
+
+void registerCallPushServiceWorker()
 
 const queryClient = new QueryClient({
   defaultOptions: {
