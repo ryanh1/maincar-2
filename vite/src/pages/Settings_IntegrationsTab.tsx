@@ -17,6 +17,7 @@ import { useAuth } from '@/providers/useAuth'
 
 import { Settings_Integrations_MailboxDrawer } from './Settings_Integrations_MailboxDrawer'
 import { Settings_Integrations_ProviderCard } from './Settings_Integrations_ProviderCard'
+import { Settings_Integrations_Capture } from './Settings_Integrations_Capture'
 
 // A small, centred window is enough for a consent screen and keeps the rep's page in
 // view behind it (SPEC-int-hub-ui.md § Consent). Named so a second click reuses the
@@ -219,6 +220,8 @@ export function Settings_IntegrationsTab() {
       )}
 
       <Settings_Integrations_MailboxDrawer orgId={orgId} timeZone={user?.timeZone} />
+
+      <Settings_Integrations_Capture />
     </section>
   )
 }

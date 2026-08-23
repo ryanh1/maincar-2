@@ -8,6 +8,12 @@
 import type { Prisma } from '../generated/prisma/client.js'
 import type { Email, Meeting } from '../generated/prisma/client.js'
 import { activityFromEmail, activityFromMeeting, recordActivityInTx } from '../crm/activityFeed.js'
+import {
+  DEFAULT_CAPTURE_SETTINGS,
+  evaluateCaptureExclusions,
+  type CaptureExclusion,
+  type CaptureSettings,
+} from './captureExclusions.js'
 
 const PUBLIC_EMAIL_DOMAINS = new Set([
   'gmail.com',
@@ -19,22 +25,7 @@ const PUBLIC_EMAIL_DOMAINS = new Set([
   'yahoo.com',
 ])
 
-const ROLE_LOCAL_PARTS = new Set([
-  'abuse',
-  'admin',
-  'billing',
-  'hello',
-  'info',
-  'mailer-daemon',
-  'no-reply',
-  'noreply',
-  'notifications',
-  'postmaster',
-  'sales',
-  'support',
-])
-
-export type ParticipantExclusion = 'invalid_address' | 'role_address'
+export type ParticipantExclusion = 'invalid_address'
 
 export interface ParticipantClassification {
   address: string
@@ -53,22 +44,25 @@ export interface ResolveCrmParticipantsInput {
   orgId: string
   participants: CrmMatchParticipant[]
   occurredAt: Date
-  /** Addresses belonging to the workspace's own users. */
-  internalDomains?: readonly string[]
   direction?: 'inbound' | 'outbound'
   /** Sync providers identify these without the matcher parsing untrusted bodies. */
   isAutoReply?: boolean
   isBounce?: boolean
-  /** Exclude mail that looks like a bulk inbound blast. Defaults to 50 recipients. */
-  bulkRecipientThreshold?: number
+  /** The org's capture settings; defaults to the safe built-in policy. */
+  captureSettings?: CaptureSettings
+  /** The message subject, for subject-keyword excludes. */
+  subject?: string | null
+  /** Which activity type this message is, for the what-to-log rule. */
+  activityType?: 'email' | 'meeting'
+  /** True when the mailbox owner has opted their own mailbox out of capture. */
+  optedOut?: boolean
 }
 
 export type CrmMatchExclusion =
   | ParticipantExclusion
   | 'auto_reply'
   | 'bounce'
-  | 'bulk_inbound'
-  | 'internal_only'
+  | CaptureExclusion
 
 export interface ResolvedCrmParticipants {
   excluded: boolean
@@ -112,9 +106,11 @@ export function candidateCompanyDomains(address: string): string[] {
 }
 
 /**
- * Apply the safe default exclusions. Exact Person matching intentionally survives
- * a public domain, because an existing `jane@gmail.com` is a high-confidence
- * identity; only company-domain inference is disabled for public mail hosts.
+ * Classify a single address for structural eligibility. Exact Person matching
+ * intentionally survives a public domain, because an existing `jane@gmail.com`
+ * is a high-confidence identity; only company-domain inference is disabled for
+ * public mail hosts. Role-address exclusion is NOT here — it is a configurable
+ * rule applied by the capture-exclusion evaluator (captureExclusions.ts).
  */
 export function classifyParticipant(value: string): ParticipantClassification {
   const address = normalizeParticipantAddress(value)
@@ -125,14 +121,6 @@ export function classifyParticipant(value: string): ParticipantClassification {
       eligibleForExactPerson: false,
       eligibleForCompanyDomain: false,
       exclusion: 'invalid_address',
-    }
-  }
-  if (ROLE_LOCAL_PARTS.has(localPart)) {
-    return {
-      address,
-      eligibleForExactPerson: false,
-      eligibleForCompanyDomain: false,
-      exclusion: 'role_address',
     }
   }
   return {
@@ -180,7 +168,21 @@ export async function resolveParticipantsToCrm(
   if (input.isBounce) return { ...NO_CRM_MATCH, excluded: true, exclusion: 'bounce' }
   if (input.isAutoReply) return { ...NO_CRM_MATCH, excluded: true, exclusion: 'auto_reply' }
 
-  const classified = input.participants.map((participant) => ({
+  // Step 2 — apply exclusions first, through the pluggable capture-exclusion
+  // evaluator. It owns every configurable rule (role addresses, address/domain
+  // excludes, internal-only, bulk inbound, subject keywords, what-to-log, opt-out).
+  const exclusion = evaluateCaptureExclusions(input.captureSettings ?? DEFAULT_CAPTURE_SETTINGS, {
+    participants: input.participants,
+    subject: input.subject,
+    direction: input.direction,
+    activityType: input.activityType ?? 'email',
+    optedOut: input.optedOut,
+  })
+  if (exclusion.excluded) {
+    return { ...NO_CRM_MATCH, excluded: true, exclusion: exclusion.exclusion }
+  }
+
+  const classified = exclusion.eligibleParticipants.map((participant) => ({
     participant,
     classification: classifyParticipant(participant.address),
   }))
@@ -192,20 +194,6 @@ export async function resolveParticipantsToCrm(
       excluded: true,
       exclusion: firstExclusion ?? 'invalid_address',
     }
-  }
-
-  const internalDomains = new Set((input.internalDomains ?? []).map((domain) => domain.trim().toLowerCase()))
-  if (
-    internalDomains.size > 0 &&
-    eligible.every(({ classification }) => internalDomains.has(classification.address.split('@')[1] ?? ''))
-  ) {
-    return { ...NO_CRM_MATCH, excluded: true, exclusion: 'internal_only' }
-  }
-  if (
-    input.direction === 'inbound' &&
-    eligible.length > (input.bulkRecipientThreshold ?? 50)
-  ) {
-    return { ...NO_CRM_MATCH, excluded: true, exclusion: 'bulk_inbound' }
   }
 
   const addresses = dedupe(eligible.map(({ classification }) => classification.address))

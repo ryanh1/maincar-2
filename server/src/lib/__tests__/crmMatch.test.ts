@@ -30,12 +30,11 @@ describe('CRM participant matching primitives', () => {
     })
   })
 
-  it.each(['sales@acme.com', 'no-reply@acme.com', 'mailer-daemon@acme.com'])(
-    'excludes role address %s',
-    (address) => {
-      expect(classifyParticipant(address).exclusion).toBe('role_address')
-    },
-  )
+  it('leaves role addresses to the capture-exclusion evaluator', () => {
+    // Role-address exclusion is a configurable rule (captureExclusions.ts), not a
+    // structural classification, so classifyParticipant no longer drops it here.
+    expect(classifyParticipant('no-reply@acme.com').exclusion).toBeNull()
+  })
 })
 
 describe('resolveParticipantsToCrm', () => {
