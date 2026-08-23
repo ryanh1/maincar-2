@@ -46,6 +46,7 @@ export function KeyboardProvider({ children }: KeyboardProviderProps) {
       { id: 'compose-email', title: 'Compose email', group: 'Actions', shortcut: 'C', keywords: ['new email message'], execute: () => void openComposer() },
       { id: 'view-home', title: 'Home', group: 'Views', keywords: ['dashboard'], execute: () => visit('/home') },
       { id: 'view-calls', title: 'Calls', group: 'Views', keywords: ['call history'], execute: () => visit('/calls') },
+      { id: 'view-tasks', title: 'Tasks', group: 'Views', keywords: ['my tasks follow-up reminders'], execute: () => visit('/tasks') },
       { id: 'settings', title: 'Settings', group: 'Settings', execute: () => visit('/settings') },
       ...settings,
     ]

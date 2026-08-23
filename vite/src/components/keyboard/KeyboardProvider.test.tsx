@@ -36,4 +36,21 @@ describe('KeyboardProvider', () => {
 
     expect(screen.getByText('/settings/numbers')).toBeInTheDocument()
   })
+
+  it('registers Tasks as a keyboard-reachable view', async () => {
+    const user = userEvent.setup()
+    useAuthMock.mockReturnValue({ org: { id: 'org-1' }, isAdmin: false })
+
+    renderWithProviders(
+      <KeyboardProvider>
+        <LocationProbe />
+      </KeyboardProvider>,
+      { initialEntries: ['/home'] },
+    )
+
+    await user.keyboard('{Meta>}k{/Meta}')
+    await user.click(screen.getByRole('option', { name: 'Tasks' }))
+
+    expect(screen.getByText('/tasks')).toBeInTheDocument()
+  })
 })
