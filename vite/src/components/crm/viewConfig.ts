@@ -60,6 +60,10 @@ export type ViewConfig = {
   zoom: number
   columnWidths: Record<string, number>
   columnStyles: Array<{ attributeId: string; headerColor?: string }>
+  /** Fields shown on compact Kanban cards; omitted views use the first three visible fields. */
+  kanbanCardFieldIds?: string[]
+  /** Optional numeric or currency field summed in each Kanban column header. */
+  kanbanSummaryAttributeId?: string
 }
 
 export type RecordListFilter =
@@ -107,6 +111,14 @@ export function createViewConfig(attributes: AttributeDef[]): ViewConfig {
       .sort((left, right) => left.sortOrder - right.sortOrder)
       .map((attribute, index) => ({ attributeId: attribute.id, visible: true, order: index })),
   }
+}
+
+/** Deals normally group by pipeline stage; other objects use their first select-like field. */
+export function defaultKanbanGroupBy(attributes: AttributeDef[]): ViewSort[] {
+  const eligible = attributes.filter((attribute) => !attribute.isArchived && (attribute.type === 'select' || attribute.type === 'status'))
+  const pipelineStage = eligible.find((attribute) => /pipeline.?stage/i.test(attribute.slug) || /pipeline stage/i.test(attribute.name))
+  const groupAttribute = pipelineStage ?? eligible[0]
+  return groupAttribute ? [{ attributeId: groupAttribute.id, direction: 'asc' }] : []
 }
 
 /** Reorder whole groups so their member columns always remain adjacent. */

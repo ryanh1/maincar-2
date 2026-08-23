@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from 'react'
-import { ChevronDown, Columns3Cog, PanelsTopLeft, Rows3, SlidersHorizontal, UsersRound } from 'lucide-react'
+import { ChevronDown, Columns3Cog, LayoutList, PanelsTopLeft, Rows3, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +28,8 @@ interface GridViewToolbarProps {
   onConfigChange: (update: (current: ViewConfig) => ViewConfig) => void
   teamScopeSupported?: boolean
   selectedColumnIds?: string[]
+  layout?: 'grid' | 'kanban'
+  onLayoutChange?: (layout: 'grid' | 'kanban') => void
 }
 
 function scopeLabel(scope: TeamScope | undefined, teams: Array<{ id: string; name: string }>, members: Array<{ userId: string; firstName: string | null; lastName: string | null; email: string }>): string | null {
@@ -105,7 +107,7 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 }
 
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
-export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [] }: GridViewToolbarProps) {
+export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange }: GridViewToolbarProps) {
   const [columnGroupName, setColumnGroupName] = useState('')
   function setColumnVisible(attributeId: string, visible: boolean) {
     onConfigChange((current) => ({
@@ -140,9 +142,35 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
     setColumnGroupName('')
   }
 
+  const kanbanGroupFields = attributes.filter((attribute) => attribute.type === 'select' || attribute.type === 'status')
+  const cardFieldIds = config.kanbanCardFieldIds ?? attributes
+    .filter((attribute) => attribute.id !== attributes.find((candidate) => candidate.isIdentity)?.id && attribute.id !== config.groupBy[0]?.attributeId)
+    .filter((attribute) => config.columns.find((column) => column.attributeId === attribute.id)?.visible !== false)
+    .slice(0, 3)
+    .map((attribute) => attribute.id)
+  const summaryFields = attributes.filter((attribute) => attribute.type === 'number' || attribute.type === 'currency')
+
+  function toggleCardField(attributeId: string, checked: boolean) {
+    onConfigChange((current) => {
+      const selected = current.kanbanCardFieldIds ?? cardFieldIds
+      const kanbanCardFieldIds = checked ? [...selected, attributeId] : selected.filter((id) => id !== attributeId)
+      return { ...current, kanbanCardFieldIds }
+    })
+  }
+
   return (
     <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-surface px-3">
       {leading}
+      {onLayoutChange && (
+        <div role="group" aria-label="Layout" className="flex items-center rounded-md border border-border bg-bg p-0.5">
+          <Button type="button" variant="secondary" size="sm" aria-pressed={layout === 'grid'} onClick={() => onLayoutChange('grid')}>
+            <Table2 size={16} /> Table
+          </Button>
+          <Button type="button" variant="secondary" size="sm" aria-pressed={layout === 'kanban'} onClick={() => onLayoutChange('kanban')}>
+            <LayoutList size={16} /> Kanban
+          </Button>
+        </div>
+      )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm">
@@ -237,7 +265,7 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuLabel>Group records</DropdownMenuLabel>
-          {attributes.map((attribute) => (
+          {(layout === 'kanban' ? kanbanGroupFields : attributes).map((attribute) => (
             <DropdownMenuItem
               key={attribute.id}
               onSelect={() => onConfigChange((current) => ({ ...current, groupBy: [{ attributeId: attribute.id, direction: 'asc' }] }))}
@@ -255,6 +283,37 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {layout === 'kanban' && (
+        <>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="secondary" size="sm"><Columns3Cog size={16} />Card fields<ChevronDown size={16} /></Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel>Fields on cards</DropdownMenuLabel>
+              {attributes.filter((attribute) => !attribute.isIdentity).map((attribute) => (
+                <DropdownMenuCheckboxItem key={attribute.id} checked={cardFieldIds.includes(attribute.id)} onSelect={(event) => event.preventDefault()} onCheckedChange={(checked) => toggleCardField(attribute.id, checked)}>
+                  {attribute.name}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {cardFieldIds.length > 5 && <span className="text-xs text-text-muted">Cards get noisy with more than five fields.</span>}
+          {summaryFields.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" size="sm"><SlidersHorizontal size={16} />Summary<ChevronDown size={16} /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuLabel>Column total</DropdownMenuLabel>
+                {summaryFields.map((attribute) => <DropdownMenuItem key={attribute.id} onSelect={() => onConfigChange((current) => ({ ...current, kanbanSummaryAttributeId: attribute.id }))}>Sum {attribute.name}</DropdownMenuItem>)}
+                {config.kanbanSummaryAttributeId && <><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => onConfigChange((current) => ({ ...current, kanbanSummaryAttributeId: undefined }))}>No summary</DropdownMenuItem></>}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </>
+      )}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

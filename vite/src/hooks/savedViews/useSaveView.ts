@@ -11,16 +11,17 @@ export type SaveViewVariables = {
   objectId: string
   name: string
   config: ViewConfig
+  layout?: 'list' | 'grid' | 'kanban'
 }
 
 /** Creates the first persistent view when the object only has its in-code default. */
 export function useSaveView() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ orgId, objectId, name, config }: SaveViewVariables) => {
+    mutationFn: async ({ orgId, objectId, name, config, layout = 'grid' }: SaveViewVariables) => {
       const saved = await jsonFetch<SavedViewResponse>(`/api/orgs/${orgId}/saved-views`, {
         method: 'POST',
-        body: JSON.stringify({ objectId, name, layout: 'grid', config }),
+        body: JSON.stringify({ objectId, name, layout, config }),
       })
       await jsonFetch<void>(`/api/orgs/${orgId}/saved-views/${saved.view.id}/default`, { method: 'POST' })
       return saved

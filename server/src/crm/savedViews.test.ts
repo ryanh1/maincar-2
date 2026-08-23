@@ -76,6 +76,16 @@ describe('repairSavedViewConfig', () => {
       ],
     })
   })
+
+  it('retains valid Kanban card and summary fields while discarding stale fields', () => {
+    const config = repairSavedViewConfig({
+      kanbanCardFieldIds: ['attr-name', 'missing-field', 'attr-stage', 'attr-name'],
+      kanbanSummaryAttributeId: 'attr-stage',
+    }, ATTRIBUTES)
+
+    expect(config.kanbanCardFieldIds).toEqual(['attr-name', 'attr-stage'])
+    expect(config.kanbanSummaryAttributeId).toBe('attr-stage')
+  })
 })
 
 describe('decodeUrlViewOverlay', () => {

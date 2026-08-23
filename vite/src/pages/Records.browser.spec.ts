@@ -24,6 +24,17 @@ const rankAttribute = {
   id: 'rank', slug: 'rank', name: 'Rank', type: 'number', isIdentity: false,
 }
 
+const dealObject = { ...companyObject, id: 'deal', slug: 'deal', name: 'Deal', namePlural: 'Deals', isGridCreateSupported: false }
+const dealNameAttribute = { ...nameAttribute, objectId: 'deal', id: 'deal-name', slug: 'name', name: 'Deal' }
+const pipelineStageAttribute = {
+  ...nameAttribute, objectId: 'deal', id: 'pipeline-stage', slug: 'pipelineStage', name: 'Pipeline stage', isIdentity: false, type: 'status', sortOrder: 1,
+  optionsJson: [
+    { value: 'discovery', label: 'Discovery', color: 'option-1', order: 0 },
+    { value: 'proposal', label: 'Proposal', color: 'option-2', order: 1 },
+  ],
+}
+const amountAttribute = { ...nameAttribute, objectId: 'deal', id: 'amount', slug: 'amount', name: 'Amount', isIdentity: false, type: 'currency', sortOrder: 2 }
+
 test('creates a Company from its grid after a recoverable validation error', async ({ page }) => {
   const consoleErrors: string[] = []
   const companies: Array<Record<string, unknown>> = []
@@ -227,5 +238,66 @@ test('saves the live URL sort into the synthesized default view and reloads it',
   await expect(canvas).toBeVisible()
   await expect.poll(() => listBodies.at(-1)).toMatchObject({ sort: { field: 'name', direction: 'asc' } })
   await expect(page.getByRole('combobox', { name: 'Saved view' })).toHaveText('Default view')
+  expect(consoleErrors).toEqual([])
+})
+
+test('renders Deals as a persisted Kanban board grouped by pipeline stage', async ({ page }) => {
+  const consoleErrors: string[] = []
+  const patchBodies: Array<Record<string, unknown>> = []
+  const attributes = [dealNameAttribute, pipelineStageAttribute, amountAttribute]
+  const config = {
+    columns: attributes.map((attribute, order) => ({ attributeId: attribute.id, visible: true, order })),
+    sorts: [], groupBy: [], rowHeight: 'compact', gridLines: true, frozenRows: 0, frozenCols: 1, zoom: 100, columnWidths: {}, columnStyles: [],
+  }
+  const view: Record<string, unknown> = {
+    id: 'deals-view', objectId: 'deal', name: 'Pipeline', layout: 'grid', config,
+    ownerUserId: 'user-fixture', isShared: false, isDefault: true, sortOrder: 0, createdAt: dealObject.createdAt, updatedAt: dealObject.updatedAt,
+  }
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+
+  await page.route('**/api/orgs/org-fixture/objects**', async (route) => {
+    const request = route.request()
+    const pathname = new URL(request.url()).pathname
+    if (request.method() === 'GET' && pathname.endsWith('/objects')) return route.fulfill({ json: { objects: [dealObject] } })
+    if (request.method() === 'GET' && pathname.endsWith('/objects/deal')) return route.fulfill({ json: { object: { ...dealObject, attributes } } })
+    if (request.method() === 'POST' && pathname.endsWith('/objects/deal/list')) {
+      return route.fulfill({ json: { rows: [
+        { id: 'deal-1', name: 'Northstar', pipelineStage: 'discovery', amount: 5000, createdAt: '', updatedAt: '' },
+        { id: 'deal-2', name: 'Acme', pipelineStage: 'proposal', amount: 12000, createdAt: '', updatedAt: '' },
+        { id: 'deal-3', name: 'Unqualified', pipelineStage: null, amount: 700, createdAt: '', updatedAt: '' },
+      ], nextCursor: null, totalCount: 3 } })
+    }
+    return route.fallback()
+  })
+  await page.route('**/api/orgs/org-fixture/saved-views**', async (route) => {
+    const request = route.request()
+    if (request.method() === 'GET') return route.fulfill({ json: { views: [view] } })
+    if (request.method() === 'PATCH') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      patchBodies.push(body)
+      if (body.layout) view.layout = body.layout
+      if (body.config) view.config = body.config
+      return route.fulfill({ json: { view } })
+    }
+    return route.fallback()
+  })
+
+  await page.goto('/__fixtures/records/deal')
+  await expect(page.getByTestId('data-grid-canvas')).toBeVisible()
+  await page.getByRole('button', { name: 'Kanban' }).click()
+  await expect(page.getByRole('heading', { name: 'Discovery 1' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Proposal 1' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'No value 1' })).toBeVisible()
+  await expect(page.getByText('Northstar')).toBeVisible()
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect.poll(() => patchBodies).toEqual([
+    expect.objectContaining({ layout: 'kanban' }),
+    expect.objectContaining({ config: expect.objectContaining({ groupBy: [{ attributeId: 'pipeline-stage', direction: 'asc' }] }) }),
+  ])
+
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Discovery 1' })).toBeVisible()
   expect(consoleErrors).toEqual([])
 })

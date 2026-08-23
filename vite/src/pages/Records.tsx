@@ -33,10 +33,12 @@ export function Records() {
   const viewsQuery = useGetViews(orgId, detail?.id ?? null)
   const views = viewsQuery.data?.views ?? []
   const [selectedViewId, setSelectedViewId] = useState<string | null>(null)
+  const [layoutOverride, setLayoutOverride] = useState<'grid' | 'kanban' | null>(null)
   const defaultView = views.find((view) => view.isDefault) ?? null
   const selectedView = selectedViewId ? views.find((view) => view.id === selectedViewId) ?? null : defaultView
   const fallbackConfig = useMemo(() => createViewConfig(detail?.attributes ?? []), [detail?.attributes])
   const baselineConfig = selectedView?.config ?? fallbackConfig
+  const layout = layoutOverride ?? (selectedView?.layout === 'kanban' ? 'kanban' : 'grid')
   const [viewConfig, setViewConfig, resetViewConfig] = useViewConfig(detail?.attributes ?? [], baselineConfig)
   const hasUnsavedChanges = !sameViewConfig(viewConfig, baselineConfig)
   const saveView = useSaveView()
@@ -55,6 +57,7 @@ export function Records() {
 
   function selectView(viewId: string | null) {
     setSelectedViewId(viewId)
+    setLayoutOverride(null)
     resetViewConfig()
   }
 
@@ -62,13 +65,31 @@ export function Records() {
     if (!orgId || !detail) return
     try {
       if (selectedView) {
-        await updateView.mutateAsync({ orgId, viewId: selectedView.id, config: viewConfig })
+        await updateView.mutateAsync({ orgId, viewId: selectedView.id, config: viewConfig, layout })
       } else {
-        const result = await saveView.mutateAsync({ orgId, objectId: detail.id, name: 'Default view', config: viewConfig })
+        const result = await saveView.mutateAsync({ orgId, objectId: detail.id, name: 'Default view', config: viewConfig, layout })
         setSelectedViewId(result.view.id)
+        setLayoutOverride(null)
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not save changes. Try again.')
+    }
+  }
+
+  async function changeLayout(nextLayout: 'grid' | 'kanban') {
+    if (!orgId || !detail || nextLayout === layout) return
+    setLayoutOverride(nextLayout)
+    try {
+      if (selectedView) {
+        await updateView.mutateAsync({ orgId, viewId: selectedView.id, config: viewConfig, layout: nextLayout })
+      } else {
+        const result = await saveView.mutateAsync({ orgId, objectId: detail.id, name: 'Default view', config: viewConfig, layout: nextLayout })
+        setSelectedViewId(result.view.id)
+        setLayoutOverride(null)
+      }
+    } catch (error) {
+      setLayoutOverride(null)
+      toast.error(error instanceof Error ? error.message : 'Could not save the layout. Try again.')
     }
   }
 
@@ -130,6 +151,8 @@ export function Records() {
               />
             }
             createRequestToken={createRequestToken}
+            layout={layout}
+            onLayoutChange={(nextLayout) => void changeLayout(nextLayout)}
           />
         )}
       </div>
