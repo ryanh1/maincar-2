@@ -11,6 +11,8 @@ interface GridColors {
   activeCallAccent: string
   activeCallTint: string
   recentCallTint: string
+  changeHighlightTint: string
+  changeHighlightDot: string
 }
 
 const FALLBACK: GridColors = {
@@ -24,6 +26,8 @@ const FALLBACK: GridColors = {
   activeCallAccent: '#0284c7',
   activeCallTint: '#e0f2fe',
   recentCallTint: '#f0f9ff',
+  changeHighlightTint: '#eef2ff',
+  changeHighlightDot: '#4f46e5',
 }
 
 function readGridColors(): GridColors {
@@ -41,6 +45,8 @@ function readGridColors(): GridColors {
     activeCallAccent: read('--status-active', FALLBACK.activeCallAccent),
     activeCallTint: read('--status-active-tint', FALLBACK.activeCallTint),
     recentCallTint: read('--status-active-faded-tint', FALLBACK.recentCallTint),
+    changeHighlightTint: read('--change-highlight-tint', FALLBACK.changeHighlightTint),
+    changeHighlightDot: read('--change-highlight-dot', FALLBACK.changeHighlightDot),
   }
 }
 

@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import type { ReactNode } from 'react'
 
 import type { AttributeDef } from '@/lib/crmTypes'
-import { reorderColumnGroup, toRecordListQuery, useViewConfig } from './viewConfig'
+import { createViewConfig, reorderColumnGroup, toRecordListQuery, useViewConfig } from './viewConfig'
 
 const attributes = [
   { id: 'first-name', slug: 'firstName', name: 'First name' },
@@ -148,6 +148,30 @@ describe('viewConfig', () => {
     const { result } = renderHook(() => useViewConfig(attributes), { wrapper: teamScopeWrapper })
 
     expect(result.current[0].teamScope).toEqual({ teamIds: ['team-revenue'], leadUserIds: ['user-jordan'] })
+  })
+
+  it('persists and shares the change-highlight mode, window, and changed-row switch', () => {
+    const { result } = renderHook(
+      () => {
+        const [config, updateConfig] = useViewConfig(attributes)
+        return { config, updateConfig, search: useLocation().search }
+      },
+      { wrapper },
+    )
+
+    expect(createViewConfig(attributes).changeHighlight).toEqual({ mode: 'off', days: 7, onlyChangedRows: false })
+
+    act(() => {
+      result.current.updateConfig((current) => ({
+        ...current,
+        changeHighlight: { mode: 'on', days: 30, onlyChangedRows: true },
+      }))
+    })
+
+    expect(result.current.config.changeHighlight).toEqual({ mode: 'on', days: 30, onlyChangedRows: true })
+    const encoded = new URLSearchParams(result.current.search).get('v')
+    expect(encoded).not.toBeNull()
+    expect(JSON.parse(atob(encoded!))).toMatchObject({ changeHighlight: { mode: 'on', days: 30, onlyChangedRows: true } })
   })
 
   it('keeps display-only grid controls live in the route config', () => {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
@@ -62,9 +62,51 @@ describe('GridViewToolbar', () => {
     renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={vi.fn()} />)
 
     expect(screen.queryByRole('button', { name: 'Sort' })).not.toBeInTheDocument()
-    for (const name of ['Fields', 'Filter', 'Group', 'Row height', 'Freeze']) {
+    for (const name of ['Fields', 'Filter', 'Changes', 'Group', 'Row height', 'Freeze']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
+  })
+
+  it('turns on change highlights, selects the window, and keeps changed-row mode opt-in', async () => {
+    const user = userEvent.setup()
+    const onConfigChange = vi.fn()
+    const config = createViewConfig(attributes)
+
+    const view = renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={onConfigChange} />)
+
+    await user.click(screen.getByRole('button', { name: 'Changes' }))
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Highlight changes' }))
+    const enabledUpdate = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    const enabledConfig = enabledUpdate(config)
+    expect(enabledConfig.changeHighlight).toEqual({ mode: 'on', days: 7, onlyChangedRows: false })
+    view.rerender(<GridViewToolbar attributes={attributes} config={enabledConfig} onConfigChange={onConfigChange} />)
+
+    await user.click(screen.getByRole('button', { name: 'Changes' }))
+    await user.click(await screen.findByText('Last 30 days'))
+    const windowUpdate = onConfigChange.mock.calls[1][0] as (current: typeof config) => typeof config
+    const windowConfig = windowUpdate(enabledConfig)
+    expect(windowConfig.changeHighlight).toEqual({ mode: 'on', days: 30, onlyChangedRows: false })
+    view.rerender(<GridViewToolbar attributes={attributes} config={windowConfig} onConfigChange={onConfigChange} />)
+
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Show only changed rows' }))
+    const rowsUpdate = onConfigChange.mock.calls[2][0] as (current: typeof config) => typeof config
+    expect(rowsUpdate(windowConfig).changeHighlight).toEqual({ mode: 'on', days: 30, onlyChangedRows: true })
+  })
+
+  it('accepts a bounded custom change window', async () => {
+    const user = userEvent.setup()
+    const onConfigChange = vi.fn()
+    const config = createViewConfig(attributes)
+
+    renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={onConfigChange} />)
+    await user.click(screen.getByRole('button', { name: 'Changes' }))
+    const input = await screen.findByRole('spinbutton', { name: 'Custom change window in days' })
+    await user.clear(input)
+    await user.type(input, '14')
+    fireEvent.blur(input)
+
+    const customWindowUpdate = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
+    expect(customWindowUpdate(config).changeHighlight.days).toBe(14)
   })
 
   it('writes field visibility, grouping, row height, and grid lines through the shared config', async () => {

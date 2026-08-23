@@ -114,6 +114,37 @@ export interface ListRecordsResponse {
   totalCount: number
 }
 
+/** One changed cell in a bounded window, summarized by the field-history reader. */
+export interface FieldChange {
+  recordId: string
+  attributeId: string
+  changeCount: number
+  previousValue: unknown
+  currentValue: unknown
+  changedAt: string
+}
+
+export interface GetFieldChangesResponse {
+  changes: FieldChange[]
+}
+
+export interface FieldHistoryEntry {
+  id: string
+  recordId: string
+  attribute: string
+  oldValue: unknown
+  newValue: unknown
+  changedByUserId: string | null
+  changeSource: string
+  reason: string | null
+  changedAt: string
+}
+
+export interface GetFieldHistoryResponse {
+  history: FieldHistoryEntry[]
+  nextCursor: string | null
+}
+
 export type CrmObject = ObjectDef
 
 export interface CrmList {
