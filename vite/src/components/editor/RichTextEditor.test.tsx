@@ -58,7 +58,7 @@ function lastHtml(onChange: ReturnType<typeof vi.fn>): string {
 
 describe('RichTextEditor', () => {
   it('uses Linkify’s built-in mailto support instead of registering it as custom', () => {
-    const link = buildEditorExtensions({ placeholder: 'Write a message' }).find(
+    const link = buildEditorExtensions({ placeholder: 'Write a message', getMentionItems: () => [] }).find(
       (extension) => extension.name === 'link',
     )
 
@@ -142,6 +142,33 @@ describe('RichTextEditor', () => {
     await waitFor(() =>
       expect(bodyOf().querySelector('p')).not.toHaveClass('is-editor-empty'),
     )
+  })
+
+  it('inserts a rename-safe mention chip from the grouped @ picker', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <RichTextEditor
+        label="Message"
+        onChange={onChange}
+        mentionItems={[
+          { id: 'user-ada', label: 'Ada Lovelace', kind: 'teammate', detail: 'ada@example.com' },
+          { id: 'company-acme', label: 'Acme', kind: 'company', detail: 'Company' },
+        ]}
+      />,
+    )
+
+    bodyOf().focus()
+    await user.keyboard('@ada')
+    expect(await screen.findByRole('option', { name: /Ada Lovelace/ })).toBeInTheDocument()
+    await user.click(screen.getByRole('option', { name: /Ada Lovelace/ }))
+
+    await waitFor(() => {
+      const html = lastHtml(onChange)
+      expect(html).toContain('data-id="user-ada"')
+      expect(html).toContain('data-mention-kind="teammate"')
+      expect(html).toContain('@Ada Lovelace')
+    })
   })
 
   describe('marks round-trip through the toolbar', () => {

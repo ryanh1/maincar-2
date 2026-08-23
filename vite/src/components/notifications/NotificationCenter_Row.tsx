@@ -119,7 +119,11 @@ function RowActions({ notification, view, pending, onAction }: { notification: N
 }
 
 function sourcePathFor(notification: Notification): string | null {
-  if (notification.source.status !== 'available' || notification.source.type !== 'call' || !notification.source.route) return null
-  const match = notification.source.route.match(/\/calls\/([^/]+)$/)
-  return match ? `/calls/${match[1]}` : null
+  if (notification.source.status !== 'available' || !notification.source.route) return null
+  const call = notification.source.route.match(/\/calls\/([^/]+)$/)
+  if (notification.source.type === 'call') return call ? `/calls/${call[1]}` : null
+
+  const note = notification.source.route.match(/\/records\/([^/?]+)(\?.*)?$/)
+  if (notification.source.type === 'note') return note ? `/records/${note[1]}${note[2] ?? ''}` : null
+  return null
 }

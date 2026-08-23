@@ -33,9 +33,14 @@ function nonBlankString(value: unknown): string | null {
 }
 
 /**
- * Extract mention IDs exclusively from TipTap's structured `mention` nodes.
+ * Extract teammate IDs exclusively from structured TipTap `mention` nodes.
  * Plain text such as "@sam" never becomes a recipient, and attributes are never
- * recursively inspected, so only the editor's canonical `attrs.id` is trusted.
+ * recursively inspected. A contact/company/deal chip is a record link, never a
+ * user notification, so only the editor's canonical `attrs.kind === 'teammate'`
+ * plus its `attrs.id` is trusted. Mentions written before chips gained a
+ * `kind` attribute are legacy teammate mentions, so they retain their
+ * established validation and notification semantics. Explicit record kinds
+ * are never recipients.
  */
 export function extractTipTapMentionUserIds(content: unknown): string[] {
   const ids: string[] = []
@@ -53,7 +58,9 @@ export function extractTipTapMentionUserIds(content: unknown): string[] {
 
     const record = node as { type?: unknown; attrs?: unknown; content?: unknown }
     if (record.type === 'mention' && record.attrs !== null && typeof record.attrs === 'object') {
-      const userId = nonBlankString((record.attrs as { id?: unknown }).id)
+      const attrs = record.attrs as { id?: unknown; kind?: unknown }
+      const userId =
+        attrs.kind === undefined || attrs.kind === 'teammate' ? nonBlankString(attrs.id) : null
       if (userId && !seenIds.has(userId)) {
         seenIds.add(userId)
         ids.push(userId)

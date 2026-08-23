@@ -78,6 +78,32 @@ describe('NotificationCenter', () => {
     await waitFor(() => expect(screen.getByText('Maya mentioned you')).toBeInTheDocument())
   })
 
+  it('links a note mention back to the record that owns the note', async () => {
+    const noteMention = {
+      ...notification,
+      source: {
+        status: 'available' as const,
+        type: 'note',
+        title: 'You were mentioned in a note',
+        preview: 'Please review the account plan.',
+        route: '/orgs/org-1/records/company?recordId=company-1',
+      },
+    }
+    jsonFetchMock.mockImplementation((url: string) => {
+      if (url.includes('read=false')) return Promise.resolve({ notifications: [], total: 1, page: 1, limit: 1 })
+      return Promise.resolve({ notifications: [noteMention], total: 1, page: 1, limit: 25 })
+    })
+
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationCenter />)
+    await user.click(await screen.findByRole('button', { name: 'Open notifications. 1 unread.' }))
+
+    expect(await screen.findByRole('link', { name: 'You were mentioned in a note' })).toHaveAttribute(
+      'href',
+      '/records/company?recordId=company-1',
+    )
+  })
+
   it('switches to the archived view and applies a bulk action to selected rows', async () => {
     const user = userEvent.setup()
     renderWithProviders(<NotificationCenter />)

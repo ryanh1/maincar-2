@@ -47,6 +47,7 @@ export const SANITIZED_ALLOWED_TAGS = [
   'em',
   'u',
   'a',
+  'span',
   'ul',
   'ol',
   'li',
@@ -62,6 +63,10 @@ export const SANITIZED_ALLOWED_TAGS = [
  * gap by stripping all three from anything that is not an anchor.
  */
 export const SANITIZED_ANCHOR_ATTR = ['href', 'target', 'rel'] as const
+
+/** Inert identity metadata on one structured TipTap mention chip. */
+export const SANITIZED_MENTION_ATTR = ['data-type', 'data-id', 'data-label', 'data-mention-kind'] as const
+const MENTION_KINDS = new Set(['teammate', 'contact', 'company', 'deal'])
 
 /** The only schemes an `href` may use. The server's `ALLOWED_SCHEMES`. */
 export const SANITIZED_ALLOWED_SCHEMES = ['http', 'https', 'mailto'] as const
@@ -93,7 +98,7 @@ const EXTRA_FORBID_CONTENTS = ['textarea', 'option', 'object', 'embed'] as const
 
 const OPTIONS: Config = {
   ALLOWED_TAGS: [...SANITIZED_ALLOWED_TAGS],
-  ALLOWED_ATTR: [...SANITIZED_ANCHOR_ATTR],
+  ALLOWED_ATTR: [...SANITIZED_ANCHOR_ATTR, ...SANITIZED_MENTION_ATTR],
   ALLOWED_URI_REGEXP: ALLOWED_URI,
   // DOMPurify runs `ALLOWED_URI_REGEXP` against EVERY attribute value, not just
   // the ones that hold a URL, so without this `target="_blank"` and
@@ -103,11 +108,11 @@ const OPTIONS: Config = {
   // words. Neither attribute ever holds a URL, so nothing is loosened.
   ADD_URI_SAFE_ATTR: ['target', 'rel'],
   ADD_FORBID_CONTENTS: [...EXTRA_FORBID_CONTENTS],
-  // `aria-*` and `data-*` are allowed by default and are not on the server's
-  // list, so they are turned off rather than left to be stripped by a later
-  // reader who wonders why they are there.
+  // `aria-*` remain prohibited. Mention metadata uses `data-*`, so the hook
+  // below removes every data attribute except the exact four allowed on a
+  // validated mention span.
   ALLOW_ARIA_ATTR: false,
-  ALLOW_DATA_ATTR: false,
+  ALLOW_DATA_ATTR: true,
   ALLOW_UNKNOWN_PROTOCOLS: false,
   // Unwrap a disallowed tag and keep its text, except for the forbidden-contents
   // list above. This is the server's `disallowedTagsMode: 'discard'`.
@@ -138,11 +143,30 @@ function getPurifier(): DOMPurify {
   const instance = createDOMPurify(window)
 
   instance.addHook('afterSanitizeAttributes', (node) => {
-    if (node.nodeName.toLowerCase() !== 'a') {
-      // The per-tag half of the allow-list DOMPurify has no setting for.
-      for (const name of SANITIZED_ANCHOR_ATTR) node.removeAttribute(name)
-      return
+    const tagName = node.nodeName.toLowerCase()
+    const allowedAttributes =
+      tagName === 'a'
+        ? SANITIZED_ANCHOR_ATTR
+        : tagName === 'span'
+          ? SANITIZED_MENTION_ATTR
+          : []
+
+    // DOMPurify's `ALLOW_DATA_ATTR` is global, while our contract is per tag.
+    // Removing by enumeration means a future `data-*` addition cannot quietly
+    // become a stored attribute on a link, paragraph, or invalid mention.
+    for (const attribute of Array.from(node.attributes)) {
+      if (!(allowedAttributes as readonly string[]).includes(attribute.name)) node.removeAttribute(attribute.name)
     }
+
+    if (tagName === 'span') {
+      const id = node.getAttribute('data-id')?.trim()
+      const label = node.getAttribute('data-label')?.trim()
+      const kind = node.getAttribute('data-mention-kind')?.trim()
+      if (node.getAttribute('data-type') !== 'mention' || !id || !label || !kind || !MENTION_KINDS.has(kind)) {
+        for (const name of SANITIZED_MENTION_ATTR) node.removeAttribute(name)
+      }
+    }
+    if (tagName !== 'a') return
     // A link that opens a new tab must never hand the opener a live `window`
     // reference. The server writes exactly this string, so a stored link and a
     // re-sanitised one are the same bytes, which is what keeps the output

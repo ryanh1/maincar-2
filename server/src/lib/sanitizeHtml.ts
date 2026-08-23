@@ -37,14 +37,38 @@ import sanitizeHtmlLib from 'sanitize-html'
  * produce (SPEC-composer-body.md → 2): bold, italic, underline, a link, and the
  * two list types, in paragraphs.
  */
-export const ALLOWED_TAGS = ['p', 'br', 'strong', 'em', 'u', 'a', 'ul', 'ol', 'li']
+export const ALLOWED_TAGS = ['p', 'br', 'strong', 'em', 'u', 'a', 'span', 'ul', 'ol', 'li']
 
 /**
  * The only attributes that survive, per tag. Nothing carries `style`, `class`,
  * `id`, `data-*`, or any `on*` handler — and `a` is the only tag with
  * attributes at all.
  */
-export const ALLOWED_ATTR: Record<string, string[]> = { a: ['href', 'target', 'rel'] }
+export const MENTION_ATTR = ['data-type', 'data-id', 'data-label', 'data-mention-kind']
+export const ALLOWED_ATTR: Record<string, string[]> = {
+  a: ['href', 'target', 'rel'],
+  // TipTap serializes a mention to a span. These are inert identity metadata,
+  // not presentation or executable attributes; the note route re-validates a
+  // teammate ID against the current organization before it creates an inbox row.
+  span: MENTION_ATTR,
+}
+
+const MENTION_KINDS = new Set(['teammate', 'contact', 'company', 'deal'])
+
+function validMentionAttributes(attribs: Record<string, string>): Record<string, string> {
+  const id = attribs['data-id']?.trim()
+  const label = attribs['data-label']?.trim()
+  const kind = attribs['data-mention-kind']?.trim()
+  if (attribs['data-type'] !== 'mention' || !id || !label || !kind || !MENTION_KINDS.has(kind)) {
+    return {}
+  }
+  return {
+    'data-type': 'mention',
+    'data-id': id.slice(0, 191),
+    'data-label': label.slice(0, 200),
+    'data-mention-kind': kind,
+  }
+}
 
 /**
  * The only URL schemes an `href` may use.
@@ -111,6 +135,7 @@ const OPTIONS: sanitizeHtmlLib.IOptions = {
       }
       return { tagName, attribs }
     },
+    span: (tagName, attribs) => ({ tagName, attribs: validMentionAttributes(attribs) }),
   },
 }
 

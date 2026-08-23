@@ -23,6 +23,7 @@ const useCreateRecord = vi.hoisted(() => vi.fn(() => ({ mutateAsync: createMutat
 const dataEditorScrollTo = vi.hoisted(() => vi.fn())
 const useDialerMock = vi.hoisted(() => vi.fn())
 vi.mock('@/hooks/crm', () => ({ useRecordWindow, useGetActivity, useUpdateRecordValue, useCreateRecord }))
+vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => <div data-testid="record-note-composer" /> }))
 
 vi.mock('@/components/dialer/dialerContext', () => ({ useDialer: useDialerMock }))
 

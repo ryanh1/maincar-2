@@ -9,6 +9,7 @@ import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { parseOptions } from './cellBuilder'
 import { FieldValueEditor } from './FieldValueEditor'
 import { OptionChip } from './OptionChip'
+import { RecordNoteComposer } from './RecordNoteComposer'
 import { formatCellValue } from './recordCellValue'
 
 // The three standard objects the activity feed can be scoped to
@@ -103,6 +104,8 @@ export function RecordPeekDrawer({
               })}
             </dl>
           </section>
+
+          {record && <RecordNoteComposer orgId={orgId} object={object} record={record} />}
 
           <section className="border-b border-border p-4">
             <h3 className="mb-2 text-xs font-medium text-muted-foreground">Related</h3>

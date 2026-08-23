@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Table2 } from 'lucide-react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/PageHeader'
@@ -20,6 +20,7 @@ import { Records_SavedViewControls } from './Records_SavedViewControls'
  */
 export function Records() {
   const { slug } = useParams<{ slug: string }>()
+  const [searchParams] = useSearchParams()
   const { org } = useAuth()
   const orgId = org?.id ?? null
 
@@ -114,6 +115,7 @@ export function Records() {
             orgId={orgId}
             object={detail}
             attributes={detail.attributes}
+            initialRecordId={searchParams.get('recordId')}
             viewConfig={viewConfig}
             onViewConfigChange={setViewConfig}
             toolbarLeading={

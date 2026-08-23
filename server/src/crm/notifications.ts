@@ -15,6 +15,16 @@ import type { Prisma, PrismaClient } from '../generated/prisma/client.js'
 export type NotificationWriterClient = Pick<PrismaClient, '$transaction'>
 
 /**
+ * The transaction-shaped half of the writer. Sources that already have a
+ * transaction — for example a note plus its activity row — use this so their
+ * source row and its inbox event cannot commit independently.
+ */
+export type NotificationWriterTransactionClient = Pick<
+  Prisma.TransactionClient,
+  'membership' | 'notificationObject' | 'notification'
+>
+
+/**
  * The deliberately narrow fallback retained after a source is deleted or becomes
  * inaccessible. It is plain text only — never source HTML, rich text, or a raw
  * record payload — so the inbox has a safe unavailable-source representation.
@@ -101,6 +111,19 @@ export async function fanOutNotification(
   client: NotificationWriterClient,
   event: NotificationEvent,
 ): Promise<FanOutNotificationResult> {
+  return client.$transaction((tx) => fanOutNotificationInTransaction(tx, event))
+}
+
+/**
+ * Fan an event out inside a source-owned transaction.
+ *
+ * This intentionally shares the exact validation and idempotency behaviour of
+ * `fanOutNotification`; the wrapper above only supplies the transaction.
+ */
+export async function fanOutNotificationInTransaction(
+  tx: NotificationWriterTransactionClient,
+  event: NotificationEvent,
+): Promise<FanOutNotificationResult> {
   const orgId = requiredString(event.orgId, 'orgId', 191)
   const eventKey = requiredString(event.eventKey, 'eventKey', 400)
   const actorUserId = requiredString(event.actorUserId, 'actorUserId', 191)
@@ -115,62 +138,60 @@ export async function fanOutNotification(
   const recipientUserIds = [...new Set(event.recipientUserIds.map((id) => requiredString(id, 'recipient user id', 191)))]
   const membershipCandidates = [...new Set([actorUserId, ...recipientUserIds])]
 
-  return client.$transaction(async (tx) => {
-    // This validates BOTH sides of the authority boundary from the same org-scoped
-    // source: an event cannot name a foreign actor or write a foreign recipient.
-    const activeMembers = await tx.membership.findMany({
-      where: { orgId, isActive: true, userId: { in: membershipCandidates } },
-      select: { userId: true },
-    })
-    const activeUserIds = new Set(activeMembers.map((member) => member.userId))
-    if (!activeUserIds.has(actorUserId)) {
-      throw new NotificationEventError('actorUserId must be an active member of orgId.')
-    }
-
-    const validRecipientUserIds = recipientUserIds.filter(
-      (userId) => userId !== actorUserId && activeUserIds.has(userId),
-    )
-    const rejectedRecipientUserIds = recipientUserIds.filter(
-      (userId) => userId !== actorUserId && !activeUserIds.has(userId),
-    )
-
-    // `update: {}` is intentional. An event key names one immutable event, so a
-    // retry must retain its original safe snapshot and never rewrite its identity.
-    const notificationObject = await tx.notificationObject.upsert({
-      where: { orgId_eventKey: { orgId, eventKey } },
-      create: {
-        orgId,
-        eventKey,
-        actorUserId,
-        verb,
-        objectType,
-        objectId,
-        sourceSnapshot: sourceSnapshot as unknown as Prisma.InputJsonValue,
-      },
-      update: {},
-      select: { id: true },
-    })
-
-    if (validRecipientUserIds.length > 0) {
-      await tx.notification.createMany({
-        data: validRecipientUserIds.map((recipientUserId) => ({
-          orgId,
-          notificationObjectId: notificationObject.id,
-          recipientUserId,
-          readAt: null,
-          archivedAt: null,
-          snoozedUntil: null,
-        })),
-        // The database's per-object recipient key is the race-safe idempotency
-        // guard when two retries pass membership validation concurrently.
-        skipDuplicates: true,
-      })
-    }
-
-    return {
-      notificationObjectId: notificationObject.id,
-      recipientUserIds: validRecipientUserIds,
-      rejectedRecipientUserIds,
-    }
+  // This validates BOTH sides of the authority boundary from the same org-scoped
+  // source: an event cannot name a foreign actor or write a foreign recipient.
+  const activeMembers = await tx.membership.findMany({
+    where: { orgId, isActive: true, userId: { in: membershipCandidates } },
+    select: { userId: true },
   })
+  const activeUserIds = new Set(activeMembers.map((member) => member.userId))
+  if (!activeUserIds.has(actorUserId)) {
+    throw new NotificationEventError('actorUserId must be an active member of orgId.')
+  }
+
+  const validRecipientUserIds = recipientUserIds.filter(
+    (userId) => userId !== actorUserId && activeUserIds.has(userId),
+  )
+  const rejectedRecipientUserIds = recipientUserIds.filter(
+    (userId) => userId !== actorUserId && !activeUserIds.has(userId),
+  )
+
+  // `update: {}` is intentional. An event key names one immutable event, so a
+  // retry must retain its original safe snapshot and never rewrite its identity.
+  const notificationObject = await tx.notificationObject.upsert({
+    where: { orgId_eventKey: { orgId, eventKey } },
+    create: {
+      orgId,
+      eventKey,
+      actorUserId,
+      verb,
+      objectType,
+      objectId,
+      sourceSnapshot: sourceSnapshot as unknown as Prisma.InputJsonValue,
+    },
+    update: {},
+    select: { id: true },
+  })
+
+  if (validRecipientUserIds.length > 0) {
+    await tx.notification.createMany({
+      data: validRecipientUserIds.map((recipientUserId) => ({
+        orgId,
+        notificationObjectId: notificationObject.id,
+        recipientUserId,
+        readAt: null,
+        archivedAt: null,
+        snoozedUntil: null,
+      })),
+      // The database's per-object recipient key is the race-safe idempotency
+      // guard when two retries pass membership validation concurrently.
+      skipDuplicates: true,
+    })
+  }
+
+  return {
+    notificationObjectId: notificationObject.id,
+    recipientUserIds: validRecipientUserIds,
+    rejectedRecipientUserIds,
+  }
 }

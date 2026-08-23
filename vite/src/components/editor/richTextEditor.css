@@ -57,6 +57,57 @@
   cursor: pointer;
 }
 
+.tiptap span[data-type='mention'] {
+  border-radius: 9999px;
+  background: var(--accent);
+  color: var(--primary);
+  padding: 0 0.25rem;
+  font-weight: 500;
+}
+
+.mention-suggestion-menu {
+  width: 18rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--popover);
+  box-shadow: var(--shadow-md);
+  padding: 0.25rem;
+}
+
+.mention-suggestion-heading {
+  margin: 0.25rem 0.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.mention-suggestion-option {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  border-radius: 0.375rem;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.mention-suggestion-option:hover,
+.mention-suggestion-option.is-selected {
+  background: var(--accent);
+}
+
+.mention-suggestion-label {
+  color: var(--foreground);
+  font-size: 0.875rem;
+}
+
+.mention-suggestion-detail {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
 /* The placeholder. TipTap marks the empty first node with `is-editor-empty` and
    carries the text in `data-placeholder`, so the string lives in the component
    and this rule only says where it goes. `float` plus `height: 0` keeps it out

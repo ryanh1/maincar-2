@@ -16,7 +16,7 @@ const documentWith = (...ids: string[]) => ({
       type: 'paragraph',
       content: [
         { type: 'text', text: 'Please review ' },
-        ...ids.map((id) => ({ type: 'mention', attrs: { id, label: `Teammate ${id}` } })),
+        ...ids.map((id) => ({ type: 'mention', attrs: { id, label: `Teammate ${id}`, kind: 'teammate' } })),
       ],
     },
   ],
@@ -57,15 +57,29 @@ describe('TipTap teammate mentions', () => {
           type: 'paragraph',
           content: [
             { type: 'text', text: '@not-a-mention' },
-            { type: 'mention', attrs: { id: 'member-1' } },
-            { type: 'mention', attrs: { id: 'member-1' } },
-            { type: 'mention', attrs: { id: 'member-2' } },
+            { type: 'mention', attrs: { id: 'member-1', kind: 'teammate' } },
+            { type: 'mention', attrs: { id: 'member-1', kind: 'teammate' } },
+            { type: 'mention', attrs: { id: 'member-2', kind: 'teammate' } },
+            { type: 'mention', attrs: { id: 'legacy-member' } },
           ],
         },
       ],
     }
 
-    expect(extractTipTapMentionUserIds(document)).toEqual(['member-1', 'member-2'])
+    expect(extractTipTapMentionUserIds(document)).toEqual(['member-1', 'member-2', 'legacy-member'])
+  })
+
+  it('does not turn linked record chips into notification recipients', () => {
+    expect(extractTipTapMentionUserIds({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [
+          { type: 'mention', attrs: { id: 'company-1', label: 'Acme', kind: 'company' } },
+          { type: 'mention', attrs: { id: 'contact-1', label: 'Ada Contact', kind: 'contact' } },
+        ],
+      }],
+    })).toEqual([])
   })
 
   it('resolves only active members of the source org and rejects forged, foreign, and inactive IDs', async () => {

@@ -18,10 +18,16 @@
  * line clean is what makes the deferred merge-field work a wrapper rather than
  * a rewrite.
  */
-import type { Extensions } from '@tiptap/core'
+import { mergeAttributes, type Extensions } from '@tiptap/core'
 import Link from '@tiptap/extension-link'
+import Mention from '@tiptap/extension-mention'
 import Placeholder from '@tiptap/extension-placeholder'
+import { ReactRenderer } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
+import type { SuggestionProps } from '@tiptap/suggestion'
+
+import { MentionSuggestionMenu, type MentionSuggestionMenuHandle } from './MentionSuggestionMenu'
+import { filterMentionSuggestions, type MentionSuggestion } from './mentionResolver'
 
 /**
  * The tags the editor is allowed to emit. The same list the server enforces.
@@ -31,7 +37,7 @@ import StarterKit from '@tiptap/starter-kit'
  * `RichTextEditor.test.tsx` asserts the editor's real output against this array,
  * so the copy cannot drift without a red test.
  */
-export const EDITOR_ALLOWED_TAGS = ['p', 'br', 'strong', 'em', 'u', 'a', 'ul', 'ol', 'li'] as const
+export const EDITOR_ALLOWED_TAGS = ['p', 'br', 'strong', 'em', 'u', 'a', 'span', 'ul', 'ol', 'li'] as const
 
 /** The only schemes an `href` may carry. Matches `ALLOWED_SCHEMES` on the server. */
 export const EDITOR_ALLOWED_SCHEMES = ['http', 'https', 'mailto'] as const
@@ -144,6 +150,64 @@ const StorableLink = Link.extend({
 interface EditorExtensionsOptions {
   /** Shown while the document is empty. Rendered by `richTextEditor.css`. */
   placeholder: string
+  /** Reads the live catalog without rebuilding an editor just to refresh a picker. */
+  getMentionItems: () => MentionSuggestion[]
+}
+
+/** Stable target kind carried with the node, not inferred from a renameable label. */
+const MaincarMention = Mention.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      kind: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-mention-kind'),
+        renderHTML: (attributes) =>
+          typeof attributes.kind === 'string' ? { 'data-mention-kind': attributes.kind } : {},
+      },
+    }
+  },
+})
+
+function buildMentionExtension(getMentionItems: () => MentionSuggestion[]) {
+  return MaincarMention.configure({
+    HTMLAttributes: { class: 'mention' },
+    renderText: ({ node }) => `@${node.attrs.label ?? node.attrs.id}`,
+    renderHTML: ({ node, options }) => [
+      'span',
+      mergeAttributes(options.HTMLAttributes, { 'data-mention-kind': (node.attrs as { kind?: string }).kind ?? '' }),
+      `@${node.attrs.label ?? node.attrs.id}`,
+    ],
+    suggestion: {
+      items: ({ query }) => filterMentionSuggestions(getMentionItems(), query).slice(0, 24),
+      command: ({ editor, range, props }) => {
+        const selected = props as unknown as MentionSuggestion
+        editor
+          .chain()
+          .focus()
+          .insertContentAt(range, { type: 'mention', attrs: { id: selected.id, label: selected.label, kind: selected.kind } })
+          .insertContent(' ')
+          .run()
+      },
+      render: () => {
+        let component: ReactRenderer<MentionSuggestionMenuHandle, SuggestionProps<MentionSuggestion, MentionSuggestion>> | null = null
+        let unmount: (() => void) | undefined
+        return {
+          onStart: (props) => {
+            component = new ReactRenderer(MentionSuggestionMenu, { editor: props.editor, props })
+            unmount = props.mount(component.element)
+          },
+          onUpdate: (props) => component?.updateProps(props),
+          onKeyDown: (props) => component?.ref?.onKeyDown(props.event) ?? false,
+          onExit: () => {
+            unmount?.()
+            component?.destroy()
+            component = null
+          },
+        }
+      },
+    },
+  })
 }
 
 /**
@@ -158,7 +222,7 @@ interface EditorExtensionsOptions {
  * reason: a link needs a URL from outside the editor, so the host listens for
  * the key on the wrapper instead and keeps this list free of anything live.
  */
-export function buildEditorExtensions({ placeholder }: EditorExtensionsOptions): Extensions {
+export function buildEditorExtensions({ placeholder, getMentionItems }: EditorExtensionsOptions): Extensions {
   return [
     StarterKit.configure({
       // OFF, because the server's allow-list has no tag for any of them.
@@ -199,6 +263,7 @@ export function buildEditorExtensions({ placeholder }: EditorExtensionsOptions):
       // What this refuses is a scheme we do not allow: `javascript:alert(1)`.
       isAllowedUri: (url, { defaultValidate }) => defaultValidate(url) && hasAllowedScheme(url),
     }),
+    buildMentionExtension(getMentionItems),
     Placeholder.configure({ placeholder }),
   ]
 }
