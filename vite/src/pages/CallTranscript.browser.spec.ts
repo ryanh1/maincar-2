@@ -26,10 +26,27 @@ const calls = [
 
 const detail = {
   ...calls[0], destinationState: 'DC', recordingEnabled: true,
-  // The server upload worker owns media storage coverage. Keep this browser
-  // fixture local and deterministic by exercising the transcript surface only.
-  recordingUrl: null,
-  transcript: 'Hello, this is the final Deepgram transcript.',
+  recordingUrl: '/__fixtures/call-review.wav',
+  transcript: 'Hello there. The renewal works.',
+  review: {
+    crm: { person: null, company: null, deal: null },
+    recording: { state: 'ready', source: { kind: 'audio', url: '/__fixtures/call-review.wav', expiresAt: '2026-08-24T01:00:00.000Z' } },
+    transcript: { state: 'ready', pass: { id: 'pass-fixture', provider: 'fixture', plainText: 'Hello there. The renewal works.', segments: [
+      { id: 'segment-1', position: 0, speakerKey: 'rep', startMs: 0, endMs: 1_200, text: 'Hello there.', words: [
+        { word: 'Hello', punctuatedWord: 'Hello', startMs: 0, endMs: 400 },
+        { word: 'there', punctuatedWord: 'there.', startMs: 500, endMs: 1_000 },
+      ] },
+      { id: 'segment-2', position: 1, speakerKey: 'buyer', startMs: 1_400, endMs: 2_700, text: 'The renewal works.', words: [
+        { word: 'The', punctuatedWord: 'The', startMs: 1_400, endMs: 1_600 },
+        { word: 'renewal', punctuatedWord: 'renewal', startMs: 1_650, endMs: 2_000 },
+        { word: 'works', punctuatedWord: 'works.', startMs: 2_050, endMs: 2_500 },
+      ] },
+    ] } },
+    speakers: [
+      { id: 'speaker-1', speakerKey: 'rep', displayName: 'Fixture Rep', source: 'call-user', confidence: 1, confirmedAt: null, manualOverride: false, person: null },
+      { id: 'speaker-2', speakerKey: 'buyer', displayName: 'Morgan Lee', source: 'manual', confidence: 1, confirmedAt: null, manualOverride: true, person: null },
+    ],
+  },
 }
 
 const unavailableDetail = {
@@ -40,18 +57,52 @@ const noSpeechDetail = {
   ...calls[2], destinationState: 'DC', recordingEnabled: true, recordingUrl: null, transcript: '',
 }
 
+function silentWavDataUrl(seconds: number): string {
+  const sampleRate = 8_000
+  const dataLength = sampleRate * seconds * 2
+  const bytes = new Uint8Array(44 + dataLength)
+  const view = new DataView(bytes.buffer)
+  const writeText = (offset: number, value: string) => value.split('').forEach((character, index) => {
+    bytes[offset + index] = character.charCodeAt(0)
+  })
+  writeText(0, 'RIFF')
+  view.setUint32(4, 36 + dataLength, true)
+  writeText(8, 'WAVEfmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * 2, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
+  writeText(36, 'data')
+  view.setUint32(40, dataLength, true)
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768))
+  }
+  return `data:audio/wav;base64,${btoa(binary)}`
+}
+
 test('shows the final transcript for an eligible recording and an honest unavailable state for the other path', async ({ page }) => {
   const consoleErrors: string[] = []
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text())
   })
 
+  const audioUrl = silentWavDataUrl(4)
+  const timedDetail = {
+    ...detail,
+    recordingUrl: audioUrl,
+    review: { ...detail.review, recording: { ...detail.review.recording, source: { ...detail.review.recording.source, url: audioUrl } } },
+  }
+
   await page.route('**/api/orgs/org-fixture/calls**', async (route) => {
     const pathname = new URL(route.request().url()).pathname
     if (pathname.endsWith('/calls')) {
       return route.fulfill({ json: { calls, total: calls.length, page: 1, limit: 25 } })
     }
-    if (pathname.endsWith('/calls/call-eligible')) return route.fulfill({ json: { call: detail } })
+    if (pathname.endsWith('/calls/call-eligible')) return route.fulfill({ json: { call: timedDetail } })
     if (pathname.endsWith('/calls/call-no-speech')) return route.fulfill({ json: { call: noSpeechDetail } })
     return route.fulfill({ json: { call: unavailableDetail } })
   })
@@ -64,8 +115,24 @@ test('shows the final transcript for an eligible recording and an honest unavail
   await expect(page.getByText('None')).toBeVisible()
 
   await page.getByRole('link', { name: '+12015550111' }).click()
-  await expect(page.getByText('Hello, this is the final Deepgram transcript.')).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Timed transcript' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Hello, 00:00' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Copy transcript' })).toBeVisible()
+
+  const renewalWord = page.getByRole('button', { name: 'renewal, 00:01' })
+  await renewalWord.scrollIntoViewIfNeeded()
+  await renewalWord.click()
+  await expect.poll(() => page.locator('audio').evaluate((audio) => (audio as HTMLAudioElement).currentTime)).toBeCloseTo(1.65, 2)
+
+  await page.getByRole('searchbox', { name: 'Search transcript' }).fill('renewal')
+  await expect(page.getByText('1 of 1')).toBeVisible()
+  await expect(page.getByTestId('speaker-ribbon-marker-transcript-search-0')).toBeVisible()
+
+  await page.getByRole('region', { name: 'Timed transcript' }).hover()
+  await page.mouse.wheel(0, 200)
+  await expect(page.getByRole('button', { name: 'Jump to current' })).toBeVisible()
+  await page.getByRole('button', { name: 'Jump to current' }).click()
+  await expect(page.getByRole('button', { name: 'Jump to current' })).toHaveCount(0)
 
   await page.getByRole('link', { name: 'Back' }).click()
   await page.getByRole('link', { name: '+12015550122' }).click()
