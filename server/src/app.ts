@@ -55,6 +55,7 @@ import voicemailGreetingRouter from './routes/voicemailGreeting.js'
 import voicemailsRouter from './routes/voicemails.js'
 import webPushSubscriptionsRouter from './routes/webPushSubscriptions.js'
 import undoEntriesRouter from './routes/undoEntries.js'
+import adminSyncHealthRouter from './routes/adminSyncHealth.js'
 
 // The app is assembled here and started in index.ts. Keeping them apart is what
 // lets supertest import the app without binding a port.
@@ -88,6 +89,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api', invitationsRouter)
 
 app.use('/api/auth', authRouter)
+app.use('/api/admin', adminSyncHealthRouter)
 app.use('/api/call-alert-settings', callAlertSettingsRouter)
 app.use('/api/notification-delivery-settings', notificationDeliverySettingsRouter)
 app.use('/api/notification-preferences', notificationPreferencesRouter)

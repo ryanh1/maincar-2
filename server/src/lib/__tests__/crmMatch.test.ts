@@ -4,6 +4,7 @@ import {
   candidateCompanyDomains,
   classifyParticipant,
   attachEmailMatchInTx,
+  attachMeetingMatchInTx,
   normalizeParticipantAddress,
   resolveParticipantsToCrm,
 } from '../crmMatch.js'
@@ -172,6 +173,7 @@ describe('attachEmailMatchInTx', () => {
       company: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
       deal: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
       activityEntry: { upsert: vi.fn().mockResolvedValue({ id: 'feed-1' }) },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-1' }) },
     }
     const email = {
       id: 'email-1', orgId: 'org-1', manualAttach: false, companyId: null, dealId: null,
@@ -203,6 +205,22 @@ describe('attachEmailMatchInTx', () => {
     expect(tx.person.updateMany).toHaveBeenCalledTimes(2)
     expect(tx.company.updateMany).toHaveBeenCalledOnce()
     expect(tx.deal.updateMany).toHaveBeenCalledOnce()
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orgId: 'org-1',
+        actorId: 'system',
+        action: 'activity_attach',
+        objectType: 'email',
+        objectId: 'email-1',
+        diffJson: {
+          targets: expect.arrayContaining([
+            expect.objectContaining({ targetType: 'person', targetId: 'person-1' }),
+            expect.objectContaining({ targetType: 'company', targetId: 'company-1' }),
+            expect.objectContaining({ targetType: 'deal', targetId: 'deal-1' }),
+          ]),
+        },
+      }),
+    })
   })
 
   it('does not overwrite an activity manually attached by a user', async () => {
@@ -212,5 +230,40 @@ describe('attachEmailMatchInTx', () => {
 
     await expect(attachEmailMatchInTx(tx as never, email as never, matched)).resolves.toBe(false)
     expect(tx.email.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('attachMeetingMatchInTx', () => {
+  it('writes a meeting attach audit in the same transaction slice', async () => {
+    const tx = {
+      meeting: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      meetingAttendee: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      activityLink: { findMany: vi.fn().mockResolvedValue([]), createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      person: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      company: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      deal: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      activityEntry: { upsert: vi.fn().mockResolvedValue({ id: 'feed-1' }) },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-1' }) },
+    }
+    const meeting = {
+      id: 'meeting-1', orgId: 'org-1', manualAttach: false, companyId: null, dealId: null,
+      organizerEmail: null, title: 'Discovery', description: null,
+      startsAt: new Date('2026-08-20T12:00:00.000Z'),
+      endsAt: new Date('2026-08-20T12:30:00.000Z'),
+      createdAt: new Date('2026-08-20T12:00:00.000Z'),
+    }
+
+    await expect(attachMeetingMatchInTx(tx as never, meeting as never, {
+      excluded: false, exclusion: null, primaryPersonId: null, primaryCompanyId: 'company-1',
+      personIds: [], personIdByAddress: {}, companyIds: ['company-1'], dealId: null,
+    })).resolves.toBe(true)
+
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'activity_attach',
+        objectType: 'meeting',
+        objectId: 'meeting-1',
+      }),
+    })
   })
 })

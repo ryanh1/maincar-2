@@ -63,6 +63,7 @@ model Org {
   emailTemplates     EmailTemplate[]
   oauthConnections   OAuthConnection[]
   mailAccounts       MailAccount[]
+  mailSyncHealthSamples MailSyncHealthSample[]
   calendarSources    CalendarSource[]
   calendarEvents     CalendarEvent[]
   calendarAttendees  CalendarEventAttendee[]
@@ -1273,6 +1274,9 @@ model MailAccount {
   mailSyncCursor     String?
   calendarSyncCursor String?
   lastSyncedAt       DateTime?
+  // Gmail mailbox watches do not have a callback-channel row, but they do carry
+  // an expiry that operations must see before the watch lapses.
+  gmailWatchExpiresAt DateTime?
 
   // The synced messages that came from this mailbox (Email.mailAccountId →
   // MailAccount). ADDITIVE ONLY (MAI-137 T9): nothing else on this model changes,
@@ -1289,6 +1293,7 @@ model MailAccount {
   // row set records their opaque ids, expiry, and callback proof so the daily
   // renewal job and unauthenticated webhook can both stay tenant-safe.
   pushSubscriptions MailPushSubscription[]
+  syncHealthSamples MailSyncHealthSample[]
 
   // The half-written emails queued to go out on this mailbox (MAI-188). Same
   // SetNull reasoning as emails above: disconnecting a mailbox orphans a rep's
@@ -1356,6 +1361,29 @@ model MailBackfill {
   updatedAt DateTime @updatedAt
 
   @@index([orgId, status])
+}
+
+// One compact sample per completed live mailbox poll. The console reads the
+// rolling window for full-resync and match rates; Axiom receives the same values
+// as event telemetry without becoming the only place support can inspect health.
+model MailSyncHealthSample {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Org @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  mailAccountId String
+  mailAccount   MailAccount @relation(fields: [mailAccountId], references: [id], onDelete: Cascade)
+
+  messagesScanned Int @default(0)
+  messagesMatched Int @default(0)
+  fullResync      Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, createdAt])
+  @@index([mailAccountId, createdAt])
 }
 
 // -----------------------------------------------------------------------------

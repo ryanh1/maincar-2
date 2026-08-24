@@ -42,6 +42,19 @@ export const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$
 // at boot so local/unit environments do not pretend they can receive push traffic.
 export const GOOGLE_PUBSUB_TOPIC = process.env.GOOGLE_PUBSUB_TOPIC ?? ''
 
+// --- Axiom observability ---
+// Ingestion and control-plane tokens stay separate so the steady-state worker
+// token can have dataset-ingest permission only. The control token is needed
+// only to create the standard failed-job monitor at process start.
+export const AXIOM_URL = (process.env.AXIOM_URL ?? 'https://api.axiom.co').replace(/\/+$/, '')
+export const AXIOM_DATASET = process.env.AXIOM_DATASET ?? ''
+export const AXIOM_INGEST_TOKEN = process.env.AXIOM_INGEST_TOKEN ?? ''
+export const AXIOM_CONTROL_TOKEN = process.env.AXIOM_CONTROL_TOKEN ?? ''
+export const AXIOM_NOTIFIER_IDS = (process.env.AXIOM_NOTIFIER_IDS ?? '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean)
+
 // --- Web Push ---
 // Keys stay optional at boot so local/unit environments can exercise every other
 // route. The delivery adapter fails closed when a push-specific path needs them.
@@ -183,3 +196,4 @@ function optionalPositiveInteger(name: string, defaultValue: number): number {
 }
 
 export const CALL_CREATION_RATE_LIMIT = optionalPositiveInteger('CALL_CREATION_RATE_LIMIT', 3)
+export const AXIOM_FAILED_JOB_THRESHOLD = optionalPositiveInteger('AXIOM_FAILED_JOB_THRESHOLD', 5)

@@ -68,7 +68,7 @@ async function saveSubscription(input: {
 export async function renewMailPushSubscriptions(mailAccountId: string): Promise<void> {
   const account = await prisma.mailAccount.findFirst({
     where: { id: mailAccountId, user: { is: { enabled: true, memberships: { some: { isActive: true } } } } },
-    select: { id: true, provider: true, connectionId: true },
+    select: { id: true, orgId: true, provider: true, connectionId: true },
   })
   if (!account) return
 
@@ -76,7 +76,12 @@ export async function renewMailPushSubscriptions(mailAccountId: string): Promise
   if (account.provider === 'google') {
     if (!GOOGLE_PUBSUB_TOPIC) throw new Error('GOOGLE_PUBSUB_TOPIC is required to create Gmail watches.')
     const google = gmailClient(accessToken)
-    await google.watchMailbox!(GOOGLE_PUBSUB_TOPIC)
+    const mailbox = await google.watchMailbox!(GOOGLE_PUBSUB_TOPIC)
+    const gmailWatchExpiresAt = expiryFromEpoch(mailbox.expiration)
+    await prisma.mailAccount.updateMany({
+      where: { id: account.id, orgId: account.orgId },
+      data: { gmailWatchExpiresAt },
+    })
     const verificationToken = crypto.randomUUID()
     const channelId = crypto.randomUUID()
     const calendar = await google.watchCalendar!({

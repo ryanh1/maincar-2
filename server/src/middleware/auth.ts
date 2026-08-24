@@ -239,3 +239,16 @@ export function requireAdmin(
   }
   next()
 }
+
+/** Mount after `requireAuth`. Hide the operator surface from non-platform users. */
+export function requireSuperadmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (!req.user?.roles.includes('superadmin')) {
+    res.status(404).json({ error: 'Not found' })
+    return
+  }
+  next()
+}
