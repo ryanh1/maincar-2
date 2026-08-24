@@ -11,8 +11,15 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     membership: { findFirst: vi.fn() },
     company: { findFirst: vi.fn() },
     deal: { findFirst: vi.fn() },
+    person: { findFirst: vi.fn() },
+    record: { findFirst: vi.fn() },
     activityEntry: { findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn() },
     call: { findFirst: vi.fn() },
+    email: { findFirst: vi.fn() },
+    smsMessage: { findFirst: vi.fn() },
+    meeting: { findFirst: vi.fn() },
+    note: { findFirst: vi.fn() },
+    task: { findFirst: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
 }))
@@ -25,6 +32,7 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
 }))
 
 import app from '../../app.js'
+import { ACTIVITY_SOURCE_TYPES } from '../../crm/activityFeed.js'
 
 const NOW = new Date('2026-08-22T18:30:00.000Z')
 const OCCURRED = new Date('2026-08-20T09:30:00.000Z')
@@ -139,6 +147,38 @@ describe('GET /api/orgs/:orgId/account-timeline — explicit account range', () 
         isDefault: false,
       },
     })
+  })
+
+  it('keeps the list request at one event query for every shipped source family', async () => {
+    prismaMock.activityEntry.findMany.mockResolvedValue(
+      ACTIVITY_SOURCE_TYPES.map((sourceType, index) => eventRow({
+        id: `event-${sourceType}`,
+        sourceType,
+        sourceId: `${sourceType}-source`,
+        occurredAt: new Date(OCCURRED.getTime() + index * 60_000),
+      })),
+    )
+
+    const res = await request(app)
+      .get(`${URL_A}?rootType=company&rootId=co-1&occurredFrom=2026-08-01&occurredTo=2026-09-01`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.events.map((event: { sourceType: string }) => event.sourceType)).toEqual(
+      ACTIVITY_SOURCE_TYPES,
+    )
+    expect(prismaMock.activityEntry.findMany).toHaveBeenCalledTimes(1)
+    expect(prismaMock.activityEntry.count).not.toHaveBeenCalled()
+    expect(prismaMock.company.findFirst).toHaveBeenCalledTimes(1)
+    expect(prismaMock.deal.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.person.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.record.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.call.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.email.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.smsMessage.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.meeting.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.note.findFirst).not.toHaveBeenCalled()
+    expect(prismaMock.task.findFirst).not.toHaveBeenCalled()
   })
 
   it('narrows a timeline to the verified caller when mine=true', async () => {

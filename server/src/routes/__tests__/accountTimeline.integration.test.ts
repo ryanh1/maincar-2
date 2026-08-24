@@ -1,8 +1,25 @@
 // Real-Postgres proofs for the account-timeline reader (MAI-274).
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest'
 
+import {
+  ACTIVITY_SOURCE_TYPES,
+  recordActivityInTx,
+  type ActivitySourceType,
+} from '../../crm/activityFeed.js'
 import type { PrismaClient } from '../../generated/prisma/client.js'
 import { createTestPrisma, seedCompany, seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
+
+const SHIPPED_TIMELINE_SOURCE_TYPES = [
+  'call',
+  'email',
+  'sms',
+  'meeting',
+  'note',
+  'stage_change',
+  'task',
+  'record_created',
+  'custom',
+] as const satisfies readonly ActivitySourceType[]
 
 describe('account-timeline read model (integration)', () => {
   let prisma: PrismaClient
@@ -29,6 +46,60 @@ describe('account-timeline read model (integration)', () => {
       },
     })
   }
+
+  it('reconciles every shipped source to one self-rendering account event', async () => {
+    expect(
+      ACTIVITY_SOURCE_TYPES,
+      'A new upstream activity family must be added to the account-timeline reconciliation fixture.',
+    ).toEqual(SHIPPED_TIMELINE_SOURCE_TYPES)
+
+    const { orgId } = await seedOrgWithAdmin(prisma)
+    const company = await seedCompany(prisma, { orgId })
+    const occurredAt = new Date('2026-08-20T09:30:00.000Z')
+
+    await prisma.$transaction(async (tx) => {
+      for (const [index, sourceType] of SHIPPED_TIMELINE_SOURCE_TYPES.entries()) {
+        const sourceId = `${sourceType}-source`
+        const event = {
+          orgId,
+          companyId: company.id,
+          sourceType,
+          sourceId,
+          summary: `${sourceType} first projection`,
+          occurredAt: new Date(occurredAt.getTime() + index * 60_000),
+          timeline: {
+            version: 1 as const,
+            title: `${sourceType} timeline event`,
+            intensity: 2 as const,
+            display: { companyName: 'Reconciliation account' },
+          },
+        }
+
+        await recordActivityInTx(tx, event)
+        await recordActivityInTx(tx, { ...event, summary: `${sourceType} refreshed projection` })
+      }
+    })
+
+    const rows = await prisma.activityEntry.findMany({
+      where: {
+        orgId,
+        companyId: company.id,
+        occurredAt: {
+          gte: new Date('2026-08-20T00:00:00.000Z'),
+          lt: new Date('2026-08-21T00:00:00.000Z'),
+        },
+      },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+    })
+
+    expect(rows).toHaveLength(SHIPPED_TIMELINE_SOURCE_TYPES.length)
+    expect(new Set(rows.map((row) => `${row.sourceType}:${row.sourceId}`)).size).toBe(
+      SHIPPED_TIMELINE_SOURCE_TYPES.length,
+    )
+    expect(rows.map((row) => row.sourceType).sort()).toEqual([...SHIPPED_TIMELINE_SOURCE_TYPES].sort())
+    expect(rows.every((row) => row.summary.endsWith('refreshed projection'))).toBe(true)
+    expect(rows.every((row) => row.timelineTitle.endsWith('timeline event'))).toBe(true)
+  })
 
   it('cannot cross a tenant boundary even when handed another organization’s account id', async () => {
     const a = await seedOrgWithAdmin(prisma)
