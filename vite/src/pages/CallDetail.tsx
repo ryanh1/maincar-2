@@ -39,7 +39,14 @@ export function CallDetail() {
       )}
 
       {call && org && <CallDetail_DispositionForm key={call.id} orgId={org.id} call={call} />}
-      {call && <CallDetail_Workbench call={call} timeZone={user?.timeZone} userId={user?.id} />}
+      {call && org && user && (
+        <CallDetail_Workbench
+          call={call}
+          orgId={org.id}
+          timeZone={user.timeZone}
+          userId={user.id}
+        />
+      )}
     </div>
   )
 }
