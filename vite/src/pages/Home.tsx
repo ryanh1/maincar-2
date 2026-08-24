@@ -1,5 +1,8 @@
+import { Home as HomeIcon } from 'lucide-react'
+
 import { APP_NAME } from '@/config'
-import { Separator } from '@/components/ui/separator'
+import { PageHeader } from '@/components/PageHeader'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { getRoleLabel } from '@/lib/roles'
 import { useAuth } from '@/providers/useAuth'
 
@@ -13,34 +16,39 @@ export function Home() {
 
   return (
     <div className="mx-auto w-full max-w-3xl">
-      <h1 className="display text-2xl font-bold">
-        Welcome back{user?.firstName ? `, ${user.firstName}` : ''}
-      </h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        This is the {APP_NAME} starting point. Build the first screen here.
-      </p>
+      <PageHeader icon={HomeIcon} title="Home" />
 
-      <Separator className="my-8" />
+      <div className="flex flex-col gap-6 pt-6">
+        <div className="flex flex-col gap-1">
+          <p className="text-[13px] font-medium text-text">
+            Welcome back{user?.firstName ? `, ${user.firstName}` : ''}
+          </p>
+          <p className="text-[13px] text-text-muted">
+            This is the {APP_NAME} starting point. Build the first screen here.
+          </p>
+        </div>
 
-      {/* House rule: main content sections are plain <section> elements with an
-          <h2> and a <Separator>. No bordered Card wrappers.
-          (CLAUDE.md → UI Components → Section Containers / Cards) */}
-      <section>
-        <h2 className="text-base font-semibold">Your account</h2>
-        <dl className="mt-4 grid grid-cols-[10rem_1fr] gap-y-3 text-sm">
-          <dt className="text-muted-foreground">Organization</dt>
-          <dd>{org?.name ?? 'Not set yet'}</dd>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-semibold">Your account</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <dl className="grid grid-cols-[10rem_1fr] gap-y-3 text-[13px]">
+              <dt className="text-text-muted">Organization</dt>
+              <dd>{org?.name ?? 'Not set yet'}</dd>
 
-          <dt className="text-muted-foreground">Email</dt>
-          <dd>{user?.email}</dd>
+              <dt className="text-text-muted">Email</dt>
+              <dd>{user?.email}</dd>
 
-          <dt className="text-muted-foreground">Role</dt>
-          <dd>{activeRoles.length > 0 ? activeRoles.map(getRoleLabel).join(', ') : 'No org yet'}</dd>
+              <dt className="text-text-muted">Role</dt>
+              <dd>{activeRoles.length > 0 ? activeRoles.map(getRoleLabel).join(', ') : 'No org yet'}</dd>
 
-          <dt className="text-muted-foreground">Time zone</dt>
-          <dd>{user?.timeZone ?? 'Not set yet'}</dd>
-        </dl>
-      </section>
+              <dt className="text-text-muted">Time zone</dt>
+              <dd>{user?.timeZone ?? 'Not set yet'}</dd>
+            </dl>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   )
 }

@@ -25,23 +25,26 @@ at the bottom.
 
 | # | Route / overlay | Component(s) | Meaningful states | Light · Desktop | Light · Mobile | Dark · Desktop | Dark · Mobile |
 |---|---|---|---|:-:|:-:|:-:|:-:|
-| 1 | `/home` — Home | `pages/Home.tsx` | single state (static account summary; no loading/error/empty variants exist today) | — | — | — | — |
+| 1 | `/home` — Home | `pages/Home.tsx` | single state (static account summary; no loading/error/empty variants exist today) | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
 | 2 | `/auth/sign-in` — Sign in | `pages/auth/SignIn.tsx` | default form, submit-error banner, submitting | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
 | 3 | `/auth/sign-up` — Sign up | `pages/auth/SignUp.tsx` | default form, submit-error banner, submitting | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
 | 4 | `/join/:token` — Invitation join | `pages/JoinOrg.tsx` | loading · dead-link (404) · unreachable/other-error (with retry) · wrong-account / server-mismatch · invited-person accept (with role badges) · no-account create-or-sign-in form | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
 | 5 | `/settings/profile` — Profile | `pages/Settings_ProfileTab.tsx` | default form (name, job title, read-only email), saving | **✅** (`settings-profile.html`) | — | — | — |
 | 6 | `/settings/members` — Members and invitations | `pages/Settings_MembersTab.tsx` + `Settings_Members_InviteForm.tsx`, `Settings_Members_PendingInvites.tsx`, `Settings_Members_RoleEditor.tsx` | default table, error, empty (`rows.length === 0`), invite-form dialog, pending-invites list, role editor | — | — | — | — |
 | 7 | `/settings/phone-numbers` — Phone numbers | `pages/Settings_PhoneNumbersTab.tsx` + `Settings_PhoneNumbers_BuyDialog.tsx`, `Settings_PhoneNumbers_AssignDialog.tsx` | default table, error, empty (`numbers.length === 0`), buy dialog, assign dialog | — | — | — | — |
-| 8 | Application shell | `components/ProtectedLayout.tsx`, `components/Sidebar.tsx` | signed-in chrome (nav rail + top bar), global `PageLoader` while auth resolves, mobile collapsed-sidebar toggle | partially implied by row 1 and row 5's shared nav rail (see note below) | — | — | — |
-| 9 | Organization switcher | `components/OrgSwitcher.tsx` | closed trigger, open dropdown (org list + "create organization"), switching (`switchOrg.isPending`) | closed trigger only, implied by rows 1 and 5 (see note below) | — | — | — |
-| 10 | Dialogs (shared primitive) | `components/ui/dialog.tsx`, used by 20+ feature dialogs across the app (lists, calendar, phone numbers, voicemail drops, data model, …) | open/close, form-inside-dialog, destructive confirm (`alert-dialog.tsx`) | — | — | — | — |
+| 8 | Application shell | `components/ProtectedLayout.tsx`, `components/Sidebar.tsx` | signed-in chrome (nav rail + top bar), global `PageLoader` while auth resolves, mobile collapsed-sidebar toggle | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
+| 9 | Organization switcher | `components/OrgSwitcher.tsx` | closed trigger, open dropdown (org list + "create organization"), switching (`switchOrg.isPending`) | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
+| 10 | Dialogs (shared primitive) | `components/ui/dialog.tsx`, used by 20+ feature dialogs across the app (lists, calendar, phone numbers, voicemail drops, data model, …) | open/close, form-inside-dialog, destructive confirm (`alert-dialog.tsx`) | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
 | 11 | Device check | `components/DeviceCheck.tsx`, `components/GreenRoom.tsx` | loading devices, mic/speaker selection, mic-denied, readiness-failed, retry | — | — | — | — |
 
-**Note on rows 8–9:** the mockup's nav rail (workspace name, favorites/records/lists
-sections, account footer) is present, unchanged, on *both* artboards — so it's a real
-observed value, just not an independent state the mockup calls out on its own. The
-organization switcher's **open dropdown** and the shell's **mobile/collapsed** treatment
-are not shown anywhere in the mockup.
+**Note on rows 1, 8–10 (MAI-545):** none of these cells were ever shown by the
+mockup — the nav rail visible on both artboards covers only the closed, desktop,
+signed-in-with-content state, not Home, the mobile/collapsed shell, the open
+switcher dropdown, or any dialog chrome. Per this file's own instruction below,
+[MAI-545](https://linear.app/maincar2/issue/MAI-545/apply-the-visual-redesign-to-shared-chrome-and-home)
+built these against the written rules in `design-system.md` (reconciled by
+[MAI-543](https://linear.app/maincar2/issue/MAI-543/reconcile-the-approved-mockup-with-global-ui-rules-and-shadcnui))
+rather than inferring an unseen look, the same approach MAI-544 used for rows 2–4.
 
 ## Bonus: a screen not in the named scope, but present in the mockup
 

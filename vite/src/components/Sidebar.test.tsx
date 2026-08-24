@@ -40,8 +40,8 @@ function brokenConnection(n: number): BrokenConnection {
 
 const ORG = { id: 'org-1', name: 'Acme' }
 
-function renderSidebar(onClose = vi.fn()) {
-  renderWithProviders(<Sidebar open={false} onClose={onClose} />)
+function renderSidebar(onClose = vi.fn(), initialEntries?: string[]) {
+  renderWithProviders(<Sidebar open={false} onClose={onClose} />, { initialEntries })
   return onClose
 }
 
@@ -71,6 +71,16 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Voicemail drops' })).toHaveAttribute('href', '/voicemail-drops')
     expect(screen.getByRole('button', { name: 'Inbox' })).toBeInTheDocument()
+  })
+
+  it('marks the current page as the selected row, never a solid fill', () => {
+    renderSidebar(vi.fn(), ['/home'])
+
+    const current = screen.getByRole('link', { name: 'Home' })
+    const other = screen.getByRole('link', { name: 'Calendar' })
+    expect(current.className).toContain('bg-primary/8')
+    expect(current.className).toContain('text-primary')
+    expect(other.className).not.toContain('bg-primary/8')
   })
 
   it('closes the mobile navigation when the rep opens Inbox', async () => {

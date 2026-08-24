@@ -54,6 +54,16 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
+  /* design-system.md's `bg-bg` / `bg-surface` / `bg-surface-2` / `text-text` /
+     `text-text-muted` names, aliased onto the tokens already above — several
+     components (EmptyState, AdminLayout, DeviceCheck_Meter, …) already reference
+     these names with no matching theme entry, so they were rendering as no-ops. */
+  --color-bg: var(--background);
+  --color-surface: var(--muted);
+  --color-surface-2: var(--accent);
+  --color-text: var(--foreground);
+  --color-text-muted: var(--muted-foreground);
+
   /* Brand accent — amber. The one true accent: stats, highlights, the
      "needs you" attention state. Distinct from shadcn's `--accent`, which is the
      neutral hover/selected surface above. */
