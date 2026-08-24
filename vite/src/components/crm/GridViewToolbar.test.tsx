@@ -61,7 +61,7 @@ describe('GridViewToolbar', () => {
 
     renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={vi.fn()} />)
 
-    for (const name of ['Fields', 'Sort', 'Filter', 'Changes', 'Group', 'Row height', 'Freeze']) {
+    for (const name of ['Fields', 'Sort', 'Filter', 'Changes', 'Group', 'Row height', 'Show grid lines', 'Freeze']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
   })
@@ -151,6 +151,32 @@ describe('GridViewToolbar', () => {
       groupBy: [],
       kanban: { groupAttributeId: 'status', visibleOptionValues: ['open'], cardAttributeIds: [] },
     }))
+  })
+
+  it('shows board controls without grid-only field, formatting, row, or freeze controls', () => {
+    const config = {
+      ...createViewConfig(attributes),
+      kanban: { groupAttributeId: 'status', visibleOptionValues: ['open'], cardAttributeIds: [] },
+    }
+
+    renderWithProviders(
+      <GridViewToolbar
+        attributes={attributes}
+        config={config}
+        layout="kanban"
+        onConfigChange={vi.fn()}
+        onFormat={vi.fn()}
+        selectedColumnIds={['status', 'owner']}
+      />,
+    )
+
+    for (const name of ['Sort', 'Filter', 'Changes', 'Group · 1', 'Card fields']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument()
+    }
+    for (const name of ['Fields', 'Format', 'Group columns', 'Row height', 'Show grid lines', 'Freeze']) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+    }
+    expect(screen.queryByRole('textbox', { name: 'Column group name' })).not.toBeInTheDocument()
   })
 
   it('names a group for adjacent selected columns through the shared config', async () => {
