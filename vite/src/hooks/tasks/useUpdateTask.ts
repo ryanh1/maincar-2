@@ -18,7 +18,9 @@ export function useUpdateTask() {
       jsonFetch<UpdateTaskResponse>(`/api/orgs/${orgId}/tasks/${taskId}`, {
         method: 'PATCH', body: JSON.stringify(update),
       }),
-    onSuccess: (_data, variables) =>
+    onSuccess: (_data, variables) => Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all(variables.orgId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.accountTimeline.all(variables.orgId) }),
+    ]),
   })
 }

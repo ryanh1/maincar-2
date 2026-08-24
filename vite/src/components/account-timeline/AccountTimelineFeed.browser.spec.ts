@@ -99,6 +99,51 @@ test('opens the selected event in the right-side detail panel without leaving th
   await expect(panel.getByRole('link', { name: 'Open full call' })).toHaveAttribute('href', '/calls/call-fixture')
 })
 
+test('renders every non-call source family from its scoped detail read', async ({ page }) => {
+  const events = [
+    { ...EVENT, id: 'email-event', sourceType: 'email', sourceId: 'email-1', title: 'Renewal email', direction: 'inbound' },
+    { ...EVENT, id: 'sms-event', sourceType: 'sms', sourceId: 'sms-1', title: 'Renewal text', direction: 'inbound' },
+    { ...EVENT, id: 'meeting-event', sourceType: 'meeting', sourceId: 'meeting-1', title: 'Renewal meeting', direction: null },
+    { ...EVENT, id: 'note-event', sourceType: 'note', sourceId: 'note-1', title: 'Renewal note', direction: null },
+    { ...EVENT, id: 'task-event', sourceType: 'task', sourceId: 'task-1', title: 'Renewal task', direction: null },
+    STAGE_EVENT,
+  ]
+  const details: Record<string, unknown> = {
+    'email-event': { type: 'email', id: 'email-1', subject: 'Renewal terms', bodyHtml: '<p>Current answer</p><blockquote>Earlier reply</blockquote>', bodyText: null, sentAt: '2026-08-22T18:00:00.000Z', receivedAt: null, participants: [{ id: 'p1', role: 'from', name: 'Ada', address: 'ada@example.com', personId: null }], attachments: [{ id: 'a1', filename: 'terms.pdf', contentType: 'application/pdf', sizeBytes: 2048, isInline: false, isStored: true }] },
+    'sms-event': { type: 'sms', id: 'sms-1', direction: 'inbound', fromE164: '+12025550123', toE164: '+12025550100', body: 'Can we renew?', status: 'received', sentAt: '2026-08-22T18:00:00.000Z', deliveredAt: null, createdAt: '2026-08-22T18:00:00.000Z', media: [], conversation: [{ id: 'sms-1', direction: 'inbound', fromE164: '+12025550123', toE164: '+12025550100', body: 'Can we renew?', status: 'received', sentAt: '2026-08-22T18:00:00.000Z', deliveredAt: null, createdAt: '2026-08-22T18:00:00.000Z', media: [] }] },
+    'meeting-event': { type: 'meeting', id: 'meeting-1', title: 'Renewal review', description: 'Review pricing.', isAllDay: false, startsAt: '2026-08-22T18:00:00.000Z', endsAt: '2026-08-22T18:30:00.000Z', startDate: null, endDate: null, timeZone: 'America/New_York', status: 'confirmed', location: 'Room 4', joinUrl: null, webLink: null, hasRecording: false, recordingProvider: null, transcriptStatus: null, attendees: [{ id: 'a1', email: 'ada@example.com', name: 'Ada', responseStatus: 'accepted' }] },
+    'note-event': { type: 'note', id: 'note-1', bodyText: 'Confirmed the rollout plan.', bodyJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Confirmed the rollout plan.' }] }] }, authorName: 'Grace Hopper', createdAt: '2026-08-22T18:00:00.000Z', updatedAt: '2026-08-22T18:00:00.000Z', links: [{ object: 'company', id: 'company-fixture' }] },
+    'task-event': { type: 'task', id: 'task-1', title: 'Send proposal', body: 'Use annual pricing.', taskType: 'email', priority: 'high', commitment: 'soft', assigneeUserId: 'user-1', assigneeName: 'Grace Hopper', dueAt: '2026-08-23T18:00:00.000Z', isDone: false, doneAt: null, links: [{ object: 'company', id: 'company-fixture' }] },
+    'stage-fixture': { type: 'stage_change', id: 'stage-fixture', dealId: 'deal-fixture', actorName: 'Grace Hopper', occurredAt: '2026-08-22T20:00:00.000Z', marker: STAGE_EVENT.marker },
+  }
+
+  await page.route('**/api/orgs/org-fixture/account-timeline**', async (route) => {
+    const eventId = Object.keys(details).find((id) => route.request().url().includes(`/${id}?`))
+    if (eventId) {
+      await route.fulfill({ json: { event: events.find((event) => event.id === eventId), detail: details[eventId], navigation: { previousEventId: null, nextEventId: null } } })
+      return
+    }
+    await route.fulfill({ json: { events, nextCursor: null, range: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', isDefault: true } } })
+  })
+
+  await page.goto('/__fixtures/account-timeline')
+  const feed = page.getByRole('feed', { name: 'Account activity' })
+  for (const journey of [
+    { title: 'Renewal email', dialog: 'Email', text: 'Current answer' },
+    { title: 'Renewal text', dialog: 'Text conversation', text: 'Can we renew?' },
+    { title: 'Renewal meeting', dialog: 'Meeting', text: 'Review pricing.' },
+    { title: 'Renewal note', dialog: 'Note', text: 'Confirmed the rollout plan.' },
+    { title: 'Renewal task', dialog: 'Task', text: 'Use annual pricing.' },
+    { title: 'Moved to Proposal', dialog: 'Stage change', text: 'Discovery' },
+  ]) {
+    await feed.getByRole('button', { name: journey.title, exact: true }).click()
+    const panel = page.getByRole('dialog', { name: journey.dialog })
+    await expect(panel.getByText(journey.text, { exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(panel).toBeHidden()
+  }
+})
+
 test('reframes the band and feed together and keeps the timeline keyboard-readable in light and dark themes', async ({ page }) => {
   const listRequests: string[] = []
   await page.route('**/api/orgs/org-fixture/account-timeline**', async (route) => {
@@ -198,7 +243,7 @@ test('keeps timeline shortcuts scoped, restores focus, and avoids overflow acros
         scrollWidth: element.scrollWidth,
       }))
       expect(panelOverflow.scrollWidth, `${theme} panel at ${width}px`).toBeLessThanOrEqual(panelOverflow.clientWidth)
-      await page.keyboard.press('ArrowRight')
+      await page.keyboard.press('j')
       await expect(page.getByRole('dialog', { name: 'stage change' })).toBeVisible()
       await page.keyboard.press('Escape')
       await expect(firstEvent).toBeFocused()

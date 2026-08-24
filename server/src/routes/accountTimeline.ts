@@ -8,6 +8,8 @@
 import { Router } from 'express'
 import { z } from 'zod'
 
+import { getRecordingDownloadUrl } from '../../dependencies/s3.js'
+import { logger } from '../../dependencies/logger.js'
 import prisma from '../db.js'
 import { ACTIVITY_DIRECTIONS, ACTIVITY_SOURCE_TYPES } from '../crm/activityFeed.js'
 import { mapEmailToDetailApi } from '../crm/emailActivity.js'
@@ -147,23 +149,78 @@ async function readTimelineDetail(entry: { sourceType: string; sourceId: string;
       const message = await prisma.smsMessage.findFirst({
         where: { id: sourceId, orgId }, include: { media: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } },
       })
-      return message && { type: 'sms', ...mapSmsToDetailApi(message) }
+      if (!message) return null
+      const conversation = await prisma.smsMessage.findMany({
+        where: {
+          orgId,
+          ...(message.personId
+            ? { personId: message.personId }
+            : {
+                OR: [
+                  { fromE164: message.fromE164, toE164: message.toE164 },
+                  { fromE164: message.toE164, toE164: message.fromE164 },
+                ],
+              }),
+        },
+        include: { media: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 100,
+      })
+      return {
+        type: 'sms',
+        ...mapSmsToDetailApi(message),
+        conversation: conversation.reverse().map(mapSmsToDetailApi),
+      }
     }
     case 'meeting': {
       const meeting = await prisma.meeting.findFirst({
         where: { id: sourceId, orgId }, include: { attendees: { orderBy: [{ createdAt: 'asc' }] } },
       })
-      return meeting && { type: 'meeting', ...mapMeetingToDetailApi(meeting) }
+      if (!meeting) return null
+      let recordingUrl: string | null = null
+      if (meeting.recordingUrl) {
+        try {
+          recordingUrl = await getRecordingDownloadUrl(meeting.recordingUrl)
+        } catch {
+          logger.warn({ orgId, meetingId: meeting.id }, 'could not sign a timeline meeting recording')
+        }
+      }
+      return { type: 'meeting', ...mapMeetingToDetailApi(meeting), recordingUrl }
     }
     case 'note': {
-      const note = await prisma.note.findFirst({ where: { id: sourceId, orgId, deletedAt: null } })
-      return note && { type: 'note', ...mapNoteToApi(note) }
+      const note = await prisma.note.findFirst({
+        where: { id: sourceId, orgId, deletedAt: null },
+        include: {
+          links: { select: { toObject: true, toId: true } },
+          author: { select: { firstName: true, lastName: true, preferredFirstName: true } },
+        },
+      })
+      return note && {
+        type: 'note',
+        ...mapNoteToApi(note),
+        authorName: note.author
+          ? [note.author.preferredFirstName || note.author.firstName, note.author.lastName].filter(Boolean).join(' ')
+          : null,
+      }
     }
     case 'task': {
-      const task = await prisma.task.findFirst({ where: { id: sourceId, orgId, deletedAt: null } })
+      const task = await prisma.task.findFirst({
+        where: { id: sourceId, orgId, deletedAt: null },
+        include: {
+          links: { select: { toObject: true, toId: true } },
+          assignee: { select: { firstName: true, lastName: true, preferredFirstName: true } },
+        },
+      })
       if (!task) return null
       const { type: taskType, ...taskDetail } = mapTaskToApi(task)
-      return { type: 'task', taskType, ...taskDetail }
+      return {
+        type: 'task',
+        taskType,
+        ...taskDetail,
+        assigneeName: task.assignee
+          ? [task.assignee.preferredFirstName || task.assignee.firstName, task.assignee.lastName].filter(Boolean).join(' ')
+          : null,
+      }
     }
     case 'stage_change': {
       // A stage change's source id is an immutable transition identity, not a
@@ -411,9 +468,17 @@ router.get(
     ])
 
     // --- Return response ---
+    const display = typeof entry.timelineDisplay === 'object' && entry.timelineDisplay !== null && !Array.isArray(entry.timelineDisplay)
+      ? entry.timelineDisplay as Record<string, unknown>
+      : {}
+
     res.json({
       event: mapTimelineEventToApi(entry),
-      detail,
+      detail: {
+        ...detail,
+        occurredAt: entry.occurredAt.toISOString(),
+        actorName: typeof display.actorName === 'string' ? display.actorName : null,
+      },
       navigation: { previousEventId: previous?.id ?? null, nextEventId: next?.id ?? null },
     })
   }),
