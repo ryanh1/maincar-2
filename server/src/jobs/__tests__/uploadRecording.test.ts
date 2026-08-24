@@ -65,6 +65,8 @@ import {
 const ROW = {
   id: 'call_1',
   orgId: 'org_1',
+  userId: 'user_1',
+  durationS: 73,
   recordingUrl: null as string | null,
   recordingStatus: 'pending',
 }
@@ -122,6 +124,22 @@ describe('uploadRecordingJob — happy path', () => {
     await uploadRecordingJob(PAYLOAD)
 
     expect(twilio.deleteRecording).toHaveBeenCalledWith(RECORDING_SID)
+  })
+
+  it('logs recording completion with call id, duration, and the stored object key', async () => {
+    await uploadRecordingJob(PAYLOAD)
+
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        event: 'dialer_recording_completed',
+        callId: ROW.id,
+        orgId: ROW.orgId,
+        userId: ROW.userId,
+        duration: ROW.durationS,
+        recordingUrl: OBJECT_KEY,
+      },
+      'upload recording: stored',
+    )
   })
 
   // The row must never point at an object that is not in S3 yet.
@@ -253,13 +271,23 @@ describe('uploadRecordingJob — permanent failures', () => {
   )
 
   it('logs the failure with the ids and the status, and no credentials', async () => {
-    twilio.fetchRecordingMp3.mockRejectedValue(twilioError(404))
+    twilio.fetchRecordingMp3.mockRejectedValue(
+      Object.assign(twilioError(404), { authToken: 'must-not-appear' }),
+    )
 
     await uploadRecordingJob(PAYLOAD)
 
     const [fields] = vi.mocked(logger.error).mock.calls.at(-1) ?? []
-    expect(fields).toMatchObject({ callId: ROW.id, orgId: ROW.orgId, status: 404 })
-    expect(JSON.stringify(fields)).not.toMatch(/authToken|auth_token|TWILIO_AUTH/i)
+    expect(fields).toMatchObject({
+      event: 'dialer_recording_failed',
+      callId: ROW.id,
+      orgId: ROW.orgId,
+      userId: ROW.userId,
+      errorType: 'Error',
+      stage: 'fetch-or-store',
+      status: 404,
+    })
+    expect(JSON.stringify(fields)).not.toMatch(/authToken|auth_token|TWILIO_AUTH|must-not-appear/i)
   })
 })
 

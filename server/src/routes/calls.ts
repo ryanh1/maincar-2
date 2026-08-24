@@ -959,9 +959,21 @@ router.post(
       throw error
     }
 
-    // Identifiers only — never the numbers, which are PII the row id already
-    // points to.
-    logger.info({ orgId, userId, callId: created.id }, 'queued an outbound call')
+    // Keep the field named `toE164` so the event stays queryable, but expose only
+    // the final four digits. The full destination is PII and already lives on the
+    // Call row for an authorized operator who needs it.
+    logger.info(
+      {
+        event: 'dialer_call_created',
+        route: 'POST /api/orgs/:orgId/calls',
+        requestId: req.id,
+        orgId,
+        userId,
+        callId: created.id,
+        toE164: `***${toE164.slice(-4)}`,
+      },
+      'queued an outbound call',
+    )
 
     // --- Return response ---
     res.status(201).json({ call: mapCallToApi(created) })
@@ -1029,7 +1041,19 @@ router.delete(
       return void res.status(400).json({ error: ALREADY_ENDED_ERROR })
     }
 
-    logger.info({ orgId, userId, callId: id }, 'hung up a call')
+    logger.info(
+      {
+        event: 'dialer_call_state_changed',
+        route: 'DELETE /api/orgs/:orgId/calls/:id',
+        requestId: req.id,
+        orgId,
+        userId,
+        callId: id,
+        oldStatus: call.status,
+        newStatus: 'canceled',
+      },
+      'dialer call state changed',
+    )
 
     // --- Return response ---
     // Re-read so the response carries the stored row, not a hand-patched copy.

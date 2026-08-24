@@ -10,7 +10,14 @@ import request from 'supertest'
 
 // vi.hoisted() builds the mocks, vi.mock() swaps the modules, and `app.js` is
 // imported LAST so the mocks are in place when its module graph loads.
-const { prismaMock, verifyTokenMock, mintVoiceAccessTokenMock, hangUpCallMock, presignMock } = vi.hoisted(() => ({
+const {
+  prismaMock,
+  verifyTokenMock,
+  mintVoiceAccessTokenMock,
+  hangUpCallMock,
+  presignMock,
+  loggerMock,
+} = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
@@ -47,9 +54,11 @@ const { prismaMock, verifyTokenMock, mintVoiceAccessTokenMock, hangUpCallMock, p
   mintVoiceAccessTokenMock: vi.fn(),
   hangUpCallMock: vi.fn(),
   presignMock: vi.fn(),
+  loggerMock: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
+vi.mock('../../../dependencies/logger.js', () => ({ logger: loggerMock }))
 vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   verifyFirebaseIdToken: verifyTokenMock,
   setFirebaseUserDisabled: vi.fn(),
@@ -884,6 +893,23 @@ describe('POST /api/orgs/:orgId/calls', () => {
     })
   })
 
+  it('logs call creation with tenant context and a masked destination', async () => {
+    await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
+
+    const [fields, message] = loggerMock.info.mock.calls.find(
+      ([candidate]) => candidate.event === 'dialer_call_created',
+    ) ?? []
+    expect(fields).toMatchObject({
+      event: 'dialer_call_created',
+      callId: 'call-1',
+      orgId: ORG_A,
+      userId: 'user-a',
+      toE164: '***0199',
+    })
+    expect(message).toBe('queued an outbound call')
+    expect(JSON.stringify(fields)).not.toContain(VALID_BODY.toE164)
+  })
+
   it('locks the caller’s active number FOR UPDATE before it counts calls in flight', async () => {
     await request(app).post(URL_A).set('Authorization', AUTH).send(VALID_BODY)
 
@@ -1345,6 +1371,17 @@ describe('DELETE /api/orgs/:orgId/calls/:id', () => {
     expect(res.body.call.id).toBe('call-1')
     expect(res.body.call.status).toBe('canceled')
     expect(res.body.call.endedAt).toBe(NOW.toISOString())
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'dialer_call_state_changed',
+        callId: 'call-1',
+        orgId: ORG_A,
+        userId: 'user-a',
+        oldStatus: 'in-progress',
+        newStatus: 'canceled',
+      }),
+      'dialer call state changed',
+    )
   })
 
   it('cancels a queued call that has no SID yet without calling Twilio', async () => {

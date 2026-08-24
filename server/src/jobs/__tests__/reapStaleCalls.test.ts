@@ -55,6 +55,7 @@ const NOW = new Date('2026-08-21T12:00:00.000Z')
 function staleRow(overrides: {
   id?: string
   orgId?: string
+  userId?: string
   status?: string
   twilioCallSid?: string | null
   updatedAt?: Date
@@ -62,6 +63,7 @@ function staleRow(overrides: {
   return {
     id: 'call_1',
     orgId: 'org_1',
+    userId: 'user_1',
     status: 'ringing',
     twilioCallSid: 'CA0123456789abcdef',
     updatedAt: new Date(NOW.getTime() - DIALED_STALE_MS - 1_000),
@@ -84,7 +86,7 @@ describe('reapStaleCallsJob — selection', () => {
         status: { in: ['queued', 'ringing', 'in-progress'] },
         updatedAt: { lt: new Date(NOW.getTime() - DIALED_STALE_MS) },
       },
-      select: { id: true, orgId: true, status: true, twilioCallSid: true, updatedAt: true },
+      select: { id: true, orgId: true, userId: true, status: true, twilioCallSid: true, updatedAt: true },
     })
   })
 
@@ -110,7 +112,15 @@ describe('reapStaleCallsJob — no Twilio SID to reconcile against', () => {
     })
     expect(result).toEqual({ scanned: 1, settled: 1 })
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ callId: row.id, reconciledFromTwilio: false, settledStatus: 'failed' }),
+      expect.objectContaining({
+        event: 'dialer_call_state_changed',
+        callId: row.id,
+        orgId: row.orgId,
+        userId: row.userId,
+        oldStatus: 'ringing',
+        newStatus: 'failed',
+        reconciledFromTwilio: false,
+      }),
       expect.stringContaining('settled a call stuck past the staleness threshold'),
     )
   })
@@ -131,7 +141,13 @@ describe('reapStaleCallsJob — reconciling against Twilio', () => {
     })
     expect(result).toEqual({ scanned: 1, settled: 1 })
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ reconciledFromTwilio: true, settledStatus: 'completed' }),
+      expect.objectContaining({
+        event: 'dialer_call_state_changed',
+        userId: row.userId,
+        oldStatus: 'ringing',
+        newStatus: 'completed',
+        reconciledFromTwilio: true,
+      }),
       expect.any(String),
     )
   })

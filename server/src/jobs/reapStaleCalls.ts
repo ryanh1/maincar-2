@@ -40,6 +40,7 @@ const BACKSTOP_STATUS = 'failed'
 interface StaleCallRow {
   id: string
   orgId: string
+  userId: string
   status: string
   twilioCallSid: string | null
   updatedAt: Date
@@ -76,7 +77,7 @@ async function settleStaleCall(call: StaleCallRow, now: Date): Promise<boolean> 
 
       if (mapped && !TERMINAL_CALL_STATUSES.has(mapped)) {
         logger.info(
-          { callId: call.id, orgId: call.orgId, twilioStatus: fetched.status, staleForMs },
+          { callId: call.id, orgId: call.orgId, userId: call.userId, twilioStatus: fetched.status, staleForMs },
           'stale-call reaper: Twilio still reports this call in flight, leaving it for the next sweep',
         )
         return false
@@ -89,7 +90,7 @@ async function settleStaleCall(call: StaleCallRow, now: Date): Promise<boolean> 
       }
     } catch (error) {
       logger.warn(
-        { callId: call.id, orgId: call.orgId, error, twilioStatus: twilioErrorStatus(error) },
+        { callId: call.id, orgId: call.orgId, userId: call.userId, error, twilioStatus: twilioErrorStatus(error) },
         'stale-call reaper: could not reconcile against Twilio, using the backstop status',
       )
     }
@@ -109,7 +110,7 @@ async function settleStaleCall(call: StaleCallRow, now: Date): Promise<boolean> 
 
   if (updated.count === 0) {
     logger.info(
-      { callId: call.id, orgId: call.orgId },
+      { callId: call.id, orgId: call.orgId, userId: call.userId },
       'stale-call reaper: call was already settled by the time this sweep got to it, skipping',
     )
     return false
@@ -117,10 +118,12 @@ async function settleStaleCall(call: StaleCallRow, now: Date): Promise<boolean> 
 
   logger.warn(
     {
+      event: 'dialer_call_state_changed',
       callId: call.id,
       orgId: call.orgId,
-      previousStatus: call.status,
-      settledStatus: finalStatus,
+      userId: call.userId,
+      oldStatus: call.status,
+      newStatus: finalStatus,
       reconciledFromTwilio,
       staleForMs,
     },
@@ -142,7 +145,7 @@ export async function reapStaleCallsJob(now: Date = new Date()): Promise<ReapSta
 
   const staleCalls = await prisma.call.findMany({
     where: { status: { in: IN_FLIGHT_STATUSES }, updatedAt: { lt: staleBefore } },
-    select: { id: true, orgId: true, status: true, twilioCallSid: true, updatedAt: true },
+    select: { id: true, orgId: true, userId: true, status: true, twilioCallSid: true, updatedAt: true },
   })
 
   let settled = 0
