@@ -126,7 +126,12 @@ async function handleInboundCall(
 
   if (!phoneNumber || !callSid) {
     logger.info(
-      { route: 'POST /api/twilio/voice', requestId: req.id, direction: params.Direction, toE164 },
+      {
+        route: 'POST /api/twilio/voice',
+        requestId: req.id,
+        direction: params.Direction,
+        toE164: toE164 ? `***${toE164.slice(-4)}` : undefined,
+      },
       'twilio voice webhook: not a recognized inbound call; returning unavailable TwiML',
     )
     res.status(200).type('text/xml').send(buildInboundUnavailableTwiml())
@@ -287,14 +292,25 @@ router.post(
     // the guard keeps a re-fetch from re-stamping a SID or re-timing startedAt.
     // updateMany scoped by orgId, never update-by-id: the tenant key carries the
     // boundary (rules/database-and-prisma.md).
-    await prisma.call.updateMany({
+    const advanced = await prisma.call.updateMany({
       where: { id: call.id, orgId: call.orgId, status: 'queued' },
       data: { status: 'ringing', startedAt: new Date(), twilioCallSid: callSid },
     })
-    logger.info(
-      { route: 'POST /api/twilio/voice', requestId: req.id, orgId: call.orgId, callId: call.id },
-      'browser call ringing; returning bridge TwiML',
-    )
+    if (advanced.count > 0) {
+      logger.info(
+        {
+          event: 'dialer_call_state_changed',
+          route: 'POST /api/twilio/voice',
+          requestId: req.id,
+          orgId: call.orgId,
+          userId: call.userId,
+          callId: call.id,
+          oldStatus: 'queued',
+          newStatus: 'ringing',
+        },
+        'dialer call state changed',
+      )
+    }
 
     // --- Return TwiML ---
     // Bridges the browser leg already on the line to the ONE destination number —
@@ -363,14 +379,30 @@ router.post(
       : null
     const mobileE164 = forwarding?.mobileE164
     const continuesToMobile = !!mobileE164
-    await prisma.call.updateMany({
+    const nextStatus = continuesToMobile ? 'ringing' : status
+    const updated = await prisma.call.updateMany({
       where: { id: call.id, orgId: call.orgId },
       data: {
-        status: continuesToMobile ? 'ringing' : status,
+        status: nextStatus,
         ...(continuesToMobile ? {} : { endedAt: new Date() }),
         ...(Number.isFinite(durationS) ? { durationS } : {}),
       },
     })
+    if (updated.count > 0 && nextStatus !== call.status) {
+      logger.info(
+        {
+          event: 'dialer_call_state_changed',
+          route: 'POST /api/twilio/voice/inbound-result',
+          requestId: req.id,
+          orgId: call.orgId,
+          userId: call.userId,
+          callId: call.id,
+          oldStatus: call.status,
+          newStatus: nextStatus,
+        },
+        'dialer call state changed',
+      )
+    }
     if (status !== 'completed') {
       void queueCallWebPush({ userId: call.userId, event: 'missed', eventKey: `call:${call.id}:missed` }).catch((error) => {
         logger.error({ orgId: call.orgId, callId: call.id, error }, 'could not queue missed call web push')
@@ -511,8 +543,24 @@ router.post(
     // updateMany scoped by orgId, never update-by-id: the tenant key carries the
     // boundary (rules/database-and-prisma.md). Skipped when there is nothing to
     // write, so a bare ping does not churn updatedAt.
-    if (Object.keys(data).length > 0) {
-      await prisma.call.updateMany({ where: { id: call.id, orgId: call.orgId }, data })
+    const updated = Object.keys(data).length > 0
+      ? await prisma.call.updateMany({ where: { id: call.id, orgId: call.orgId }, data })
+      : null
+
+    if (updated && updated.count > 0 && mappedStatus && mappedStatus !== call.status) {
+      logger.info(
+        {
+          event: 'dialer_call_state_changed',
+          route: 'POST /api/twilio/voice/status',
+          requestId: req.id,
+          orgId: call.orgId,
+          userId: call.userId,
+          callId: call.id,
+          oldStatus: call.status,
+          newStatus: mappedStatus,
+        },
+        'dialer call state changed',
+      )
     }
 
     // --- Apply a deterministic dead-call disposition ---

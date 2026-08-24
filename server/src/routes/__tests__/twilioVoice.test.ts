@@ -23,6 +23,7 @@ const {
   queueUploadVoicemailMock,
   queueCallWebPushMock,
   getRecordingDownloadUrlMock,
+  loggerMock,
 } = vi.hoisted(() => ({
   prismaMock: {
     call: {
@@ -57,9 +58,11 @@ const {
   queueUploadVoicemailMock: vi.fn(),
   queueCallWebPushMock: vi.fn(),
   getRecordingDownloadUrlMock: vi.fn(),
+  loggerMock: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }))
 
 vi.mock('../../db.js', () => ({ default: prismaMock }))
+vi.mock('../../../dependencies/logger.js', () => ({ logger: loggerMock }))
 // The status callback kicks off the recording pipeline through this queue
 // function; mock it so the job (and its OpenAI/S3 imports) never load, and so the
 // enqueue can be asserted with its exact arguments.
@@ -281,6 +284,17 @@ describe('a call the browser Device originated (carries our callId)', () => {
     expect(args.data.twilioCallSid).toBe(CALL_SID)
     // update-by-id is never used for org-scoped data.
     expect(prismaMock.call.update).not.toHaveBeenCalled()
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'dialer_call_state_changed',
+        callId: 'call-1',
+        orgId: 'org-a',
+        userId: 'user-a',
+        oldStatus: 'queued',
+        newStatus: 'ringing',
+      }),
+      'dialer call state changed',
+    )
   })
 
   it('404s when no call matches the callId, and writes nothing', async () => {
@@ -320,6 +334,11 @@ describe('a request with no callId', () => {
     expect(res.status).toBe(200)
     expect(res.text).toContain('This number is not accepting calls. Please try again later.')
     expect(prismaMock.voicemail.upsert).not.toHaveBeenCalled()
+    const unavailableLog = loggerMock.info.mock.calls.find(
+      ([, message]) => message.includes('not a recognized inbound call'),
+    )?.[0]
+    expect(unavailableLog).toMatchObject({ toE164: '***0006' })
+    expect(JSON.stringify(unavailableLog)).not.toContain('+15005550006')
   })
 })
 
@@ -569,6 +588,17 @@ describe('inbound browser result', () => {
       }),
     )
     expect(prismaMock.voicemail.upsert).not.toHaveBeenCalled()
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'dialer_call_state_changed',
+        callId: 'call-1',
+        orgId: 'org-a',
+        userId: 'user-a',
+        oldStatus: 'ringing',
+        newStatus: 'completed',
+      }),
+      'dialer call state changed',
+    )
   })
 
   it('is idempotent when Twilio retries an unanswered browser-leg result', async () => {
@@ -832,6 +862,33 @@ describe('status callback — CallStatus → Call.status mapping', () => {
     expect(res.status).toBe(200)
     // Nothing to write: no known status, no duration.
     expect(prismaMock.call.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('logs each state change with the call id and exact old/new statuses', async () => {
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'ringing' })
+
+    const [fields, message] = loggerMock.info.mock.calls.find(
+      ([candidate]) => candidate.event === 'dialer_call_state_changed',
+    ) ?? []
+    expect(fields).toMatchObject({
+      event: 'dialer_call_state_changed',
+      callId: 'call-1',
+      orgId: 'org-a',
+      userId: 'user-a',
+      oldStatus: 'queued',
+      newStatus: 'ringing',
+    })
+    expect(message).toBe('dialer call state changed')
+  })
+
+  it('does not report a state change when Twilio repeats the stored status', async () => {
+    prismaMock.call.findFirst.mockResolvedValue(callRow({ status: 'ringing' }))
+
+    await postStatus({ CallSid: CALL_SID, CallStatus: 'ringing' })
+
+    expect(loggerMock.info.mock.calls.some(
+      ([fields]) => fields.event === 'dialer_call_state_changed',
+    )).toBe(false)
   })
 })
 

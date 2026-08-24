@@ -77,6 +77,11 @@ function isTransientFailure(status: number | null): boolean {
   return status === 429 || status >= 500
 }
 
+/** A bounded classifier for logs; provider error objects may carry credentials. */
+function errorType(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error
+}
+
 /**
  * Mark the recording upload failed.
  *
@@ -121,7 +126,7 @@ export async function uploadRecordingJob(
   // back here is what every write below is scoped to.
   const row = await prisma.call.findUnique({
     where: { id: callId },
-    select: { id: true, orgId: true, recordingUrl: true, recordingStatus: true },
+    select: { id: true, orgId: true, userId: true, durationS: true, recordingUrl: true, recordingStatus: true },
   })
 
   if (!row) {
@@ -162,7 +167,16 @@ export async function uploadRecordingJob(
       // Leave the row untouched and rethrow: pg-boss owns the retry, and the
       // idempotency guard above still holds if this attempt had in fact stored it.
       logger.warn(
-        { callId, orgId: row.orgId, status, retryCount: attempt.retryCount, error },
+        {
+          event: 'dialer_recording_retrying',
+          callId,
+          orgId: row.orgId,
+          userId: row.userId,
+          errorType: errorType(error),
+          stage: 'fetch-or-store',
+          status,
+          retryCount: attempt.retryCount,
+        },
         'upload recording: transient failure, handing it back to the queue',
       )
       throw error
@@ -171,7 +185,16 @@ export async function uploadRecordingJob(
     // Permanent, or transient with the retry budget spent. Either way this
     // recording is not coming down. Note what is NOT logged: no auth token.
     logger.error(
-      { callId, orgId: row.orgId, status, retryCount: attempt.retryCount, error },
+      {
+        event: 'dialer_recording_failed',
+        callId,
+        orgId: row.orgId,
+        userId: row.userId,
+        errorType: errorType(error),
+        stage: 'fetch-or-store',
+        status,
+        retryCount: attempt.retryCount,
+      },
       'upload recording: could not fetch or store the recording',
     )
     await markRecordingFailed(callId, row.orgId)
@@ -221,12 +244,29 @@ export async function uploadRecordingJob(
     await deleteRecording(recordingSid)
   } catch (error) {
     logger.warn(
-      { callId, orgId: row.orgId, error },
+      {
+        event: 'dialer_recording_cleanup_failed',
+        callId,
+        orgId: row.orgId,
+        userId: row.userId,
+        errorType: errorType(error),
+        stage: 'provider-delete',
+      },
       'upload recording: stored the recording but could not delete it from Twilio',
     )
   }
 
-  logger.info({ callId, orgId: row.orgId }, 'upload recording: stored')
+  logger.info(
+    {
+      event: 'dialer_recording_completed',
+      callId,
+      orgId: row.orgId,
+      userId: row.userId,
+      duration: row.durationS,
+      recordingUrl: objectKey,
+    },
+    'upload recording: stored',
+  )
 }
 
 /**
