@@ -93,3 +93,15 @@ Per MAI-542's acceptance criteria: each later visual-redesign issue links to thi
 marks which rows it covers as it ships. Do not check a row until the shipped screen has
 been compared against the mockup (where one exists) or against the written system
 requirements in MAI-509 (where the mockup is silent).
+
+## Shipped coverage
+
+- **[MAI-546](https://linear.app/maincar2/issue/MAI-546/apply-the-visual-redesign-to-settings-members-invitations-and-phone)**
+  shipped rows 5–7 (Profile, Members and invitations, Phone numbers). Row 5 was built
+  against `settings-profile.html` through [decision-list.md](./decision-list.md); rows 6–7
+  have no mockup cell (the matrix still reads `—` for them, per the legend), so they were
+  built against `design-system.md` and the decision list's written rules instead.
+  MAI-546 also changed the global `--primary` token from indigo (`#4f46e5`) to the
+  decision list's teal (`#0E7490`) — a deliberate, user-approved exception to keeping this
+  ticket scoped to Settings, since `--primary` is an app-wide token. Everything outside
+  Settings inherits the new color automatically; no other screen's markup changed.

@@ -75,8 +75,8 @@
 
 :root {
   --radius: 0.625rem;
-  --primary: #4f46e5; /* indigo-600 */
-  --primary-hover: #4338ca; /* indigo-700 */
+  --primary: #0e7490; /* cyan-700 — "ocean" accent (MAI-543/MAI-546) */
+  --primary-hover: #155e75; /* cyan-800 */
 
   /* Neutrals are TRUE COOL GRAY (slate), NEVER tinted with the brand hue.
      Tinting every surface with a few percent of indigo makes the whole app read
@@ -153,10 +153,10 @@
 }
 
 .dark {
-  /* Indigo-600 is too dark to read on a near-black surface, so dark mode steps
-     the brand up to indigo-500. */
-  --primary: #6366f1; /* indigo-500 */
-  --primary-hover: #818cf8; /* indigo-400 */
+  /* cyan-700 is too dark to read on a near-black surface, so dark mode steps
+     the brand up to cyan-500/400. */
+  --primary: #06b6d4; /* cyan-500 */
+  --primary-hover: #22d3ee; /* cyan-400 */
 
   /* Same discipline in dark: neutral cool slate-navy, NOT indigo-washed. */
   --background: #0a0f1a;

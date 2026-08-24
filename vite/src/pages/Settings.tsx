@@ -88,7 +88,7 @@ export function Settings() {
                 className={cn(
                   'flex items-center gap-3 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition-colors',
                   isActive
-                    ? 'bg-primary/10 font-medium text-primary'
+                    ? 'bg-primary/8 font-medium text-primary'
                     : 'text-text-muted hover:bg-surface-2 hover:text-text',
                 )}
               >

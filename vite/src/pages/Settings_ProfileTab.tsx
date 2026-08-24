@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RequiredAsterisk } from '@/components/ui/RequiredAsterisk'
@@ -37,69 +38,71 @@ export function Settings_ProfileTab() {
   }
 
   return (
-    <section>
-      <h2 className="text-base font-semibold">Your profile</h2>
-
-      {user && (
-        <div className="mt-4">
+    <Card>
+      <CardHeader className="border-b border-border">
+        <CardTitle className="text-sm font-semibold">Your profile</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-6">
+        {user && (
           <AvatarPhotoField
             name={`${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || user.email}
             avatarUrl={user.avatarUrl}
             upload={(blob) => updateAvatar.mutateAsync(blob).then(() => undefined)}
             label="profile"
           />
-        </div>
-      )}
+        )}
 
-      <form onSubmit={onSubmit} className="mt-6 flex max-w-sm flex-col gap-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <form onSubmit={onSubmit} className="flex max-w-sm flex-col gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="firstName">
+                First name <RequiredAsterisk />
+              </Label>
+              <Input
+                id="firstName"
+                required
+                autoComplete="given-name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="lastName">
+                Last name <RequiredAsterisk />
+              </Label>
+              <Input
+                id="lastName"
+                required
+                autoComplete="family-name"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+              />
+            </div>
+          </div>
+
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="firstName">
-              First name <RequiredAsterisk />
-            </Label>
+            <Label htmlFor="title">Job title</Label>
             <Input
-              id="firstName"
-              required
-              autoComplete="given-name"
-              value={firstName}
-              onChange={(e) => setFirstName(e.target.value)}
+              id="title"
+              autoComplete="organization-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
             />
           </div>
+
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="lastName">
-              Last name <RequiredAsterisk />
-            </Label>
-            <Input
-              id="lastName"
-              required
-              autoComplete="family-name"
-              value={lastName}
-              onChange={(e) => setLastName(e.target.value)}
-            />
+            <Label htmlFor="email">Email</Label>
+            {/* Read-only: the address is the Firebase identity, so changing it here
+                would put the row and the auth account out of step. */}
+            <Input id="email" value={user?.email ?? ''} disabled />
+            <p className="text-xs text-muted-foreground">This is your sign-in email.</p>
           </div>
-        </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="title">Job title</Label>
-          <Input
-            id="title"
-            autoComplete="organization-title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="email">Email</Label>
-          {/* Read-only: the address is the Firebase identity, so changing it here
-              would put the row and the auth account out of step. */}
-          <Input id="email" value={user?.email ?? ''} disabled />
-        </div>
-
-        <Button type="submit" className="self-start" disabled={updateProfile.isPending}>
-          {updateProfile.isPending ? 'Saving…' : 'Save changes'}
-        </Button>
-      </form>
-    </section>
+          <Button type="submit" className="mt-1 self-start" disabled={updateProfile.isPending}>
+            {updateProfile.isPending ? 'Saving…' : 'Save changes'}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   )
 }
