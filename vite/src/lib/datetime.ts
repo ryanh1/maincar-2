@@ -82,6 +82,21 @@ export function formatTime(value: string | Date, timeZone: string | null | undef
   }).format(date)
 }
 
+/** `2 hours ago` — exact, zone-labeled time belongs in the caller's hover title. */
+export function formatRelativeTime(value: string | Date, now = new Date()): string {
+  const date = typeof value === 'string' ? new Date(value) : value
+  if (Number.isNaN(date.getTime())) return ''
+
+  const differenceSeconds = Math.round((date.getTime() - now.getTime()) / 1000)
+  const elapsedSeconds = Math.abs(differenceSeconds)
+  if (elapsedSeconds < 60) return differenceSeconds > 0 ? 'In less than a minute' : 'Just now'
+
+  const formatter = new Intl.RelativeTimeFormat('en-US', { numeric: 'always' })
+  if (elapsedSeconds < 60 * 60) return formatter.format(Math.trunc(differenceSeconds / 60), 'minute')
+  if (elapsedSeconds < 24 * 60 * 60) return formatter.format(Math.trunc(differenceSeconds / (60 * 60)), 'hour')
+  return formatter.format(Math.trunc(differenceSeconds / (24 * 60 * 60)), 'day')
+}
+
 function timeZoneOffset(value: Date, timeZone: string): number {
   const offset = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
     .formatToParts(value)

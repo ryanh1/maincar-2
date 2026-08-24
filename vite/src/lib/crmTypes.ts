@@ -273,6 +273,7 @@ export interface FieldHistoryEntry {
   oldValue: unknown
   newValue: unknown
   changedByUserId: string | null
+  actor: { name: string; avatarUrl: string | null } | null
   changeSource: string
   reason: string | null
   changedAt: string

@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, vi } from 'vitest'
 
 import type { AttributeDef, ObjectDef, RecordRow, RelatedRecordGroup } from '@/lib/crmTypes'
+import { renderWithProviders } from '@/test/utils'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 
 const useGetRelatedRecords = vi.hoisted(() => vi.fn(() => ({ isPending: false, isError: false, data: { related: [] as RelatedRecordGroup[] } })))
@@ -10,6 +11,7 @@ const lifecycleMutateAsync = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 
 vi.mock('@/hooks/crm', () => ({
   useGetActivity: () => ({ isPending: false, isError: false, data: undefined }),
+  useGetFieldHistory: () => ({ data: { pages: [{ history: [], nextCursor: null }] }, isPending: false, isError: false, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn() }),
   useGetRelatedRecords,
   useUpdateRecordLifecycle: () => ({ mutateAsync: lifecycleMutateAsync, isPending: false }),
 }))
@@ -53,14 +55,14 @@ describe('RecordPeekDrawer', () => {
       dialerRightInsetPx: 64,
     })
 
-    render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={{ id: 'person-1', name: 'Ada', createdAt: '', updatedAt: '' }} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
+    renderWithProviders(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={{ id: 'person-1', name: 'Ada', createdAt: '', updatedAt: '' }} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
 
     expect(document.querySelector('[data-slot="sheet-content"]')).toHaveStyle({ right: '384px' })
   })
 
   it('offers a full-page record view', () => {
     const onOpenFullPage = vi.fn()
-    render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={{ id: 'person-1', name: 'Ada', createdAt: '', updatedAt: '' }} timeZone="America/New_York" position={null} onEdit={vi.fn()} onOpenFullPage={onOpenFullPage} />)
+    renderWithProviders(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={{ id: 'person-1', name: 'Ada', createdAt: '', updatedAt: '' }} timeZone="America/New_York" position={null} onEdit={vi.fn()} onOpenFullPage={onOpenFullPage} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand to full page' }))
 
@@ -79,7 +81,7 @@ describe('RecordPeekDrawer', () => {
       createdAt: '2026-08-22T00:00:00.000Z', updatedAt: '2026-08-22T00:00:00.000Z',
     }
 
-    render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={attributes} record={record} timeZone="America/New_York" position={null} onEdit={onEdit} />)
+    renderWithProviders(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={attributes} record={record} timeZone="America/New_York" position={null} onEdit={onEdit} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Engineer' }))
     const input = screen.getByRole('textbox', { name: 'Role' })
@@ -88,6 +90,18 @@ describe('RecordPeekDrawer', () => {
 
     expect(onEdit).toHaveBeenCalledWith(expect.objectContaining({ slug: 'role' }), 'Manager')
     expect(screen.getByRole('button', { name: 'London' })).toHaveFocus()
+  })
+
+  it('mounts field history beside each detail value', () => {
+    const attributes = [
+      attribute({ slug: 'name', name: 'Name', isIdentity: true }),
+      attribute({ slug: 'role', name: 'Role', sortOrder: 1 }),
+    ]
+    const record: RecordRow = { id: 'person-1', name: 'Ada', role: 'Engineer', createdAt: '', updatedAt: '' }
+
+    renderWithProviders(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={attributes} record={record} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
+
+    expect(screen.getByRole('button', { name: 'Show Role history' })).toBeInTheDocument()
   })
 
   it('opens related records in a stack, exposes a breadcrumb, and previews on hover', async () => {
@@ -119,7 +133,7 @@ describe('RecordPeekDrawer', () => {
       data: { related: objectId === 'people' ? [companyGroup] : objectId === 'companies' ? [dealGroup] : [] },
     }))
     const person: RecordRow = { id: 'person-1', name: 'Dana', createdAt: '', updatedAt: '' }
-    render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={person} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
+    renderWithProviders(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={person} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
 
     const related = screen.getByRole('button', { name: 'Open Acme' })
     await waitFor(() => expect(screen.getByText('People').parentElement?.querySelector('[data-icon-name="user"]')).not.toBeNull())
@@ -145,7 +159,7 @@ describe('RecordPeekDrawer', () => {
       createdAt: '2026-08-22T00:00:00.000Z', updatedAt: '2026-08-22T00:00:00.000Z',
     }
 
-    render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={attributes} record={record} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
+    renderWithProviders(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={attributes} record={record} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
 
     expect(screen.getByText('Archived')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Unarchive' }))
