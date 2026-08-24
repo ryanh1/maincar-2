@@ -11,7 +11,7 @@ export function useGetFieldHistory(
   attribute: string | null | undefined,
 ) {
   return useInfiniteQuery({
-    queryKey: queryKeys.records.fieldHistory(orgId ?? 'none', recordId ?? 'none', attribute ?? 'none'),
+    queryKey: queryKeys.fieldHistory(orgId ?? 'none', recordId ?? 'none', attribute ?? 'none'),
     enabled: !!orgId && !!recordId && !!attribute,
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) => jsonFetch<GetFieldHistoryResponse>(

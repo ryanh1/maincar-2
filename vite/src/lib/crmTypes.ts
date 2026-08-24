@@ -282,6 +282,21 @@ export interface GetFieldHistoryResponse {
   nextCursor: string | null
 }
 
+export interface ObjectImpactReference {
+  objectName: string
+  fieldName: string
+  count: number
+}
+
+export interface GetObjectImpactResponse {
+  recordCount: number
+  references: ObjectImpactReference[]
+}
+
+export interface GetAttributeImpactResponse {
+  valueCount: number
+}
+
 export type CrmObject = ObjectDef
 
 export interface CrmList {
