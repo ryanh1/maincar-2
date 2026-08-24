@@ -3,6 +3,7 @@ import { signInWithEmailAndPassword } from 'firebase/auth'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { APP_NAME, APP_SLOGAN } from '@/config'
+import { AuthCard } from '@/components/AuthCard'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -42,55 +43,11 @@ export function SignIn() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-1 items-center justify-center p-6">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <h1 className="display text-2xl font-bold">{APP_NAME}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{APP_SLOGAN}</p>
-        </div>
-
-        <form onSubmit={onSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="email">
-              Email <RequiredAsterisk />
-            </Label>
-            <Input
-              id="email"
-              type="email"
-              required
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="password">
-              Password <RequiredAsterisk />
-            </Label>
-            {/* No rule shown here: this password already exists, so a rule would
-                only be something to fail against. */}
-            <PasswordInput
-              id="password"
-              required
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
-
-          <Button type="submit" disabled={submitting}>
-            {submitting ? 'Signing in…' : 'Sign in'}
-          </Button>
-        </form>
-
-        <p className="mt-6 text-center text-sm text-muted-foreground">
+    <AuthCard
+      title={APP_NAME}
+      subtitle={APP_SLOGAN}
+      footer={
+        <>
           Do not have an account?{' '}
           <Link
             to="/auth/sign-up"
@@ -101,8 +58,49 @@ export function SignIn() {
           >
             Create one
           </Link>
-        </p>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <form onSubmit={onSubmit} className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="email">
+            Email <RequiredAsterisk />
+          </Label>
+          <Input
+            id="email"
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="password">
+            Password <RequiredAsterisk />
+          </Label>
+          {/* No rule shown here: this password already exists, so a rule would
+              only be something to fail against. */}
+          <PasswordInput
+            id="password"
+            required
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+
+        <Button type="submit" disabled={submitting}>
+          {submitting ? 'Signing in…' : 'Sign in'}
+        </Button>
+      </form>
+    </AuthCard>
   )
 }

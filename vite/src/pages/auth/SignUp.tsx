@@ -3,6 +3,7 @@ import { createUserWithEmailAndPassword } from 'firebase/auth'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
+import { AuthCard } from '@/components/AuthCard'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -48,51 +49,10 @@ export function SignUp() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-1 items-center justify-center p-6">
-      <div className="w-full max-w-sm">
-        <h1 className="display mb-8 text-center text-2xl font-bold">Create your {APP_NAME} account</h1>
-
-        <form onSubmit={onSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="email">
-              Email <RequiredAsterisk />
-            </Label>
-            <Input
-              id="email"
-              type="email"
-              required
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="password">
-              Password <RequiredAsterisk />
-            </Label>
-            <PasswordInput
-              id="password"
-              required
-              showRequirement
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
-
-          <Button type="submit" disabled={submitting}>
-            {submitting ? 'Creating account…' : 'Create account'}
-          </Button>
-        </form>
-
-        <p className="mt-6 text-center text-sm text-muted-foreground">
+    <AuthCard
+      title={`Create your ${APP_NAME} account`}
+      footer={
+        <>
           Already have an account?{' '}
           <Link
             to="/auth/sign-in"
@@ -103,8 +63,48 @@ export function SignUp() {
           >
             Sign in
           </Link>
-        </p>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <form onSubmit={onSubmit} className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="email">
+            Email <RequiredAsterisk />
+          </Label>
+          <Input
+            id="email"
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="password">
+            Password <RequiredAsterisk />
+          </Label>
+          <PasswordInput
+            id="password"
+            required
+            showRequirement
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+
+        <Button type="submit" disabled={submitting}>
+          {submitting ? 'Creating account…' : 'Create account'}
+        </Button>
+      </form>
+    </AuthCard>
   )
 }

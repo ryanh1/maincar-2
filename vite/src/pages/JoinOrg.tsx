@@ -3,6 +3,7 @@ import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'fire
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
+import { AuthCard } from '@/components/AuthCard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -69,10 +70,9 @@ export function JoinOrg() {
     const isDeadLink = err instanceof ApiError && err.status === 404
     if (isDeadLink) {
       return (
-        <Shell>
-          <h1 className="display text-2xl font-bold">{DEAD_LINK_HEADING}</h1>
-          <p className="mt-2 text-sm text-muted-foreground">{DEAD_LINK_FIX}</p>
-        </Shell>
+        <AuthCard title={DEAD_LINK_HEADING}>
+          <p className="text-center text-sm text-muted-foreground">{DEAD_LINK_FIX}</p>
+        </AuthCard>
       )
     }
 
@@ -85,9 +85,8 @@ export function JoinOrg() {
         ? err.message
         : 'Could not open this invite. Try again in a moment.'
     return (
-      <Shell>
-        <h1 className="display text-2xl font-bold">Could not open this invite</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{message}</p>
+      <AuthCard title="Could not open this invite">
+        <p className="text-center text-sm text-muted-foreground">{message}</p>
         <Button
           className="mt-6 w-full"
           disabled={invitationQuery.isFetching}
@@ -95,15 +94,15 @@ export function JoinOrg() {
         >
           {invitationQuery.isFetching ? 'Trying…' : 'Try again'}
         </Button>
-      </Shell>
+      </AuthCard>
     )
   }
 
   if (invitationQuery.isPending || authLoading) {
     return (
-      <Shell>
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      </Shell>
+      <AuthCard>
+        <p className="text-center text-sm text-muted-foreground">Loading…</p>
+      </AuthCard>
     )
   }
 
@@ -135,9 +134,8 @@ export function JoinOrg() {
   if (firebaseUser && invitation && (addressesDiffer || serverMismatchMessage)) {
     const invitedEmail = invitation.email
     return (
-      <Shell>
-        <h1 className="display text-2xl font-bold">Wrong account</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+      <AuthCard title="Wrong account">
+        <p className="text-center text-sm text-muted-foreground">
           {/* Both addresses, always — "wrong account" on its own leaves the reader
               with no way to work out which account to use. When the server is the
               one calling it a mismatch, the Firebase address is not the one it
@@ -162,16 +160,15 @@ export function JoinOrg() {
         >
           Sign out and sign in as {invitedEmail}
         </Button>
-      </Shell>
+      </AuthCard>
     )
   }
 
   // --- State 2: signed in as the invited person ------------------------------
   if (firebaseUser && invitation) {
     return (
-      <Shell>
-        <h1 className="display text-2xl font-bold">Join {orgName}</h1>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+      <AuthCard title={`Join ${orgName}`}>
+        <div className="flex flex-wrap items-center justify-center gap-2">
           {invitation.roles.map((role) => (
             <Badge key={role} variant="secondary">
               {getRoleLabel(role)}
@@ -179,7 +176,7 @@ export function JoinOrg() {
           ))}
         </div>
         {error && (
-          <p role="alert" className="mt-4 text-sm text-destructive">
+          <p role="alert" className="mt-4 text-center text-sm text-destructive">
             {error}
           </p>
         )}
@@ -193,7 +190,7 @@ export function JoinOrg() {
         >
           {acceptInvitation.isPending ? 'Joining…' : `Join ${orgName}`}
         </Button>
-      </Shell>
+      </AuthCard>
     )
   }
 
@@ -236,13 +233,26 @@ export function JoinOrg() {
   }
 
   return (
-    <Shell>
-      <h1 className="display text-2xl font-bold">Join {orgName}</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {mode === 'create' ? `Create your ${APP_NAME} account.` : 'Sign in to accept.'}
-      </p>
-
-      <form onSubmit={onSubmit} className="mt-8 flex flex-col gap-4">
+    <AuthCard
+      title={`Join ${orgName}`}
+      subtitle={mode === 'create' ? `Create your ${APP_NAME} account.` : 'Sign in to accept.'}
+      footer={
+        <>
+          {mode === 'create' ? 'Already have an account? ' : 'Need an account? '}
+          <button
+            type="button"
+            className="text-primary underline-offset-4 hover:underline"
+            onClick={() => {
+              setError('')
+              setMode(mode === 'create' ? 'signIn' : 'create')
+            }}
+          >
+            {mode === 'create' ? 'Sign in' : 'Create one'}
+          </button>
+        </>
+      }
+    >
+      <form onSubmit={onSubmit} className="flex flex-col gap-3">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="joinEmail">Email</Label>
           {/* Disabled, not hidden: the invite is bound to this address on the
@@ -301,28 +311,6 @@ export function JoinOrg() {
           {submitting ? 'Joining…' : `Join ${orgName}`}
         </Button>
       </form>
-
-      <p className="mt-6 text-center text-sm text-muted-foreground">
-        {mode === 'create' ? 'Already have an account? ' : 'Need an account? '}
-        <button
-          type="button"
-          className="text-primary underline-offset-4 hover:underline"
-          onClick={() => {
-            setError('')
-            setMode(mode === 'create' ? 'signIn' : 'create')
-          }}
-        >
-          {mode === 'create' ? 'Sign in' : 'Create one'}
-        </button>
-      </p>
-    </Shell>
-  )
-}
-
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-dvh flex-1 items-center justify-center p-6">
-      <div className="w-full max-w-sm">{children}</div>
-    </div>
+    </AuthCard>
   )
 }

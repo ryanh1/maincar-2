@@ -17,14 +17,18 @@ at the bottom.
 ## Legend
 
 - ✅ = the mockup shows this exact cell
+- ✅¹ = no mockup artboard covers this cell; resolved instead against the written
+  rules in `.claude/rules/design-system.md` (auth type scale, `max-w-sm`, spacing,
+  radius, one primary button), per MAI-544 and this file's own instruction below to
+  use "the written system requirements... where the mockup is silent"
 - — = not shown by the mockup (not covered, not inferred)
 
 | # | Route / overlay | Component(s) | Meaningful states | Light · Desktop | Light · Mobile | Dark · Desktop | Dark · Mobile |
 |---|---|---|---|:-:|:-:|:-:|:-:|
 | 1 | `/home` — Home | `pages/Home.tsx` | single state (static account summary; no loading/error/empty variants exist today) | — | — | — | — |
-| 2 | `/auth/sign-in` — Sign in | `pages/auth/SignIn.tsx` | default form, submit-error banner, submitting | — | — | — | — |
-| 3 | `/auth/sign-up` — Sign up | `pages/auth/SignUp.tsx` | default form, submit-error banner, submitting | — | — | — | — |
-| 4 | `/join/:token` — Invitation join | `pages/JoinOrg.tsx` | loading · dead-link (404) · unreachable/other-error (with retry) · wrong-account / server-mismatch · invited-person accept (with role badges) · no-account create-or-sign-in form | — | — | — | — |
+| 2 | `/auth/sign-in` — Sign in | `pages/auth/SignIn.tsx` | default form, submit-error banner, submitting | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
+| 3 | `/auth/sign-up` — Sign up | `pages/auth/SignUp.tsx` | default form, submit-error banner, submitting | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
+| 4 | `/join/:token` — Invitation join | `pages/JoinOrg.tsx` | loading · dead-link (404) · unreachable/other-error (with retry) · wrong-account / server-mismatch · invited-person accept (with role badges) · no-account create-or-sign-in form | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
 | 5 | `/settings/profile` — Profile | `pages/Settings_ProfileTab.tsx` | default form (name, job title, read-only email), saving | **✅** (`settings-profile.html`) | — | — | — |
 | 6 | `/settings/members` — Members and invitations | `pages/Settings_MembersTab.tsx` + `Settings_Members_InviteForm.tsx`, `Settings_Members_PendingInvites.tsx`, `Settings_Members_RoleEditor.tsx` | default table, error, empty (`rows.length === 0`), invite-form dialog, pending-invites list, role editor | — | — | — | — |
 | 7 | `/settings/phone-numbers` — Phone numbers | `pages/Settings_PhoneNumbersTab.tsx` + `Settings_PhoneNumbers_BuyDialog.tsx`, `Settings_PhoneNumbers_AssignDialog.tsx` | default table, error, empty (`numbers.length === 0`), buy dialog, assign dialog | — | — | — | — |
