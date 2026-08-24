@@ -384,6 +384,26 @@ async function refreshDerivedActivityFields(
   ])
 }
 
+async function auditAutomaticAttach(
+  tx: Prisma.TransactionClient,
+  orgId: string,
+  sourceType: 'email' | 'meeting',
+  sourceId: string,
+  targets: ActivityAttachmentTarget[],
+): Promise<void> {
+  if (targets.length === 0) return
+  await tx.auditLog.create({
+    data: {
+      orgId,
+      actorId: 'system',
+      action: 'activity_attach',
+      objectType: sourceType,
+      objectId: sourceId,
+      diffJson: { targets },
+    },
+  })
+}
+
 /** Persist all automatic Email CRM links as one transaction slice. */
 export async function attachEmailMatchInTx(
   tx: Prisma.TransactionClient,
@@ -409,6 +429,7 @@ export async function attachEmailMatchInTx(
     tx,
     activityFromEmail({ ...email, companyId: match.primaryCompanyId, dealId: match.dealId }, { personId: match.primaryPersonId }),
   )
+  await auditAutomaticAttach(tx, email.orgId, 'email', email.id, freshTargets)
   return true
 }
 
@@ -446,5 +467,6 @@ export async function attachMeetingMatchInTx(
       organizerPersonId: meeting.organizerEmail ? match.personIdByAddress[normalizeParticipantAddress(meeting.organizerEmail)] ?? null : null,
     }),
   )
+  await auditAutomaticAttach(tx, meeting.orgId, 'meeting', meeting.id, freshTargets)
   return true
 }

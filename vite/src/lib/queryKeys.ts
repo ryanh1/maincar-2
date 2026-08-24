@@ -9,6 +9,9 @@ import type { EmailTemplateListQuery } from './emailTypes'
  * (CLAUDE.md → Frontend Data Fetching Patterns → Query Keys).
  */
 export const queryKeys = {
+  admin: {
+    syncHealth: ['admin', 'syncHealth'] as const,
+  },
   callAlertSettings: ['callAlertSettings'] as const,
   notificationDeliverySettings: ['notificationDeliverySettings'] as const,
   notificationPreferences: ['notificationPreferences'] as const,

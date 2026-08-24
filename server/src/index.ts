@@ -1,4 +1,5 @@
 import { logger } from '../dependencies/logger.js'
+import { ensureSyncJobFailureMonitor } from '../dependencies/axiom.js'
 import { initErrorReporter } from '../dependencies/errorReporter.js'
 import app from './app.js'
 import { APP_NAME, PORT } from './config.js'
@@ -52,6 +53,12 @@ const server = app.listen(PORT, () => {
 // schema migration — on every test run.
 async function startWorkers(): Promise<void> {
   await startQueue()
+  try {
+    await ensureSyncJobFailureMonitor()
+  } catch (error) {
+    // Observability must report job failures, never become the reason jobs stop.
+    logger.warn({ error }, 'could not provision the Axiom sync-job failure monitor')
+  }
   await registerProvisionNumberWorker()
   await registerReleaseNumberWorker()
   await registerCallerNameReconciliationWorker()

@@ -1,5 +1,6 @@
 import { PgBoss, type JobWithMetadata, type SendOptions, type WorkOptions } from 'pg-boss'
 
+import { emitAxiomEvents, isAxiomIngestConfigured, type AxiomEvent } from '../../dependencies/axiom.js'
 import { logger } from '../../dependencies/logger.js'
 import { DATABASE_URL } from '../config.js'
 
@@ -73,6 +74,19 @@ export const JOB_NAMES = [
 
 export type JobName = (typeof JOB_NAMES)[number]
 
+export const SYNC_JOB_NAMES = [
+  JOB_MAIL_BACKFILL,
+  JOB_MAIL_SYNC,
+  JOB_MAIL_REMATCH,
+  JOB_CAPTURE_PURGE,
+] as const
+
+export type SyncJobName = (typeof SYNC_JOB_NAMES)[number]
+
+export function syncDeadLetterQueueName(name: SyncJobName): string {
+  return `${name}-dead-letter`
+}
+
 /**
  * Queue-level defaults, applied when the queue is created.
  *
@@ -80,7 +94,12 @@ export type JobName = (typeof JOB_NAMES)[number]
  * them. They are set here so a queue behaves the same no matter which caller
  * enqueued the job.
  */
-const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number; policy?: 'singleton' }> = {
+const QUEUE_DEFAULTS: Record<JobName, {
+  retryLimit: number
+  retryDelay: number
+  policy?: 'singleton'
+  deadLetter?: string
+}> = {
   // One retry, thirty seconds later. See jobs/provisionNumber.ts for why this
   // queue must not retry more than that: the work it does spends money.
   [JOB_PROVISION_NUMBER]: { retryLimit: 1, retryDelay: 30 },
@@ -121,21 +140,40 @@ const QUEUE_DEFAULTS: Record<JobName, { retryLimit: number; retryDelay: number; 
   // The recurring dispatcher and each account's keyed delivery share this queue.
   // `singletonKey = mailAccountId` prevents a slow provider page for one mailbox
   // overlapping its next five-minute run, without serialising other accounts.
-  [JOB_MAIL_SYNC]: { retryLimit: 3, retryDelay: 60, policy: 'singleton' },
+  [JOB_MAIL_SYNC]: {
+    retryLimit: 3,
+    retryDelay: 60,
+    policy: 'singleton',
+    deadLetter: syncDeadLetterQueueName(JOB_MAIL_SYNC),
+  },
   // Provider rate limits and transient mailbox errors need a longer retry budget;
   // writes are idempotent by mailbox + provider message id.
-  [JOB_MAIL_BACKFILL]: { retryLimit: 5, retryDelay: 60 },
+  [JOB_MAIL_BACKFILL]: {
+    retryLimit: 5,
+    retryDelay: 60,
+    deadLetter: syncDeadLetterQueueName(JOB_MAIL_BACKFILL),
+  },
   // Capture history is idempotent and attaches transactionally, so three retries
   // are safe for a transient database failure during a create-triggered rematch.
-  [JOB_MAIL_REMATCH]: { retryLimit: 3, retryDelay: 30 },
+  [JOB_MAIL_REMATCH]: {
+    retryLimit: 3,
+    retryDelay: 30,
+    deadLetter: syncDeadLetterQueueName(JOB_MAIL_REMATCH),
+  },
   // Each settings-version job uses its rule id as the singleton key. A retry is
   // safe because the purge handler compare-and-sets each source's deletedAt.
-  [JOB_CAPTURE_PURGE]: { retryLimit: 3, retryDelay: 60, policy: 'singleton' },
+  [JOB_CAPTURE_PURGE]: {
+    retryLimit: 3,
+    retryDelay: 60,
+    policy: 'singleton',
+    deadLetter: syncDeadLetterQueueName(JOB_CAPTURE_PURGE),
+  },
   [JOB_MAIL_PUSH_SUBSCRIPTION]: { retryLimit: 3, retryDelay: 300, policy: 'singleton' },
   [JOB_DELIVER_CALL_WEB_PUSH]: { retryLimit: 3, retryDelay: 30, policy: 'singleton' },
 }
 
 let boss: PgBoss | null = null
+let queueHealthTimer: ReturnType<typeof setInterval> | null = null
 // The in-flight start, so two concurrent callers share one instance instead of
 // racing to build two connection pools against the same database.
 let starting: Promise<PgBoss> | null = null
@@ -167,6 +205,11 @@ export async function startQueue(): Promise<PgBoss> {
 
     await instance.start()
 
+    // Dead-letter targets must exist before their source queues name them.
+    for (const name of SYNC_JOB_NAMES) {
+      await instance.createQueue(syncDeadLetterQueueName(name), { retryLimit: 0 })
+    }
+
     // Queues must exist before anything can send to them or work them. This is
     // ON CONFLICT DO NOTHING inside pg-boss, so it is safe on every boot.
     for (const name of JOB_NAMES) {
@@ -174,6 +217,7 @@ export async function startQueue(): Promise<PgBoss> {
     }
 
     boss = instance
+    startQueueHealthEmitter(instance)
     return instance
   })()
 
@@ -187,11 +231,69 @@ export async function startQueue(): Promise<PgBoss> {
 /** Stop the queue and release its connections. Safe to call when nothing started. */
 export async function stopQueue(): Promise<void> {
   if (!boss) return
+  if (queueHealthTimer) {
+    clearInterval(queueHealthTimer)
+    queueHealthTimer = null
+  }
   const instance = boss
   boss = null
   // Graceful: a job that is mid-Twilio-call gets to finish rather than being
   // killed halfway through a purchase.
   await instance.stop({ graceful: true, close: true })
+}
+
+export interface SyncQueueHealth {
+  queue: SyncJobName
+  queueDepth: number
+  failureCount: number
+  deadLetterCount: number
+}
+
+type QueueHealthReader = Pick<PgBoss, 'getQueue'>
+
+export async function collectSyncQueueHealth(instance: QueueHealthReader): Promise<SyncQueueHealth[]> {
+  return Promise.all(SYNC_JOB_NAMES.map(async (queue) => {
+    const [source, deadLetter] = await Promise.all([
+      instance.getQueue(queue),
+      instance.getQueue(syncDeadLetterQueueName(queue)),
+    ])
+    return {
+      queue,
+      queueDepth: source?.readyCount ?? 0,
+      failureCount: source?.failedCount ?? 0,
+      deadLetterCount: deadLetter?.queuedCount ?? 0,
+    }
+  }))
+}
+
+async function safeEmitAxiom(events: AxiomEvent[]): Promise<void> {
+  try {
+    await emitAxiomEvents(events)
+  } catch (error) {
+    logger.warn({ error }, 'could not emit job telemetry to Axiom')
+  }
+}
+
+async function emitSyncQueueHealth(instance: QueueHealthReader): Promise<void> {
+  const time = new Date().toISOString()
+  const health = await collectSyncQueueHealth(instance)
+  await safeEmitAxiom(health.map((row) => ({
+    time,
+    event: 'job.queue.health',
+    jobFamily: 'sync',
+    ...row,
+  })))
+}
+
+function startQueueHealthEmitter(instance: QueueHealthReader): void {
+  if (!isAxiomIngestConfigured() || queueHealthTimer) return
+  void emitSyncQueueHealth(instance)
+  queueHealthTimer = setInterval(() => void emitSyncQueueHealth(instance), 60_000)
+  queueHealthTimer.unref()
+}
+
+export async function getSyncQueueHealth(): Promise<SyncQueueHealth[]> {
+  return collectSyncQueueHealth(await startQueue())
 }
 
 /**
@@ -260,7 +362,36 @@ export async function workJob<T extends object>(
   // whether the batch arrives as JobWithMetadata or as bare Job.
   return instance.work<T, void, MetadataWorkOptions>(name, workOptions, async (jobs) => {
     for (const job of jobs) {
-      await handler(job)
+      const startedAt = Date.now()
+      try {
+        await handler(job)
+        if ((SYNC_JOB_NAMES as readonly string[]).includes(name)) {
+          void safeEmitAxiom([{
+            time: new Date().toISOString(),
+            event: 'job.run',
+            jobFamily: 'sync',
+            queue: name,
+            outcome: 'completed',
+            durationMs: Date.now() - startedAt,
+            retryCount: job.retryCount,
+            retryLimit: job.retryLimit,
+          }])
+        }
+      } catch (error) {
+        if ((SYNC_JOB_NAMES as readonly string[]).includes(name)) {
+          void safeEmitAxiom([{
+            time: new Date().toISOString(),
+            event: 'job.run',
+            jobFamily: 'sync',
+            queue: name,
+            outcome: 'failed',
+            durationMs: Date.now() - startedAt,
+            retryCount: job.retryCount,
+            retryLimit: job.retryLimit,
+          }])
+        }
+        throw error
+      }
     }
   })
 }

@@ -10,6 +10,7 @@ const db = vi.hoisted(() => ({
   emailParticipant: { deleteMany: vi.fn(), createMany: vi.fn() },
   meeting: { findFirst: vi.fn(), findFirstOrThrow: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
   meetingAttendee: { deleteMany: vi.fn(), createMany: vi.fn() },
+  mailSyncHealthSample: { create: vi.fn() },
   $transaction: vi.fn(),
 }))
 
@@ -84,6 +85,7 @@ beforeEach(() => {
   db.meeting.findFirstOrThrow.mockResolvedValue({
     id: 'meeting_1', orgId: ACCOUNT.orgId, manualAttach: false, startsAt: new Date('2026-08-23T12:00:00.000Z'), organizerEmail: null,
   })
+  db.mailSyncHealthSample.create.mockResolvedValue({ id: 'health_1' })
   matcher.resolveParticipantsToCrm.mockResolvedValue({ excluded: false, personIds: [], companyIds: [], personIdByAddress: {}, primaryPersonId: null, primaryCompanyId: null, dealId: null })
   matcher.attachEmailMatchInTx.mockResolvedValue(false)
   matcher.attachMeetingMatchInTx.mockResolvedValue(false)
@@ -119,9 +121,17 @@ describe('syncMailAccount', () => {
       where: { id: ACCOUNT.id, orgId: ACCOUNT.orgId, userId: ACCOUNT.userId },
       data: expect.objectContaining({ mailSyncCursor: 'history-fresh', calendarSyncCursor: 'calendar-fresh' }),
     })
+    expect(db.mailSyncHealthSample.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orgId: ACCOUNT.orgId,
+        mailAccountId: ACCOUNT.id,
+        fullResync: true,
+      }),
+    })
   })
 
   it('persists matching mail and meetings through the shared matcher', async () => {
+    matcher.attachEmailMatchInTx.mockResolvedValue(true)
     matcher.resolveParticipantsToCrm
       .mockResolvedValueOnce({ excluded: false, personIds: ['person_1'], companyIds: [], personIdByAddress: {}, primaryPersonId: 'person_1', primaryCompanyId: null, dealId: null })
       .mockResolvedValueOnce({ excluded: false, personIds: [], companyIds: [], personIdByAddress: {}, primaryPersonId: null, primaryCompanyId: null, dealId: null })
@@ -151,6 +161,13 @@ describe('syncMailAccount', () => {
     expect(matcher.resolveParticipantsToCrm).toHaveBeenCalledTimes(2)
     expect(matcher.attachEmailMatchInTx).toHaveBeenCalledTimes(1)
     expect(matcher.attachMeetingMatchInTx).toHaveBeenCalledTimes(1)
+    expect(db.mailSyncHealthSample.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        messagesScanned: 1,
+        messagesMatched: 1,
+        fullResync: false,
+      }),
+    })
   })
 
   it('holds a zero-match message instead of creating an Email record', async () => {

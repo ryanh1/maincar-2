@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ProtectedLayout } from '@/components/ProtectedLayout'
+import { AdminLayout } from '@/components/AdminLayout'
 import { RouteErrorPage } from '@/components/RouteErrorPage'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -24,6 +25,7 @@ import { Settings, SettingsLegacyRedirect } from '@/pages/Settings'
 import { Welcome } from '@/pages/Welcome'
 import { VoicemailDetail } from '@/pages/VoicemailDetail'
 import { Voicemails } from '@/pages/Voicemails'
+import { AdminSyncHealth } from '@/pages/AdminSyncHealth'
 
 const routeErrorElement = <RouteErrorPage />
 
@@ -53,6 +55,15 @@ const router = createBrowserRouter([
       { path: 'create-org', element: <CreateOrg /> },
       { path: 'settings', element: <SettingsLegacyRedirect /> },
       { path: 'settings/:section', element: <Settings /> },
+    ],
+  },
+  {
+    path: '/admin',
+    element: <AdminLayout />,
+    errorElement: routeErrorElement,
+    children: [
+      { index: true, element: <Navigate to="/admin/sync-health" replace /> },
+      { path: 'sync-health', element: <AdminSyncHealth /> },
     ],
   },
   { path: '*', element: <Navigate to="/" replace /> },
