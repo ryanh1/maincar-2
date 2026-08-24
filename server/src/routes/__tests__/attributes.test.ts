@@ -12,6 +12,8 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     $queryRaw: vi.fn(),
     $executeRaw: vi.fn(),
     $transaction: vi.fn(),
+    fieldHistory: { createMany: vi.fn() },
+    recordLink: { deleteMany: vi.fn(), createMany: vi.fn() },
     user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     membership: { findFirst: vi.fn() },
     objectDef: { findFirst: vi.fn() },
@@ -125,6 +127,10 @@ beforeEach(() => {
   prismaMock.attributeDef.create.mockResolvedValue(attributeRow())
   prismaMock.attributeDef.updateMany.mockResolvedValue({ count: 1 })
   prismaMock.$queryRaw.mockResolvedValue([{ valueCount: 0 }])
+  prismaMock.fieldHistory.createMany.mockResolvedValue({ count: 0 })
+  prismaMock.recordLink.deleteMany.mockResolvedValue({ count: 0 })
+  prismaMock.recordLink.createMany.mockResolvedValue({ count: 0 })
+  prismaMock.$transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback(prismaMock))
 })
 
 // ============================================================
@@ -225,6 +231,41 @@ describe('POST /api/orgs/:orgId/attributes', () => {
 
     expect(prismaMock.attributeDef.create.mock.calls[0][0].data.orgId).toBe(ORG_A)
   })
+
+  it('accepts a scalar default that matches the field type', async () => {
+    await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ objectId: 'obj-person', slug: 'score', name: 'Score', type: 'number', defaultJson: 5 })
+
+    expect(prismaMock.attributeDef.create.mock.calls[0][0].data.defaultJson).toBe(5)
+  })
+
+  it('persists a false checkbox default instead of treating it as absent', async () => {
+    await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ objectId: 'obj-person', slug: 'active', name: 'Active', type: 'checkbox', defaultJson: false })
+
+    expect(prismaMock.attributeDef.create.mock.calls[0][0].data.defaultJson).toBe(false)
+  })
+
+  it('422s a default that violates the field type or configured rules', async () => {
+    const wrongType = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ objectId: 'obj-person', slug: 'score', name: 'Score', type: 'number', defaultJson: 'five' })
+    const outsideRange = await request(app)
+      .post(URL_A)
+      .set('Authorization', AUTH)
+      .send({ objectId: 'obj-person', slug: 'score', name: 'Score', type: 'number', validationJson: { min: 1, max: 5 }, defaultJson: 8 })
+
+    expect(wrongType.status).toBe(422)
+    expect(wrongType.body.error).toContain('must be a number')
+    expect(outsideRange.status).toBe(422)
+    expect(outsideRange.body.error).toContain('at most 5')
+    expect(prismaMock.attributeDef.create).not.toHaveBeenCalled()
+  })
 })
 
 // ============================================================
@@ -307,6 +348,120 @@ describe('GET /api/orgs/:orgId/attributes/:id/impact', () => {
 // PATCH — the isSystem retype guard (spec §10.2)
 // ============================================================
 describe('PATCH /api/orgs/:orgId/attributes/:id', () => {
+  it('422s a new default that violates the resulting field configuration', async () => {
+    prismaMock.attributeDef.findFirst.mockResolvedValueOnce(
+      attributeRow({ id: 'attr-1', type: 'number', validationJson: { min: 1, max: 5 } }),
+    )
+
+    const res = await request(app)
+      .patch(`${URL_A}/attr-1`)
+      .set('Authorization', AUTH)
+      .send({ defaultJson: 8 })
+
+    expect(res.status).toBe(422)
+    expect(res.body.error).toContain('at most 5')
+    expect(prismaMock.attributeDef.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('422s a configuration change that would make the existing default invalid', async () => {
+    prismaMock.attributeDef.findFirst.mockResolvedValueOnce(
+      attributeRow({ id: 'attr-1', type: 'text', defaultJson: 'five' }),
+    )
+
+    const res = await request(app)
+      .patch(`${URL_A}/attr-1`)
+      .set('Authorization', AUTH)
+      .send({ type: 'number' })
+
+    expect(res.status).toBe(422)
+    expect(res.body.error).toContain('must be a number')
+    expect(prismaMock.attributeDef.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('blocks multi-to-single when records have multiple values and returns the count', async () => {
+    prismaMock.attributeDef.findFirst.mockResolvedValueOnce(
+      attributeRow({ id: 'attr-1', type: 'record_reference', isMulti: true, refObjectId: 'obj-company' }),
+    )
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce({ id: 'obj-person', slug: 'person', storage: 'record' })
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      { recordId: 'record-1', value: ['company-1', 'company-2'] },
+      { recordId: 'record-2', value: ['company-3'] },
+      { recordId: 'record-3', value: ['company-4', 'company-5', 'company-6'] },
+    ])
+
+    const res = await request(app)
+      .patch(`${URL_A}/attr-1`)
+      .set('Authorization', AUTH)
+      .send({ isMulti: false })
+
+    expect(res.status).toBe(422)
+    expect(res.body).toMatchObject({ recordCount: 2 })
+    expect(prismaMock.$executeRaw).not.toHaveBeenCalled()
+    expect(prismaMock.attributeDef.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('resolves multi-to-single by keeping first values and archiving the prior arrays', async () => {
+    prismaMock.attributeDef.findFirst
+      .mockResolvedValueOnce(
+        attributeRow({ id: 'attr-1', type: 'record_reference', isMulti: true, refObjectId: 'obj-company' }),
+      )
+      .mockResolvedValueOnce(
+        attributeRow({ id: 'attr-1', type: 'record_reference', isMulti: false, refObjectId: 'obj-company' }),
+      )
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce({ id: 'obj-person', slug: 'project', storage: 'record' })
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      { recordId: 'record-1', value: ['company-1', 'company-2'] },
+      { recordId: 'record-2', value: ['company-3'] },
+    ])
+    prismaMock.$executeRaw.mockResolvedValueOnce(2)
+
+    const res = await request(app)
+      .patch(`${URL_A}/attr-1`)
+      .set('Authorization', AUTH)
+      .send({ isMulti: false, resolveMultiToSingle: true })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.$executeRaw).toHaveBeenCalledOnce()
+    expect(prismaMock.fieldHistory.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ recordId: 'record-1', oldJson: ['company-1', 'company-2'], newJson: 'company-1' }),
+      ]),
+    })
+    expect(prismaMock.recordLink.deleteMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ orgId: ORG_A, fromId: { in: ['record-1', 'record-2'] }, attribute: 'renewal_month' }),
+    })
+    expect(prismaMock.recordLink.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ fromId: 'record-1', toId: 'company-1' }),
+        expect.objectContaining({ fromId: 'record-2', toId: 'company-3' }),
+      ]),
+    })
+    expect(prismaMock.attributeDef.updateMany).toHaveBeenCalledWith({
+      where: { id: 'attr-1', orgId: ORG_A, deletedAt: null },
+      data: expect.objectContaining({ isMulti: false }),
+    })
+  })
+
+  it('converts one-item arrays without a resolve flag when no record would lose data', async () => {
+    prismaMock.attributeDef.findFirst
+      .mockResolvedValueOnce(attributeRow({ id: 'attr-1', type: 'record_reference', isMulti: true }))
+      .mockResolvedValueOnce(attributeRow({ id: 'attr-1', type: 'record_reference', isMulti: false }))
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce({ id: 'obj-person', slug: 'project', storage: 'record' })
+    prismaMock.$queryRaw.mockResolvedValueOnce([{ recordId: 'record-1', value: ['company-1'] }])
+    prismaMock.$executeRaw.mockResolvedValueOnce(1)
+
+    const res = await request(app)
+      .patch(`${URL_A}/attr-1`)
+      .set('Authorization', AUTH)
+      .send({ isMulti: false })
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.$executeRaw).toHaveBeenCalledOnce()
+    expect(prismaMock.attributeDef.updateMany).toHaveBeenCalledWith({
+      where: { id: 'attr-1', orgId: ORG_A, deletedAt: null },
+      data: expect.objectContaining({ isMulti: false }),
+    })
+  })
   it('422s RETYPING a system field, and writes nothing', async () => {
     prismaMock.attributeDef.findFirst.mockResolvedValueOnce(
       attributeRow({ id: 'sys', slug: 'attention_status', type: 'status', storage: 'column', isSystem: true }),

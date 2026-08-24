@@ -27,7 +27,18 @@ import { logger } from '../../dependencies/logger.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
-import { TABLE_STORAGE_TABLES } from '../crm/recordList.js'
+import {
+  archiveCollapsedMultiValues,
+  collapseMultiValueRows,
+  countOptionValue,
+  lockMultiValueRows,
+  migrateOptionValue,
+} from '../crm/attributeValueMigrations.js'
+import {
+  checkValidationRule,
+  checkValueShape,
+  type ValidatorAttribute,
+} from '../crm/valuesValidator.js'
 import { Prisma } from '../generated/prisma/client.js'
 import type { AttributeDef } from '../generated/prisma/client.js'
 
@@ -129,9 +140,7 @@ const optionSchema = z
   })
   .loose()
 
-// A JSON object blob (formatJson / validationJson / defaultJson). Kept permissive
-// on purpose — the shape is per-type and validated by the value validator (T7),
-// not here.
+// JSON object blobs whose shape is interpreted elsewhere.
 const jsonObject = z.record(z.string(), z.unknown())
 
 const slugSchema = z.preprocess(
@@ -158,7 +167,9 @@ const attributeBodySchema = z.object({
   refObjectId: z.preprocess(blankToUndefined, z.string().optional()),
   formatJson: jsonObject.optional(),
   validationJson: jsonObject.optional(),
-  defaultJson: jsonObject.optional(),
+  // A default is the value itself, so scalars and arrays are valid JSON shapes too.
+  // Its semantic shape is checked against the proposed field configuration below.
+  defaultJson: z.unknown().optional(),
   isIdentity: z.boolean().optional(),
   isMulti: z.boolean().optional(),
   isRequired: z.boolean().optional(),
@@ -166,7 +177,23 @@ const attributeBodySchema = z.object({
   isReadOnly: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
   isArchived: z.boolean().optional(),
+  // Confirmation flag for the guarded true → false multiplicity migration. It is
+  // route input only and is never persisted on AttributeDef.
+  resolveMultiToSingle: z.boolean().optional(),
 })
+
+function defaultValueError(attribute: ValidatorAttribute, value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  const shapeError = checkValueShape(attribute, value)
+  if (shapeError) return shapeError
+
+  const values = attribute.isMulti && Array.isArray(value) ? value : [value]
+  for (const candidate of values) {
+    const ruleError = checkValidationRule(attribute, candidate)
+    if (ruleError) return ruleError
+  }
+  return null
+}
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -198,10 +225,6 @@ const OPTION_COLOR_TOKENS = [
   'option-7',
   'option-8',
 ] as const
-
-// AttributeDef.slug is already constrained to this shape at creation time; re-checked
-// here before a slug is interpolated as a bare SQL identifier in the migration.
-const SAFE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
 // The option-bearing types. Only these carry an editable optionsJson list.
 const OPTION_TYPES = new Set(['select', 'status', 'multiselect'])
@@ -250,160 +273,6 @@ async function loadAttributeWithObject(
   })
   if (!object) return null
   return { attribute, object }
-}
-
-// The storage location of a single-valued option, resolved from the object's
-// storage surface. `column` maps to a real table column; `custom` maps to a JSONB
-// bag (customJson on a table-backed object, valuesJson on a record-backed one);
-// `list` maps to ListEntry.valuesJson.
-interface OptionValueLocation {
-  tableName: string
-  kind: 'column' | 'json'
-  columnName?: string
-  jsonColumn?: string
-  objectId?: string
-  objectSlug?: string
-  hasDeletedAt: boolean
-}
-
-function resolveOptionValueLocation(
-  object: { id: string; slug: string; storage: string },
-  attribute: { slug: string; storage: string },
-): OptionValueLocation | null {
-  if (!SAFE_IDENTIFIER.test(attribute.slug)) return null
-  if (attribute.storage === 'column') {
-    const tableName = TABLE_STORAGE_TABLES[object.slug]
-    if (!tableName) return null
-    return { tableName, kind: 'column', columnName: attribute.slug, hasDeletedAt: true }
-  }
-  if (attribute.storage === 'list') {
-    return { tableName: 'ListEntry', kind: 'json', jsonColumn: 'valuesJson', objectSlug: object.slug, hasDeletedAt: false }
-  }
-  // custom storage
-  const isRecord = object.storage === 'record'
-  const tableName = isRecord ? 'Record' : TABLE_STORAGE_TABLES[object.slug]
-  if (!tableName) return null
-  return {
-    tableName,
-    kind: 'json',
-    jsonColumn: isRecord ? 'valuesJson' : 'customJson',
-    ...(isRecord ? { objectId: object.id } : {}),
-    hasDeletedAt: true,
-  }
-}
-
-// Count the records that currently hold `oldValue` for this option (the warning
-// number shown before a rename or a reassign-and-remove).
-export async function countOptionValue(
-  client: Prisma.TransactionClient,
-  args: {
-    orgId: string
-    object: { id: string; slug: string; storage: string }
-    attribute: { slug: string; storage: string; isMulti?: boolean }
-    value: string
-  },
-): Promise<number> {
-  const location = resolveOptionValueLocation(args.object, args.attribute)
-  if (!location) return 0
-  const { orgId, value } = args
-
-  if (location.kind === 'column') {
-    const rows = await client.$queryRaw<{ count: bigint }[]>`
-      SELECT COUNT(*) AS count
-      FROM ${Prisma.raw(`"${location.tableName}"`)}
-      WHERE "orgId" = ${orgId}
-        AND ${Prisma.raw(`"${location.columnName!}"`)} = ${value}
-        AND "deletedAt" IS NULL
-    `
-    return Number(rows[0]?.count ?? 0)
-  }
-
-  const objectFilter = location.objectId
-    ? Prisma.sql`AND "objectId" = ${location.objectId}`
-    : location.objectSlug
-      ? Prisma.sql`AND "objectSlug" = ${location.objectSlug}`
-      : Prisma.empty
-  const deletedAtFilter = location.hasDeletedAt ? Prisma.sql`AND "deletedAt" IS NULL` : Prisma.empty
-  const valueFilter = args.attribute.isMulti
-    ? Prisma.sql`${Prisma.raw(`"${location.jsonColumn!}"`)} -> ${args.attribute.slug} ? ${value}`
-    : Prisma.sql`${Prisma.raw(`"${location.jsonColumn!}"`)} ->> ${args.attribute.slug} = ${value}`
-  const rows = await client.$queryRaw<{ count: bigint }[]>`
-    SELECT COUNT(*) AS count
-    FROM ${Prisma.raw(`"${location.tableName}"`)}
-    WHERE "orgId" = ${orgId}
-      ${objectFilter}
-      AND ${valueFilter}
-      ${deletedAtFilter}
-  `
-  return Number(rows[0]?.count ?? 0)
-}
-
-// Atomically migrate every record that holds `oldValue` to `newValue`, across the
-// attribute's real storage. Returns the number of rows changed. Single-valued
-// (select/status) only — a multiselect array rename is a separate concern.
-export async function migrateOptionValue(
-  client: Prisma.TransactionClient,
-  args: {
-    orgId: string
-    object: { id: string; slug: string; storage: string }
-    attribute: { slug: string; storage: string; isMulti?: boolean }
-    oldValue: string
-    newValue: string
-  },
-): Promise<number> {
-  const location = resolveOptionValueLocation(args.object, args.attribute)
-  if (!location) return 0
-  const { orgId, oldValue, newValue } = args
-
-  if (location.kind === 'column') {
-    return client.$executeRaw`
-      UPDATE ${Prisma.raw(`"${location.tableName}"`)}
-      SET ${Prisma.raw(`"${location.columnName!}"`)} = ${newValue}
-      WHERE "orgId" = ${orgId}
-        AND ${Prisma.raw(`"${location.columnName!}"`)} = ${oldValue}
-        AND "deletedAt" IS NULL
-    `
-  }
-
-  const objectFilter = location.objectId
-    ? Prisma.sql`AND "objectId" = ${location.objectId}`
-    : location.objectSlug
-      ? Prisma.sql`AND "objectSlug" = ${location.objectSlug}`
-      : Prisma.empty
-  const deletedAtFilter = location.hasDeletedAt ? Prisma.sql`AND "deletedAt" IS NULL` : Prisma.empty
-
-  if (args.attribute.isMulti) {
-    return client.$executeRaw`
-      UPDATE ${Prisma.raw(`"${location.tableName}"`)}
-      SET ${Prisma.raw(`"${location.jsonColumn!}"`)} = jsonb_set(
-        ${Prisma.raw(`"${location.jsonColumn!}"`)},
-        ARRAY[${args.attribute.slug}],
-        (
-          SELECT jsonb_agg(
-            CASE WHEN option_value = to_jsonb(${oldValue}::text) THEN to_jsonb(${newValue}::text) ELSE option_value END
-          )
-          FROM jsonb_array_elements(${Prisma.raw(`"${location.jsonColumn!}"`)} -> ${args.attribute.slug}) AS option_values(option_value)
-        )
-      )
-      WHERE "orgId" = ${orgId}
-        ${objectFilter}
-        AND ${Prisma.raw(`"${location.jsonColumn!}"`)} -> ${args.attribute.slug} ? ${oldValue}
-        ${deletedAtFilter}
-    `
-  }
-
-  return client.$executeRaw`
-    UPDATE ${Prisma.raw(`"${location.tableName}"`)}
-    SET ${Prisma.raw(`"${location.jsonColumn!}"`)} = jsonb_set(
-      ${Prisma.raw(`"${location.jsonColumn!}"`)},
-      ARRAY[${args.attribute.slug}],
-      to_jsonb(${newValue}::text)
-    )
-    WHERE "orgId" = ${orgId}
-      ${objectFilter}
-      AND ${Prisma.raw(`"${location.jsonColumn!}"`)} ->> ${args.attribute.slug} = ${oldValue}
-      ${deletedAtFilter}
-  `
 }
 
 const addOptionSchema = z
@@ -575,6 +444,18 @@ router.post(
       return void res.status(422).json({ error: 'A field needs a type.' })
     }
 
+    const createDefaultError = defaultValueError({
+      slug: body.slug,
+      name: body.name,
+      type: body.type,
+      isMulti: body.isMulti ?? false,
+      optionsJson: body.optionsJson,
+      validationJson: body.validationJson,
+    }, body.defaultJson)
+    if (createDefaultError) {
+      return void res.status(422).json({ error: createDefaultError })
+    }
+
     // --- Guard: a runtime field can never be a real column (spec §5.1) ---
     if (body.storage === 'column') {
       return void res.status(422).json({
@@ -624,7 +505,9 @@ router.post(
       ...(body.optionsJson ? { optionsJson: body.optionsJson as Prisma.InputJsonValue } : {}),
       ...(body.formatJson ? { formatJson: body.formatJson as Prisma.InputJsonValue } : {}),
       ...(body.validationJson ? { validationJson: body.validationJson as Prisma.InputJsonValue } : {}),
-      ...(body.defaultJson ? { defaultJson: body.defaultJson as Prisma.InputJsonValue } : {}),
+      ...(body.defaultJson !== undefined && body.defaultJson !== null
+        ? { defaultJson: body.defaultJson as Prisma.InputJsonValue }
+        : {}),
     }
     let created: AttributeDef
     try {
@@ -692,6 +575,19 @@ router.patch(
       })
     }
 
+    const proposedDefault = 'defaultJson' in raw ? body.defaultJson : existing.defaultJson
+    const patchDefaultError = defaultValueError({
+      slug: existing.slug,
+      name: body.name ?? existing.name,
+      type: body.type ?? existing.type,
+      isMulti: body.isMulti ?? existing.isMulti,
+      optionsJson: 'optionsJson' in raw ? body.optionsJson : existing.optionsJson,
+      validationJson: 'validationJson' in raw ? body.validationJson : existing.validationJson,
+    }, proposedDefault)
+    if (patchDefaultError) {
+      return void res.status(422).json({ error: patchDefaultError })
+    }
+
     // --- Verify a new record_reference target is in this org ---
     if (body.refObjectId !== undefined) {
       const ref = await prisma.objectDef.findFirst({
@@ -723,16 +619,54 @@ router.patch(
     if ('optionsJson' in raw && body.optionsJson) data.optionsJson = body.optionsJson
     if ('formatJson' in raw && body.formatJson) data.formatJson = body.formatJson
     if ('validationJson' in raw && body.validationJson) data.validationJson = body.validationJson
-    if ('defaultJson' in raw && body.defaultJson) data.defaultJson = body.defaultJson
+    if ('defaultJson' in raw) {
+      data.defaultJson = body.defaultJson === null || body.defaultJson === undefined
+        ? Prisma.DbNull
+        : body.defaultJson as Prisma.InputJsonValue
+    }
 
     // --- Execute query ---
     let count: number
     try {
-      const result = await prisma.attributeDef.updateMany({
-        where: { id, orgId, deletedAt: null },
-        data,
-      })
-      count = result.count
+      const isMultiToSingle = existing.isMulti && body.isMulti === false
+      if (isMultiToSingle) {
+        const object = await prisma.objectDef.findFirst({
+          where: { id: existing.objectId, orgId, deletedAt: null },
+          select: { id: true, slug: true, storage: true },
+        })
+        if (!object) {
+          return void res.status(404).json({ error: 'Field not found' })
+        }
+
+        const outcome = await prisma.$transaction(async (tx) => {
+          const rows = await lockMultiValueRows(tx, { orgId, object, attribute: existing })
+          const recordCount = rows.filter((row) => Array.isArray(row.value) && row.value.length > 1).length
+          if (recordCount > 0 && body.resolveMultiToSingle !== true) {
+            return { blocked: true as const, recordCount, count: 0 }
+          }
+
+          await collapseMultiValueRows(tx, { orgId, object, attribute: existing })
+          await archiveCollapsedMultiValues(tx, { orgId, userId, object, attribute: existing, rows })
+          const result = await tx.attributeDef.updateMany({
+            where: { id, orgId, deletedAt: null },
+            data,
+          })
+          return { blocked: false as const, recordCount, count: result.count }
+        })
+        if (outcome.blocked) {
+          return void res.status(422).json({
+            error: `${outcome.recordCount} records have multiple values. Send resolveMultiToSingle=true to keep the first value and archive the rest.`,
+            recordCount: outcome.recordCount,
+          })
+        }
+        count = outcome.count
+      } else {
+        const result = await prisma.attributeDef.updateMany({
+          where: { id, orgId, deletedAt: null },
+          data,
+        })
+        count = result.count
+      }
     } catch (error) {
       if (isUniqueViolation(error)) {
         return void res.status(409).json({ error: DUPLICATE_SLUG_ERROR })
