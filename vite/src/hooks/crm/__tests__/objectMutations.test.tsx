@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react'
 import { renderHook, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { jsonFetch } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { makeTestQueryClient, withProviders } from '@/test/utils'
 import { useCreateObject } from '../useCreateObject'
+import { useDeleteObject } from '../useDeleteObject'
 import { useUpdateObject } from '../useUpdateObject'
 
 vi.mock('@/lib/api', async () => {
@@ -21,7 +22,9 @@ function setup<T>(hook: () => T) {
 }
 
 describe('object mutations', () => {
-  it('creates a custom object with the selected icon and refreshes the object list', async () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('creates a custom object and refreshes editor and navbar object queries', async () => {
     vi.mocked(jsonFetch).mockResolvedValue({ object: { id: 'obj-project' } } as never)
     const { result, invalidate } = setup(() => useCreateObject())
 
@@ -37,28 +40,43 @@ describe('object mutations', () => {
       method: 'POST',
       body: JSON.stringify({ slug: 'project', name: 'Project', namePlural: 'Projects', icon: 'folder-kanban' }),
     })
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.objects.list('org-1') }))
+    await waitFor(() => {
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.objects.all })
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.crm.objects('org-1') })
+    })
   })
 
-  it('updates an object icon and refreshes both list and detail caches', async () => {
+  it('patches only the submitted object fields and refreshes editor and navbar object queries', async () => {
     vi.mocked(jsonFetch).mockResolvedValue({ object: { id: 'obj-project' } } as never)
     const { result, invalidate } = setup(() => useUpdateObject())
 
     await result.current.mutateAsync({
       orgId: 'org-1',
       objectId: 'obj-project',
-      name: 'Project',
-      namePlural: 'Projects',
       icon: 'rocket',
+      isHidden: true,
     })
 
     expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/objects/obj-project', {
       method: 'PATCH',
-      body: JSON.stringify({ name: 'Project', namePlural: 'Projects', icon: 'rocket' }),
+      body: JSON.stringify({ icon: 'rocket', isHidden: true }),
     })
     await waitFor(() => {
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.objects.list('org-1') })
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.objects.detail('org-1', 'obj-project') })
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.objects.all })
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.crm.objects('org-1') })
+    })
+  })
+
+  it('deletes a custom object and refreshes editor and navbar object queries', async () => {
+    vi.mocked(jsonFetch).mockResolvedValue(undefined as never)
+    const { result, invalidate } = setup(() => useDeleteObject())
+
+    await result.current.mutateAsync({ orgId: 'org-1', objectId: 'obj-project' })
+
+    expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/objects/obj-project', { method: 'DELETE' })
+    await waitFor(() => {
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.objects.all })
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.crm.objects('org-1') })
     })
   })
 })

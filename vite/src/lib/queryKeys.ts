@@ -163,6 +163,12 @@ export const queryKeys = {
     // which a list read does not.
     detail: (orgId: string, objectId: string) => ['objects', 'detail', orgId, objectId] as const,
   },
+  fieldHistory: (orgId: string, recordId: string, attribute: string) =>
+    ['fieldHistory', orgId, recordId, attribute] as const,
+  objectImpact: (orgId: string, objectId: string) =>
+    ['objectImpact', orgId, objectId] as const,
+  attributeImpact: (orgId: string, attributeId: string) =>
+    ['attributeImpact', orgId, attributeId] as const,
   records: {
     all: ['records'] as const,
     // Keyed by org, object, AND the list query (sort), like the call history list:
@@ -175,8 +181,6 @@ export const queryKeys = {
       ['records', 'fieldChanges', orgId, objectId, days] as const,
     related: (orgId: string, objectId: string, recordId: string) =>
       ['records', 'related', orgId, objectId, recordId] as const,
-    fieldHistory: (orgId: string, recordId: string, attribute: string) =>
-      ['records', 'fieldHistory', orgId, recordId, attribute] as const,
   },
   savedViews: {
     all: (orgId: string) => ['savedViews', orgId] as const,
