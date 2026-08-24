@@ -33,7 +33,8 @@ vi.mock('@/hooks/dialer', () => ({
   useGetCallDetail: useGetCallDetailMock,
   useLogCallDisposition: useLogCallDispositionMock,
 }))
-vi.mock('@/hooks/callComments', () => ({
+vi.mock('@/hooks/callComments', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/hooks/callComments')>(),
   useGetCallComments: useGetCallCommentsMock,
   useCreateCallComment: () => ({ mutateAsync: vi.fn(), error: null }),
   useDeleteCallComment: () => ({ mutate: vi.fn(), error: null }),

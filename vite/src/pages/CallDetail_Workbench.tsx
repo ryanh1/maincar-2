@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useRef, useState, type PointerEvent } from 'react'
 import { Check, Copy, Download, MessageSquarePlus, Phone } from 'lucide-react'
-import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { AudioPlayer, type AudioMediaSource } from '@/components/call-review/AudioPlayer'
@@ -8,7 +7,7 @@ import { CallCommentsRail } from '@/components/call-review/CallCommentsRail'
 import type { SpeakerRibbonSpeaker } from '@/components/call-review/SpeakerRibbon'
 import { TimedTranscript, type TimedTranscriptSelection } from '@/components/call-review/TimedTranscript'
 import { Button } from '@/components/ui/button'
-import { useGetCallComments } from '@/hooks/callComments'
+import { useGetCallComments, useSynchronizeCallComments } from '@/hooks/callComments'
 import type { CallDetail } from '@/hooks/dialer'
 import type { CallCommentDraftAnchor } from '@/lib/callCommentTypes'
 import { getCallDirectionLabel, getCallStatusLabel } from '@/lib/callLabels'
@@ -16,8 +15,6 @@ import { formatDateTime } from '@/lib/datetime'
 import { formatElapsed } from '@/lib/duration'
 import { getStoredCallReviewLayout, saveCallReviewLayout, type CallReviewLayout, type CallReviewLayoutPreset } from '@/lib/callReviewLayout'
 import { cn } from '@/lib/utils'
-
-type Pane = 'playback' | 'comments'
 
 const LAYOUTS: Array<{ preset: CallReviewLayoutPreset; playbackWidth: number; label: string }> = [
   { preset: 'focused-comments', playbackWidth: 40, label: 'Focus comments' },
@@ -51,65 +48,33 @@ export function CallDetail_Workbench({
   timeZone: string | null | undefined
   userId: string
 }) {
-  const [searchParams, setSearchParams] = useSearchParams()
   const [layout, setLayout] = useState<CallReviewLayout>(() => getStoredCallReviewLayout(userId))
-  const [activePane, setActivePane] = useState<Pane>(() => searchParams.get('mode') === 'comments' ? 'comments' : 'playback')
   const [currentTimeMs, setCurrentTimeMs] = useState(0)
   const [selection, setSelection] = useState<TimedTranscriptSelection | null>(null)
   const [seekRequest, setSeekRequest] = useState<{ atMs: number; sequence: number } | null>(null)
   const [commentDraft, setCommentDraft] = useState<CallCommentDraftAnchor | null>(null)
-  const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
   const comments = useGetCallComments(orgId, call.id)
   const workbenchRef = useRef<HTMLDivElement>(null)
-  const handledDeepLinkRef = useRef<string | null>(null)
   const requestSeek = useCallback((atMs: number) => {
     setSeekRequest((current) => ({ atMs, sequence: (current?.sequence ?? 0) + 1 }))
   }, [])
-  const threads = useMemo(() => comments.data?.comments ?? [], [comments.data?.comments])
-  const commentPins = useMemo(
-    () => threads.flatMap((thread) => thread.atMs === null ? [] : [{ id: thread.id, time: thread.atMs / 1_000 }]),
-    [threads],
-  )
-  const nearestCommentId = useMemo(() => {
-    let nearest: { id: string; distance: number } | null = null
-    for (const thread of threads) {
-      if (thread.atMs === null) continue
-      const distance = Math.abs(thread.atMs - currentTimeMs)
-      if (!nearest || distance < nearest.distance) nearest = { id: thread.id, distance }
-    }
-    return nearest?.id ?? null
-  }, [currentTimeMs, threads])
-
-  const activateComment = useCallback((commentId: string, atMs: number) => {
-    handledDeepLinkRef.current = `${call.id}:${commentId}`
-    setActiveCommentId(commentId)
-    setActivePane('comments')
+  const activateMoment = useCallback((atMs: number) => {
     setCurrentTimeMs(atMs)
     requestSeek(atMs)
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      next.set('mode', 'comments')
-      next.set('commentId', commentId)
-      return next
-    })
-  }, [call.id, requestSeek, setSearchParams])
-
-  const deepLinkCommentId = searchParams.get('commentId')
-  useEffect(() => {
-    if (!deepLinkCommentId) return
-    const thread = threads.find((candidate) =>
-      candidate.id === deepLinkCommentId ||
-      candidate.replies.some((reply) => reply.id === deepLinkCommentId),
-    )
-    if (!thread || thread.atMs === null) return
-    const key = `${call.id}:${thread.id}`
-    if (handledDeepLinkRef.current === key) return
-    handledDeepLinkRef.current = key
-    setActiveCommentId(thread.id)
-    setActivePane('comments')
-    setCurrentTimeMs(thread.atMs)
-    requestSeek(thread.atMs)
-  }, [call.id, deepLinkCommentId, requestSeek, threads])
+  }, [requestSeek])
+  const {
+    activeCommentId,
+    activePane,
+    activateComment,
+    commentPins,
+    nearestCommentId,
+    setActivePane,
+  } = useSynchronizeCallComments({
+    callId: call.id,
+    threads: comments.data?.comments,
+    currentTimeMs,
+    onActivateMoment: activateMoment,
+  })
 
   function updateLayout(next: CallReviewLayout): void {
     setLayout(next)
