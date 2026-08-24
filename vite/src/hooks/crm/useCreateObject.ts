@@ -1,19 +1,11 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { jsonFetch } from '@/lib/api'
-import type { ObjectDef } from '@/lib/crmTypes'
+import type { CreateObjectRequest, CreateObjectResponse } from '@/lib/crmTypes'
 import { queryKeys } from '@/lib/queryKeys'
 
-export interface CreateObjectInput {
+export type CreateObjectInput = CreateObjectRequest & {
   orgId: string
-  slug: string
-  name: string
-  namePlural: string
-  icon: string
-}
-
-interface ObjectResponse {
-  object: ObjectDef
 }
 
 /** Creates one custom record type and refreshes every object-identity surface. */
@@ -22,11 +14,13 @@ export function useCreateObject() {
 
   return useMutation({
     mutationFn: ({ orgId, ...object }: CreateObjectInput) =>
-      jsonFetch<ObjectResponse>(`/api/orgs/${orgId}/objects`, {
+      jsonFetch<CreateObjectResponse>(`/api/orgs/${orgId}/objects`, {
         method: 'POST',
         body: JSON.stringify(object),
       }),
-    onSuccess: (_response, { orgId }) =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.objects.list(orgId) }),
+    onSuccess: (_response, { orgId }) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.objects.all })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.crm.objects(orgId) })
+    },
   })
 }

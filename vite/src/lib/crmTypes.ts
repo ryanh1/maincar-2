@@ -122,6 +122,33 @@ export interface GetObjectResponse {
   object: ObjectDefWithAttributes
 }
 
+export interface CreateObjectRequest {
+  slug: string
+  name: string
+  namePlural: string
+  icon?: string
+  iconColor?: string
+  isFirstClass?: boolean
+  timelineEventsEnabled?: boolean
+}
+
+export interface PatchObjectRequest {
+  name?: string
+  namePlural?: string
+  icon?: string
+  iconColor?: string
+  isFirstClass?: boolean
+  timelineEventsEnabled?: boolean
+  isHidden?: boolean
+  isArchived?: boolean
+}
+
+export interface CreateObjectResponse {
+  object: ObjectDef
+}
+
+export type PatchObjectResponse = CreateObjectResponse
+
 export interface RelatedRecordGroup {
   id: string
   label: string
