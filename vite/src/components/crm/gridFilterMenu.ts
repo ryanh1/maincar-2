@@ -78,8 +78,46 @@ export function filterKind(attribute: AttributeDef): FilterKind {
 }
 
 export function filterForAttribute(config: ViewConfig, attributeId: string): ViewFilterCondition | undefined {
-  const filter = config.filterTree
-  return filter?.type === 'condition' && filter.attributeId === attributeId ? filter : undefined
+  function find(node: ViewConfig['filterTree']): ViewFilterCondition | undefined {
+    if (!node) return undefined
+    if (node.type === 'condition') return node.attributeId === attributeId ? node : undefined
+    return node.children.map(find).find(Boolean)
+  }
+
+  return find(config.filterTree)
+}
+
+export function removeFiltersForAttribute(tree: ViewConfig['filterTree'], attributeId: string): ViewConfig['filterTree'] {
+  if (!tree) return undefined
+  if (tree.type === 'condition') return tree.attributeId === attributeId ? undefined : tree
+  const children = tree.children.flatMap((child) => {
+    const next = removeFiltersForAttribute(child, attributeId)
+    return next ? [next] : []
+  })
+  if (children.length === 0) return undefined
+  if (children.length === 1) return children[0]
+  return { ...tree, children }
+}
+
+export function upsertFilterForAttribute(tree: ViewConfig['filterTree'], condition: ViewFilterCondition): ViewConfig['filterTree'] {
+  let replaced = false
+
+  function replace(node: NonNullable<ViewConfig['filterTree']>): NonNullable<ViewConfig['filterTree']> {
+    if (node.type === 'condition') {
+      if (!replaced && node.attributeId === condition.attributeId) {
+        replaced = true
+        return condition
+      }
+      return node
+    }
+    return { ...node, children: node.children.map(replace) }
+  }
+
+  if (!tree) return condition
+  const next = replace(tree)
+  if (replaced) return next
+  if (next.type === 'group' && next.op === 'and') return { ...next, children: [...next.children, condition] }
+  return { type: 'group', op: 'and', children: [next, condition] }
 }
 
 export function conditionChoice(attribute: AttributeDef, operator: ViewFilterCondition['operator'] | undefined): ConditionChoice | undefined {

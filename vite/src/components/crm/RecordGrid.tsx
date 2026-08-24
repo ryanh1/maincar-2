@@ -38,7 +38,8 @@ import { chipCellRenderer, type ChipCellData } from './chipCell'
 import { fieldEditorCellRenderer, type FieldEditorCellData } from './fieldEditorCell'
 import { GridViewToolbar } from './GridViewToolbar'
 import { GridColumnFilterMenu } from './GridColumnFilterMenu'
-import type { GridMenuAnchor } from './gridFilterMenu'
+import { filterForAttribute, type GridFilterValue, type GridMenuAnchor } from './gridFilterMenu'
+import { AppliedGridConstraints } from './AppliedGridConstraints'
 import { useGridColors } from './useGridColors'
 import { RecordPeekDrawer } from './RecordPeekDrawer'
 import { RecordGridCreateRow } from './RecordGrid_CreateRow'
@@ -74,6 +75,9 @@ const BASE_FONT_SIZE = 13
 // rows of the end of what is loaded, so the fetch lands before blank rows do.
 const PREFETCH_MARGIN = 60
 const JUST_CALLED_MARKER_MS = 5_000
+const GRID_HEADER_ICONS: NonNullable<DataEditorProps['headerIcons']> = {
+  activeFilter: ({ fgColor }) => `<svg width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 5h12l-4.5 5v4l-3 1v-5L4 5Z" stroke="${fgColor}" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
+}
 
 function drawFiniteCellBorders(
   ctx: CanvasRenderingContext2D,
@@ -166,6 +170,28 @@ const HEADER_MENU_UNSUPPORTED_TYPES = new Set(['multiselect', 'record_reference'
 
 function headerMenuSupported(attribute: AttributeDef): boolean {
   return !attribute.isMulti && !HEADER_MENU_UNSUPPORTED_TYPES.has(attribute.type)
+}
+
+function headerMenuValues(attribute: AttributeDef, rows: RecordRow[], timeZone: string | null | undefined): GridFilterValue[] {
+  if (Array.isArray(attribute.optionsJson)) {
+    return attribute.optionsJson
+      .filter((option): option is { value: string; label: string; isArchived?: boolean } =>
+        typeof option === 'object' && option !== null && typeof (option as { value?: unknown }).value === 'string' && typeof (option as { label?: unknown }).label === 'string',
+      )
+      .filter((option) => !option.isArchived)
+      .map((option) => ({ value: option.value, label: option.label }))
+  }
+
+  const values = new Map<string, string>()
+  for (const row of rows) {
+    const raw = row[attribute.slug]
+    if (raw === undefined || raw === null || raw === '') continue
+    const value = String(raw)
+    values.set(value, formatCellValue(raw, attribute.type, timeZone, typeof row.currency === 'string' ? row.currency : undefined))
+  }
+  return [...values.entries()]
+    .map(([value, label]) => ({ value, label }))
+    .sort((left, right) => left.label.localeCompare(right.label))
 }
 
 // Mirrors KeyboardSystem.tsx's guards (not imported from there: those two are
@@ -296,17 +322,22 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         const column = configuredColumns.get(attr.id)
         const collapsedGroup = column?.group && column.collapsed ? column.group : undefined
         const headerColor = resolveHeaderColor(attr, config.columnStyles)
+        const sort = config.sorts.find((candidate) => candidate.attributeId === attr.id)
+        const filterActive = Boolean(filterForAttribute(config, attr.id))
+        const title = collapsedGroup ? `${collapsedGroup} (${config.columns.filter((candidate) => candidate.group === collapsedGroup).length})` : attr.name
         return {
           id: attr.slug,
-          title: collapsedGroup ? `${collapsedGroup} (${config.columns.filter((candidate) => candidate.group === collapsedGroup).length})` : attr.name,
+          title: `${title}${sort ? sort.direction === 'asc' ? ' ↑' : ' ↓' : ''}`,
           width: Math.round((config.columnWidths[attr.id] ?? (index === 0 ? LEADING_COLUMN_WIDTH : DEFAULT_COLUMN_WIDTH)) * zoomFactor),
           hasMenu: headerMenuSupported(attr),
+          ...(sort || filterActive ? { style: 'highlight' as const } : {}),
+          ...(filterActive ? { indicatorIcon: 'activeFilter' } : {}),
           ...(headerColor
             ? { themeOverride: { bgHeader: colors.headerTintColors[headerColor], headerBottomBorderColor: colors.paintColors[headerColor] } }
             : {}),
         }
       }),
-    [visibleColumns, config.columnWidths, configuredColumns, config.columns, config.columnStyles, zoomFactor, colors],
+    [visibleColumns, config, configuredColumns, zoomFactor, colors],
   )
   const listQuery = useMemo(() => toRecordListQuery(config, attributes), [config, attributes])
   const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
@@ -759,6 +790,11 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
       })
     },
     [visibleColumns, onViewConfigChange],
+  )
+
+  const activeHeaderMenuValues = useMemo(
+    () => headerMenu ? headerMenuValues(headerMenu.attribute, rows, user?.timeZone) : [],
+    [headerMenu, rows, user?.timeZone],
   )
 
   const selectedColumnIds = useMemo(() => {
@@ -1368,6 +1404,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
             trailing={<RecordCount filteredCount={totalCount} isFiltered={false} totalCount={totalCount} />}
           />
         )}
+        {onViewConfigChange && <AppliedGridConstraints attributes={columns} config={config} onConfigChange={onViewConfigChange} />}
         <KanbanBoard
           attributes={columns}
           config={config}
@@ -1398,6 +1435,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           trailing={<RecordCount filteredCount={totalCount} isFiltered={false} totalCount={totalCount} />}
         />
       )}
+      {onViewConfigChange && <AppliedGridConstraints attributes={columns} config={config} onConfigChange={onViewConfigChange} />}
       {isCreating && (
         <RecordGridCreateRow
           object={object}
@@ -1465,6 +1503,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         smoothScrollX
         smoothScrollY
         onVisibleRegionChanged={onGridVisibleRegionChanged}
+        headerIcons={GRID_HEADER_ICONS}
         onHeaderMenuClick={onHeaderMenuClick}
         onCellClicked={onCellClicked}
         onCellContextMenu={onCellContextMenu}
@@ -1538,6 +1577,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
               if (!open) setHeaderMenu(null)
             }}
             open
+            values={activeHeaderMenuValues}
             wrap={configuredColumns.get(headerMenu.attribute.id)?.wrap === true}
           />
         )}

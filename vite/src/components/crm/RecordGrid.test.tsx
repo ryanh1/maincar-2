@@ -1541,6 +1541,35 @@ describe('RecordGrid', () => {
     expect(onViewConfigChange).not.toHaveBeenCalled()
   })
 
+  it('marks constrained headers and exposes removable applied constraints', () => {
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada', lastName: 'Lovelace' }],
+      totalCount: 1,
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    const config = {
+      ...createViewConfig(ATTRIBUTES),
+      sorts: [{ attributeId: 'firstName', direction: 'asc' as const }],
+      filterTree: { type: 'condition' as const, attributeId: 'lastName', operator: 'contains' as const, value: 'Love' },
+    }
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={vi.fn()} />,
+    )
+
+    const columns = dataEditorProps.current!.columns as Array<{ title: string; style?: string; indicatorIcon?: string }>
+    expect(columns[0]).toMatchObject({ title: 'First name ↑', style: 'highlight' })
+    expect(columns[1]).toMatchObject({ title: 'Last name', style: 'highlight', indicatorIcon: 'activeFilter' })
+    expect(screen.getByLabelText('Applied grid constraints')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove the First name sort' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove the Last name filter' })).toBeInTheDocument()
+  })
+
   it('toggles a column between clipped and wrapped text from its header menu', async () => {
     const user = userEvent.setup()
     useRecordWindow.mockReturnValue({
