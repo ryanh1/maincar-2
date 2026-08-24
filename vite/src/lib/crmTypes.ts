@@ -149,6 +149,54 @@ export interface CreateObjectResponse {
 
 export type PatchObjectResponse = CreateObjectResponse
 
+export interface CreateAttributeRequest {
+  objectId: string
+  slug: string
+  name: string
+  type: AttributeType
+  description?: string
+  icon?: string
+  storage?: Exclude<AttributeDef['storage'], 'column'>
+  optionsJson?: AttributeOption[]
+  refObjectId?: string
+  formatJson?: FieldFormat
+  validationJson?: FieldValidation
+  defaultJson?: unknown
+  isIdentity?: boolean
+  isMulti?: boolean
+  isRequired?: boolean
+  isUnique?: boolean
+  isReadOnly?: boolean
+  sortOrder?: number
+}
+
+export interface PatchAttributeRequest {
+  name?: string
+  description?: string
+  icon?: string
+  type?: AttributeType
+  storage?: AttributeDef['storage']
+  optionsJson?: AttributeOption[]
+  refObjectId?: string
+  formatJson?: FieldFormat
+  validationJson?: FieldValidation
+  defaultJson?: unknown
+  isIdentity?: boolean
+  isMulti?: boolean
+  isRequired?: boolean
+  isUnique?: boolean
+  isReadOnly?: boolean
+  isArchived?: boolean
+  sortOrder?: number
+  resolveMultiToSingle?: boolean
+}
+
+export interface CreateAttributeResponse {
+  attribute: AttributeDef
+}
+
+export type PatchAttributeResponse = CreateAttributeResponse
+
 export interface RelatedRecordGroup {
   id: string
   label: string
