@@ -31,6 +31,7 @@ describe('ComposerDock', () => {
 
   it('renders only open cards, from oldest at left to newest at right', () => {
     renderDock([draft({ id: 'saved', subject: 'Saved', isOpen: false }), draft({ id: 'old', subject: 'Old' }), draft({ id: 'new', subject: 'New' })], 2000)
+    expect(screen.getByRole('region', { name: 'Active email cards' })).toHaveStyle({ left: '224px', right: '384px' })
     expect(screen.getAllByRole('article').map((item) => item.textContent)).toEqual(['Old', 'New'])
     expect(screen.queryByText('Saved')).not.toBeInTheDocument()
   })

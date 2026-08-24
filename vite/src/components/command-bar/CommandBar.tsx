@@ -28,6 +28,7 @@ import { useComposer } from '@/components/composer/composerContext'
 import { useDialer } from '@/components/dialer/dialerContext'
 import type { EmailDraft } from '@/lib/emailTypes'
 import { LG_BREAKPOINT_PX, useWindowWidth } from '@/components/composer/desktopOnly'
+import { useOutreachLayout } from '@/components/outreachLayout'
 
 interface CommandBarProps {
   /** Open drafts currently hidden only because the desktop dock cannot fit them. */
@@ -52,11 +53,12 @@ export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarPro
   const { drafts, discardDraft, openComposer, reopenCard } = useComposer()
   const { expandDialer } = useDialer()
   const width = useWindowWidth()
+  const outreachLayout = useOutreachLayout()
   const [query, setQuery] = useState('')
   const [mobileDraftId, setMobileDraftId] = useState<string | null>(null)
   const [mobileDraftsOpen, setMobileDraftsOpen] = useState(false)
   const [draftToDelete, setDraftToDelete] = useState<EmailDraft | null>(null)
-  const narrow = width < 640
+  const narrow = !outreachLayout.usesRail
   // Below the desktop dock threshold, a card has no safe corner to occupy.
   // Tablet and phone therefore share the full-screen composer and sheet list.
   const compact = width < LG_BREAKPOINT_PX
@@ -113,7 +115,7 @@ export function CommandBar({ hiddenDraftIds = [], onSelectDraft }: CommandBarPro
       aria-label="Outreach actions"
       className={narrow
         ? 'fixed bottom-0 left-0 right-0 z-[120] flex h-12 flex-row items-center justify-around border-t border-border bg-surface px-3'
-        : 'fixed bottom-6 right-6 z-[120] flex w-8 flex-col items-center gap-2'}
+        : 'fixed inset-y-0 right-0 z-[120] flex w-16 flex-col items-center justify-end gap-2 border-l border-border bg-surface pb-6'}
     >
       {totalRecoverable > 0 && compact ? (
         <Sheet open={mobileDraftsOpen} onOpenChange={(open) => {

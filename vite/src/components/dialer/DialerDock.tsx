@@ -10,6 +10,7 @@ import { DialerPostCallActions } from '@/components/dialer/DialerPostCallActions
 import { NumericKeypad } from '@/components/dialer/NumericKeypad'
 import { Button } from '@/components/ui/button'
 import { useDialer } from '@/components/dialer/dialerContext'
+import { useOutreachLayout } from '@/components/outreachLayout'
 import { useGetCallDetail } from '@/hooks/dialer'
 import { formatDateTime } from '@/lib/datetime'
 import { useAuth } from '@/providers/useAuth'
@@ -44,6 +45,7 @@ export function DialerDock() {
   } = useDialer()
   const [postCall, setPostCall] = useState<{ callId: string; dispositionId: string } | null>(null)
   const [draftNote, setDraftNote] = useState<{ callId: string; noteText: string } | null>(null)
+  const outreachLayout = useOutreachLayout()
   const expanded = view === 'expanded'
   const inCall = mode === 'call'
   const incoming = phase === 'ringing' && activeCall?.direction === 'inbound'
@@ -78,7 +80,13 @@ export function DialerDock() {
     <div
       role="region"
       aria-label="Dialer"
-      className={cn('fixed bottom-0 right-16 z-[100] flex w-80 flex-col rounded-t-md border border-b-0 border-border bg-card text-card-foreground shadow-md')}
+      className={cn(
+        'fixed bottom-0 flex flex-col bg-card text-card-foreground',
+        outreachLayout.usesRail
+          ? 'z-[100] w-80 rounded-t-md border border-b-0 border-border shadow-md'
+          : 'inset-x-0 top-0 z-[130] w-full overflow-y-auto',
+      )}
+      style={outreachLayout.usesRail ? { right: outreachLayout.dialerRightInsetPx } : undefined}
     >
       <button
         type="button"
