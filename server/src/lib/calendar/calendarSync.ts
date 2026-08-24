@@ -108,7 +108,7 @@ function eventData(event: ProviderEvent, source: { timeZone: string | null }) {
       }
     : { recurrenceKind: 'none', providerSeriesId: null, recurrenceRule: null, originalStartAt: null, originalStartDate: null }
   const time = event.kind === 'timed'
-    ? { kind: 'timed', startsAt: event.startsAt, endsAt: event.endsAt, timeZone: source.timeZone }
+    ? { kind: 'timed', startsAt: event.startsAt, endsAt: event.endsAt, timeZone: event.timeZone ?? source.timeZone }
     : { kind: 'all-day', startsAt: allDayDate(event.startDate), endsAt: allDayDate(event.endDateExclusive), timeZone: null }
 
   return {
@@ -118,6 +118,9 @@ function eventData(event: ProviderEvent, source: { timeZone: string | null }) {
     description: event.description,
     location: event.location,
     webLink: event.webLink,
+    meetingLink: event.meetingLink ?? null,
+    availability: event.availability ?? 'busy',
+    privacy: event.privacy ?? 'default',
     status: event.status,
     cancelledAt: event.status === 'cancelled' ? new Date() : null,
     ...time,
@@ -167,6 +170,19 @@ async function persistEvent(tx: Tx, scope: CalendarSyncScope, source: { id: stri
       })
     }
   }
+  return stored
+}
+
+/** Persist the provider response from one lifecycle command without waiting for the next delta page. */
+export async function persistCalendarEventSnapshot(
+  input: CalendarSourceSyncInput,
+  event: ProviderEvent,
+  db: Db = prisma,
+) {
+  const scope = sourceScope(input)
+  const source = await db.calendarSource.findFirst({ where: { id: input.sourceId, ...scope } })
+  if (!source) return null
+  return db.$transaction((tx) => persistEvent(tx, input, source, event))
 }
 
 /**

@@ -1425,11 +1425,20 @@ model CalendarEvent {
   description String?
   location String?
   webLink String?
+  // Provider-created meeting URL plus an optional Maincar override entered by the rep.
+  meetingLink String?
+  meetingLinkOverride String?
+  // Explicit editing zone chosen in Maincar. The provider snapshot remains in timeZone.
+  timeZoneOverride String?
   // timed | all-day. All-day dates are UTC-midnight instants and carry no zone.
   kind String
   startsAt DateTime
   endsAt DateTime
   timeZone String?
+  // busy | free
+  availability String @default("busy")
+  // default | public | private
+  privacy String @default("default")
   // confirmed | tentative | cancelled. A cancellation/deletion remains a durable
   // tombstone so downstream consumers do not mistake it for a missing sync row.
   status String @default("confirmed")
@@ -1442,6 +1451,7 @@ model CalendarEvent {
   originalStartDate String?
 
   attendees CalendarEventAttendee[]
+  links RecordLink[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2295,6 +2305,8 @@ model RecordLink {
   note   Note?   @relation("NoteLinks", fields: [noteId], references: [id], onDelete: Cascade)
   taskId String?
   task   Task?   @relation("TaskLinks", fields: [taskId], references: [id], onDelete: Cascade)
+  calendarEventId String?
+  calendarEvent   CalendarEvent? @relation(fields: [calendarEventId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2305,6 +2317,7 @@ model RecordLink {
   // both make, scoped by tenant.
   @@index([orgId, noteId])
   @@index([orgId, taskId])
+  @@index([orgId, calendarEventId])
 }
 
 // -----------------------------------------------------------------------------

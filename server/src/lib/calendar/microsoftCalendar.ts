@@ -61,6 +61,9 @@ const GraphEventSchema = z.object({
   bodyPreview: z.string().nullish(),
   location: z.object({ displayName: z.string().nullish() }).nullish(),
   webLink: z.string().nullish(),
+  sensitivity: z.string().nullish(),
+  onlineMeetingUrl: z.string().nullish(),
+  onlineMeeting: z.object({ joinUrl: z.string().nullish() }).nullish(),
   start: GraphDateTimeSchema.nullish(),
   end: GraphDateTimeSchema.nullish(),
   isAllDay: z.boolean().nullish(),
@@ -175,6 +178,16 @@ function status(event: ParsedEvent): 'confirmed' | 'tentative' | 'cancelled' {
   return event.showAs === 'tentative' ? 'tentative' : 'confirmed'
 }
 
+function availability(event: ParsedEvent): 'busy' | 'free' {
+  return event.showAs?.toLowerCase() === 'free' ? 'free' : 'busy'
+}
+
+function privacy(event: ParsedEvent): 'default' | 'public' | 'private' {
+  return event.sensitivity?.toLowerCase() === 'private' || event.sensitivity?.toLowerCase() === 'confidential'
+    ? 'private'
+    : 'default'
+}
+
 const GRAPH_DAY: Record<string, string> = { monday: 'MO', tuesday: 'TU', wednesday: 'WE', thursday: 'TH', friday: 'FR', saturday: 'SA', sunday: 'SU' }
 const RRULE_DAY: Record<string, string> = Object.fromEntries(Object.entries(GRAPH_DAY).map(([day, code]) => [code, day]))
 const GRAPH_INDEX: Record<string, string> = { first: '1', second: '2', third: '3', fourth: '4', last: '-1' }
@@ -229,6 +242,9 @@ function toCalendarEvent(event: ParsedEvent, providerCalendarId: string): Calend
     description: event.body?.content ?? event.bodyPreview ?? null,
     location: event.location?.displayName ?? null,
     webLink: event.webLink ?? null,
+    meetingLink: event.onlineMeeting?.joinUrl ?? event.onlineMeetingUrl ?? null,
+    availability: availability(event),
+    privacy: privacy(event),
     attendees: (event.attendees ?? []).flatMap((attendee) => {
       const email = attendee.emailAddress?.address
       if (!email) return []
@@ -248,7 +264,7 @@ function toCalendarEvent(event: ParsedEvent, providerCalendarId: string): Calend
   }
   return event.isAllDay
     ? { ...shared, kind: 'all-day', startDate: toDateOnly(event.start.dateTime), endDateExclusive: toDateOnly(event.end.dateTime) }
-    : { ...shared, kind: 'timed', startsAt: toDate(event.start.dateTime, event.start.timeZone), endsAt: toDate(event.end.dateTime, event.end.timeZone) }
+    : { ...shared, kind: 'timed', startsAt: toDate(event.start.dateTime, event.start.timeZone), endsAt: toDate(event.end.dateTime, event.end.timeZone), timeZone: event.start.timeZone ?? null }
 }
 
 function toCalendar(calendar: ParsedCalendar, accountEmail: string): Calendar {
@@ -312,7 +328,8 @@ function toGraphEvent(input: CreateCalendarEventInput): Record<string, unknown> 
     end: toGraphDateTime(end),
     isAllDay: input.kind === 'all-day',
     attendees: toGraphAttendees(input.attendees),
-    showAs: input.status === 'tentative' ? 'tentative' : input.status === 'cancelled' ? 'free' : 'busy',
+    showAs: input.availability === 'free' ? 'free' : input.status === 'tentative' ? 'tentative' : 'busy',
+    sensitivity: input.privacy === 'private' ? 'private' : 'normal',
     recurrence: input.recurrence.kind === 'series' ? parseRRule(input.recurrence.recurrenceRule, typeof start === 'string' ? start : start.toISOString().slice(0, 10) as `${number}-${number}-${number}`) : undefined,
   }
 }
@@ -323,7 +340,9 @@ function toGraphPatch(patch: CalendarEventPatch): Record<string, unknown> {
   if (patch.description !== undefined) result.body = { contentType: 'HTML', content: patch.description ?? '' }
   if (patch.location !== undefined) result.location = { displayName: patch.location ?? '' }
   if (patch.attendees !== undefined) result.attendees = toGraphAttendees(patch.attendees)
-  if (patch.status !== undefined) result.showAs = patch.status === 'tentative' ? 'tentative' : patch.status === 'cancelled' ? 'free' : 'busy'
+  if (patch.status !== undefined) result.showAs = patch.status === 'tentative' ? 'tentative' : 'busy'
+  if (patch.availability !== undefined) result.showAs = patch.availability === 'free' ? 'free' : 'busy'
+  if (patch.privacy !== undefined) result.sensitivity = patch.privacy === 'private' ? 'private' : 'normal'
   if (patch.time) {
     const start = patch.time.kind === 'all-day' ? patch.time.startDate : patch.time.startsAt
     const end = patch.time.kind === 'all-day' ? patch.time.endDateExclusive : patch.time.endsAt
