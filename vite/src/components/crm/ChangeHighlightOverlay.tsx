@@ -1,8 +1,4 @@
-import { X } from 'lucide-react'
-
 import { Button } from '@/components/ui/button'
-import { IconButton } from '@/components/ui/icon-button'
-import { useGetFieldHistory } from '@/hooks/crm'
 import type { AttributeDef, FieldChange } from '@/lib/crmTypes'
 import { formatCellValue } from './recordCellValue'
 
@@ -39,53 +35,5 @@ export function ChangeHighlightOverlay({ hover, timeZone, onShowFullHistory }: C
         See full history
       </Button>
     </aside>
-  )
-}
-
-export function FieldHistoryPopover({
-  orgId,
-  target,
-  timeZone,
-  onClose,
-}: {
-  orgId: string
-  target: ChangeHighlightTarget
-  timeZone: string | null | undefined
-  onClose: () => void
-}) {
-  const historyQuery = useGetFieldHistory(orgId, target.recordId, target.attribute.slug)
-  const entries = historyQuery.data?.pages.flatMap((page) => page.history) ?? []
-
-  const { bounds, attribute } = target
-  return (
-    <section
-      aria-label={`${attribute.name} full history`}
-      className="absolute z-40 w-80 border border-border bg-popover p-3 text-sm text-popover-foreground shadow-md"
-      style={{ left: bounds.x + 8, top: bounds.y + bounds.height + 4 }}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="font-medium">{attribute.name} history</h2>
-        <IconButton type="button" variant="ghost" size="icon-sm" onClick={onClose} tooltip="Close field history">
-          <X size={16} />
-        </IconButton>
-      </div>
-      {historyQuery.isPending && <p className="mt-3 text-muted-foreground">Loading…</p>}
-      {historyQuery.isError && <p className="mt-3 text-destructive">Could not load field history.</p>}
-      {!historyQuery.isPending && !historyQuery.isError && entries.length === 0 && <p className="mt-3 text-muted-foreground">No field history yet.</p>}
-      {entries.length > 0 && (
-        <ol className="mt-3 space-y-2">
-          {entries.map((entry) => (
-            <li key={entry.id} className="border-t border-border pt-2 first:border-t-0 first:pt-0">
-              {formatCellValue(entry.oldValue, attribute.type, timeZone) || '—'} → {formatCellValue(entry.newValue, attribute.type, timeZone) || '—'}
-            </li>
-          ))}
-        </ol>
-      )}
-      {historyQuery.hasNextPage && (
-        <Button type="button" variant="secondary" size="sm" className="mt-3" disabled={historyQuery.isFetchingNextPage} onClick={() => void historyQuery.fetchNextPage()}>
-          Load more
-        </Button>
-      )}
-    </section>
   )
 }

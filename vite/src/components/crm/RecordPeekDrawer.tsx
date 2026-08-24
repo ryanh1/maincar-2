@@ -11,6 +11,7 @@ import { useGetActivity, useGetRelatedRecords, useUpdateRecordLifecycle, type Ac
 import type { AttributeDef, ObjectDef, RecordRow, RelatedRecordGroup } from '@/lib/crmTypes'
 import { parseOptions } from './cellBuilder'
 import { FieldValueEditor } from './FieldValueEditor'
+import { FieldHistoryPopover } from './FieldHistoryPopover'
 import { OptionChip } from './OptionChip'
 import { RecordNoteComposer } from './RecordNoteComposer'
 import { formatCellValue } from './recordCellValue'
@@ -374,21 +375,26 @@ function FieldRow({
   return (
     <>
       <dt className="truncate text-muted-foreground">{attr.name}</dt>
-      <dd className="min-w-0 break-words text-foreground">
+      <dd className="group flex min-w-0 items-start gap-1 break-words text-foreground">
         {editing ? (
-          <FieldValueEditor orgId={orgId} attribute={attr} value={rawValue} timeZone={timeZone} onCommit={commit} onCancel={() => setEditing(false)} onTabNext={onTabNext} />
+          <div className="min-w-0 flex-1">
+            <FieldValueEditor orgId={orgId} attribute={attr} value={rawValue} timeZone={timeZone} onCommit={commit} onCancel={() => setEditing(false)} onTabNext={onTabNext} />
+          </div>
         ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={attr.isReadOnly || !canEdit}
-            ref={focusButtonRef}
-            className="w-full justify-start px-0 text-left disabled:cursor-default"
-            onClick={() => setEditing(true)}
-          >
-            <FieldValue attr={attr} rawValue={rawValue} timeZone={timeZone} currencyCode={typeof record?.currency === 'string' ? record.currency : undefined} />
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={attr.isReadOnly || !canEdit}
+              ref={focusButtonRef}
+              className="min-w-0 flex-1 justify-start px-0 text-left disabled:cursor-default"
+              onClick={() => setEditing(true)}
+            >
+              <FieldValue attr={attr} rawValue={rawValue} timeZone={timeZone} currencyCode={typeof record?.currency === 'string' ? record.currency : undefined} />
+            </Button>
+            {record && <FieldHistoryPopover orgId={orgId} recordId={record.id} attribute={attr} timeZone={timeZone} />}
+          </>
         )}
       </dd>
     </>

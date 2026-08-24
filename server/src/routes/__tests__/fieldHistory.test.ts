@@ -4,7 +4,7 @@ import request from 'supertest'
 
 const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
   prismaMock: {
-    user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
+    user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findMany: vi.fn() },
     membership: { findFirst: vi.fn() },
     fieldHistory: { findMany: vi.fn() },
   },
@@ -56,6 +56,7 @@ function authAs(membership: ReturnType<typeof membershipRow> | null = membership
   verifyTokenMock.mockResolvedValue({ uid: 'uid-a', email: 'a@orga.com' })
   prismaMock.user.findUnique.mockResolvedValue(userRow())
   prismaMock.user.findUniqueOrThrow.mockResolvedValue(userRow())
+  prismaMock.user.findMany.mockResolvedValue([userRow()])
   prismaMock.membership.findFirst.mockResolvedValue(membership)
 }
 
@@ -112,13 +113,18 @@ describe('GET /api/orgs/:orgId/field-history — newest-first cursor paging', ()
     expect(res.body.history).toHaveLength(50)
     expect(res.body.history[0]).toEqual({
       id: 'history-51', recordId: 'person-1', attribute: 'title', oldValue: 'SDR', newValue: 'AE',
-      changedByUserId: 'user-a', changeSource: 'user', reason: null, changedAt: rows[0].changedAt.toISOString(),
+      changedByUserId: 'user-a', actor: { name: 'Al Pha', avatarUrl: null }, changeSource: 'user', reason: null,
+      changedAt: rows[0].changedAt.toISOString(),
     })
     expect(res.body.nextCursor).toEqual(expect.any(String))
     expect(prismaMock.fieldHistory.findMany).toHaveBeenCalledWith({
       where: { orgId: ORG_A, recordId: 'person-1', attribute: 'title' },
       orderBy: [{ changedAt: 'desc' }, { id: 'desc' }],
       take: 51,
+    })
+    expect(prismaMock.user.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['user-a'] }, memberships: { some: { orgId: ORG_A } } },
+      select: { id: true, email: true, firstName: true, lastName: true, imageUrl: true },
     })
   })
 

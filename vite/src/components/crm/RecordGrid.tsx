@@ -56,7 +56,8 @@ import { parseGridCommand } from './gridCommands'
 import { coerceCurrency, coerceNumber } from './cellCoercion'
 import { formatEntry } from '@/lib/dialPad'
 import { KanbanBoard } from './KanbanBoard'
-import { ChangeHighlightOverlay, FieldHistoryPopover, type ChangeHighlightTarget } from './ChangeHighlightOverlay'
+import { ChangeHighlightOverlay, type ChangeHighlightTarget } from './ChangeHighlightOverlay'
+import { FieldHistoryPopover } from './FieldHistoryPopover'
 import { drawChangeDots, drawColorRuleDot } from './changeHighlightCanvas'
 import { useRowSelection } from './useRowSelection'
 import { SelectionBanner } from './SelectionBanner'
@@ -1508,9 +1509,12 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           <FieldHistoryPopover
             key={`${historyTarget.recordId}:${historyTarget.attribute.id}`}
             orgId={orgId}
-            target={historyTarget}
+            recordId={historyTarget.recordId}
+            attribute={historyTarget.attribute}
             timeZone={user?.timeZone}
-            onClose={() => setHistoryTarget(null)}
+            open
+            onOpenChange={(nextOpen) => { if (!nextOpen) setHistoryTarget(null) }}
+            anchor={historyTarget.bounds}
           />
         )}
 

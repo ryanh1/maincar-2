@@ -50,6 +50,11 @@ function decodeCursor(value: string): FieldHistoryCursor | null {
   }
 }
 
+interface HistoryActor {
+  name: string
+  avatarUrl: string | null
+}
+
 function mapHistoryToApi(row: {
   id: string
   recordId: string
@@ -60,7 +65,7 @@ function mapHistoryToApi(row: {
   changeSource: string
   reason: string | null
   changedAt: Date
-}) {
+}, actor: HistoryActor | null) {
   return {
     id: row.id,
     recordId: row.recordId,
@@ -68,6 +73,7 @@ function mapHistoryToApi(row: {
     oldValue: row.oldJson,
     newValue: row.newJson,
     changedByUserId: row.changedByUserId,
+    actor,
     changeSource: row.changeSource,
     reason: row.reason,
     changedAt: row.changedAt.toISOString(),
@@ -129,10 +135,24 @@ router.get(
     })
     const hasMore = rows.length > FIELD_HISTORY_PAGE_SIZE
     const pageRows = hasMore ? rows.slice(0, FIELD_HISTORY_PAGE_SIZE) : rows
+    const actorIds = [...new Set(pageRows.flatMap((row) => row.changedByUserId ? [row.changedByUserId] : []))]
+    const actors = actorIds.length > 0
+      ? await prisma.user.findMany({
+          where: { id: { in: actorIds }, memberships: { some: { orgId } } },
+          select: { id: true, email: true, firstName: true, lastName: true, imageUrl: true },
+        })
+      : []
+    const actorsById = new Map(actors.map((actor) => [
+      actor.id,
+      {
+        name: [actor.firstName, actor.lastName].filter(Boolean).join(' ') || actor.email,
+        avatarUrl: actor.imageUrl,
+      },
+    ]))
 
     // --- Return response ---
     res.json({
-      history: pageRows.map(mapHistoryToApi),
+      history: pageRows.map((row) => mapHistoryToApi(row, row.changedByUserId ? actorsById.get(row.changedByUserId) ?? null : null)),
       nextCursor: hasMore ? encodeCursor(pageRows[pageRows.length - 1]) : null,
     })
   }),
