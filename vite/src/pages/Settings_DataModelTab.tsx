@@ -1,8 +1,13 @@
 import { useState } from 'react'
+import { Database } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { EmptyState } from '@/components/EmptyState'
+import { PageHeader } from '@/components/PageHeader'
 import { RecordTypeIcon } from '@/components/RecordTypeIcon'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -10,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { useGetObject, useGetObjects, useUpdateAttribute } from '@/hooks/crm'
 import type { AttributeDef, FieldFormat, FieldValidation, ObjectDef } from '@/lib/crmTypes'
+import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/useAuth'
 
 import { Settings_DataModelTab_ObjectEditor } from './Settings_DataModelTab_ObjectEditor'
@@ -37,6 +43,54 @@ function asFormat(value: unknown): FieldFormat {
 
 function asValidation(value: unknown): FieldValidation {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as FieldValidation) : {}
+}
+
+function fieldTypeLabel(type: AttributeDef['type']): string {
+  const label = type.replaceAll('_', ' ')
+  return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
+function ObjectListSection({
+  id,
+  title,
+  objects,
+  selectedObjectId,
+  onSelect,
+}: {
+  id: string
+  title: string
+  objects: ObjectDef[]
+  selectedObjectId: string | null
+  onSelect: (objectId: string) => void
+}) {
+  return (
+    <section aria-labelledby={id}>
+      <h3 id={id} className="mb-2 text-xs font-medium text-text-muted">{title}</h3>
+      {objects.length === 0 ? (
+        <p className="px-2 text-xs text-text-muted">No {title.toLowerCase()}.</p>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {objects.map((object) => (
+            <Button
+              key={object.id}
+              type="button"
+              size="sm"
+              variant="ghost"
+              aria-pressed={selectedObjectId === object.id}
+              className={cn(
+                'w-full justify-start gap-2 px-2',
+                selectedObjectId === object.id && 'bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary',
+              )}
+              onClick={() => onSelect(object.id)}
+            >
+              <RecordTypeIcon icon={object.icon} color={object.iconColor} aria-hidden />
+              {object.namePlural}
+            </Button>
+          ))}
+        </div>
+      )}
+    </section>
+  )
 }
 
 /** The Format & validation editor for one field (MAI-365). */
@@ -170,7 +224,7 @@ function FieldConfigEditor({ orgId, objectId, attribute, onClose }: { orgId: str
   )
 }
 
-/** Settings → Data model: pick an object, then edit a field's Format & validation. */
+/** Settings → Data model: browse objects, inspect fields, and open schema editors. */
 export function Settings_DataModelTab() {
   const { org, isAdmin } = useAuth()
   const objectsQuery = useGetObjects(org?.id)
@@ -182,61 +236,105 @@ export function Settings_DataModelTab() {
   if (!org) return null
 
   const objects = (objectsQuery.data?.objects ?? []).filter((object) => !object.isArchived)
+  const standardObjects = objects.filter((object) => object.isStandard)
+  const customObjects = objects.filter((object) => !object.isStandard)
   const selectedObject = objects.find((object) => object.id === objectId) ?? null
   const attributes = (objectQuery.data?.object.attributes ?? []).filter((attribute) => !attribute.isArchived)
-  const loading = objectsQuery.isPending || (objectId !== null && objectQuery.isPending)
-  const loadError = objectsQuery.isError || objectQuery.isError
 
   return (
-    <section className="flex max-w-5xl flex-col gap-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">Data model</h2>
-          <p className="mt-1 text-xs text-text-muted">Choose an object, then set how each field displays and validates.</p>
-        </div>
-        {isAdmin && <Button type="button" size="sm" onClick={() => setEditingObject('new')}>New object</Button>}
-      </div>
+    <section className="flex max-w-5xl flex-col gap-6">
+      <PageHeader
+        icon={Database}
+        title="Data model"
+        action={isAdmin ? <Button type="button" size="sm" onClick={() => setEditingObject('new')}>New object</Button> : undefined}
+      />
       {!isAdmin && <p className="text-xs text-text-muted">Only an admin can change the data model.</p>}
 
-      <div className="flex items-end gap-2">
-        <div className="flex w-full max-w-sm flex-col gap-1">
-          <Label htmlFor="data-model-object">Object</Label>
-          <Select value={objectId ?? ''} disabled={!isAdmin} onValueChange={(value) => setObjectId(value || null)}>
-            <SelectTrigger id="data-model-object" className="h-8 w-full"><SelectValue placeholder="Choose an object" /></SelectTrigger>
-            <SelectContent>{objects.map((object) => <SelectItem key={object.id} value={object.id}><RecordTypeIcon icon={object.icon} color={object.iconColor} aria-hidden />{object.namePlural}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        {selectedObject && <Button type="button" size="sm" variant="secondary" disabled={!isAdmin} onClick={() => setEditingObject(selectedObject)}>Edit object</Button>}
-      </div>
+      <div className="grid items-start gap-6 xl:grid-cols-[16rem_minmax(0,1fr)]">
+        <Card className="gap-4 py-4">
+          <CardHeader className="px-4">
+            <CardTitle className="text-sm">Objects</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4 px-4">
+            {objectsQuery.isPending ? (
+              <p className="text-sm text-text-muted">Loading objects.</p>
+            ) : objectsQuery.isError ? (
+              <div className="flex flex-col items-start gap-3">
+                <p className="text-sm text-destructive">Could not load objects. Try again.</p>
+                <Button type="button" size="sm" variant="secondary" onClick={() => void objectsQuery.refetch()}>Try again</Button>
+              </div>
+            ) : (
+              <>
+                <ObjectListSection id="standard-objects" title="Standard objects" objects={standardObjects} selectedObjectId={objectId} onSelect={setObjectId} />
+                <ObjectListSection id="custom-objects" title="Custom objects" objects={customObjects} selectedObjectId={objectId} onSelect={setObjectId} />
+              </>
+            )}
+          </CardContent>
+        </Card>
 
-      {loading && <p className="text-sm text-text-muted">Loading fields.</p>}
-      {loadError && <p className="text-sm text-destructive">Could not load fields.</p>}
-      {!loading && !loadError && objectId && (
-        <div className="overflow-x-auto border border-border">
-          <table className="w-full">
-            <caption className="sr-only">Fields for the selected object</caption>
-            <thead>
-              <tr className="border-b border-border bg-surface">
-                <th className="px-3 py-2 text-left text-xs font-medium text-text-muted">Field</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-text-muted">Type</th>
-                <th className="w-36 px-3 py-2"><span className="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {attributes.map((attribute) => (
-                <tr key={attribute.id} className="border-b border-border last:border-b-0">
-                  <td className="px-3 py-2 text-sm">{attribute.name}</td>
-                  <td className="px-3 py-2 text-sm text-text-muted">{attribute.type}</td>
-                  <td className="px-3 py-1 text-right">
-                    <Button type="button" size="sm" variant="secondary" disabled={!isAdmin} onClick={() => setEditingField(attribute)}>Format</Button>
-                  </td>
-                </tr>
-              ))}
-              {attributes.length === 0 && <tr><td colSpan={3} className="px-3 py-2 text-sm text-text-muted">This object has no fields.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
+        {!selectedObject ? (
+          <EmptyState title="Select an object">
+            <p>Choose an object to view its fields.</p>
+          </EmptyState>
+        ) : (
+          <Card className="gap-4 py-4">
+            <CardHeader className="px-4 has-data-[slot=card-action]:grid-cols-[minmax(0,1fr)_auto]">
+              <CardTitle className="flex min-w-0 items-center gap-2 text-sm">
+                <RecordTypeIcon icon={selectedObject.icon} color={selectedObject.iconColor} aria-hidden />
+                <span className="truncate">{selectedObject.namePlural}</span>
+              </CardTitle>
+              {isAdmin && (
+                <CardAction>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setEditingObject(selectedObject)}>Edit object</Button>
+                </CardAction>
+              )}
+            </CardHeader>
+            <CardContent className="px-4">
+              {objectQuery.isPending ? (
+                <p className="text-sm text-text-muted">Loading fields.</p>
+              ) : objectQuery.isError ? (
+                <div className="flex flex-col items-start gap-3">
+                  <p className="text-sm text-destructive">Could not load fields. Try again.</p>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => void objectQuery.refetch()}>Try again</Button>
+                </div>
+              ) : attributes.length === 0 ? (
+                <EmptyState title="Add the first field">
+                  <p>Create a field for this object.</p>
+                </EmptyState>
+              ) : (
+                <div className="overflow-x-auto rounded-md border border-border">
+                  <table className="w-full">
+                    <caption className="sr-only">Fields for {selectedObject.namePlural}</caption>
+                    <thead>
+                      <tr className="h-8 border-b border-border bg-surface">
+                        <th scope="col" className="px-3 text-left text-xs font-medium text-text-muted">Field</th>
+                        <th scope="col" className="px-3 text-left text-xs font-medium text-text-muted">Type</th>
+                        <th scope="col" className="w-36 px-3"><span className="sr-only">Actions</span></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {attributes.map((attribute) => (
+                        <tr key={attribute.id} className="h-10 border-b border-border last:border-b-0">
+                          <td className="px-3 py-1 text-sm">
+                            <div className="flex items-center gap-2">
+                              <span>{attribute.name}</span>
+                              {attribute.isSystem && <Badge variant="secondary">System</Badge>}
+                            </div>
+                          </td>
+                          <td className="px-3 py-1 text-sm text-text-muted">{fieldTypeLabel(attribute.type)}</td>
+                          <td className="px-3 py-1 text-right">
+                            <Button type="button" size="sm" variant="secondary" disabled={!isAdmin} onClick={() => setEditingField(attribute)}>Format</Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
 
       {editingField && objectId && (
         <FieldConfigEditor orgId={org.id} objectId={objectId} attribute={editingField} onClose={() => setEditingField(null)} />
