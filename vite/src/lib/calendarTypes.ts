@@ -1,4 +1,18 @@
 export type CalendarConnectionState = 'connected' | 'not-connected'
+export type CalendarRecurrenceScope = 'this-event' | 'this-and-following' | 'series'
+export type CalendarAttendeeResponse = 'needs-action' | 'accepted' | 'declined' | 'tentative'
+
+export interface CalendarAttendee {
+  email: string
+  name?: string | null
+  isOptional: boolean
+  isResource: boolean
+  response: CalendarAttendeeResponse
+}
+
+export type CalendarRecurrence =
+  | { kind: 'none' }
+  | { kind: 'series'; providerSeriesId: string; recurrenceRule: string; originalStart: string | null }
 
 export interface CalendarSource {
   id: string
@@ -11,10 +25,13 @@ export interface CalendarSource {
   isPrimary: boolean
   isSelected: boolean
   lastSyncedAt: string | null
+  capabilities: { recurrence: boolean; rsvp: boolean; availability: boolean }
+  recurrenceScopes: CalendarRecurrenceScope[]
 }
 
 export interface CalendarEvent {
   id: string
+  providerEventId: string
   sourceId: string
   title: string | null
   startsAt: string
@@ -29,6 +46,12 @@ export interface CalendarEvent {
   webLink?: string | null
   meetingLink?: string | null
   providerVersion?: string | null
+  recurrenceKind: 'none' | 'series'
+  providerSeriesId: string | null
+  recurrenceRule: string | null
+  originalStartAt?: string | null
+  originalStartDate?: string | null
+  attendees: CalendarAttendee[]
   links: CalendarRecordLink[]
   source?: Pick<CalendarSource, 'id' | 'name' | 'provider'>
 }
@@ -44,6 +67,8 @@ export interface CalendarEventCreateInput {
   availability?: CalendarEvent['availability']
   privacy?: CalendarEvent['privacy']
   meetingLink?: string | null
+  attendees?: CalendarAttendee[]
+  recurrence?: CalendarRecurrence
   timeZone?: string | null
   links?: CalendarRecordLink[]
   time: CalendarEventTime
@@ -56,6 +81,8 @@ export interface CalendarEventPatch {
   availability?: CalendarEvent['availability']
   privacy?: CalendarEvent['privacy']
   meetingLink?: string | null
+  attendees?: CalendarAttendee[]
+  recurrence?: CalendarRecurrence
   timeZone?: string | null
   links?: CalendarRecordLink[]
   time?: CalendarEventTime
@@ -72,4 +99,10 @@ export interface CalendarEventsResponse {
   total: number
   page: number
   limit: number
+}
+
+export type CalendarAvailabilityResponse = {
+  availability:
+    | { state: 'available'; busy: Array<{ sourceId: string; startsAt: string; endsAt: string }> }
+    | { state: 'unavailable'; reason: string }
 }

@@ -98,9 +98,24 @@ const listSchema = z.object({
   startsAt: z.coerce.date().optional(), endsAt: z.coerce.date().optional(), q: z.string().trim().min(1).max(200).optional(),
   page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(50),
 })
+const availabilitySchema = z.object({ startsAt: z.coerce.date(), endsAt: z.coerce.date() })
 
 function serializeSource(source: Prisma.CalendarSourceGetPayload<{ select: typeof sourceSelect }>) {
-  return { id: source.id, provider: source.provider, providerCalendarId: source.providerCalendarId, name: source.name, description: source.description, timeZone: source.timeZone, accessRole: source.accessRole, isPrimary: source.isPrimary, isSelected: source.isSelected, lastSyncedAt: source.lastSyncedAt?.toISOString() ?? null }
+  const capabilities = providerFor(source).capabilities
+  return {
+    id: source.id, provider: source.provider, providerCalendarId: source.providerCalendarId,
+    name: source.name, description: source.description, timeZone: source.timeZone,
+    accessRole: source.accessRole, isPrimary: source.isPrimary, isSelected: source.isSelected,
+    lastSyncedAt: source.lastSyncedAt?.toISOString() ?? null,
+    capabilities: {
+      recurrence: capabilities.recurrence,
+      rsvp: capabilities.rsvp,
+      availability: capabilities.availability,
+    },
+    recurrenceScopes: source.provider === 'microsoft'
+      ? ['this-event', 'series']
+      : ['this-event', 'this-and-following', 'series'],
+  }
 }
 
 type CalendarEventRow = Prisma.CalendarEventGetPayload<{ include: typeof eventInclude }>
@@ -164,6 +179,38 @@ router.patch('/sources/:sourceId', wrapRoute('PATCH /api/calendar/orgs/:orgId/so
   if (changed.count === 0) return void res.status(404).json({ error: 'Calendar source not found' })
   const source = await ownedSource(sourceId, orgId, authReq.user!.id); if (!source) return void res.status(404).json({ error: 'Calendar source not found' })
   res.json({ source: serializeSource(source) })
+}))
+
+router.get('/sources/:sourceId/availability', wrapRoute('GET /api/calendar/orgs/:orgId/sources/:sourceId/availability', async (req, res) => {
+  const authReq = req as AuthenticatedRequest; const orgId = String(req.params.orgId)
+  if (!await requireMembership(authReq, res, orgId)) return
+  const parsed = availabilitySchema.safeParse(req.query ?? {})
+  if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
+  if (parsed.data.endsAt <= parsed.data.startsAt) return void res.status(400).json({ error: 'endsAt must be after startsAt.' })
+  const source = await ownedSource(String(req.params.sourceId), orgId, authReq.user!.id)
+  if (!source) return void res.status(404).json({ error: 'Calendar source not found' })
+  const provider = providerFor(source)
+  if (!provider.capabilities.availability) {
+    const providerName = source.provider === 'microsoft' ? 'Microsoft' : 'Google'
+    return void res.json({ availability: { state: 'unavailable', reason: `Availability is not available for this connected ${providerName} account. Choose a time manually.` } })
+  }
+  try {
+    const result = await provider.getAvailability({
+      providerCalendarIds: [source.providerCalendarId],
+      startsAt: parsed.data.startsAt,
+      endsAt: parsed.data.endsAt,
+    })
+    res.json({
+      availability: {
+        state: 'available',
+        busy: result.busy.map((interval) => ({
+          sourceId: source.id,
+          startsAt: interval.startsAt.toISOString(),
+          endsAt: interval.endsAt.toISOString(),
+        })),
+      },
+    })
+  } catch (error) { if (!respondProviderError(res, error)) throw error }
 }))
 
 router.get('/events', wrapRoute('GET /api/calendar/orgs/:orgId/events', async (req, res) => {

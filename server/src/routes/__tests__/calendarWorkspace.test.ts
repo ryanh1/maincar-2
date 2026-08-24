@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
-const { prismaMock, verifyTokenMock, googleCalendarMock, syncCalendarSourceMock, persistCalendarEventSnapshotMock, saveCalendarEventMetadataMock, verifyLinkTargetsMock } = vi.hoisted(() => ({
+const { prismaMock, verifyTokenMock, googleCalendarMock, microsoftCalendarMock, syncCalendarSourceMock, persistCalendarEventSnapshotMock, saveCalendarEventMetadataMock, verifyLinkTargetsMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
@@ -10,6 +10,7 @@ const { prismaMock, verifyTokenMock, googleCalendarMock, syncCalendarSourceMock,
   },
   verifyTokenMock: vi.fn(),
   googleCalendarMock: vi.fn(),
+  microsoftCalendarMock: vi.fn(),
   syncCalendarSourceMock: vi.fn(),
   persistCalendarEventSnapshotMock: vi.fn(),
   saveCalendarEventMetadataMock: vi.fn(),
@@ -23,7 +24,7 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
   deleteFirebaseUser: vi.fn(),
 }))
 vi.mock('../../lib/calendar/googleCalendar.js', () => ({ googleCalendar: googleCalendarMock }))
-vi.mock('../../lib/calendar/microsoftCalendar.js', () => ({ microsoftCalendar: vi.fn() }))
+vi.mock('../../lib/calendar/microsoftCalendar.js', () => ({ microsoftCalendar: microsoftCalendarMock }))
 vi.mock('../../lib/calendar/calendarSync.js', () => ({ syncCalendarSource: syncCalendarSourceMock, persistCalendarEventSnapshot: persistCalendarEventSnapshotMock }))
 vi.mock('../../lib/calendar/calendarEventMetadata.js', () => ({ saveCalendarEventMetadata: saveCalendarEventMetadataMock }))
 vi.mock('../../crm/workLinks.js', async (importOriginal) => ({
@@ -93,7 +94,14 @@ beforeEach(() => {
   prismaMock.calendarEvent.count.mockResolvedValue(0)
   prismaMock.calendarEvent.findFirst.mockResolvedValue(null)
   prismaMock.calendarEvent.updateMany.mockResolvedValue({ count: 1 })
-  googleCalendarMock.mockReturnValue({ updateEvent: vi.fn(), createEvent: vi.fn(), deleteEvent: vi.fn(), respondToEvent: vi.fn() })
+  googleCalendarMock.mockReturnValue({
+    capabilities: { calendarInventory: true, eventRead: true, eventWrite: true, recurrence: true, rsvp: true, availability: true, eventVersioning: true },
+    updateEvent: vi.fn(), createEvent: vi.fn(), deleteEvent: vi.fn(), respondToEvent: vi.fn(), getAvailability: vi.fn(),
+  })
+  microsoftCalendarMock.mockReturnValue({
+    capabilities: { calendarInventory: true, eventRead: true, eventWrite: true, recurrence: true, rsvp: true, availability: false, eventVersioning: true },
+    updateEvent: vi.fn(), createEvent: vi.fn(), deleteEvent: vi.fn(), respondToEvent: vi.fn(), getAvailability: vi.fn(),
+  })
   persistCalendarEventSnapshotMock.mockResolvedValue({ id: 'event-1' })
   saveCalendarEventMetadataMock.mockResolvedValue(undefined)
   verifyLinkTargetsMock.mockResolvedValue(null)
@@ -105,6 +113,19 @@ describe('Calendar workspace routes', () => {
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ calendar: { state: 'not-connected' }, sources: [] })
+  })
+
+  it('reports scheduling capabilities and supported recurrence scopes for each source', async () => {
+    prismaMock.calendarSource.findMany.mockResolvedValue([source({ connection: { emailAddress: 'rep@example.test' } })])
+
+    const res = await request(app).get(`${URL}/sources`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body.sources[0]).toMatchObject({
+      id: 'source-1',
+      capabilities: { recurrence: true, rsvp: true, availability: true },
+      recurrenceScopes: ['this-event', 'this-and-following', 'series'],
+    })
   })
 
   it('returns selected projection events in a half-open range and searches title, description, and location', async () => {
@@ -173,13 +194,20 @@ describe('Calendar workspace routes', () => {
       availability: 'free',
       privacy: 'private',
       meetingLink: 'https://meet.example.test/planning',
+      attendees: [{ email: 'guest@example.test' }],
+      recurrence: { kind: 'series', providerSeriesId: 'new-series', recurrenceRule: 'RRULE:FREQ=WEEKLY;BYDAY=SU', originalStart: null },
       timeZone: 'America/New_York',
       links: [{ object: 'company', id: 'company-1' }],
       time: { kind: 'timed', startsAt: NOW.toISOString(), endsAt: '2026-08-23T13:00:00.000Z' },
     })
 
     expect(res.status).toBe(201)
-    expect(createEvent).toHaveBeenCalledWith(expect.objectContaining({ availability: 'free', privacy: 'private' }))
+    expect(createEvent).toHaveBeenCalledWith(expect.objectContaining({
+      availability: 'free',
+      privacy: 'private',
+      attendees: [{ email: 'guest@example.test', isOptional: false, isResource: false, response: 'needs-action' }],
+      recurrence: { kind: 'series', providerSeriesId: 'new-series', recurrenceRule: 'RRULE:FREQ=WEEKLY;BYDAY=SU', originalStart: null },
+    }))
     expect(saveCalendarEventMetadataMock).toHaveBeenCalledWith(expect.objectContaining({
       eventId: 'event-1',
       meetingLink: 'https://meet.example.test/planning',
@@ -238,5 +266,82 @@ describe('Calendar workspace routes', () => {
       where: { id: 'event-1', orgId: ORG_ID, userId: 'user-a' },
       data: { status: 'cancelled', cancelledAt: expect.any(Date) },
     })
+  })
+
+  it('responds to a recurring invitation with the explicit provider scope and refreshes the projection', async () => {
+    const respondToEvent = vi.fn().mockResolvedValue(undefined)
+    const provider = {
+      capabilities: { calendarInventory: true, eventRead: true, eventWrite: true, recurrence: true, rsvp: true, availability: true, eventVersioning: true },
+      updateEvent: vi.fn(), createEvent: vi.fn(), deleteEvent: vi.fn(), respondToEvent, getAvailability: vi.fn(),
+    }
+    googleCalendarMock.mockReturnValue(provider)
+    prismaMock.calendarEvent.findFirst.mockResolvedValue(event())
+    syncCalendarSourceMock.mockResolvedValue({ eventsChanged: 1 })
+
+    const res = await request(app).post(`${URL}/events/event-1/rsvp`).set('Authorization', AUTH).send({
+      response: 'accepted',
+      scope: 'series',
+      comment: 'See you there',
+    })
+
+    expect(res.status).toBe(204)
+    expect(respondToEvent).toHaveBeenCalledWith({
+      providerCalendarId: 'primary',
+      providerEventId: 'provider-event-1',
+      response: 'accepted',
+      scope: 'series',
+      comment: 'See you there',
+    })
+    expect(syncCalendarSourceMock).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'source-1' }), provider)
+  })
+
+  it('returns provider-backed busy intervals when availability is supported', async () => {
+    const getAvailability = vi.fn().mockResolvedValue({
+      busy: [{ providerCalendarId: 'primary', startsAt: NOW, endsAt: new Date('2026-08-23T13:00:00.000Z') }],
+    })
+    googleCalendarMock.mockReturnValue({
+      capabilities: { calendarInventory: true, eventRead: true, eventWrite: true, recurrence: true, rsvp: true, availability: true, eventVersioning: true },
+      getAvailability,
+    })
+    prismaMock.calendarSource.findFirst.mockResolvedValue(source({ connection: { emailAddress: 'rep@example.test' } }))
+
+    const res = await request(app)
+      .get(`${URL}/sources/source-1/availability?startsAt=2026-08-23T12:00:00.000Z&endsAt=2026-08-23T17:00:00.000Z`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(getAvailability).toHaveBeenCalledWith({
+      providerCalendarIds: ['primary'],
+      startsAt: NOW,
+      endsAt: new Date('2026-08-23T17:00:00.000Z'),
+    })
+    expect(res.body).toEqual({
+      availability: { state: 'available', busy: [{ sourceId: 'source-1', startsAt: NOW.toISOString(), endsAt: '2026-08-23T13:00:00.000Z' }] },
+    })
+  })
+
+  it('returns an honest availability fallback without calling an unsupported provider', async () => {
+    const getAvailability = vi.fn()
+    microsoftCalendarMock.mockReturnValue({
+      capabilities: { calendarInventory: true, eventRead: true, eventWrite: true, recurrence: true, rsvp: true, availability: false, eventVersioning: true },
+      getAvailability,
+    })
+    prismaMock.calendarSource.findFirst.mockResolvedValue(source({
+      provider: 'microsoft',
+      connection: { emailAddress: 'rep@example.test' },
+    }))
+
+    const res = await request(app)
+      .get(`${URL}/sources/source-1/availability?startsAt=2026-08-23T12:00:00.000Z&endsAt=2026-08-23T17:00:00.000Z`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({
+      availability: {
+        state: 'unavailable',
+        reason: 'Availability is not available for this connected Microsoft account. Choose a time manually.',
+      },
+    })
+    expect(getAvailability).not.toHaveBeenCalled()
   })
 })
