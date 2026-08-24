@@ -13,9 +13,14 @@ import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest'
 import type { PrismaClient } from '../../generated/prisma/client.js'
 import { Prisma } from '../../generated/prisma/client.js'
 import { createTestPrisma, seedOrgWithAdmin } from '../../test/integration/testPrisma.js'
-import { countOptionValue, migrateOptionValue } from '../attributes.js'
+import {
+  collapseMultiValueRows,
+  countOptionValue,
+  lockMultiValueRows,
+  migrateOptionValue,
+} from '../../crm/attributeValueMigrations.js'
 
-describe('option value migration (integration, real Postgres)', () => {
+describe('attribute value migrations (integration, real Postgres)', () => {
   let prisma: PrismaClient
   let testSchema: string
 
@@ -54,6 +59,73 @@ describe('option value migration (integration, real Postgres)', () => {
       return countOptionValue(tx, args)
     })
   }
+
+  async function collapseInSchema(args: {
+    orgId: string
+    object: { id: string; slug: string; storage: string }
+    attribute: { slug: string; storage: string }
+  }): Promise<{ recordCount: number; collapsed: number }> {
+    return prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL search_path TO "${testSchema}", public`)
+      const rows = await lockMultiValueRows(tx, args)
+      const recordCount = rows.filter((row) => Array.isArray(row.value) && row.value.length > 1).length
+      const collapsed = await collapseMultiValueRows(tx, args)
+      return { recordCount, collapsed }
+    })
+  }
+
+  it('counts risky arrays and keeps the first value for a record-backed custom field', async () => {
+    const { orgId } = await seedOrgWithAdmin(prisma)
+    const object = await prisma.objectDef.create({
+      data: { orgId, slug: `project_refs_${Date.now()}`, name: 'Project', namePlural: 'Projects', storage: 'record', isStandard: false },
+    })
+    const otherObject = await prisma.objectDef.create({
+      data: { orgId, slug: `other_refs_${Date.now()}`, name: 'Other', namePlural: 'Others', storage: 'record', isStandard: false },
+    })
+    const records = await Promise.all([
+      prisma.record.create({ data: { orgId, objectId: object.id, valuesJson: { companies: ['company-1', 'company-2'] } } }),
+      prisma.record.create({ data: { orgId, objectId: object.id, valuesJson: { companies: ['company-3'] } } }),
+      prisma.record.create({ data: { orgId, objectId: object.id, valuesJson: { companies: [] } } }),
+      prisma.record.create({ data: { orgId, objectId: object.id, valuesJson: { companies: 'legacy-scalar' } } }),
+      prisma.record.create({ data: { orgId, objectId: otherObject.id, valuesJson: { companies: ['other-1', 'other-2'] } } }),
+    ])
+    const args = {
+      orgId,
+      object: { id: object.id, slug: object.slug, storage: object.storage },
+      attribute: { slug: 'companies', storage: 'custom' },
+    }
+
+    await expect(collapseInSchema(args)).resolves.toEqual({ recordCount: 1, collapsed: 3 })
+
+    const updated = await prisma.record.findMany({ where: { orgId }, orderBy: { createdAt: 'asc' } })
+    expect((updated.find((row) => row.id === records[0].id)!.valuesJson as { companies: string }).companies).toBe('company-1')
+    expect((updated.find((row) => row.id === records[1].id)!.valuesJson as { companies: string }).companies).toBe('company-3')
+    expect(updated.find((row) => row.id === records[2].id)!.valuesJson).toEqual({})
+    expect((updated.find((row) => row.id === records[3].id)!.valuesJson as { companies: string }).companies).toBe('legacy-scalar')
+    expect((updated.find((row) => row.id === records[4].id)!.valuesJson as { companies: string[] }).companies).toEqual(['other-1', 'other-2'])
+  })
+
+  it('collapses only live rows in the owning org for a table-backed custom field', async () => {
+    const { orgId } = await seedOrgWithAdmin(prisma, { seed: true })
+    const companyObject = await prisma.objectDef.findFirstOrThrow({ where: { orgId, slug: 'company' } })
+    const companies = await Promise.all([
+      prisma.company.create({ data: { orgId, name: 'Acme', customJson: { contacts: ['person-1', 'person-2'] } } }),
+      prisma.company.create({ data: { orgId, name: 'Globex', customJson: { contacts: ['person-3'] } } }),
+      prisma.company.create({ data: { orgId, name: 'Deleted', customJson: { contacts: ['person-4', 'person-5'] }, deletedAt: new Date() } }),
+    ])
+    const args = {
+      orgId,
+      object: { id: companyObject.id, slug: companyObject.slug, storage: companyObject.storage },
+      attribute: { slug: 'contacts', storage: 'custom' },
+    }
+
+    await expect(collapseInSchema(args)).resolves.toEqual({ recordCount: 1, collapsed: 2 })
+
+    const updated = await prisma.company.findMany({ where: { orgId } })
+    expect((updated.find((row) => row.id === companies[0].id)!.customJson as { contacts: string }).contacts).toBe('person-1')
+    expect((updated.find((row) => row.id === companies[1].id)!.customJson as { contacts: string }).contacts).toBe('person-3')
+    expect((updated.find((row) => row.id === companies[2].id)!.customJson as { contacts: string[] }).contacts).toEqual(['person-4', 'person-5'])
+  })
 
   it('migrates a record-backed custom field value across valuesJson', async () => {
     const { orgId } = await seedOrgWithAdmin(prisma)
