@@ -37,7 +37,14 @@ export function ActivityFeedRow({
         <div className="min-w-0">
           <p className="text-xs font-medium text-text-muted">{sourceTypeLabel(item.sourceType)}</p>
           {onSelect ? (
-            <Button type="button" variant="link" size="sm" className="h-auto px-0 text-left text-sm font-medium text-text" onClick={onSelect}>
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              data-feed-event-control
+              className="h-auto px-0 text-left text-sm font-medium text-text"
+              onClick={onSelect}
+            >
               {item.title}
             </Button>
           ) : <p className="text-sm font-medium text-text">{item.title}</p>}

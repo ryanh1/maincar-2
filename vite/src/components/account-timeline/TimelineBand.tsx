@@ -54,9 +54,9 @@ export function TimelineBand({
   }
 
   return (
-    <section aria-label="Account momentum" className="border border-border bg-background" data-timeline-band>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted p-2">
-        <div role="group" aria-label="Timeline duration" className="flex flex-wrap gap-1">
+    <section aria-label="Account momentum" className="min-w-0 border border-border bg-background" data-timeline-band>
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-border bg-muted p-2">
+        <div role="group" aria-label="Timeline duration" className="flex min-w-0 flex-wrap gap-1">
           {TIMELINE_PRESETS.map((preset) => (
             <Button
               key={preset.value}
@@ -70,7 +70,7 @@ export function TimelineBand({
             </Button>
           ))}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
           <IconButton tooltip="Pan the timeline backward" onClick={() => onRangeChange?.(panRange(range, -1))}>
             <ChevronLeft size={16} aria-hidden="true" />
           </IconButton>
@@ -94,7 +94,7 @@ export function TimelineBand({
 
       <div className="flex border-b border-border">
         <div className="flex w-16 shrink-0 items-center px-2 text-xs font-medium text-muted-foreground">Deal</div>
-        <div className="relative h-8 flex-1 bg-muted" aria-label="Deal ribbon">
+        <div className="relative h-8 min-w-0 flex-1 bg-muted" aria-label="Deal ribbon">
           {markerEvents.map((event) => (
             <TimelineBand_DealMarker
               key={event.id}
@@ -136,9 +136,9 @@ export function TimelineBand({
 
       <div className="flex border-t border-border bg-muted">
         <span className="w-16 shrink-0" aria-hidden="true" />
-        <div className="flex flex-1 justify-between px-2 py-1 text-xs tabular-nums text-muted-foreground">
+        <div className="grid min-w-0 flex-1 grid-cols-1 gap-1 px-2 py-1 text-xs tabular-nums text-muted-foreground sm:grid-cols-2">
           <time dateTime={range.from} title={formatDateTime(range.from, timeZone)}>{formatDateTime(range.from, timeZone)}</time>
-          <time dateTime={range.to} title={formatDateTime(range.to, timeZone)}>{formatDateTime(range.to, timeZone)}</time>
+          <time className="sm:text-right" dateTime={range.to} title={formatDateTime(range.to, timeZone)}>{formatDateTime(range.to, timeZone)}</time>
         </div>
       </div>
     </section>

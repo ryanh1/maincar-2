@@ -137,3 +137,78 @@ test('reframes the band and feed together and keeps the timeline keyboard-readab
   expect(darkBackground).not.toBe(lightBackground)
   await expect(page.getByRole('button', { name: 'Deal stage moved from Discovery to Proposal' })).toBeVisible()
 })
+
+test('keeps timeline shortcuts scoped, restores focus, and avoids overflow across widths and themes', async ({ page }) => {
+  const consoleErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  await page.route('**/api/orgs/org-fixture/calls/call-fixture', async (route) => {
+    await route.fulfill({ json: { call: { toE164: '+15555550100', review: null } } })
+  })
+  await page.route('**/api/orgs/org-fixture/account-timeline**', async (route) => {
+    const url = route.request().url()
+    if (url.includes('/event-fixture?')) {
+      await route.fulfill({ json: {
+        event: EVENT,
+        detail: { type: 'call', id: 'call-fixture', transcript: 'Discussed the renewal plan.' },
+        navigation: { previousEventId: null, nextEventId: 'stage-fixture' },
+      } })
+      return
+    }
+    if (url.includes('/stage-fixture?')) {
+      await route.fulfill({ json: {
+        event: STAGE_EVENT,
+        detail: { type: 'stage_change', id: 'stage-fixture', marker: STAGE_EVENT.marker },
+        navigation: { previousEventId: 'event-fixture', nextEventId: null },
+      } })
+      return
+    }
+    await route.fulfill({ json: {
+      events: [EVENT, STAGE_EVENT],
+      nextCursor: null,
+      range: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:00:00.000Z', isDefault: true },
+    } })
+  })
+
+  for (const width of [320, 768, 1024]) {
+    for (const theme of ['light', 'dark']) {
+      await page.setViewportSize({ width, height: 900 })
+      await page.goto('/__fixtures/account-timeline')
+      await page.evaluate((nextTheme) => {
+        document.documentElement.classList.toggle('dark', nextTheme === 'dark')
+      }, theme)
+
+      const feed = page.getByRole('feed', { name: 'Account activity' })
+      const firstEvent = feed.getByRole('button', { name: 'Called Ada Lovelace', exact: true })
+      const secondEvent = feed.getByRole('button', { name: 'Moved to Proposal', exact: true })
+      await feed.focus()
+      await page.keyboard.press('j')
+      await expect(firstEvent).toBeFocused()
+      await page.keyboard.press('j')
+      await expect(secondEvent).toBeFocused()
+      await page.keyboard.press('k')
+      await expect(firstEvent).toBeFocused()
+
+      await page.keyboard.press('Enter')
+      const panel = page.getByRole('dialog', { name: 'call' })
+      await expect(panel).toBeVisible()
+      const panelOverflow = await panel.evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }))
+      expect(panelOverflow.scrollWidth, `${theme} panel at ${width}px`).toBeLessThanOrEqual(panelOverflow.clientWidth)
+      await page.keyboard.press('ArrowRight')
+      await expect(page.getByRole('dialog', { name: 'stage change' })).toBeVisible()
+      await page.keyboard.press('Escape')
+      await expect(firstEvent).toBeFocused()
+
+      const overflow = await page.locator('html').evaluate((root) => ({
+        clientWidth: root.clientWidth,
+        scrollWidth: root.scrollWidth,
+      }))
+      expect(overflow.scrollWidth, `${theme} theme at ${width}px`).toBeLessThanOrEqual(overflow.clientWidth)
+    }
+  }
+  expect(consoleErrors).toEqual([])
+})
