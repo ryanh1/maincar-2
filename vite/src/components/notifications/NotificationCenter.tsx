@@ -256,6 +256,10 @@ export function NotificationCenter({ onOpen }: { onOpen?: () => void }) {
                       onFocus={() => setFocusedId(notification.id)}
                       onSelect={(checked) => toggleSelection(notification.id, checked)}
                       onAction={(action, snoozeDurationMs) => runAction(action, [notification.id], false, snoozeDurationMs)}
+                      onOpenSource={() => {
+                        if (!notification.readAt) runAction('read', [notification.id])
+                        setOpen(false)
+                      }}
                     />
                   ))}
                 </div>

@@ -11,7 +11,9 @@ import { z } from 'zod'
 import prisma from '../db.js'
 import { logger } from '../../dependencies/logger.js'
 import { flattenTipTapText } from '../crm/taskNote.js'
-import { resolveTeammateMentions } from '../crm/mentions.js'
+import { resolveNewTeammateMentions, resolveTeammateMentions } from '../crm/mentions.js'
+import { fanOutNotificationInTransaction } from '../crm/notifications.js'
+import { buildMentionEvent } from '../crm/richTextMentions.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
@@ -114,6 +116,32 @@ async function requireLiveComment(args: { orgId: string; callId: string; comment
   })
 }
 
+async function writeCallCommentMentionNotifications(
+  tx: Prisma.TransactionClient,
+  args: {
+    orgId: string
+    commentId: string
+    actorUserId: string
+    bodyText: string
+    recipientUserIds: string[]
+  },
+): Promise<void> {
+  if (args.recipientUserIds.length === 0) return
+  await fanOutNotificationInTransaction(
+    tx,
+    buildMentionEvent(
+      {
+        orgId: args.orgId,
+        sourceType: 'call_comment',
+        sourceId: args.commentId,
+        actorUserId: args.actorUserId,
+        title: 'You were mentioned in a call comment',
+      },
+      { bodyText: args.bodyText, recipientUserIds: args.recipientUserIds },
+    ),
+  )
+}
+
 router.use(requireAuth)
 
 // ============================================================
@@ -198,21 +226,32 @@ router.post(
     }
 
     // --- Execute query ---
-    const comment = await prisma.callComment.create({
-      data: {
+    const bodyText = flattenTipTapText(input.bodyJson)
+    const comment = await prisma.$transaction(async (tx) => {
+      const created = await tx.callComment.create({
+        data: {
+          orgId,
+          callId,
+          authorUserId: userId,
+          bodyJson: input.bodyJson as Prisma.InputJsonValue,
+          bodyText,
+          atMs: input.atMs,
+          anchorEndMs: input.anchorEndMs,
+          anchorQuote: input.anchorQuote,
+          selectionStartChar: input.selectionStartChar,
+          selectionEndChar: input.selectionEndChar,
+          transcriptId: input.transcriptId,
+        },
+        include: commentInclude,
+      })
+      await writeCallCommentMentionNotifications(tx, {
         orgId,
-        callId,
-        authorUserId: userId,
-        bodyJson: input.bodyJson as Prisma.InputJsonValue,
-        bodyText: flattenTipTapText(input.bodyJson),
-        atMs: input.atMs,
-        anchorEndMs: input.anchorEndMs,
-        anchorQuote: input.anchorQuote,
-        selectionStartChar: input.selectionStartChar,
-        selectionEndChar: input.selectionEndChar,
-        transcriptId: input.transcriptId,
-      },
-      include: commentInclude,
+        commentId: created.id,
+        actorUserId: userId,
+        bodyText,
+        recipientUserIds: mentions.recipientUserIds,
+      })
+      return created
     })
 
     logger.info({ orgId, callId, userId, commentId: comment.id }, 'created a timed call comment')
@@ -264,6 +303,7 @@ router.post(
       if (parent.deletedAt) return { kind: 'deleted' as const }
       if (parent.parentId) return { kind: 'too-deep' as const }
 
+      const bodyText = flattenTipTapText(parsed.data.bodyJson)
       const comment = await tx.callComment.create({
         data: {
           orgId,
@@ -271,11 +311,18 @@ router.post(
           parentId: parent.id,
           authorUserId: userId,
           bodyJson: parsed.data.bodyJson as Prisma.InputJsonValue,
-          bodyText: flattenTipTapText(parsed.data.bodyJson),
+          bodyText,
           // Replies deliberately have no local anchor: their root is their moment.
           atMs: undefined,
         },
         include: commentInclude,
+      })
+      await writeCallCommentMentionNotifications(tx, {
+        orgId,
+        commentId: comment.id,
+        actorUserId: userId,
+        bodyText,
+        recipientUserIds: mentions.recipientUserIds,
       })
       return { kind: 'created' as const, comment, parentId: parent.id }
     })
@@ -315,23 +362,37 @@ router.patch(
     // --- Parse & validate params ---
     const parsed = updateSchema.safeParse(req.body ?? {})
     if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
-    const mentions = await resolveTeammateMentions(prisma, { orgId, content: parsed.data.bodyJson })
+    const mentions = await resolveNewTeammateMentions(prisma, {
+      orgId,
+      previousContent: existing.bodyJson,
+      content: parsed.data.bodyJson,
+    })
     if (mentions.rejectedUserIds.length > 0) {
       return void res.status(422).json({ error: 'A mentioned teammate is inactive or outside this organization.' })
     }
 
     // --- Execute query ---
-    const result = await prisma.callComment.updateMany({
-      where: { id: commentId, orgId, callId, authorUserId: userId, deletedAt: null },
-      data: {
-        bodyJson: parsed.data.bodyJson as Prisma.InputJsonValue,
-        bodyText: flattenTipTapText(parsed.data.bodyJson),
-      },
-    })
-    if (result.count === 0) return void res.status(404).json({ error: 'Call comment not found' })
-    const updated = await prisma.callComment.findFirst({
-      where: { id: commentId, orgId, callId, deletedAt: null },
-      include: commentInclude,
+    const bodyText = flattenTipTapText(parsed.data.bodyJson)
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.callComment.updateMany({
+        where: { id: commentId, orgId, callId, authorUserId: userId, deletedAt: null },
+        data: {
+          bodyJson: parsed.data.bodyJson as Prisma.InputJsonValue,
+          bodyText,
+        },
+      })
+      if (result.count === 0) return null
+      await writeCallCommentMentionNotifications(tx, {
+        orgId,
+        commentId,
+        actorUserId: userId,
+        bodyText,
+        recipientUserIds: mentions.recipientUserIds,
+      })
+      return tx.callComment.findFirst({
+        where: { id: commentId, orgId, callId, deletedAt: null },
+        include: commentInclude,
+      })
     })
     if (!updated) return void res.status(404).json({ error: 'Call comment not found' })
 

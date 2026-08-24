@@ -16,6 +16,19 @@ function doc(text: string) {
   return { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }
 }
 
+function mentionDoc(userIds: string[], text: string) {
+  return {
+    type: 'doc',
+    content: [{
+      type: 'paragraph',
+      content: [
+        ...userIds.map((id) => ({ type: 'mention', attrs: { id, kind: 'teammate', label: id } })),
+        { type: 'text', text },
+      ],
+    }],
+  }
+}
+
 function url(orgId: string, callId: string) {
   return `/api/orgs/${orgId}/calls/${callId}/comments`
 }
@@ -31,9 +44,11 @@ beforeAll(async () => {
     },
   }))
   const { default: callCommentsRouter } = await import('../callComments.js')
+  const { default: notificationsRouter } = await import('../notifications.js')
   app = express()
   app.use(express.json())
   app.use('/api/orgs/:orgId/calls/:callId/comments', callCommentsRouter)
+  app.use('/api/orgs/:orgId/notifications', notificationsRouter)
 })
 
 afterAll(async () => {
@@ -156,5 +171,82 @@ describe('Timed call comments (integration, real Postgres)', () => {
         },
       })
       .expect(422)
+  })
+
+  it('fans out only new teammate mentions and resolves a safe exact-moment notification destination', async () => {
+    const a = await seedOrgWithAdmin(prisma)
+    const call = await seedCall(prisma, { orgId: a.orgId, userId: a.adminUserId })
+    const firstTeammate = await seedMember(prisma, a.orgId)
+    const secondTeammate = await seedMember(prisma, a.orgId)
+    activeUserId = a.adminUserId
+
+    const created = await request(app)
+      .post(url(a.orgId, call.id))
+      .send({
+        atMs: 2_750,
+        bodyJson: mentionDoc([firstTeammate.userId, a.adminUserId], ' review this moment.'),
+      })
+      .expect(201)
+    const commentId = created.body.comment.id as string
+
+    expect(await prisma.notificationObject.count({
+      where: { orgId: a.orgId, eventKey: `call_comment:${commentId}:mentions:v1` },
+    })).toBe(1)
+    expect(await prisma.notification.count({
+      where: { orgId: a.orgId, recipientUserId: firstTeammate.userId },
+    })).toBe(1)
+    expect(await prisma.notification.count({
+      where: { orgId: a.orgId, recipientUserId: a.adminUserId },
+    })).toBe(0)
+
+    const editedBody = mentionDoc(
+      [firstTeammate.userId, secondTeammate.userId, a.adminUserId],
+      ' both review this moment.',
+    )
+    await request(app)
+      .patch(`${url(a.orgId, call.id)}/${commentId}`)
+      .send({ bodyJson: editedBody })
+      .expect(200)
+    await request(app)
+      .patch(`${url(a.orgId, call.id)}/${commentId}`)
+      .send({ bodyJson: editedBody })
+      .expect(200)
+
+    expect(await prisma.notificationObject.count({
+      where: { orgId: a.orgId, eventKey: `call_comment:${commentId}:mentions:v1` },
+    })).toBe(1)
+    expect(await prisma.notification.count({
+      where: {
+        orgId: a.orgId,
+        recipientUserId: { in: [firstTeammate.userId, secondTeammate.userId] },
+      },
+    })).toBe(2)
+
+    activeUserId = firstTeammate.userId
+    const available = await request(app)
+      .get(`/api/orgs/${a.orgId}/notifications?objectType=call`)
+      .expect(200)
+    expect(available.body.notifications).toHaveLength(1)
+    expect(available.body.notifications[0].source).toMatchObject({
+      status: 'available',
+      type: 'call',
+      title: 'You were mentioned in a call comment',
+      route: `/orgs/${a.orgId}/calls/${call.id}?mode=comments&commentId=${commentId}`,
+    })
+
+    activeUserId = a.adminUserId
+    await request(app).delete(`${url(a.orgId, call.id)}/${commentId}`).expect(204)
+
+    activeUserId = firstTeammate.userId
+    const unavailable = await request(app)
+      .get(`/api/orgs/${a.orgId}/notifications`)
+      .expect(200)
+    expect(unavailable.body.notifications[0].source).toMatchObject({
+      status: 'unavailable',
+      type: 'call',
+      title: 'You were mentioned in a call comment',
+      preview: expect.stringContaining('review this moment'),
+    })
+    expect(unavailable.body.notifications[0].source).not.toHaveProperty('route')
   })
 })

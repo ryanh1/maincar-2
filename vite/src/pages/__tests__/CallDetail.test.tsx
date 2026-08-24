@@ -16,12 +16,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { Route, Routes } from 'react-router-dom'
+import { Route, Routes, useLocation } from 'react-router-dom'
 
 import { renderWithProviders } from '@/test/utils'
 
-const { useAuthMock, useGetCallDetailMock, useLogCallDispositionMock, toastErrorMock } = vi.hoisted(() => ({
+const { useAuthMock, useGetCallCommentsMock, useGetCallDetailMock, useLogCallDispositionMock, toastErrorMock } = vi.hoisted(() => ({
   useAuthMock: vi.fn(),
+  useGetCallCommentsMock: vi.fn(),
   useGetCallDetailMock: vi.fn(),
   useLogCallDispositionMock: vi.fn(),
   toastErrorMock: vi.fn(),
@@ -32,13 +33,9 @@ vi.mock('@/hooks/dialer', () => ({
   useGetCallDetail: useGetCallDetailMock,
   useLogCallDisposition: useLogCallDispositionMock,
 }))
-vi.mock('@/hooks/callComments', () => ({
-  useGetCallComments: () => ({
-    data: { comments: [], total: 0, page: 1, limit: 100 },
-    isPending: false,
-    isError: false,
-    refetch: vi.fn(),
-  }),
+vi.mock('@/hooks/callComments', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/hooks/callComments')>(),
+  useGetCallComments: useGetCallCommentsMock,
   useCreateCallComment: () => ({ mutateAsync: vi.fn(), error: null }),
   useDeleteCallComment: () => ({ mutate: vi.fn(), error: null }),
   useReplyToCallComment: () => ({ mutateAsync: vi.fn(), error: null }),
@@ -117,19 +114,30 @@ function detailState(overrides: Record<string, unknown> = {}) {
 // The page reads its id from the path, so it renders inside a matching route. A
 // sibling /calls route stands in for the history list, so the Back link has a
 // place to land that the test can detect.
-function renderDetail() {
+function LocationProbe() {
+  const location = useLocation()
+  return <output data-testid="call-detail-location">{location.search}</output>
+}
+
+function renderDetail(initialEntry = '/calls/call-1') {
   return renderWithProviders(
     <Routes>
-      <Route path="/calls/:id" element={<CallDetail />} />
+      <Route path="/calls/:id" element={<><CallDetail /><LocationProbe /></>} />
       <Route path="/calls" element={<div>Calls history</div>} />
     </Routes>,
-    { initialEntries: ['/calls/call-1'] },
+    { initialEntries: [initialEntry] },
   )
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   useAuthMock.mockReturnValue({ user: { id: 'user-a', timeZone: 'America/New_York' }, org: ORG })
+  useGetCallCommentsMock.mockReturnValue({
+    data: { comments: [], total: 0, page: 1, limit: 100 },
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(),
+  })
   useGetCallDetailMock.mockReturnValue(detailState())
   useLogCallDispositionMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
   // navigator.clipboard is a getter-only property in jsdom, so it is redefined
@@ -289,6 +297,100 @@ describe('the transcript', () => {
     await user.click(screen.getByRole('button', { name: 'Comment on selection' }))
     expect(screen.getAllByText('“renewal”').length).toBeGreaterThan(0)
     expect(screen.getByRole('textbox', { name: 'Comment on selected transcript text' })).toBeInTheDocument()
+  })
+
+  it('converges comment deep links, timestamps, ribbon pins, and playback highlighting on one moment', async () => {
+    const user = userEvent.setup()
+    const comments = [
+      {
+        id: 'comment-1',
+        parentId: null,
+        atMs: 1_650,
+        anchorEndMs: null,
+        anchorQuote: null,
+        selectionStartChar: null,
+        selectionEndChar: null,
+        transcriptId: null,
+        bodyJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'First moment' }] }] },
+        bodyText: 'First moment',
+        deletedAt: null,
+        createdAt: '2026-08-01T12:00:00.000Z',
+        updatedAt: '2026-08-01T12:00:00.000Z',
+        author: { id: 'user-a', name: 'Grace Hopper', imageUrl: null },
+        reactions: [],
+        replies: [],
+      },
+      {
+        id: 'comment-2',
+        parentId: null,
+        atMs: 2_500,
+        anchorEndMs: null,
+        anchorQuote: null,
+        selectionStartChar: null,
+        selectionEndChar: null,
+        transcriptId: null,
+        bodyJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Second moment' }] }] },
+        bodyText: 'Second moment',
+        deletedAt: null,
+        createdAt: '2026-08-01T12:00:01.000Z',
+        updatedAt: '2026-08-01T12:00:01.000Z',
+        author: { id: 'user-a', name: 'Grace Hopper', imageUrl: null },
+        reactions: [],
+        replies: [],
+      },
+    ]
+    useGetCallDetailMock.mockReturnValue(detailState({ data: { call: callDetail({ review: review() }) } }))
+    useGetCallCommentsMock.mockReturnValue({
+      data: { comments, total: 2, page: 1, limit: 100 },
+      isPending: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
+
+    renderDetail('/calls/call-1?mode=comments&commentId=comment-2')
+    const audio = screen.getByLabelText('Recording of the call to +12015550111') as HTMLAudioElement
+    Object.defineProperty(audio, 'duration', { configurable: true, value: 10 })
+    fireEvent.loadedMetadata(audio)
+
+    await waitFor(() => expect(audio.currentTime).toBe(2.5))
+    expect(screen.getByRole('tab', { name: 'Comments' })).toHaveAttribute('aria-selected', 'true')
+    expect(document.querySelector('[data-comment-id="comment-2"]')).toHaveAttribute('data-active', 'true')
+
+    const transcript = screen.getByRole('region', { name: 'Timed transcript' })
+    fireEvent.wheel(transcript)
+    expect(screen.getByRole('button', { name: 'Jump to current' })).toBeInTheDocument()
+    scrollIntoView.mockClear()
+
+    let currentTime = audio.currentTime
+    let seekWrites = 0
+    Object.defineProperty(audio, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: (value: number) => {
+        seekWrites += 1
+        currentTime = value
+      },
+    })
+    const search = screen.getByRole('searchbox', { name: 'Search transcript' })
+    search.focus()
+    currentTime = 1.7
+    fireEvent.timeUpdate(audio)
+    expect(document.querySelector('[data-comment-id="comment-1"]')).toHaveAttribute('data-nearest', 'true')
+    expect(search).toHaveFocus()
+
+    seekWrites = 0
+    await user.click(screen.getByRole('button', { name: /00:01Aug 1, 2026/ }))
+    expect(seekWrites).toBe(1)
+    expect(document.querySelector('[data-comment-id="comment-1"]')).toHaveAttribute('data-active', 'true')
+    expect(screen.getByTestId('call-detail-location')).toHaveTextContent('?mode=comments&commentId=comment-1')
+    expect(scrollIntoView).toHaveBeenCalled()
+
+    seekWrites = 0
+    await user.click(screen.getByRole('button', { name: 'Open comment at 00:02' }))
+    expect(seekWrites).toBe(1)
+    expect(document.querySelector('[data-comment-id="comment-2"]')).toHaveAttribute('data-active', 'true')
+    expect(screen.getByTestId('call-detail-location')).toHaveTextContent('?mode=comments&commentId=comment-2')
   })
 })
 

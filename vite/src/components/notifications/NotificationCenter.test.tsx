@@ -234,6 +234,63 @@ describe('NotificationCenter', () => {
     )
   })
 
+  it('preserves a call-comment deep link and marks an unread mention read when it opens', async () => {
+    const callMention = {
+      ...notification,
+      source: {
+        status: 'available' as const,
+        type: 'call',
+        title: 'You were mentioned in a call comment',
+        preview: 'Please review this moment.',
+        route: '/orgs/org-1/calls/call-1?mode=comments&commentId=comment-1',
+      },
+    }
+    jsonFetchMock.mockImplementation((url: string, options?: { method?: string }) => {
+      if (options?.method === 'PATCH') return Promise.resolve({ updated: 1 })
+      if (url.includes('read=false')) return Promise.resolve({ notifications: [], total: 1, page: 1, limit: 1 })
+      return Promise.resolve({ notifications: [callMention], total: 1, page: 1, limit: 25 })
+    })
+
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationCenter />)
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 1 unread.' }))
+
+    const link = await screen.findByRole('link', { name: 'Open call' })
+    expect(link).toHaveAttribute('href', '/calls/call-1?mode=comments&commentId=comment-1')
+    await user.click(link)
+
+    await waitFor(() => expect(jsonFetchMock).toHaveBeenCalledWith(
+      '/api/orgs/org-1/notifications/notification-1',
+      { method: 'PATCH', body: JSON.stringify({ action: 'read' }) },
+    ))
+  })
+
+  it('renders only the safe snapshot when a call-comment target is unavailable', async () => {
+    const unavailableMention = {
+      ...notification,
+      summary: 'You were mentioned in a call comment',
+      source: {
+        status: 'unavailable' as const,
+        type: 'call',
+        title: 'You were mentioned in a call comment',
+        preview: 'Please review this moment.',
+      },
+    }
+    jsonFetchMock.mockImplementation((url: string) => {
+      if (url.includes('read=false')) return Promise.resolve({ notifications: [], total: 1, page: 1, limit: 1 })
+      return Promise.resolve({ notifications: [unavailableMention], total: 1, page: 1, limit: 25 })
+    })
+
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationCenter />)
+    await user.click(await screen.findByRole('button', { name: 'Inbox. 1 unread.' }))
+
+    expect(await screen.findByText('You were mentioned in a call comment')).toBeInTheDocument()
+    expect(screen.getByText('Please review this moment.')).toBeInTheDocument()
+    expect(screen.getByText('Source unavailable')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open call' })).not.toBeInTheDocument()
+  })
+
   it('switches to the archived view and applies a bulk action to selected rows', async () => {
     const user = userEvent.setup()
     renderWithProviders(<NotificationCenter />)
