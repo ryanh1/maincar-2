@@ -31,6 +31,10 @@ describe('formatDate', () => {
     expect(formatDate('2026-08-24', 'America/New_York')).toBe('Aug 24, 2026')
   })
 
+  it('keeps a date-only value on the same calendar day at the eastern timezone limit', () => {
+    expect(formatDate('2026-08-24', 'Pacific/Kiritimati')).toBe('Aug 24, 2026')
+  })
+
   it('renders nothing for a value that is not a date', () => {
     expect(formatDate('not-a-date', 'America/New_York')).toBe('')
   })
@@ -53,5 +57,16 @@ describe('zoned timestamp helpers', () => {
     expect(zonedDateTimeParts('2026-08-25T19:30:00.000Z', 'America/New_York')).toEqual({ date: new Date(2026, 7, 25), time: '15:30' })
     expect(zonedDateTimeToIso(new Date(2026, 7, 25), '15:30', 'America/New_York')).toBe('2026-08-25T19:30:00.000Z')
     expect(formatTimeZoneName(new Date('2026-08-25T19:30:00.000Z'), 'America/New_York')).toBe('EDT')
+  })
+
+  it('rejects a wall time that does not exist across the spring DST boundary', () => {
+    expect(zonedDateTimeToIso(new Date(2026, 2, 8), '02:30', 'America/New_York')).toBeNull()
+  })
+
+  it('chooses the earlier instant for an ambiguous fall DST wall time', () => {
+    const instant = zonedDateTimeToIso(new Date(2026, 10, 1), '01:30', 'America/New_York')
+
+    expect(instant).toBe('2026-11-01T05:30:00.000Z')
+    expect(formatDateTime(instant!, 'America/New_York')).toBe('Nov 1, 2026, 1:30 AM EDT')
   })
 })

@@ -48,8 +48,9 @@ export function formatDateTime(value: string | Date, timeZone: string | null | u
  * pins the same calendar date for every reader, which is the point.
  */
 export function formatDate(value: string | Date, timeZone: string | null | undefined): string {
+  const isDateOnly = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
   const date =
-    typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    isDateOnly
       ? new Date(`${value}T12:00:00.000Z`)
       : typeof value === 'string'
         ? new Date(value)
@@ -57,7 +58,7 @@ export function formatDate(value: string | Date, timeZone: string | null | undef
   if (Number.isNaN(date.getTime())) return ''
 
   return new Intl.DateTimeFormat('en-US', {
-    timeZone: resolveZone(timeZone),
+    timeZone: isDateOnly ? 'UTC' : resolveZone(timeZone),
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -120,5 +121,13 @@ export function zonedDateTimeToIso(date: Date, time: string, timeZone: string | 
   const wallTime = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes)
   let instant = new Date(wallTime - timeZoneOffset(new Date(wallTime), zone))
   instant = new Date(wallTime - timeZoneOffset(instant, zone))
+  const roundTrip = zonedDateTimeParts(instant.toISOString(), zone)
+  if (
+    !roundTrip.date
+    || roundTrip.date.getFullYear() !== date.getFullYear()
+    || roundTrip.date.getMonth() !== date.getMonth()
+    || roundTrip.date.getDate() !== date.getDate()
+    || roundTrip.time !== time
+  ) return null
   return instant.toISOString()
 }

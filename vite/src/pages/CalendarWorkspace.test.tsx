@@ -1,21 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
+import { ApiError } from '@/lib/api'
 
-const { useAuthMock, useGetCalendarSourcesMock, useGetCalendarEventsMock, useGetCalendarAvailabilityMock, useUpdateCalendarSourceMock, useCreateCalendarEventMock, useUpdateCalendarEventMock, useDeleteCalendarEventMock, useRespondToCalendarEventMock } = vi.hoisted(() => ({
+const { toastErrorMock, toastSuccessMock, useAuthMock, useGetCalendarSourcesMock, useGetCalendarEventsMock, useGetCalendarAvailabilityMock, useUpdateCalendarSourceMock, useRefreshCalendarSourcesMock, useCreateCalendarEventMock, useUpdateCalendarEventMock, useDeleteCalendarEventMock, useRespondToCalendarEventMock } = vi.hoisted(() => ({
+  toastErrorMock: vi.fn(),
+  toastSuccessMock: vi.fn(),
   useAuthMock: vi.fn(),
   useGetCalendarSourcesMock: vi.fn(),
   useGetCalendarEventsMock: vi.fn(),
   useGetCalendarAvailabilityMock: vi.fn(),
   useUpdateCalendarSourceMock: vi.fn(),
+  useRefreshCalendarSourcesMock: vi.fn(),
   useCreateCalendarEventMock: vi.fn(),
   useUpdateCalendarEventMock: vi.fn(),
   useDeleteCalendarEventMock: vi.fn(),
   useRespondToCalendarEventMock: vi.fn(),
 }))
 
+vi.mock('sonner', () => ({ toast: { error: toastErrorMock, success: toastSuccessMock } }))
 vi.mock('@/providers/useAuth', () => ({ useAuth: useAuthMock }))
 vi.mock('@/components/editor/useMentionSuggestions', () => ({
   useMentionSuggestions: () => ({
@@ -28,6 +33,7 @@ vi.mock('@/hooks/calendar', () => ({
   useGetCalendarEvents: useGetCalendarEventsMock,
   useGetCalendarAvailability: useGetCalendarAvailabilityMock,
   useUpdateCalendarSource: useUpdateCalendarSourceMock,
+  useRefreshCalendarSources: useRefreshCalendarSourcesMock,
   useCreateCalendarEvent: useCreateCalendarEventMock,
   useUpdateCalendarEvent: useUpdateCalendarEventMock,
   useDeleteCalendarEvent: useDeleteCalendarEventMock,
@@ -56,10 +62,15 @@ beforeEach(() => {
   useGetCalendarEventsMock.mockReturnValue({ data: { calendar: { state: 'connected' }, events: [calendarEvent], total: 1 }, isLoading: false, isError: false, refetch: vi.fn() })
   useGetCalendarAvailabilityMock.mockReturnValue({ data: undefined, isLoading: false, isError: false })
   useUpdateCalendarSourceMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
+  useRefreshCalendarSourcesMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
   useCreateCalendarEventMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
   useUpdateCalendarEventMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
   useDeleteCalendarEventMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
   useRespondToCalendarEventMock.mockReturnValue({ mutate: vi.fn(), isPending: false })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('CalendarWorkspace', () => {
@@ -79,9 +90,49 @@ describe('CalendarWorkspace', () => {
     expect(screen.getByText('Main calendar')).toBeInTheDocument()
     expect(screen.getByText('Discovery call')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Show month view' }))
+    expect(screen.getByRole('button', { name: 'Show month view' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('heading', { name: /August 2026/i })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Show next time range' }))
     expect(useGetCalendarEventsMock).toHaveBeenCalled()
+  })
+
+  it('uses the viewing user timezone for Today and the queried day boundary', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-24T00:30:00.000Z'))
+    useAuthMock.mockReturnValue({ org: { id: 'org-1' }, user: { email: 'rep@example.test', timeZone: 'Asia/Tokyo' } })
+
+    renderWithProviders(<CalendarWorkspace />)
+    fireEvent.click(screen.getByRole('button', { name: 'Show day view' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }))
+
+    const latest = useGetCalendarEventsMock.mock.calls.at(-1)
+    expect(latest?.[1]).toEqual({
+      startsAt: '2026-08-23T15:00:00.000Z',
+      endsAt: '2026-08-24T15:00:00.000Z',
+    })
+  })
+
+  it('keeps an all-day event on its provider date and gives it a date-only accessible name', async () => {
+    useGetCalendarEventsMock.mockReturnValue({
+      data: {
+        calendar: { state: 'connected' },
+        events: [{
+          ...calendarEvent,
+          id: 'all-day-1',
+          title: 'Company holiday',
+          kind: 'all-day',
+          startsAt: '2026-08-23T00:00:00.000Z',
+          endsAt: '2026-08-24T00:00:00.000Z',
+          timeZone: null,
+        }],
+        total: 1,
+      },
+      isLoading: false, isError: false, refetch: vi.fn(),
+    })
+
+    renderWithProviders(<CalendarWorkspace />)
+
+    expect(screen.getByRole('button', { name: 'Company holiday, All day, Aug 23, 2026' })).toBeInTheDocument()
   })
 
   it('selects a secondary calendar from the rail', async () => {
@@ -93,7 +144,30 @@ describe('CalendarWorkspace', () => {
     renderWithProviders(<CalendarWorkspace />)
     await user.click(screen.getByRole('button', { name: 'Team calendar' }))
 
-    expect(mutate).toHaveBeenCalledWith({ orgId: 'org-1', sourceId: 'team', isSelected: true })
+    expect(mutate).toHaveBeenCalledWith({ orgId: 'org-1', sourceId: 'team', isSelected: true }, expect.objectContaining({ onError: expect.any(Function) }))
+  })
+
+  it('reports a failed secondary-calendar selection with a recovery action', async () => {
+    const mutate = vi.fn((_variables, options) => options.onError(new ApiError('Something went wrong. Please try again.', 502)))
+    useGetCalendarSourcesMock.mockReturnValue({ data: { calendar: { state: 'connected' }, sources: [source, { ...source, id: 'team', name: 'Team calendar', isPrimary: false, isSelected: false }] }, isLoading: false, isError: false })
+    useUpdateCalendarSourceMock.mockReturnValue({ mutate, isPending: false })
+    const user = userEvent.setup()
+
+    renderWithProviders(<CalendarWorkspace />)
+    await user.click(screen.getByRole('button', { name: 'Team calendar' }))
+
+    expect(toastErrorMock).toHaveBeenCalledWith('Could not update visible calendars. Refresh Calendar and try again.')
+  })
+
+  it('reports stale-sync recovery after a manual Calendar refresh', async () => {
+    const mutate = vi.fn((_variables, options) => options.onSuccess([{ events: 1, nextCursor: 'fresh', recovered: true }]))
+    useRefreshCalendarSourcesMock.mockReturnValue({ mutate, isPending: false })
+    const user = userEvent.setup()
+
+    renderWithProviders(<CalendarWorkspace />)
+    await user.click(screen.getByRole('button', { name: 'Refresh calendar' }))
+
+    expect(toastSuccessMock).toHaveBeenCalledWith('Calendar recovered from stale provider sync state.')
   })
 
   it('opens quick create from a time slot and sends the entered event to the selected calendar', async () => {
@@ -148,6 +222,27 @@ describe('CalendarWorkspace', () => {
         timeZone: 'America/New_York',
       }),
     }), expect.anything())
+  })
+
+  it('keeps the draft open and directs the rep to reconnect after an authorization failure', async () => {
+    const mutate = vi.fn((_variables, options) => options.onError(new ApiError(
+      'Something went wrong. Please try again.',
+      502,
+      undefined,
+      { error: 'Calendar authorization failed.', code: 'calendar_auth_failed' },
+    )))
+    useUpdateCalendarEventMock.mockReturnValue({ mutate, isPending: false })
+    const user = userEvent.setup()
+    renderWithProviders(<CalendarWorkspace />)
+
+    await user.click(screen.getByRole('button', { name: /^Discovery call,/i }))
+    await user.click(screen.getByRole('button', { name: 'Edit event' }))
+    await user.type(screen.getByLabelText('Title'), ' revised')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    expect(screen.getByRole('dialog', { name: 'Edit event' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Title')).toHaveValue('Discovery call revised')
+    expect(toastErrorMock).toHaveBeenCalledWith('Could not update the event. Reconnect Calendar in Settings → Integrations.')
   })
 
   it('adds guests and a provider-backed recurrence rule from the event editor', async () => {

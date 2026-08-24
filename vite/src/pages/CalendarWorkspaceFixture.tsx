@@ -10,6 +10,7 @@ import { CalendarWorkspace } from './CalendarWorkspace'
 
 /** Development-only shell for the real-browser calendar event lifecycle journey. */
 export function CalendarWorkspaceFixture() {
+  const fixtureTimeZone = new URLSearchParams(window.location.search).get('timeZone') ?? 'America/New_York'
   const client = useMemo(
     () => new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }),
     [],
@@ -24,13 +25,13 @@ export function CalendarWorkspaceFixture() {
       user: {
         id: 'user-fixture', email: 'fixture@example.com', firstName: 'Fixture', lastName: 'Rep',
         imageUrl: null, avatarUrl: null, title: null, roles: ['basic'], enabled: true,
-        currentOrgId: org.id, timeZone: 'America/New_York', createdAt: org.createdAt, updatedAt: org.updatedAt,
+        currentOrgId: org.id, timeZone: fixtureTimeZone, createdAt: org.createdAt, updatedAt: org.updatedAt,
       },
       org,
       memberships: [{ orgId: org.id, org, roles: ['basic'] }],
     })
     return () => useAuthStore.getState().reset()
-  }, [])
+  }, [fixtureTimeZone])
 
   return (
     <QueryClientProvider client={client}>
