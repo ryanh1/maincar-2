@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from 'react'
-import { ChevronDown, Columns3Cog, Grid3X3, History, LayoutList, Palette, PanelsTopLeft, Rows3, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
+import { ChevronDown, Columns3Cog, LayoutList, Search, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,9 +19,9 @@ import type { AttributeDef } from '@/lib/crmTypes'
 import { memberDisplayName, useGetMembers, useGetTeams } from '@/hooks/orgs'
 import { createKanbanConfig, isKanbanGroupAttribute, type TeamScope, type ViewConfig } from './viewConfig'
 import { GridFilterBuilder } from './GridFilterBuilder'
-import type { GridMenuAnchor } from './gridFilterMenu'
 import { GridSortPopover } from './GridSortPopover'
-import { GridZoomControl } from './GridZoomControl'
+import type { GridMenuAnchor } from './gridFilterMenu'
+import { GridViewOptionsMenu } from './GridViewOptionsMenu'
 import { KanbanCardFieldPicker } from './KanbanCardFieldPicker'
 
 interface GridViewToolbarProps {
@@ -34,6 +34,7 @@ interface GridViewToolbarProps {
   selectedColumnIds?: string[]
   layout?: 'grid' | 'kanban'
   onLayoutChange?: (layout: 'grid' | 'kanban') => void
+  onSearch?: () => void
   onFormat?: (anchor: GridMenuAnchor) => void
   trailing?: ReactNode
 }
@@ -112,10 +113,9 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
   return label ? <span className="text-xs text-text-muted">{label}</span> : null
 }
 
-/** The grid's shared view controls. Every action writes the same ViewConfig. */
-export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange, onFormat, trailing }: GridViewToolbarProps) {
+/** Stable saved-view controls above task-oriented grid commands. */
+export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange, onSearch, onFormat, trailing }: GridViewToolbarProps) {
   const [columnGroupName, setColumnGroupName] = useState('')
-  const [customChangeDays, setCustomChangeDays] = useState('')
   function setColumnVisible(attributeId: string, visible: boolean) {
     onConfigChange((current) => ({
       ...current,
@@ -130,12 +130,6 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
       ...current,
       columnWidths: { ...current.columnWidths, [attributeId]: Math.min(500, Math.max(50, Math.round(width))) },
     }))
-  }
-
-  function setFrozenCount(key: 'frozenRows' | 'frozenCols', rawValue: string) {
-    const value = Number(rawValue)
-    if (!Number.isFinite(value)) return
-    onConfigChange((current) => ({ ...current, [key]: Math.max(0, Math.floor(value)) }))
   }
 
   function createColumnGroup() {
@@ -153,24 +147,33 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
   const isKanban = layout === 'kanban'
   const hasGrouping = layout === 'kanban' ? Boolean(config.kanban) : config.groupBy.length > 0
 
-  function applyCustomChangeWindow() {
-    const days = Number(customChangeDays)
-    if (!Number.isInteger(days) || days < 1 || days > 365) return
-    onConfigChange((current) => ({ ...current, changeHighlight: { ...current.changeHighlight, days } }))
-  }
-
   return (
-    <div role="region" aria-label="Grid controls" className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-surface px-3">
-      {leading}
-      {onLayoutChange && (
-        <div role="group" aria-label="Layout" className="flex items-center rounded-md border border-border bg-bg p-0.5">
-          <Button type="button" variant="secondary" size="sm" aria-pressed={layout === 'grid'} onClick={() => onLayoutChange('grid')}>
-            <Table2 size={16} /> Table
-          </Button>
-          <Button type="button" variant="secondary" size="sm" aria-pressed={layout === 'kanban'} onClick={() => onLayoutChange('kanban')}>
-            <LayoutList size={16} /> Kanban
-          </Button>
+    <>
+      <div role="region" aria-label="View bar" className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <div className="flex w-max min-w-full items-center gap-1">{leading}</div>
         </div>
+        <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
+          {onLayoutChange && (
+            <div role="group" aria-label="Layout" className="flex items-center gap-1">
+              <Button type="button" variant="secondary" size="sm" aria-pressed={layout === 'grid'} onClick={() => onLayoutChange('grid')}>
+                <Table2 size={16} /> Table
+              </Button>
+              <Button type="button" variant="secondary" size="sm" aria-pressed={layout === 'kanban'} onClick={() => onLayoutChange('kanban')}>
+                <LayoutList size={16} /> Kanban
+              </Button>
+            </div>
+          )}
+          {trailing}
+        </div>
+      </div>
+
+      <div role="region" aria-label="Command bar" className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto whitespace-nowrap border-b border-border bg-surface px-3">
+      {onSearch && (
+        <Button type="button" variant="secondary" size="sm" onClick={onSearch}>
+          <Search size={16} />
+          Search
+        </Button>
       )}
       {!isKanban && (
         <DropdownMenu>
@@ -220,20 +223,6 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
         </DropdownMenu>
       )}
 
-      {!isKanban && onFormat && (
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect()
-            onFormat({ x: rect.left, y: rect.bottom, width: rect.width, height: rect.height })
-          }}
-        >
-          <Palette size={16} />
-          Format
-        </Button>
-      )}
-
       {!isKanban && selectedColumnIds.length >= 2 && (
         <div className="flex items-center gap-1">
           <Input
@@ -278,72 +267,6 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm">
-            <History size={16} />
-            Changes
-            <ChevronDown size={16} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuCheckboxItem
-            checked={config.changeHighlight.mode === 'on'}
-            onSelect={(event) => event.preventDefault()}
-            onCheckedChange={(checked) => onConfigChange((current) => ({
-              ...current,
-              changeHighlight: { ...current.changeHighlight, mode: checked ? 'on' : 'off' },
-            }))}
-          >
-            Highlight changes
-          </DropdownMenuCheckboxItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuLabel>Change window</DropdownMenuLabel>
-          {[1, 7, 30].map((days) => (
-            <DropdownMenuItem
-              key={days}
-              onSelect={(event) => {
-                event.preventDefault()
-                onConfigChange((current) => ({ ...current, changeHighlight: { ...current.changeHighlight, days } }))
-              }}
-            >
-              {days === 1 ? 'Last day' : `Last ${days} days`}
-            </DropdownMenuItem>
-          ))}
-          <label className="mx-2 mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-            Custom days
-            <Input
-              aria-label="Custom change window in days"
-              className="h-8 w-20"
-              min={1}
-              max={365}
-              type="number"
-              value={customChangeDays}
-              onChange={(event) => setCustomChangeDays(event.target.value)}
-              onBlur={applyCustomChangeWindow}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  applyCustomChangeWindow()
-                }
-              }}
-            />
-          </label>
-          <DropdownMenuSeparator />
-          <DropdownMenuCheckboxItem
-            checked={config.changeHighlight.onlyChangedRows}
-            disabled={config.changeHighlight.mode === 'off'}
-            onSelect={(event) => event.preventDefault()}
-            onCheckedChange={(onlyChangedRows) => onConfigChange((current) => ({
-              ...current,
-              changeHighlight: { ...current.changeHighlight, onlyChangedRows },
-            }))}
-          >
-            Show only changed rows
-          </DropdownMenuCheckboxItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="secondary" size="sm">
             <SlidersHorizontal size={16} />
             Group{hasGrouping ? ' · 1' : ''}
             <ChevronDown size={16} />
@@ -380,75 +303,8 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
         </>
       )}
 
-      {!isKanban && (
-        <>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="secondary" size="sm">
-                <Rows3 size={16} />
-                Row height
-                <ChevronDown size={16} />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuLabel>Row height</DropdownMenuLabel>
-              {(['compact', 'comfortable', 'tall'] as const).map((rowHeight) => (
-                <DropdownMenuItem key={rowHeight} onSelect={() => onConfigChange((current) => ({ ...current, rowHeight }))}>
-                  {rowHeight.slice(0, 1).toUpperCase() + rowHeight.slice(1)}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            aria-label={config.gridLines ? 'Hide grid lines' : 'Show grid lines'}
-            aria-pressed={config.gridLines}
-            onClick={() => onConfigChange((current) => ({ ...current, gridLines: !current.gridLines }))}
-          >
-            <Grid3X3 size={16} />
-            Grid lines
-          </Button>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="secondary" size="sm">
-                <PanelsTopLeft size={16} />
-                Freeze
-                <ChevronDown size={16} />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56 p-2">
-              <label className="mb-2 flex items-center gap-2 text-xs text-text-muted">
-                Frozen rows
-                <Input
-                  aria-label="Frozen rows"
-                  className="h-7 w-20"
-                  min={0}
-                  type="number"
-                  value={config.frozenRows}
-                  onChange={(event) => setFrozenCount('frozenRows', event.target.value)}
-                />
-              </label>
-              <label className="flex items-center gap-2 text-xs text-text-muted">
-                Frozen columns
-                <Input
-                  aria-label="Frozen columns"
-                  className="h-7 w-20"
-                  min={0}
-                  type="number"
-                  value={config.frozenCols}
-                  onChange={(event) => setFrozenCount('frozenCols', event.target.value)}
-                />
-              </label>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </>
-      )}
-      {!isKanban && <GridZoomControl zoom={config.zoom} onZoomChange={(zoom) => onConfigChange((current) => ({ ...current, zoom }))} />}
-      {trailing && <div className="ml-auto flex shrink-0 items-center pl-2">{trailing}</div>}
-    </div>
+      {!isKanban && <GridViewOptionsMenu config={config} onConfigChange={onConfigChange} onFormat={onFormat} />}
+      </div>
+    </>
   )
 }

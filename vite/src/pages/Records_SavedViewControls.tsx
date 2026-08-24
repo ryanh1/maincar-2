@@ -75,7 +75,7 @@ export function Records_SavedViewControls({
   }
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex min-w-max items-center gap-1">
       <Select disabled={isSaving} value={selectedViewId ?? DEFAULT_VIEW_ID} onValueChange={(value) => onSelectView(value === DEFAULT_VIEW_ID ? null : value)}>
         <SelectTrigger aria-label="Saved view" size="sm" className="max-w-52 bg-bg">
           <SelectValue placeholder="Default view" />
@@ -105,7 +105,7 @@ export function Records_SavedViewControls({
           {selectedView?.isShared ? (
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button size="sm" disabled={isSaving}>Save changes</Button>
+                <Button variant="secondary" size="sm" disabled={isSaving}>Save changes</Button>
               </AlertDialogTrigger>
               <AlertDialogContent size="sm">
                 <AlertDialogHeader>
@@ -119,7 +119,7 @@ export function Records_SavedViewControls({
               </AlertDialogContent>
             </AlertDialog>
           ) : (
-            <Button size="sm" disabled={isSaving} onClick={onSave}>Save changes</Button>
+            <Button variant="secondary" size="sm" disabled={isSaving} onClick={onSave}>Save changes</Button>
           )}
           {onSaveAsNew && (
             <Button variant="secondary" size="sm" disabled={isSaving} onClick={() => setIsNewViewDialogOpen(true)}>

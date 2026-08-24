@@ -1393,6 +1393,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           selectedColumnIds={selectedColumnIds}
           layout={layout}
           onLayoutChange={setLayout}
+          onSearch={() => { setFindOpen(true); setReplaceOpen(false) }}
           onFormat={(anchor) => setFormatPanel({ anchor, attributeId: null })}
           trailing={<RecordCount filteredCount={totalCount} isFiltered={false} totalCount={totalCount} />}
         />

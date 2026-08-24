@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
@@ -56,14 +56,46 @@ describe('GridViewToolbar', () => {
       isPending: false,
     })
   })
-  it('exposes the sort popover and condition builder with compact labeled toolbar controls', () => {
+  it('separates stable view controls from task commands and structured view options', async () => {
+    const user = userEvent.setup()
     const config = createViewConfig(attributes)
+    const onSearch = vi.fn()
+    const onFormat = vi.fn()
 
-    renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={vi.fn()} />)
+    renderWithProviders(
+      <GridViewToolbar
+        leading={<button type="button">Saved view</button>}
+        trailing={<output>42 records</output>}
+        attributes={attributes}
+        config={config}
+        onConfigChange={vi.fn()}
+        onLayoutChange={vi.fn()}
+        onSearch={onSearch}
+        onFormat={onFormat}
+      />,
+    )
 
-    for (const name of ['Fields', 'Sort', 'Filter', 'Changes', 'Group', 'Row height', 'Show grid lines', 'Freeze', 'View options']) {
-      expect(screen.getByRole('button', { name })).toBeInTheDocument()
+    const viewBar = screen.getByRole('region', { name: 'View bar' })
+    expect(within(viewBar).getByRole('button', { name: 'Saved view' })).toBeInTheDocument()
+    expect(within(viewBar).getByRole('button', { name: 'Table' })).toBeInTheDocument()
+    expect(within(viewBar).getByRole('button', { name: 'Kanban' })).toBeInTheDocument()
+    expect(within(viewBar).getByText('42 records')).toBeInTheDocument()
+
+    const commandBar = screen.getByRole('region', { name: 'Command bar' })
+    for (const name of ['Search', 'Fields', 'Sort', 'Filter', 'Group', 'View options']) {
+      expect(within(commandBar).getByRole('button', { name })).toBeInTheDocument()
     }
+    expect(within(commandBar).queryByRole('button', { name: 'Table' })).not.toBeInTheDocument()
+
+    await user.click(within(commandBar).getByRole('button', { name: 'Search' }))
+    expect(onSearch).toHaveBeenCalledOnce()
+
+    await user.click(within(commandBar).getByRole('button', { name: 'View options' }))
+    for (const name of ['Format', 'Change highlighting', 'Density', 'Freeze', 'Zoom']) {
+      expect(await screen.findByRole('menuitem', { name })).toBeInTheDocument()
+    }
+    await user.click(screen.getByRole('menuitem', { name: 'Format' }))
+    expect(onFormat).toHaveBeenCalledOnce()
   })
 
   it('turns on change highlights, selects the window, and keeps changed-row mode opt-in', async () => {
@@ -73,20 +105,29 @@ describe('GridViewToolbar', () => {
 
     const view = renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={onConfigChange} />)
 
-    await user.click(screen.getByRole('button', { name: 'Changes' }))
+    await user.click(screen.getByRole('button', { name: 'View options' }))
+    ;(await screen.findByRole('menuitem', { name: 'Change highlighting' })).focus()
+    await user.keyboard('{ArrowRight}')
     await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Highlight changes' }))
     const enabledUpdate = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
     const enabledConfig = enabledUpdate(config)
     expect(enabledConfig.changeHighlight).toEqual({ mode: 'on', days: 7, onlyChangedRows: false })
     view.rerender(<GridViewToolbar attributes={attributes} config={enabledConfig} onConfigChange={onConfigChange} />)
 
-    await user.click(screen.getByRole('button', { name: 'Changes' }))
+    await user.keyboard('{Escape}{Escape}')
+    await user.click(screen.getByRole('button', { name: 'View options' }))
+    ;(await screen.findByRole('menuitem', { name: 'Change highlighting' })).focus()
+    await user.keyboard('{ArrowRight}')
     await user.click(await screen.findByText('Last 30 days'))
     const windowUpdate = onConfigChange.mock.calls[1][0] as (current: typeof config) => typeof config
     const windowConfig = windowUpdate(enabledConfig)
     expect(windowConfig.changeHighlight).toEqual({ mode: 'on', days: 30, onlyChangedRows: false })
     view.rerender(<GridViewToolbar attributes={attributes} config={windowConfig} onConfigChange={onConfigChange} />)
 
+    await user.keyboard('{Escape}{Escape}')
+    await user.click(screen.getByRole('button', { name: 'View options' }))
+    ;(await screen.findByRole('menuitem', { name: 'Change highlighting' })).focus()
+    await user.keyboard('{ArrowRight}')
     await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Show only changed rows' }))
     const rowsUpdate = onConfigChange.mock.calls[2][0] as (current: typeof config) => typeof config
     expect(rowsUpdate(windowConfig).changeHighlight).toEqual({ mode: 'on', days: 30, onlyChangedRows: true })
@@ -98,11 +139,13 @@ describe('GridViewToolbar', () => {
     const config = createViewConfig(attributes)
 
     renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={onConfigChange} />)
-    await user.click(screen.getByRole('button', { name: 'Changes' }))
+    await user.click(screen.getByRole('button', { name: 'View options' }))
+    ;(await screen.findByRole('menuitem', { name: 'Change highlighting' })).focus()
+    await user.keyboard('{ArrowRight}')
     const input = await screen.findByRole('spinbutton', { name: 'Custom change window in days' })
     await user.clear(input)
     await user.type(input, '14')
-    fireEvent.blur(input)
+    await user.keyboard('{Enter}')
 
     const customWindowUpdate = onConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
     expect(customWindowUpdate(config).changeHighlight.days).toBe(14)
@@ -126,12 +169,18 @@ describe('GridViewToolbar', () => {
     const groupUpdate = onConfigChange.mock.calls[1][0] as (current: typeof config) => typeof config
     expect(groupUpdate(config).groupBy).toEqual([{ attributeId: 'status', direction: 'asc' }])
 
-    await user.click(screen.getByRole('button', { name: 'Row height' }))
-    await user.click(await screen.findByText('Comfortable'))
+    await user.click(screen.getByRole('button', { name: 'View options' }))
+    ;(await screen.findByRole('menuitem', { name: 'Density' })).focus()
+    await user.keyboard('{ArrowRight}')
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Comfortable' }))
     const heightUpdate = onConfigChange.mock.calls[2][0] as (current: typeof config) => typeof config
     expect(heightUpdate(config).rowHeight).toBe('comfortable')
 
-    await user.click(screen.getByRole('button', { name: 'Show grid lines' }))
+    await user.keyboard('{Escape}{Escape}')
+    await user.click(screen.getByRole('button', { name: 'View options' }))
+    ;(await screen.findByRole('menuitem', { name: 'Density' })).focus()
+    await user.keyboard('{ArrowRight}')
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: 'Show grid lines' }))
     const linesUpdate = onConfigChange.mock.calls[3][0] as (current: typeof config) => typeof config
     expect(linesUpdate(config).gridLines).toBe(true)
   })
@@ -170,10 +219,10 @@ describe('GridViewToolbar', () => {
       />,
     )
 
-    for (const name of ['Sort', 'Filter', 'Changes', 'Group · 1', 'Card fields']) {
+    for (const name of ['Sort', 'Filter', 'Group · 1', 'Card fields']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
-    for (const name of ['Fields', 'Format', 'Group columns', 'Row height', 'Show grid lines', 'Freeze']) {
+    for (const name of ['Fields', 'Format', 'Changes', 'Group columns', 'Row height', 'Show grid lines', 'Freeze', 'View options']) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
     }
     expect(screen.queryByRole('textbox', { name: 'Column group name' })).not.toBeInTheDocument()
