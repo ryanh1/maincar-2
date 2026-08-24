@@ -3,12 +3,11 @@ import { ArrowLeft } from 'lucide-react'
 
 import { ActivityFeedRow } from '@/components/activity-feed/ActivityFeedRow'
 import { mapActivityEntry } from '@/components/activity-feed/activityFeed'
+import { RecordTypeIcon } from '@/components/RecordTypeIcon'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import { useGetActivity, useGetRelatedRecords, type ActivityScope } from '@/hooks/crm'
+import { useGetActivity, useGetRelatedRecords, useUpdateRecordLifecycle, type ActivityScope } from '@/hooks/crm'
 import type { AttributeDef, ObjectDef, RecordRow, RelatedRecordGroup } from '@/lib/crmTypes'
-import { resolveOptionColor } from '@/lib/optionPalette'
-import { useUpdateRecordLifecycle } from '@/hooks/crm'
 import { parseOptions } from './cellBuilder'
 import { FieldValueEditor } from './FieldValueEditor'
 import { OptionChip } from './OptionChip'
@@ -173,8 +172,9 @@ export function RecordPeekDrawer({
               )
             })}
           </nav>
-          <p className="text-xs text-muted-foreground">
-            {activeObject.namePlural}
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <RecordTypeIcon icon={activeObject.icon} color={activeObject.iconColor} aria-hidden />
+            <span>{activeObject.namePlural}</span>
             {stack.length === 1 && position ? ` · ${position.index} of ${position.total}` : ''}
           </p>
           <div className="flex items-center justify-between gap-3">
@@ -265,8 +265,6 @@ export function RecordPeekDrawer({
   )
 }
 
-const RELATION_COLORS = ['option-3', 'option-1', 'option-6', 'option-4', 'option-7', 'option-2', 'option-5', 'option-8'] as const
-
 function recordTitle(record: RecordRow, object: ObjectDef, timeZone: string | null | undefined): string {
   const identity = object.attributes?.find((attribute) => attribute.isIdentity) ?? object.attributes?.[0]
   return identity ? formatCellValue(record[identity.slug], identity.type, timeZone) || object.name : object.name
@@ -281,11 +279,10 @@ function RelatedRail({
   timeZone: string | null | undefined
   onOpen: (record: RecordRow) => void
 }) {
-  const objectColor = resolveOptionColor(RELATION_COLORS[group.object.slug.length % RELATION_COLORS.length])
   return (
     <div className="rounded-md border border-border">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs font-medium">
-        <span aria-hidden="true" className="size-2 rounded-full" style={{ backgroundColor: objectColor }} />
+        <RecordTypeIcon icon={group.object.icon} color={group.object.iconColor} aria-hidden />
         <span>{group.label}</span>
         <span className="ml-auto rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{group.count}</span>
       </div>

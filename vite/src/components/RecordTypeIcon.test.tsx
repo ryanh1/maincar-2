@@ -25,4 +25,20 @@ describe('RecordTypeIcon', () => {
 
     expect(screen.getByTestId('object-icon')).toHaveStyle({ color: 'var(--option-3)' })
   })
+
+  it.each([
+    'building-2',
+    'user',
+    'circle-dollar-sign',
+    'phone',
+    'mail',
+    'message-square',
+    'calendar-clock',
+    'square-check',
+    'sticky-note',
+  ])('supports the seeded %s record type icon', async (icon) => {
+    renderWithProviders(<RecordTypeIcon icon={icon} data-testid="object-icon" />)
+
+    await waitFor(() => expect(screen.getByTestId('object-icon')).toHaveAttribute('data-icon-name', icon))
+  })
 })

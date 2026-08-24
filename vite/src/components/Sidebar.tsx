@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, Database, Home, List, ListChecks, LogOut, Phone, Settings, Voicemail } from 'lucide-react'
+import { BarChart3, CalendarDays, Home, List, ListChecks, LogOut, Phone, Settings, Voicemail } from 'lucide-react'
 import { Link, NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { NotificationCenter } from '@/components/notifications/NotificationCenter'
 import { useKeyboardSystemOptional } from '@/components/keyboard/keyboardContext'
 import { OrgSwitcher } from '@/components/OrgSwitcher'
+import { RecordTypeIcon } from '@/components/RecordTypeIcon'
 import { useGetLists, useGetObjects } from '@/hooks/crm'
 import { useGetIntegrationHealth } from '@/hooks/integrations'
 import { cn } from '@/lib/utils'
@@ -133,7 +134,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 onClick={onClose}
                 className={({ isActive }) => navRowClass(isActive)}
               >
-                <Database size={16} aria-hidden />
+                <RecordTypeIcon icon={object.icon} color={object.iconColor} aria-hidden />
                 {object.namePlural}
               </NavLink>
             ))}

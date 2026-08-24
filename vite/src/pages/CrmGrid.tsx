@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/PageHeader'
+import { RecordTypeIcon } from '@/components/RecordTypeIcon'
 import { ListEntryGrid } from '@/components/crm/ListEntryGrid'
 import { AddListFieldDialog } from '@/components/crm/AddListFieldDialog'
 import { ListEntryReorderDialog } from '@/components/crm/ListEntryReorderDialog'
@@ -155,7 +156,8 @@ export function CrmGrid() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex h-12 shrink-0 items-center border-b border-border bg-muted px-4">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-muted px-4">
+        <RecordTypeIcon icon={object?.icon} color={object?.iconColor} aria-hidden />
         <h1 className="text-base font-semibold">{title}</h1>
         <div className="ml-auto">
           <RecordCount filteredCount={0} isFiltered={false} totalCount={0} />

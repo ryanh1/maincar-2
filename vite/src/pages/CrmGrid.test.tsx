@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Route, Routes } from 'react-router-dom'
 
@@ -19,7 +19,7 @@ vi.mock('@/providers/useAuth', () => ({
 
 vi.mock('@/hooks/crm', () => ({
   useGetObjects: () => ({
-    data: { objects: [{ id: 'person', slug: 'person', namePlural: 'People' }] },
+    data: { objects: [{ id: 'person', slug: 'person', namePlural: 'People', icon: 'user', iconColor: 'option-1' }] },
   }),
   useGetLists: () => ({
     data: { lists: [{ id: 'list-1', name: 'Q3 targets' }] },
@@ -68,7 +68,7 @@ beforeEach(() => {
 })
 
 describe('CrmGrid', () => {
-  it('renders the selected object as a grid', () => {
+  it('renders the selected object as a grid', async () => {
     renderWithProviders(
       <Routes>
         <Route path="/records/:objectSlug" element={<CrmGrid />} />
@@ -78,6 +78,7 @@ describe('CrmGrid', () => {
 
     expect(screen.getByRole('grid', { name: 'People grid' })).toBeInTheDocument()
     expect(screen.getByText('0 records')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'People' }).parentElement?.querySelector('[data-icon-name="user"]')).not.toBeNull())
   })
 
   it('renders a truthful empty state for the selected list', () => {

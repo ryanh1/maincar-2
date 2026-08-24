@@ -89,6 +89,8 @@ function object(overrides: Record<string, unknown> = {}) {
     id: 'person',
     slug: 'person',
     namePlural: 'People',
+    icon: null,
+    iconColor: null,
     isHidden: false,
     isArchived: false,
     capabilities: { list: true },
@@ -144,6 +146,18 @@ describe('Records', () => {
     renderRecords('/records/person')
 
     expect(screen.getByRole('grid', { name: 'People grid' })).toBeInTheDocument()
+  })
+
+  it('uses the configured object icon and color in the page header', async () => {
+    const person = object({ icon: 'user-round', iconColor: 'option-4' })
+    useGetObjectsMock.mockReturnValue({ data: { objects: [person] }, isPending: false, isError: false, refetch: vi.fn() })
+    useGetObjectMock.mockReturnValue({ data: { object: person }, isPending: false, isError: false, refetch: vi.fn() })
+
+    renderRecords('/records/person')
+
+    const heading = screen.getByRole('heading', { name: 'People' })
+    await waitFor(() => expect(heading.parentElement?.querySelector('[data-icon-name="user-round"]')).not.toBeNull())
+    expect(heading.parentElement?.querySelector('[data-icon-name="user-round"]')).toHaveStyle({ color: 'var(--option-4)' })
   })
 
   it.each([

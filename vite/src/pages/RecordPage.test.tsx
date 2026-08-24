@@ -6,12 +6,12 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 const fixtures = vi.hoisted(() => ({
   saveLayout: vi.fn(),
   object: {
-    id: 'people', slug: 'person', name: 'Person', namePlural: 'People', icon: null, iconColor: null,
+    id: 'people', slug: 'person', name: 'Person', namePlural: 'People', icon: 'user', iconColor: 'option-1',
     storage: 'table' as const, isStandard: true, isFirstClass: true, isGridCreateSupported: true,
     capabilities: { list: true }, isHidden: false, isArchived: false, createdAt: '', updatedAt: '',
   },
   relatedObject: {
-    id: 'deals', slug: 'deal', name: 'Deal', namePlural: 'Deals', icon: null, iconColor: null,
+    id: 'deals', slug: 'deal', name: 'Deal', namePlural: 'Deals', icon: 'circle-dollar-sign', iconColor: 'option-3',
     storage: 'table' as const, isStandard: true, isFirstClass: true, isGridCreateSupported: true,
     capabilities: { list: true }, isHidden: false, isArchived: false, createdAt: '', updatedAt: '',
   },
@@ -64,5 +64,17 @@ describe('RecordPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Ada Lovelace' }))
     expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Ada Lovelace')
+  })
+
+  it('uses configured object icons in the record header and layout object selector', async () => {
+    render(<TooltipProvider><RecordPage /></TooltipProvider>)
+
+    const heading = screen.getByRole('heading', { name: 'Ada Lovelace' })
+    await waitFor(() => expect(heading.parentElement?.querySelector('[data-icon-name="user"]')).not.toBeNull())
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Show record actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit layout' }))
+    const deals = screen.getByRole('checkbox', { name: 'Deals' }).closest('label')
+    await waitFor(() => expect(deals?.querySelector('[data-icon-name="circle-dollar-sign"]')).not.toBeNull())
   })
 })
