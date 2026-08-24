@@ -91,6 +91,19 @@ export interface TimedTranscriptSegment {
   words: unknown
 }
 
+/** Provider-normalized timing used for word-level review interactions. */
+export interface TimedTranscriptWord {
+  word: string
+  punctuatedWord?: string
+  startMs: number
+  endMs: number
+  confidence?: number
+  speaker?: number
+  speakerConfidence?: number | null
+  channel?: number
+  language?: string
+}
+
 export interface CallTranscriptPass {
   id: string
   provider: string
