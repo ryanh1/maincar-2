@@ -26,6 +26,7 @@ import { Settings_NextStepsFixture } from './pages/Settings_NextStepsFixture'
 import { Settings_AlertsFixture } from './pages/Settings_AlertsFixture'
 import { Settings_NotificationsFixture } from './pages/Settings_NotificationsFixture'
 import { CalendarWorkspaceFixture } from './pages/CalendarWorkspaceFixture'
+import { VoicemailDropsFixture } from './pages/VoicemailDropsFixture'
 import { registerCallPushServiceWorker } from './lib/webPush'
 
 void registerCallPushServiceWorker()
@@ -85,6 +86,8 @@ createRoot(document.getElementById('root')!).render(
       <Settings_NotificationsFixture />
     ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/calendar-workspace' ? (
       <CalendarWorkspaceFixture />
+    ) : import.meta.env.DEV && window.location.pathname === '/__fixtures/voicemail-drops' ? (
+      <VoicemailDropsFixture />
     ) : (
       <QueryClientProvider client={queryClient}>
         <App />
