@@ -130,7 +130,7 @@ export function Settings_PhoneNumbers_OrgTable({ orgId }: { orgId: string }) {
                     key={column.label}
                     scope="col"
                     className={cn(
-                      'px-4 py-2 text-left text-xs font-medium text-text-muted',
+                      'px-4 py-2 text-left text-xs font-semibold text-text-muted',
                       column.className,
                     )}
                   >
