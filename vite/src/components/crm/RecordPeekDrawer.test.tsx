@@ -15,7 +15,7 @@ vi.mock('@/hooks/crm', () => ({
 vi.mock('./RecordNoteComposer', () => ({ RecordNoteComposer: () => null }))
 
 const object: ObjectDef = {
-  id: 'people', slug: 'person', name: 'Person', namePlural: 'People', icon: null, iconColor: null,
+  id: 'people', slug: 'person', name: 'Person', namePlural: 'People', icon: 'user', iconColor: 'option-1',
   storage: 'table', isStandard: true, isFirstClass: true, isGridCreateSupported: true,
   capabilities: { list: true }, isHidden: false, isArchived: false,
   createdAt: '2026-08-22T00:00:00.000Z', updatedAt: '2026-08-22T00:00:00.000Z',
@@ -67,15 +67,17 @@ describe('RecordPeekDrawer', () => {
     expect(screen.getByRole('button', { name: 'London' })).toHaveFocus()
   })
 
-  it('opens related records in a stack, exposes a breadcrumb, and previews on hover', () => {
+  it('opens related records in a stack, exposes a breadcrumb, and previews on hover', async () => {
     const company: ObjectDef = {
       ...object,
       id: 'companies', slug: 'company', name: 'Company', namePlural: 'Companies',
+      icon: 'building-2', iconColor: 'option-2',
       attributes: [attribute({ slug: 'name', name: 'Name', isIdentity: true })],
     }
     const deal: ObjectDef = {
       ...object,
       id: 'deals', slug: 'deal', name: 'Deal', namePlural: 'Deals',
+      icon: 'circle-dollar-sign', iconColor: 'option-3',
       attributes: [attribute({ slug: 'name', name: 'Name', isIdentity: true })],
     }
     const companyGroup: RelatedRecordGroup = {
@@ -97,6 +99,8 @@ describe('RecordPeekDrawer', () => {
     render(<RecordPeekDrawer open onOpenChange={vi.fn()} orgId="org-1" object={object} attributes={[attribute({ slug: 'name', name: 'Name', isIdentity: true })]} record={person} timeZone="America/New_York" position={null} onEdit={vi.fn()} />)
 
     const related = screen.getByRole('button', { name: 'Open Acme' })
+    await waitFor(() => expect(screen.getByText('People').parentElement?.querySelector('[data-icon-name="user"]')).not.toBeNull())
+    await waitFor(() => expect(screen.getAllByText('Company').some((label) => label.parentElement?.querySelector('[data-icon-name="building-2"]'))).toBe(true))
     fireEvent.mouseEnter(related)
     expect(screen.getByRole('tooltip')).toHaveTextContent('Acme')
     fireEvent.click(related)

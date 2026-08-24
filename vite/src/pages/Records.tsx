@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Table2 } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/PageHeader'
+import { RecordTypeIcon } from '@/components/RecordTypeIcon'
 import { RecordGrid } from '@/components/crm/RecordGrid'
 import { NewListDialog } from '@/components/crm/NewListDialog'
 import { createViewConfig, sameViewConfig, useViewConfig } from '@/components/crm/viewConfig'
@@ -158,7 +158,7 @@ export function Records() {
   return (
     <div className="flex h-[calc(100vh-8rem)] min-h-0 flex-col">
       <PageHeader
-        icon={Table2}
+        iconNode={<RecordTypeIcon icon={detail?.icon ?? object?.icon} color={detail?.iconColor ?? object?.iconColor} aria-hidden />}
         title={detail?.namePlural ?? object?.namePlural ?? slug ?? 'Records'}
         action={detail ? (
           <div className="flex items-center gap-2">

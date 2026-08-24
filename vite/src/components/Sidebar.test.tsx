@@ -87,8 +87,8 @@ describe('Sidebar', () => {
       if (input.endsWith('/objects')) {
         return Promise.resolve({
           objects: [
-            { id: 'person', slug: 'person', namePlural: 'People', isHidden: false, isArchived: false, capabilities: { list: true } },
-            { id: 'company', slug: 'company', namePlural: 'Companies', isHidden: false, isArchived: false, capabilities: { list: true } },
+            { id: 'person', slug: 'person', namePlural: 'People', icon: 'user', iconColor: 'option-1', isHidden: false, isArchived: false, capabilities: { list: true } },
+            { id: 'company', slug: 'company', namePlural: 'Companies', icon: 'building-2', iconColor: 'option-2', isHidden: false, isArchived: false, capabilities: { list: true } },
             { id: 'deferred', slug: 'deferred', namePlural: 'Deferred', isHidden: false, isArchived: false, capabilities: { list: false } },
             { id: 'hidden', slug: 'hidden', namePlural: 'Hidden', isHidden: true, isArchived: false, capabilities: { list: true } },
             { id: 'archived', slug: 'archived', namePlural: 'Archived', isHidden: false, isArchived: true, capabilities: { list: true } },
@@ -115,6 +115,11 @@ describe('Sidebar', () => {
 
     expect(await screen.findByRole('link', { name: 'People' })).toHaveAttribute('href', '/records/person')
     expect(screen.getByRole('link', { name: 'Companies' })).toHaveAttribute('href', '/records/company')
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'People' }).querySelector('[data-icon-name="user"]')).not.toBeNull()
+      expect(screen.getByRole('link', { name: 'Companies' }).querySelector('[data-icon-name="building-2"]')).not.toBeNull()
+    })
+    expect(screen.getByRole('link', { name: 'People' }).querySelector('[data-icon-name="user"]')).toHaveStyle({ color: 'var(--option-1)' })
     expect(screen.getByRole('link', { name: 'Q3 targets' })).toHaveAttribute('href', '/lists/list-1')
     expect(screen.queryByRole('link', { name: 'Deferred' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Hidden' })).not.toBeInTheDocument()

@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react'
-import { MoreHorizontal, PanelTop, GripVertical, Plus, X } from 'lucide-react'
+import { MoreHorizontal, GripVertical, Plus, X } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { ActivityFeedRow } from '@/components/activity-feed/ActivityFeedRow'
 import { mapActivityEntry } from '@/components/activity-feed/activityFeed'
 import { PageHeader } from '@/components/PageHeader'
+import { RecordTypeIcon } from '@/components/RecordTypeIcon'
 import { FieldValueEditor } from '@/components/crm/FieldValueEditor'
 import { OptionChip } from '@/components/crm/OptionChip'
 import { parseOptions } from '@/components/crm/cellBuilder'
@@ -16,7 +17,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { useGetActivity, useGetDetailLayout, useGetObject, useGetObjects, useListRecords, useSaveDetailLayout, useUpdateRecordValue, type ActivityScope, type DetailLayoutSection } from '@/hooks/crm'
-import type { AttributeDef, RecordRow } from '@/lib/crmTypes'
+import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { useAuth } from '@/providers/useAuth'
 
 type DragLocation = { slug: string; sectionIndex: number | null }
@@ -169,7 +170,7 @@ export function RecordPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
-        icon={PanelTop}
+        iconNode={<RecordTypeIcon icon={object?.icon} color={object?.iconColor} aria-hidden />}
         title={title}
         action={editingLayout ? (
           <div className="flex items-center gap-2">
@@ -339,7 +340,7 @@ function RelatedRail({
   activeRailObjects,
   currentObjectId,
 }: {
-  objects: Array<{ id: string; slug: string; namePlural: string }>
+  objects: Array<Pick<ObjectDef, 'id' | 'slug' | 'namePlural' | 'icon' | 'iconColor'>>
   activeRailObjects: string[]
   currentObjectId: string
 }) {
@@ -356,7 +357,10 @@ function RelatedRail({
       {relatedObjects.length > 0 ? (
         <ul className="divide-y divide-border">
           {relatedObjects.map((relatedObject) => (
-            <li key={relatedObject.id} className="p-3 text-sm">{relatedObject.namePlural}</li>
+            <li key={relatedObject.id} className="flex items-center gap-2 p-3 text-sm">
+              <RecordTypeIcon icon={relatedObject.icon} color={relatedObject.iconColor} aria-hidden />
+              {relatedObject.namePlural}
+            </li>
           ))}
         </ul>
       ) : (
@@ -381,7 +385,7 @@ function LayoutEditorRail({
   hiddenAttributes: AttributeDef[]
   draftRailObjects: string[]
   draftFeedKinds: string[]
-  objects: Array<{ id: string; slug: string; namePlural: string }>
+  objects: Array<Pick<ObjectDef, 'id' | 'slug' | 'namePlural' | 'icon' | 'iconColor'>>
   currentObjectId: string
   onDropField: () => void
   onDragStart: (slug: string) => void
@@ -427,6 +431,7 @@ function LayoutEditorRail({
                   checked={draftRailObjects.includes(candidate.slug) || draftRailObjects.includes(candidate.id)}
                   onCheckedChange={(checked) => toggleValue(draftRailObjects.filter((value) => value !== candidate.id && value !== candidate.slug), candidate.slug, checked === true, onRailObjectsChange)}
                 />
+                <RecordTypeIcon icon={candidate.icon} color={candidate.iconColor} aria-hidden />
                 {candidate.namePlural}
               </label>
             ))}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 
+import { RecordTypeIcon } from '@/components/RecordTypeIcon'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -8,8 +9,10 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useGetObject, useGetObjects, useUpdateAttribute } from '@/hooks/crm'
-import type { AttributeDef, FieldFormat, FieldValidation } from '@/lib/crmTypes'
+import type { AttributeDef, FieldFormat, FieldValidation, ObjectDef } from '@/lib/crmTypes'
 import { useAuth } from '@/providers/useAuth'
+
+import { Settings_DataModelTab_ObjectEditor } from './Settings_DataModelTab_ObjectEditor'
 
 const NUMBER_STYLES = [
   { value: 'decimal', label: 'Number' },
@@ -174,28 +177,36 @@ export function Settings_DataModelTab() {
   const [objectId, setObjectId] = useState<string | null>(null)
   const objectQuery = useGetObject(org?.id, objectId)
   const [editingField, setEditingField] = useState<AttributeDef | null>(null)
+  const [editingObject, setEditingObject] = useState<ObjectDef | 'new' | null>(null)
 
   if (!org) return null
 
   const objects = (objectsQuery.data?.objects ?? []).filter((object) => !object.isArchived)
+  const selectedObject = objects.find((object) => object.id === objectId) ?? null
   const attributes = (objectQuery.data?.object.attributes ?? []).filter((attribute) => !attribute.isArchived)
   const loading = objectsQuery.isPending || (objectId !== null && objectQuery.isPending)
   const loadError = objectsQuery.isError || objectQuery.isError
 
   return (
     <section className="flex max-w-5xl flex-col gap-4">
-      <div>
-        <h2 className="text-sm font-semibold">Data model</h2>
-        <p className="mt-1 text-xs text-text-muted">Choose an object, then set how each field displays and validates.</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">Data model</h2>
+          <p className="mt-1 text-xs text-text-muted">Choose an object, then set how each field displays and validates.</p>
+        </div>
+        {isAdmin && <Button type="button" size="sm" onClick={() => setEditingObject('new')}>New object</Button>}
       </div>
       {!isAdmin && <p className="text-xs text-text-muted">Only an admin can change the data model.</p>}
 
-      <div className="flex flex-col gap-1">
-        <Label htmlFor="data-model-object">Object</Label>
-        <Select value={objectId ?? ''} disabled={!isAdmin} onValueChange={(value) => setObjectId(value || null)}>
-          <SelectTrigger id="data-model-object" className="h-8 w-full max-w-sm"><SelectValue placeholder="Choose an object" /></SelectTrigger>
-          <SelectContent>{objects.map((object) => <SelectItem key={object.id} value={object.id}>{object.namePlural}</SelectItem>)}</SelectContent>
-        </Select>
+      <div className="flex items-end gap-2">
+        <div className="flex w-full max-w-sm flex-col gap-1">
+          <Label htmlFor="data-model-object">Object</Label>
+          <Select value={objectId ?? ''} disabled={!isAdmin} onValueChange={(value) => setObjectId(value || null)}>
+            <SelectTrigger id="data-model-object" className="h-8 w-full"><SelectValue placeholder="Choose an object" /></SelectTrigger>
+            <SelectContent>{objects.map((object) => <SelectItem key={object.id} value={object.id}><RecordTypeIcon icon={object.icon} color={object.iconColor} aria-hidden />{object.namePlural}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        {selectedObject && <Button type="button" size="sm" variant="secondary" disabled={!isAdmin} onClick={() => setEditingObject(selectedObject)}>Edit object</Button>}
       </div>
 
       {loading && <p className="text-sm text-text-muted">Loading fields.</p>}
@@ -229,6 +240,15 @@ export function Settings_DataModelTab() {
 
       {editingField && objectId && (
         <FieldConfigEditor orgId={org.id} objectId={objectId} attribute={editingField} onClose={() => setEditingField(null)} />
+      )}
+      {editingObject && (
+        <Settings_DataModelTab_ObjectEditor
+          orgId={org.id}
+          object={editingObject === 'new' ? null : editingObject}
+          objects={objects}
+          onClose={() => setEditingObject(null)}
+          onSaved={(savedObject) => { setObjectId(savedObject.id); setEditingObject(null) }}
+        />
       )}
     </section>
   )
