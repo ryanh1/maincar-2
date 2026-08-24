@@ -22,6 +22,7 @@ committed here, in the repo, openable by anyone with repo access.
 | [`companies-grid.html`](./companies-grid.html) | Self-contained static reproduction of the mockup's "Companies grid" artboard. Open directly in any browser — no server, no login, no JS runtime dependency. |
 | [`settings-profile.html`](./settings-profile.html) | Same, for the mockup's "Settings · Profile" artboard. |
 | [`route-state-parity-matrix.md`](./route-state-parity-matrix.md) | Every current Maincar-3 route and shared overlay, and whether the mockup covers it. |
+| [`decision-list.md`](./decision-list.md) | [MAI-543](https://linear.app/maincar2/issue/MAI-543/reconcile-the-approved-mockup-with-global-ui-rules-and-shadcnui)'s row-by-row reconciliation of this mockup against `.claude/rules/design-system.md`, `copy.md`, and `frontend.md` — what changed, what already matched, and why. |
 | `source/Main.dc.html`, `source/Profile.dc.html` | The original design-canvas artboard source (template + the JS that supplies its data), exactly as authored in the Claude Design canvas. Kept for provenance; not meant to be opened directly (it depends on a canvas runtime the static HTML files above do not need). |
 | `source/canvas.json` | The canvas layout: artboard titles, positions, and the author's own annotation note (quoted below). |
 

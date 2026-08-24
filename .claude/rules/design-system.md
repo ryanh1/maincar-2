@@ -20,15 +20,22 @@ dense grid. shadcn/ui page templates for surface and border treatment. Airtable 
 
 - **One face: Inter**, self-hosted, `font-sans`. No second family. No `font-mono`
   unless asked. Never Roboto, Arial, or a system stack.
-- **Type scale — these four sizes only:**
+- **Type scale — these six sizes only**, reconciled against the MAI-509 mockup in
+  [MAI-543's decision list](../../docs/design-references/maincar-3-visual-redesign/decision-list.md).
+  `text-[13px]` and `text-[11px]` are Tailwind arbitrary-value classes; add them as
+  named `vite/tailwind.config.js` utilities before the first screen that needs them ships.
   | Class | Size | Used for |
   |---|---|---|
-  | `text-xs` | 12px | Table column headers, meta, timestamps, helper text |
-  | `text-sm` | 14px | **Default.** Body, every control, every table cell, `<h2>` section headings |
+  | `text-[11px]` | 11px | Sidebar section labels (Favorites/Records/Lists), the signed-in-user footer's email line |
+  | `text-xs` | 12px | Table/grid column headers, meta, timestamps, helper text, pagination footer text |
+  | `text-[13px]` | 13px | **Default.** Body, every control, nav rail rows, table/grid cell values |
+  | `text-sm` | 14px | `<h2>` section headings — a `Card`'s `CardHeader` title |
   | `text-base` | 16px | Page title in `PageHeader`, empty-state headline |
   | `text-xl` | 20px | Auth screens only (sign-in, sign-up, join, create organization) |
-  `text-lg`, `text-2xl`, and larger are **forbidden**.
-- **Weights: 400 body, 500 controls and labels, 600 headings.** Never 700+.
+  `text-lg`, `text-2xl`, and larger are still **forbidden**.
+- **Weights: 400 body, 500 controls and labels, 600 headings.** Never 700+. **One
+  exception: a table/grid column header is 600**, not 500 — it reads as a heading for
+  its column, per the MAI-509 mockup's grid header row.
 - **Numbers align.** Any column of numbers, duration, count, or money gets
   `tabular-nums`.
 
@@ -58,10 +65,16 @@ dense grid. shadcn/ui page templates for surface and border treatment. Airtable 
   `danger` red, and the accent stays clear of all three. The Call button is `success`,
   so it must never read as "the primary button".
 - **Status colors are `success` / `warning` / `danger` only**, and they mean the same
-  thing on every screen. No per-feature color. Status is never color alone — always a
-  label or an icon with it.
+  thing on every screen — an operational signal (a toast, sync health, a call
+  outcome), never a business/record field. No per-feature color. Status is never
+  color alone — always a label or an icon with it.
 - **Category and option colors come from `--option-1…8`** — muted tints of one
   family, assigned by `lib/optionPalette.ts`, stored as the token name, never a hex.
+  A record's own lifecycle field (a company's Customer/Prospect/Trial/Churned status,
+  a deal stage, a disposition) is a category, not an operational status — it gets an
+  `--option-N` tint per value, never `success`/`warning`/`danger`. The MAI-509
+  mockup's Companies-grid Status column is the reference case: 4 values get 4
+  `--option-N` tints, not 3 status colors forced onto a 4-value field.
 - **Dark mode is not optional.** No screen ships until it is correct in both themes.
   If a color is not a token, dark mode is already broken.
 
@@ -198,6 +211,11 @@ announcing "button".
 - **`CopyButton` swaps its icon to a checkmark for 1.5 seconds** after a successful
   copy, and the text label does not change. Track which row was copied by id, then
   clear it. On failure, show a `toast` error instead.
+- **A selected row or tab is `bg-primary/8` with `text-primary` and `font-medium`** —
+  never a solid `primary` fill, which stays reserved for the one primary button. This
+  is the sidebar's active nav row, a settings tab's active row, and an active
+  filter/view chip in the MAI-509 mockup — one pattern, reused everywhere a row or
+  tab can be "the current one."
 
 ### Page and section structure
 
@@ -229,8 +247,14 @@ Two components, each used where it fits. A `<ul>` of rows is never a table.
   and search in the URL. **Match Loadwire's tables** (`../loadwire`) at minimum.
 - **Header rows are distinct from body rows.** Every HTML table header `<tr>` uses
   `bg-surface` with `border-b border-border`; column headings use `text-xs`
-  `font-medium text-text-muted`. Body rows keep the page background, so headers
-  remain easy to scan in both themes.
+  `font-semibold text-text-muted` (see the table/grid header weight exception in
+  **Typography** above). Body rows keep the page background, so headers remain easy
+  to scan in both themes.
+- **Glide Data Grid rows are 36px**, not the `DataTable`'s 32px/40px pair — a canvas
+  grid sets its own numeric row height rather than being built from an `h-8` HTML
+  control, and 36px is the value the MAI-509 mockup's Companies grid shows. This
+  applies only to Glide Data Grid record grids; the shared `DataTable` component
+  still follows the 32px/40px rule above.
 
 ### Motion
 
