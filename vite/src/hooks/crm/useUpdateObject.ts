@@ -9,7 +9,7 @@ export type UpdateObjectInput = PatchObjectRequest & {
   objectId: string
 }
 
-/** Updates one record type's visible identity and refreshes list and detail caches. */
+/** Patches one record type's editable schema and refreshes every object-identity surface. */
 export function useUpdateObject() {
   const queryClient = useQueryClient()
 

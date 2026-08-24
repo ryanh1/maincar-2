@@ -10,10 +10,7 @@ export type UpdateAttributeInput = PatchAttributeRequest & {
   objectId: string
 }
 
-/**
- * Saves a field's Format & validation config (MAI-365) through the attribute
- * route, then refreshes the object detail so the field list reflects the change.
- */
+/** Patches one field's editable schema and refreshes every object-schema surface. */
 export function useUpdateAttribute() {
   const queryClient = useQueryClient()
 

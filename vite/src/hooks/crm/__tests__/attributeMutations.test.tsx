@@ -98,6 +98,21 @@ describe('attribute mutations', () => {
     await expectSchemaInvalidations(invalidate, 'org-1')
   })
 
+  it('refreshes schema queries when a reorder only partially succeeds', async () => {
+    vi.mocked(jsonFetch)
+      .mockResolvedValueOnce({ attribute: {} } as never)
+      .mockRejectedValueOnce(new Error('Could not reorder the field.'))
+    const { result, invalidate } = setup(() => useReorderAttributes())
+
+    await expect(result.current.mutateAsync({
+      orgId: 'org-1',
+      objectId: 'obj-company',
+      attributeIds: ['attr-name', 'attr-domain'],
+    })).rejects.toThrow('Could not reorder the field.')
+
+    await expectSchemaInvalidations(invalidate, 'org-1')
+  })
+
   it('deletes a custom field and refreshes editor and navbar object queries', async () => {
     vi.mocked(jsonFetch).mockResolvedValue(undefined as never)
     const { result, invalidate } = setup(() => useDeleteAttribute())

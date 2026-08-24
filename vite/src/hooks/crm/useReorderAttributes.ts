@@ -22,7 +22,7 @@ export function useReorderAttributes() {
           body: JSON.stringify({ sortOrder }),
         }),
       )),
-    onSuccess: (_response, { orgId }) => {
+    onSettled: (_response, _error, { orgId }) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.objects.all })
       void queryClient.invalidateQueries({ queryKey: queryKeys.crm.objects(orgId) })
     },
