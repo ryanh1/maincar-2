@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { RecordTypeIcon } from '@/components/RecordTypeIcon'
 import { ListEntryGrid } from '@/components/crm/ListEntryGrid'
 import { AddListFieldDialog } from '@/components/crm/AddListFieldDialog'
+import { GridWorkspaceShell } from '@/components/crm/GridWorkspaceShell'
 import { ListEntryReorderDialog } from '@/components/crm/ListEntryReorderDialog'
 import { RecordCount } from '@/components/crm/RecordCount'
 import {
@@ -99,49 +100,49 @@ function ListGridRoute({ listId }: { listId: string }) {
   const manuallyOrdered = sort === 'position'
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] min-h-0 flex-col">
-      <PageHeader
-        icon={Table2}
-        title={list?.name ?? 'List'}
-        count={isPending ? undefined : total}
-        action={canEditList ? (
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="secondary" onClick={() => setAddFieldOpen(true)}>Add list field</Button>
-            <Button size="sm" variant="secondary" disabled={!manuallyOrdered || total === 0} onClick={() => setReorderOpen(true)}>Reorder</Button>
-            <Select value={sort} onValueChange={(value) => setSort(value as ListEntrySort)}>
-              <SelectTrigger aria-label="List sort" className="h-8 w-36"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="position">Manual order</SelectItem>
-                <SelectItem value="createdAt">Date added</SelectItem>
-                <SelectItem value="updatedAt">Last updated</SelectItem>
-              </SelectContent>
-            </Select>
+    <>
+      <GridWorkspaceShell
+        header={(
+          <PageHeader
+            icon={Table2}
+            title={list?.name ?? 'List'}
+            action={canEditList ? (
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" onClick={() => setAddFieldOpen(true)}>Add list field</Button>
+                <Button size="sm" variant="secondary" disabled={!manuallyOrdered || total === 0} onClick={() => setReorderOpen(true)}>Reorder</Button>
+                <Select value={sort} onValueChange={(value) => setSort(value as ListEntrySort)}>
+                  <SelectTrigger aria-label="List sort" className="h-8 w-36"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="position">Manual order</SelectItem>
+                    <SelectItem value="createdAt">Date added</SelectItem>
+                    <SelectItem value="updatedAt">Last updated</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : undefined}
+          />
+        )}
+        recordCount={!isPending && !isError ? <RecordCount filteredCount={total} isFiltered={false} totalCount={total} /> : undefined}
+        notice={!manuallyOrdered ? (
+          <div className="flex items-center gap-2 border-b border-border bg-surface px-3 py-2">
+            <span className="text-xs text-text-muted">Clear sort to reorder by hand.</span>
+            <Button size="sm" variant="secondary" onClick={() => setSort('position')}>Clear sort</Button>
           </div>
         ) : undefined}
-      />
-      {!manuallyOrdered && (
-        <div className="flex items-center gap-2 border-b border-border bg-surface px-3 py-2">
-          <span className="text-xs text-text-muted">Clear sort to reorder by hand.</span>
-          <Button size="sm" variant="secondary" onClick={() => setSort('position')}>Clear sort</Button>
-        </div>
-      )}
-      <div className="min-h-0 flex-1 pt-4">
+      >
         {isPending && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading…</div>}
         {!isPending && isError && <div className="flex h-full flex-col items-center justify-center gap-3"><p className="text-sm text-destructive">Could not load this list.</p><Button variant="secondary" size="sm" onClick={retry}>Try again</Button></div>}
         {!isPending && !isError && !list && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">This list is unavailable.</div>}
         {!isPending && !isError && list && !object && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">This list’s object is unavailable.</div>}
         {!isPending && !isError && list && objectQuery.data && total === 0 && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">No records are in this list.</div>}
         {!isPending && !isError && list && objectQuery.data && total > 0 && (
-          <div className="flex h-full min-h-0 flex-col gap-2">
-            <div className="self-end"><RecordCount filteredCount={total} isFiltered={false} totalCount={total} /></div>
-            <div className="min-h-0 flex-1"><ListEntryGrid orgId={orgId!} object={object} attributes={objectQuery.data.object.attributes} entries={entries} totalCount={total} hasNextPage={entriesQuery.hasNextPage ?? false} isFetchingNextPage={entriesQuery.isFetchingNextPage} fetchNextPage={entriesQuery.fetchNextPage} onRemoveEntry={setEntryToRemove} onUpdateEntry={updateEntry} /></div>
-          </div>
+          <div className="h-full min-h-0"><ListEntryGrid orgId={orgId!} object={object} attributes={objectQuery.data.object.attributes} entries={entries} totalCount={total} hasNextPage={entriesQuery.hasNextPage ?? false} isFetchingNextPage={entriesQuery.isFetchingNextPage} fetchNextPage={entriesQuery.fetchNextPage} onRemoveEntry={setEntryToRemove} onUpdateEntry={updateEntry} /></div>
         )}
-      </div>
+      </GridWorkspaceShell>
       {canEditList && <AddListFieldDialog open={addFieldOpen} onOpenChange={setAddFieldOpen} orgId={orgId!} objectId={object!.id} />}
       {canEditList && reorderOpen && <ListEntryReorderDialog open onOpenChange={setReorderOpen} entries={entries} onSave={saveOrder} />}
       <AlertDialog open={entryToRemove !== null} onOpenChange={(open) => { if (!open && !removeListEntry.isPending) setEntryToRemove(null) }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{name ? `Remove ${name} from this list?` : 'Remove this record from the list?'}</AlertDialogTitle><AlertDialogDescription>{name ? `${name}’s record will stay unchanged.` : 'The record will stay unchanged.'}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel size="sm" disabled={removeListEntry.isPending}>Cancel</AlertDialogCancel><AlertDialogAction size="sm" variant="destructive" disabled={removeListEntry.isPending} onClick={(event) => { event.preventDefault(); void confirmRemoval() }}>{removeListEntry.isPending ? 'Removing…' : 'Remove from list'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
-    </div>
+    </>
   )
 }
 
