@@ -61,7 +61,7 @@ describe('GridViewToolbar', () => {
 
     renderWithProviders(<GridViewToolbar attributes={attributes} config={config} onConfigChange={vi.fn()} />)
 
-    for (const name of ['Fields', 'Sort', 'Filter', 'Changes', 'Group', 'Row height', 'Show grid lines', 'Freeze']) {
+    for (const name of ['Fields', 'Sort', 'Filter', 'Changes', 'Group', 'Row height', 'Show grid lines', 'Freeze', 'View options']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
   })

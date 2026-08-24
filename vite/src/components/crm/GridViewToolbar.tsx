@@ -21,6 +21,7 @@ import { createKanbanConfig, isKanbanGroupAttribute, type TeamScope, type ViewCo
 import { GridFilterBuilder } from './GridFilterBuilder'
 import type { GridMenuAnchor } from './gridFilterMenu'
 import { GridSortPopover } from './GridSortPopover'
+import { GridZoomControl } from './GridZoomControl'
 import { KanbanCardFieldPicker } from './KanbanCardFieldPicker'
 
 interface GridViewToolbarProps {
@@ -34,6 +35,7 @@ interface GridViewToolbarProps {
   layout?: 'grid' | 'kanban'
   onLayoutChange?: (layout: 'grid' | 'kanban') => void
   onFormat?: (anchor: GridMenuAnchor) => void
+  trailing?: ReactNode
 }
 
 function scopeLabel(scope: TeamScope | undefined, teams: Array<{ id: string; name: string }>, members: Array<{ userId: string; firstName: string | null; lastName: string | null; email: string }>): string | null {
@@ -111,7 +113,7 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 }
 
 /** The grid's shared view controls. Every action writes the same ViewConfig. */
-export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange, onFormat }: GridViewToolbarProps) {
+export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange, onFormat, trailing }: GridViewToolbarProps) {
   const [columnGroupName, setColumnGroupName] = useState('')
   const [customChangeDays, setCustomChangeDays] = useState('')
   function setColumnVisible(attributeId: string, visible: boolean) {
@@ -158,7 +160,7 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
   }
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-surface px-3">
+    <div role="region" aria-label="Grid controls" className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-surface px-3">
       {leading}
       {onLayoutChange && (
         <div role="group" aria-label="Layout" className="flex items-center rounded-md border border-border bg-bg p-0.5">
@@ -445,6 +447,8 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
           </DropdownMenu>
         </>
       )}
+      {!isKanban && <GridZoomControl zoom={config.zoom} onZoomChange={(zoom) => onConfigChange((current) => ({ ...current, zoom }))} />}
+      {trailing && <div className="ml-auto flex shrink-0 items-center pl-2">{trailing}</div>}
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/PageHeader'
 import { RecordTypeIcon } from '@/components/RecordTypeIcon'
+import { GridWorkspaceShell } from '@/components/crm/GridWorkspaceShell'
 import { RecordGrid } from '@/components/crm/RecordGrid'
 import { NewListDialog } from '@/components/crm/NewListDialog'
 import { createViewConfig, sameViewConfig, useViewConfig } from '@/components/crm/viewConfig'
@@ -156,19 +157,20 @@ export function Records() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] min-h-0 flex-col">
-      <PageHeader
-        iconNode={<RecordTypeIcon icon={detail?.icon ?? object?.icon} color={detail?.iconColor ?? object?.iconColor} aria-hidden />}
-        title={detail?.namePlural ?? object?.namePlural ?? slug ?? 'Records'}
-        action={detail ? (
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="secondary" onClick={() => setNewListOpen(true)}>New list</Button>
-            {detail.isGridCreateSupported && <Button size="sm" onClick={() => setCreateRequestToken((current) => current + 1)}>New</Button>}
-          </div>
-        ) : undefined}
-      />
-
-      <div className="min-h-0 flex-1 pt-4">
+    <GridWorkspaceShell
+      header={(
+        <PageHeader
+          iconNode={<RecordTypeIcon icon={detail?.icon ?? object?.icon} color={detail?.iconColor ?? object?.iconColor} aria-hidden />}
+          title={detail?.namePlural ?? object?.namePlural ?? slug ?? 'Records'}
+          action={detail ? (
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="secondary" onClick={() => setNewListOpen(true)}>New list</Button>
+              {detail.isGridCreateSupported && <Button size="sm" onClick={() => setCreateRequestToken((current) => current + 1)}>New</Button>}
+            </div>
+          ) : undefined}
+        />
+      )}
+    >
         {isPending && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Loading…
@@ -260,8 +262,7 @@ export function Records() {
             onLayoutChange={(nextLayout) => void changeLayout(nextLayout)}
           />
         )}
-      </div>
       {newListOpen && orgId && detail && <NewListDialog open onOpenChange={setNewListOpen} orgId={orgId} object={detail} onCreated={(list) => navigate(`/lists/${list.id}`)} />}
-    </div>
+    </GridWorkspaceShell>
   )
 }

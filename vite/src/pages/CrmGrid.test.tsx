@@ -89,6 +89,8 @@ describe('CrmGrid', () => {
       { initialEntries: ['/lists/list-1'] },
     )
 
+    expect(screen.getByTestId('grid-workspace')).toHaveClass('flex-1', 'overflow-hidden')
+    expect(screen.getByRole('region', { name: 'View bar' })).toHaveTextContent('0 records')
     expect(screen.getByRole('heading', { name: 'Q3 targets' })).toBeInTheDocument()
     expect(screen.getByText('No records are in this list.')).toBeInTheDocument()
   })

@@ -37,7 +37,6 @@ import { buildGridCell, coerceForType, FLAGGED_THEME, parseOptions } from './cel
 import { chipCellRenderer, type ChipCellData } from './chipCell'
 import { fieldEditorCellRenderer, type FieldEditorCellData } from './fieldEditorCell'
 import { GridViewToolbar } from './GridViewToolbar'
-import { GridZoomControl } from './GridZoomControl'
 import { GridColumnFilterMenu } from './GridColumnFilterMenu'
 import type { GridMenuAnchor } from './gridFilterMenu'
 import { useGridColors } from './useGridColors'
@@ -62,6 +61,7 @@ import { drawChangeDots, drawColorRuleDot } from './changeHighlightCanvas'
 import { useRowSelection } from './useRowSelection'
 import { SelectionBanner } from './SelectionBanner'
 import { BulkActionBar } from './BulkActionBar'
+import { RecordCount } from './RecordCount'
 
 const LEADING_COLUMN_WIDTH = 220
 const DEFAULT_COLUMN_WIDTH = 160
@@ -1365,6 +1365,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
             layout={layout}
             onLayoutChange={setLayout}
             onFormat={(anchor) => setFormatPanel({ anchor, attributeId: null })}
+            trailing={<RecordCount filteredCount={totalCount} isFiltered={false} totalCount={totalCount} />}
           />
         )}
         <KanbanBoard
@@ -1393,6 +1394,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           layout={layout}
           onLayoutChange={setLayout}
           onFormat={(anchor) => setFormatPanel({ anchor, attributeId: null })}
+          trailing={<RecordCount filteredCount={totalCount} isFiltered={false} totalCount={totalCount} />}
         />
       )}
       {isCreating && (
@@ -1801,11 +1803,6 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         onLifecycleChanged={() => void refetch()}
         />
       </div>
-      {onViewConfigChange && (
-        <div className="flex h-7 shrink-0 items-center justify-end border-t border-border bg-surface px-3">
-          <GridZoomControl zoom={config.zoom} onZoomChange={(zoom) => onViewConfigChange((current) => ({ ...current, zoom }))} />
-        </div>
-      )}
     </div>
   )
 }

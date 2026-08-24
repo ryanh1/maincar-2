@@ -145,6 +145,8 @@ describe('Records', () => {
 
     renderRecords('/records/person')
 
+    expect(screen.getByTestId('grid-workspace')).toHaveClass('flex-1', 'overflow-hidden')
+    expect(screen.getByTestId('grid-workspace-canvas')).toContainElement(screen.getByRole('grid', { name: 'People grid' }))
     expect(screen.getByRole('grid', { name: 'People grid' })).toBeInTheDocument()
   })
 

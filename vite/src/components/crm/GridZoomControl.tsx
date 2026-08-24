@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ZoomIn } from 'lucide-react'
+import { ChevronDown, SlidersHorizontal } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,9 +19,8 @@ interface GridZoomControlProps {
 }
 
 /**
- * The Sheets-style zoom control (journey 4b.10.1): presets plus a custom
- * percentage, shown in the grid's bottom status bar. The grid owns persistence;
- * this only reports the chosen percentage.
+ * Zoom presets plus a custom percentage under the grid's View options menu.
+ * The grid owns persistence; this only reports the chosen percentage.
  */
 export function GridZoomControl({ zoom, onZoomChange }: GridZoomControlProps) {
   const [custom, setCustom] = useState('')
@@ -36,14 +35,14 @@ export function GridZoomControl({ zoom, onZoomChange }: GridZoomControlProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-text-muted">
-          <ZoomIn size={14} />
-          {zoom}%
-          <ChevronDown size={14} />
+        <Button variant="secondary" size="sm">
+          <SlidersHorizontal size={16} />
+          View options
+          <ChevronDown size={16} />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" side="top" className="w-40">
-        <DropdownMenuLabel>Zoom</DropdownMenuLabel>
+      <DropdownMenuContent align="end" className="w-40">
+        <DropdownMenuLabel>Zoom · {zoom}%</DropdownMenuLabel>
         {ZOOM_PRESETS.map((preset) => (
           <DropdownMenuItem key={preset} onSelect={() => onZoomChange(preset)}>
             {preset}%
@@ -54,7 +53,7 @@ export function GridZoomControl({ zoom, onZoomChange }: GridZoomControlProps) {
           Custom
           <Input
             aria-label="Custom zoom percentage"
-            className="h-7 w-16"
+            className="h-8 w-16"
             min={50}
             max={200}
             type="number"

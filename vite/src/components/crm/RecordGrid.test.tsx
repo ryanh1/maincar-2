@@ -6,7 +6,7 @@
  * scroll are verified in the browser (CLAUDE.md → Verification before finishing).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { makeTestQueryClient, renderWithProviders, withProviders } from '@/test/utils'
@@ -1380,7 +1380,7 @@ describe('RecordGrid', () => {
     expect(columns[1].themeOverride).toBeUndefined()
   })
 
-  it('shows the zoom control in the bottom status bar and writes a preset', async () => {
+  it('shows the record count and exposes zoom through View options without a bottom status bar', async () => {
     const user = userEvent.setup()
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'r1', firstName: 'Ada' }], totalCount: 1,
@@ -1391,7 +1391,13 @@ describe('RecordGrid', () => {
 
     renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={onViewConfigChange} />)
 
-    await user.click(screen.getByRole('button', { name: /100%/ }))
+    const controls = screen.getByRole('region', { name: 'Grid controls' })
+    const recordCount = within(controls).getByLabelText('Record count')
+    expect(recordCount).toHaveTextContent('1 records')
+    expect(recordCount.parentElement).toHaveClass('ml-auto')
+    expect(screen.queryByRole('button', { name: '100%' })).not.toBeInTheDocument()
+
+    await user.click(within(controls).getByRole('button', { name: 'View options' }))
     await user.click(await screen.findByRole('menuitem', { name: '125%' }))
     const update = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
     expect(update(config).zoom).toBe(125)
