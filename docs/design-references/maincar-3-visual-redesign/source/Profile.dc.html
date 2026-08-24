@@ -1,0 +1,184 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif; color: #0f172a; -webkit-font-smoothing: antialiased; }
+    a { color: #0E7490; text-decoration: none; } a:hover { color: #155e75; }
+    svg { flex: none; }
+  </style>
+</helmet>
+<div style="display: flex; flex-direction: row; width: 1440px; height: 900px; background: #ffffff; font-size: 13px; overflow: hidden;">
+
+  <!-- Navigation rail -->
+  <div style="display: flex; flex-direction: column; width: 224px; height: 900px; background: #f8fafc; border-right: 1px solid #e2e8f0; flex: none;">
+    <div style="display: flex; flex-direction: row; align-items: center; gap: 8px; height: 48px; padding: 0 12px; border-bottom: 1px solid #e2e8f0;">
+      <div style="display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; background: #0E7490; color: #ffffff; font-size: 11px; font-weight: 600;">AF</div>
+      <div style="font-size: 13px; font-weight: 500; flex: 1 1 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Acme Freight</div>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 16px; padding: 12px 8px; flex: 1 1 0; overflow: hidden;">
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="padding: 0 8px 4px 8px; font-size: 11px; font-weight: 500; color: #64748b;">Favorites</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M9 22V12h6v10"></path></svg>Home</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>Calls</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg>Calendar</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"></path><path d="m3 7 2 2 4-4"></path><path d="M13 6h8M13 12h8M13 18h8"></path></svg>Tasks</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="12" r="3"></circle><path d="M6 15h12"></path></svg>Voicemails</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h2M6 8v8M10 5v14M14 8v8M18 5v14M22 12h-2"></path></svg>Voicemail drops</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="M7 15v3M12 10v8M17 6v12"></path></svg>Reports</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; background: rgba(14,116,144,0.08); color: #0E7490; font-weight: 500;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>Settings</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="padding: 0 8px 4px 8px; font-size: 11px; font-weight: 500; color: #64748b;">Records</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"></path><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2M10 6h4M10 10h4M10 14h4M10 18h4"></path></svg>Companies</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>People</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8M12 6v2M12 16v2"></path></svg>Deals</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="padding: 0 8px 4px 8px; font-size: 11px; font-weight: 500; color: #64748b;">Lists</div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg><span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Q3 renewal targets</span></div>
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; color: #334155;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg><span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Bay Area fleets</span></div>
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: row; align-items: center; gap: 8px; height: 48px; padding: 0 12px; border-top: 1px solid #e2e8f0;">
+      <div style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 9999px; background: #e2e8f0; color: #334155; font-size: 10px; font-weight: 600;">RH</div>
+      <div style="display: flex; flex-direction: column; min-width: 0;">
+        <div style="font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Ryan Hollander</div>
+        <div style="font-size: 11px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">ryan@acmefreight.com</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main workspace -->
+  <div style="display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; background: #ffffff;">
+
+    <!-- Page header -->
+    <div style="display: flex; flex-direction: row; align-items: center; gap: 8px; height: 48px; padding: 0 16px; border-bottom: 1px solid #e2e8f0; flex: none;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      <div style="font-size: 16px; font-weight: 600;">Settings</div>
+    </div>
+
+    <!-- Settings pane -->
+    <div style="display: flex; flex-direction: row; justify-content: center; flex: 1 1 0; overflow: hidden;">
+      <div style="display: flex; flex-direction: row; gap: 32px; width: 1024px; max-width: 1024px; padding: 24px;">
+
+        <!-- Settings tab nav -->
+        <div style="display: flex; flex-direction: column; gap: 2px; width: 192px; flex: none;">
+          <sc-for list="{{tabs}}" as="tab" hint-placeholder-count="6">
+            <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 6px; background: {{tab.bg}}; color: {{tab.color}}; font-weight: {{tab.weight}};">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="{{tab.d}}"></path></svg>
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{tab.label}}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- Profile card -->
+        <div style="display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; align-items: stretch;">
+          <div style="display: flex; flex-direction: column; border: 1px solid #e2e8f0; border-radius: 6px; background: #ffffff;">
+            <div style="padding: 12px 24px; border-bottom: 1px solid #e2e8f0; font-size: 14px; font-weight: 600;">Your profile</div>
+            <div style="display: flex; flex-direction: column; gap: 24px; padding: 24px;">
+
+              <div style="display: flex; flex-direction: row; align-items: center; gap: 16px;">
+                <div style="display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; border-radius: 9999px; background: rgba(14,116,144,0.1); color: #0E7490; font-size: 18px; font-weight: 600;">RH</div>
+                <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+                  <div style="display: flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; font-size: 13px; font-weight: 500; color: #0f172a;">Change photo</div>
+                  <div style="font-size: 12px; color: #64748b;">PNG or JPG, up to 2 MB.</div>
+                </div>
+              </div>
+
+              <div style="display: flex; flex-direction: column; gap: 12px; width: 384px;">
+                <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+                  <div style="display: flex; flex-direction: column; gap: 6px;">
+                    <div style="font-size: 13px; font-weight: 500;">First name <span style="color: #be123c;">*</span></div>
+                    <div style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 6px; border: 1px solid #e2e8f0; background: #ffffff; font-size: 13px;">Ryan</div>
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 6px;">
+                    <div style="font-size: 13px; font-weight: 500;">Last name <span style="color: #be123c;">*</span></div>
+                    <div style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 6px; border: 1px solid #e2e8f0; background: #ffffff; font-size: 13px;">Hollander</div>
+                  </div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <div style="font-size: 13px; font-weight: 500;">Job title</div>
+                  <div style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 6px; border: 1px solid #e2e8f0; background: #ffffff; font-size: 13px;">Head of Sales</div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <div style="font-size: 13px; font-weight: 500;">Email</div>
+                  <div style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; font-size: 13px; color: #64748b;">ryan@acmefreight.com</div>
+                  <div style="font-size: 12px; color: #64748b;">This is your sign-in email.</div>
+                </div>
+                <div style="display: flex; flex-direction: row; padding-top: 4px;">
+                  <div style="display: flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 6px; background: #0E7490; color: #ffffff; font-size: 13px; font-weight: 500;">Save changes</div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview": {"width": 1440, "height": 900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var icons = {
+      user: 'M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2 M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z',
+      org: 'M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2 M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2',
+      members: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75',
+      phone: 'M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z',
+      mic: 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z M19 10v2a7 7 0 0 1-14 0v-2 M12 19v3',
+      inbound: 'M22 12h-6l-2 3h-4l-2-3H2 M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z',
+      tag: 'M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z M7.5 8a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1Z',
+      next: 'M5 12h14 M12 5l7 7-7 7',
+      vm: 'M6 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z M18 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z M6 15h12',
+      mail: 'M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z M22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7',
+      pen: 'M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z M15 5l4 4',
+      plug: 'M12 22v-5 M9 8V2 M15 8V2 M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z',
+      db: 'M12 2C7.58 2 4 3.79 4 6s3.58 4 8 4 8-1.79 8-4-3.58-4-8-4Z M4 6v12c0 2.21 3.58 4 8 4s8-1.79 8-4V6 M4 12c0 2.21 3.58 4 8 4s8-1.79 8-4',
+      bell: 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9 M10.3 21a1.94 1.94 0 0 0 3.4 0',
+      kbd: 'M2 6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2Z M6 8h.01 M10 8h.01 M14 8h.01 M18 8h.01 M8 12h.01 M12 12h.01 M16 12h.01 M7 16h10',
+      alert: 'M21.73 18 13.73 4a2 2 0 0 0-3.46 0L2.27 18a2 2 0 0 0 1.73 3h16a2 2 0 0 0 1.73-3 M12 9v4 M12 17h.01'
+    };
+    var list = [
+      ['Profile', icons.user, true],
+      ['Organization', icons.org],
+      ['Members', icons.members],
+      ['Teams', icons.members],
+      ['Phone numbers', icons.phone],
+      ['Call recordings', icons.mic],
+      ['Inbound', icons.inbound],
+      ['Dispositions', icons.tag],
+      ['Next steps', icons.next],
+      ['Voicemail greeting', icons.vm],
+      ['Email templates', icons.mail],
+      ['Signatures', icons.pen],
+      ['Integrations', icons.plug],
+      ['Data model', icons.db],
+      ['Notifications', icons.bell],
+      ['Keyboard', icons.kbd],
+      ['Alerts', icons.alert]
+    ];
+    var tabs = list.map(function (t) {
+      var active = !!t[2];
+      return {
+        label: t[0],
+        d: t[1],
+        bg: active ? 'rgba(14,116,144,0.08)' : 'transparent',
+        color: active ? '#0E7490' : '#64748b',
+        weight: active ? '500' : '400'
+      };
+    });
+    return { tabs: tabs };
+  }
+}
+</script>
+</body>
+</html>
