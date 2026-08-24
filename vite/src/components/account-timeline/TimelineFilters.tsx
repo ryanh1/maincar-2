@@ -1,4 +1,4 @@
-import type { AccountTimelineParams, AccountTimelineSourceType } from '@/lib/accountTimelineTypes'
+import type { AccountTimelineFilterValue, AccountTimelineSourceType } from '@/lib/accountTimelineTypes'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -8,7 +8,7 @@ export interface TimelineFilterOption {
   label: string
 }
 
-export type TimelineFilterValue = Pick<AccountTimelineParams, 'sourceType' | 'personId' | 'dealId' | 'mine'>
+export type TimelineFilterValue = AccountTimelineFilterValue
 
 const TYPE_OPTIONS: { value: AccountTimelineSourceType; label: string }[] = [
   { value: 'call', label: 'Calls' },

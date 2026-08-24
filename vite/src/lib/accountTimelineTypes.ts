@@ -27,6 +27,8 @@ export interface AccountTimelineParams {
   mine?: boolean
 }
 
+export type AccountTimelineFilterValue = Pick<AccountTimelineParams, 'sourceType' | 'personId' | 'dealId' | 'mine'>
+
 export interface AccountTimelineEventDisplay {
   actorName?: string
   companyName?: string

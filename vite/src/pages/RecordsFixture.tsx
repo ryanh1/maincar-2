@@ -7,6 +7,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAuthStore } from '@/store/authStore'
 
 import { Records } from './Records'
+import { RecordPage } from './RecordPage'
 
 // The grid reads the dialer only to mark a live Call row. Browser fixtures do
 // not exercise calling, so provide the idle state without starting the Voice
@@ -50,8 +51,11 @@ export function RecordsFixture() {
       <BrowserRouter>
         <DialerContext.Provider value={idleDialer}>
           <TooltipProvider>
-            <main className="h-dvh bg-bg p-6">
-              <Routes><Route path="/__fixtures/records/:slug" element={<Records />} /></Routes>
+            <main className="flex h-dvh flex-col bg-bg p-6">
+              <Routes>
+                <Route path="/__fixtures/records/:slug" element={<Records />} />
+                <Route path="/__fixtures/records/:slug/:recordId" element={<RecordPage />} />
+              </Routes>
             </main>
           </TooltipProvider>
         </DialerContext.Provider>

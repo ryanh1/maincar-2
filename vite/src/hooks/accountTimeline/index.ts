@@ -6,3 +6,4 @@ export {
   useAccountTimelineRangePreference,
 } from './useAccountTimelineRangePreference'
 export type { AccountTimelineRangeSelection } from './useAccountTimelineRangePreference'
+export { useAccountTimelineFilterPreference } from './useAccountTimelineFilterPreference'
