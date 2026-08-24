@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
-import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { AudioPlayer } from '@/components/call-review/AudioPlayer'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useGetCallDetail } from '@/hooks/dialer'
@@ -23,20 +23,41 @@ export function AccountTimelineDetailPanel({
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-[540px]">
-        <SheetHeader className="border-b border-border">
-          <div className="flex items-center justify-between gap-2">
-            <div>
+      <SheetContent
+        side="right"
+        className="w-full gap-0 p-0 sm:max-w-[540px]"
+        onKeyDown={(keyboardEvent) => {
+          const target = keyboardEvent.target as HTMLElement
+          if (
+            target.isContentEditable
+            || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+            || keyboardEvent.ctrlKey
+            || keyboardEvent.metaKey
+            || keyboardEvent.altKey
+          ) return
+          const eventId = keyboardEvent.key === 'ArrowLeft'
+            ? navigation?.previousEventId
+            : keyboardEvent.key === 'ArrowRight'
+              ? navigation?.nextEventId
+              : null
+          if (!eventId) return
+          keyboardEvent.preventDefault()
+          onNavigate(eventId)
+        }}
+      >
+        <SheetHeader className="border-b border-border pr-12">
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
               <SheetTitle className="text-base">{detail ? detail.type.replace('_', ' ') : 'Activity detail'}</SheetTitle>
               <SheetDescription>{detail ? 'Source-authoritative activity detail.' : 'Loading activity detail.'}</SheetDescription>
             </div>
-            <div className="flex gap-1">
-              <Button type="button" variant="secondary" size="sm" disabled={!navigation?.previousEventId} onClick={() => navigation?.previousEventId && onNavigate(navigation.previousEventId)}>
-                <ChevronLeft size={16} aria-hidden="true" /> <span className="sr-only">Previous timeline event</span>
-              </Button>
-              <Button type="button" variant="secondary" size="sm" disabled={!navigation?.nextEventId} onClick={() => navigation?.nextEventId && onNavigate(navigation.nextEventId)}>
-                <ChevronRight size={16} aria-hidden="true" /> <span className="sr-only">Next timeline event</span>
-              </Button>
+            <div className="flex shrink-0 gap-1">
+              <IconButton tooltip="Show the previous timeline event" disabled={!navigation?.previousEventId} onClick={() => navigation?.previousEventId && onNavigate(navigation.previousEventId)}>
+                <ChevronLeft size={16} aria-hidden="true" />
+              </IconButton>
+              <IconButton tooltip="Show the next timeline event" disabled={!navigation?.nextEventId} onClick={() => navigation?.nextEventId && onNavigate(navigation.nextEventId)}>
+                <ChevronRight size={16} aria-hidden="true" />
+              </IconButton>
             </div>
           </div>
         </SheetHeader>

@@ -61,8 +61,32 @@ export function AccountTimelineFeed({
       ref={feedRef}
       role="feed"
       aria-label="Account activity"
+      aria-keyshortcuts="J K"
       tabIndex={0}
-      className="max-h-96 overflow-y-auto border border-border bg-bg"
+      className="max-h-96 w-full min-w-0 overflow-y-auto border border-border bg-bg"
+      onKeyDown={(keyboardEvent) => {
+        const target = keyboardEvent.target as HTMLElement
+        if (
+          keyboardEvent.ctrlKey
+          || keyboardEvent.metaKey
+          || keyboardEvent.altKey
+          || target.isContentEditable
+          || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+        ) return
+
+        const key = keyboardEvent.key.toLowerCase()
+        if (key !== 'j' && key !== 'k') return
+        const controls = [...keyboardEvent.currentTarget.querySelectorAll<HTMLButtonElement>('[data-feed-event-control]')]
+        if (controls.length === 0) return
+        const currentControl = target.closest('[data-event-id]')
+          ?.querySelector<HTMLButtonElement>('[data-feed-event-control]')
+        const currentIndex = currentControl ? controls.indexOf(currentControl) : -1
+        const nextIndex = key === 'j'
+          ? Math.min(controls.length - 1, currentIndex + 1)
+          : currentIndex < 0 ? controls.length - 1 : Math.max(0, currentIndex - 1)
+        keyboardEvent.preventDefault()
+        controls[nextIndex]?.focus()
+      }}
       onScroll={(scrollEvent) => {
         if (!onVisibleEventChange) return
         const feedTop = scrollEvent.currentTarget.getBoundingClientRect().top

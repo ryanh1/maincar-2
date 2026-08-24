@@ -22,7 +22,7 @@ export function TimelineBand_Lane({ label, direction, events, bounds, timeZone, 
       <div className="flex w-16 shrink-0 items-center overflow-hidden px-2 text-xs font-medium text-muted-foreground" title={label}>
         <span className="truncate" data-person-lane={person || undefined}>{label}</span>
       </div>
-      <div className="relative h-16 flex-1 bg-background" aria-label={`${direction} timeline lane`}>
+      <div className="relative h-16 min-w-0 flex-1 bg-background" aria-label={`${direction} timeline lane`}>
         <TimelineBand_Guides bounds={bounds} now={now} />
         {events.map((event, index) => (
           <TimelineBand_EventBubble

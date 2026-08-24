@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
 import { AccountTimelineFeed } from './AccountTimelineFeed'
@@ -14,7 +15,7 @@ const EVENT = {
 
 describe('AccountTimelineFeed', () => {
   it('groups feed rows by the viewing user’s calendar day and keeps selection when another page arrives', () => {
-    const first = mapAccountTimelineEvent(EVENT)
+    const first = { ...mapAccountTimelineEvent(EVENT), preview: 'Shared the pricing plan and rollout dates.' }
     const older = { ...first, id: 'event-2', occurredAt: '2026-08-21T18:00:00.000Z', title: 'Left voicemail' }
     const nextPage = { ...older, id: 'event-3', title: 'Created follow-up task' }
     const { rerender } = renderWithProviders(
@@ -52,5 +53,37 @@ describe('AccountTimelineFeed', () => {
 
     screen.getByRole('button', { name: 'Sent proposal' }).click()
     expect(onEventSelect).toHaveBeenCalledWith('event-1')
+  })
+
+  it('moves feed focus with J and K while ignoring editable targets', async () => {
+    const user = userEvent.setup()
+    const first = { ...mapAccountTimelineEvent(EVENT), preview: 'Shared the pricing plan and rollout dates.' }
+    const second = { ...first, id: 'event-2', title: 'Reviewed pricing' }
+    renderWithProviders(
+      <AccountTimelineFeed items={[first, second]} state="ready" timeZone="America/New_York" onEventSelect={vi.fn()} />,
+    )
+
+    const feed = screen.getByRole('feed', { name: 'Account activity' })
+    const firstControl = screen.getByRole('button', { name: 'Sent proposal' })
+    const secondControl = screen.getByRole('button', { name: 'Reviewed pricing' })
+
+    feed.focus()
+    await user.keyboard('j')
+    expect(firstControl).toHaveFocus()
+    await user.keyboard('J')
+    expect(secondControl).toHaveFocus()
+    await user.keyboard('k')
+    expect(firstControl).toHaveFocus()
+
+    screen.getAllByRole('button', { name: 'Show more' })[0]?.focus()
+    await user.keyboard('j')
+    expect(secondControl).toHaveFocus()
+
+    const input = document.createElement('input')
+    input.setAttribute('aria-label', 'Timeline note')
+    feed.append(input)
+    input.focus()
+    await user.keyboard('j')
+    expect(input).toHaveFocus()
   })
 })

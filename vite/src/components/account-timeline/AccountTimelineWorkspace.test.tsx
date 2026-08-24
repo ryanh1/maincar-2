@@ -90,4 +90,40 @@ describe('AccountTimelineWorkspace', () => {
     expect(onEventSelect).toHaveBeenCalledOnce()
     expect(scrollIntoView).toHaveBeenCalledOnce()
   })
+
+  it('restores focus to the event control that opened detail when selection closes', async () => {
+    const user = userEvent.setup()
+
+    function Harness() {
+      const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
+      return (
+        <>
+          <AccountTimelineWorkspace
+            events={[EVENT]}
+            state="ready"
+            range={null}
+            timeZone="America/New_York"
+            selectedEventId={selectedEventId}
+            highlightedEventId={selectedEventId}
+            onEventSelect={setSelectedEventId}
+            onHighlightedEventChange={() => {}}
+          />
+          <button type="button" onClick={() => setSelectedEventId('event-1')}>Open detail programmatically</button>
+          <button type="button" onClick={() => setSelectedEventId(null)}>Close detail</button>
+        </>
+      )
+    }
+    renderWithProviders(<Harness />)
+
+    const eventControl = screen.getByRole('button', { name: 'Sent proposal' })
+    await user.click(eventControl)
+    await user.click(screen.getByRole('button', { name: 'Close detail' }))
+
+    expect(eventControl).toHaveFocus()
+
+    await user.click(screen.getByRole('button', { name: 'Open detail programmatically' }))
+    const closeControl = screen.getByRole('button', { name: 'Close detail' })
+    await user.click(closeControl)
+    expect(closeControl).toHaveFocus()
+  })
 })
