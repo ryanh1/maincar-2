@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react'
 import { MoreHorizontal, GripVertical, Plus, X } from 'lucide-react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { AccountTimelineRecordTab } from '@/components/account-timeline/AccountTimelineRecordTab'
 import { ActivityFeedRow } from '@/components/activity-feed/ActivityFeedRow'
 import { mapActivityEntry } from '@/components/activity-feed/activityFeed'
 import { PageHeader } from '@/components/PageHeader'
@@ -16,7 +17,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useGetActivity, useGetDetailLayout, useGetObject, useGetObjects, useListRecords, useSaveDetailLayout, useUpdateRecordValue, type ActivityScope, type DetailLayoutSection } from '@/hooks/crm'
+import type { AccountTimelineRoot } from '@/lib/accountTimelineTypes'
 import type { AttributeDef, ObjectDef, RecordRow } from '@/lib/crmTypes'
 import { useAuth } from '@/providers/useAuth'
 
@@ -88,6 +91,7 @@ export function RecordPage() {
   const [draftRailObjects, setDraftRailObjects] = useState<string[]>([])
   const [draftFeedKinds, setDraftFeedKinds] = useState<string[]>([])
   const [localValues, setLocalValues] = useState<Record<string, unknown>>({})
+  const [activeTab, setActiveTab] = useState<'details' | 'timeline'>('details')
   const dragLocation = useRef<DragLocation | null>(null)
 
   const savedLayout = layoutQuery.data?.layout
@@ -102,8 +106,12 @@ export function RecordPage() {
   const displayedRecord = record ? { ...record, ...localValues } : null
   const identity = attributes?.find((attribute) => attribute.isIdentity) ?? attributes?.[0]
   const title = identity && displayedRecord ? formatCellValue(displayedRecord[identity.slug], identity.type, user?.timeZone) : object?.name ?? 'Record'
+  const timelineRoot: AccountTimelineRoot | null = displayedRecord && (object?.slug === 'company' || object?.slug === 'deal')
+    ? { type: object.slug, id: displayedRecord.id }
+    : null
 
   function startEditingLayout() {
+    setActiveTab('details')
     setDraftSections(savedSections)
     setDraftRailObjects(savedRailObjects)
     setDraftFeedKinds(savedFeedKinds)
@@ -191,7 +199,27 @@ export function RecordPage() {
         )}
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-6">
+      <Tabs
+        value={timelineRoot ? activeTab : 'details'}
+        onValueChange={(value) => setActiveTab(value as 'details' | 'timeline')}
+        className="min-h-0 flex-1 gap-0"
+      >
+        {timelineRoot && object && (
+          <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-surface px-6">
+            <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm">
+              <Link className="font-medium text-primary underline-offset-4 hover:underline" to={`/records/${object.slug}`}>
+                {object.namePlural}
+              </Link>
+              <span aria-hidden className="text-text-muted">/</span>
+              <span aria-current="page" className="truncate text-text-muted">{title}</span>
+            </nav>
+            <TabsList variant="line" aria-label={`${object.name} record views`} className="h-12">
+              <TabsTrigger value="details" className="h-8 flex-none px-3">Details</TabsTrigger>
+              <TabsTrigger value="timeline" className="h-8 flex-none px-3">Timeline</TabsTrigger>
+            </TabsList>
+          </div>
+        )}
+        <TabsContent value="details" className="min-h-0 flex-1 overflow-y-auto p-6">
         {isPending && <p className="text-sm text-muted-foreground">Loading record…</p>}
         {!isPending && isError && <p className="text-sm text-destructive">Could not load this record.</p>}
         {!isPending && !isError && (!object || !displayedRecord) && <p className="text-sm text-muted-foreground">This record no longer exists.</p>}
@@ -286,7 +314,13 @@ export function RecordPage() {
             </div>
           </div>
         )}
-      </div>
+        </TabsContent>
+        {timelineRoot && orgId && object && (
+          <TabsContent value="timeline" className="min-h-0 flex-1 overflow-y-auto p-6">
+            <AccountTimelineRecordTab orgId={orgId} objectId={object.id} root={timelineRoot} timeZone={user?.timeZone} />
+          </TabsContent>
+        )}
+      </Tabs>
     </div>
   )
 }

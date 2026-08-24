@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -22,8 +23,14 @@ const fixtures = vi.hoisted(() => ({
   record: { id: 'person-1', name: 'Ada Lovelace', title: 'Engineer', createdAt: '', updatedAt: '' },
 }))
 
-vi.mock('react-router-dom', () => ({ useParams: () => ({ slug: 'person', recordId: 'person-1' }) }))
+vi.mock('react-router-dom', () => ({
+  Link: ({ children, to, ...props }: { children: React.ReactNode; to: string }) => <a href={to} {...props}>{children}</a>,
+  useParams: () => ({ slug: fixtures.object.slug, recordId: fixtures.record.id }),
+}))
 vi.mock('@/providers/useAuth', () => ({ useAuth: () => ({ org: { id: 'org-1' }, user: { timeZone: 'America/New_York' } }) }))
+vi.mock('@/components/account-timeline/AccountTimelineRecordTab', () => ({
+  AccountTimelineRecordTab: ({ root }: { root: { type: string; id: string } }) => <div data-testid="record-timeline">{root.type}:{root.id}</div>,
+}))
 vi.mock('@/hooks/crm', () => ({
   useGetObjects: () => ({ data: { objects: [fixtures.object, fixtures.relatedObject] }, isPending: false, isError: false }),
   useGetObject: () => ({ data: { object: { ...fixtures.object, attributes: fixtures.attributes } }, isPending: false, isError: false }),
@@ -76,5 +83,24 @@ describe('RecordPage', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit layout' }))
     const deals = screen.getByRole('checkbox', { name: 'Deals' }).closest('label')
     await waitFor(() => expect(deals?.querySelector('[data-icon-name="circle-dollar-sign"]')).not.toBeNull())
+  })
+
+  it.each([
+    ['company', 'Company', 'Companies'],
+    ['deal', 'Deal', 'Deals'],
+  ])('exposes the shared Timeline tab on a %s record', async (slug, name, namePlural) => {
+    const user = userEvent.setup()
+    const priorObject = { ...fixtures.object }
+    Object.assign(fixtures.object, { id: `${slug}-object`, slug, name, namePlural })
+
+    try {
+      render(<TooltipProvider><RecordPage /></TooltipProvider>)
+
+      expect(screen.getByRole('link', { name: namePlural })).toHaveAttribute('href', `/records/${slug}`)
+      await user.click(screen.getByRole('tab', { name: 'Timeline' }))
+      await waitFor(() => expect(screen.getByTestId('record-timeline')).toHaveTextContent(`${slug}:person-1`))
+    } finally {
+      Object.assign(fixtures.object, priorObject)
+    }
   })
 })
