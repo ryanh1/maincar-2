@@ -92,6 +92,27 @@ describe('AudioPlayer', () => {
     expect(onSeek).toHaveBeenCalledWith(30)
   })
 
+  it('routes transcript seeks through the same media controller and reports the converged time', () => {
+    const onSeek = vi.fn()
+    const onTimeChange = vi.fn()
+    const { rerender } = renderPlayer({ onSeek, onTimeChange })
+    const audio = screen.getByLabelText('Recording of the call to +12015550111') as HTMLAudioElement
+    Object.defineProperty(audio, 'duration', { configurable: true, value: 120 })
+    Object.defineProperty(audio, 'currentTime', { configurable: true, writable: true, value: 0 })
+    fireEvent.loadedMetadata(audio)
+
+    rerender(withProviders(player({
+      onSeek,
+      onTimeChange,
+      seekRequest: { atMs: 42_000, sequence: 1 },
+    })))
+
+    expect(audio.currentTime).toBe(42)
+    expect(onSeek).toHaveBeenCalledTimes(1)
+    expect(onSeek).toHaveBeenCalledWith(42)
+    expect(onTimeChange).toHaveBeenLastCalledWith(42)
+  })
+
   it('does not capture shortcuts while an editor has focus', () => {
     renderPlayer()
     const audio = screen.getByLabelText('Recording of the call to +12015550111') as HTMLAudioElement

@@ -14,7 +14,7 @@ interface Props {
   currentTimeMs: number
   matches: readonly TimedTranscriptMatch[]
   activeMatchId: string | null
-  onSeek: (atMs: number) => void
+  onSeek?: (atMs: number) => void
 }
 
 function matchingRanges(piece: TimedTranscriptPiece, matches: readonly TimedTranscriptMatch[]) {
@@ -60,7 +60,7 @@ export function TimedTranscript_Segment({ segment, speakerLabel, speakerKeys, cu
       className={cn('border-l-2 border-transparent py-2 pl-3', isCurrent && 'border-primary bg-surface')}
     >
       <header className="mb-1 flex items-center gap-2 select-none">
-        <Button variant="ghost" size="sm" className="px-1 text-xs tabular-nums text-text-muted" onClick={() => onSeek(segment.source.startMs)}>
+        <Button variant="ghost" size="sm" className="px-1 text-xs tabular-nums text-text-muted" disabled={!onSeek} onClick={() => onSeek?.(segment.source.startMs)}>
           {formatElapsed(segment.source.startMs / 1_000)}
         </Button>
         <span className="text-xs font-medium" style={{ color: resolveOptionColor(getSpeakerColorToken(segment.source.speakerKey, speakerKeys)) }}>
@@ -84,8 +84,9 @@ export function TimedTranscript_Segment({ segment, speakerLabel, speakerKeys, cu
               size="sm"
               aria-label={`${piece.word.word}, ${timeLabel}`}
               aria-current={currentWord ? 'true' : undefined}
+              disabled={!onSeek}
               className={cn('relative h-8 px-1 text-sm font-normal', currentWord && 'border-primary bg-primary/10')}
-              onClick={() => onSeek(piece.word?.startMs ?? 0)}
+              onClick={() => onSeek?.(piece.word?.startMs ?? 0)}
               onPointerEnter={() => setVisibleWordTime(piece.id)}
               onPointerLeave={() => setVisibleWordTime((current) => current === piece.id ? null : current)}
               onFocus={() => setVisibleWordTime(piece.id)}

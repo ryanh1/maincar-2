@@ -25,7 +25,9 @@ export interface AudioPlayerProps {
   selectionRange?: SpeakerRibbonTimeRange | null
   searchTicks?: readonly SpeakerRibbonSearchTick[]
   commentPins?: readonly SpeakerRibbonCommentPin[]
+  seekRequest?: { atMs: number; sequence: number } | null
   onSeek?: (time: number) => void
+  onTimeChange?: (time: number) => void
 }
 
 function isEditorFocused(): boolean {
@@ -50,7 +52,7 @@ function readBufferedRanges(audio: HTMLAudioElement): SpeakerRibbonTimeRange[] {
 }
 
 /** Compact audio-only playback controls; the source contract intentionally leaves room for later video. */
-export function AudioPlayer({ source, recordingState, callLabel, segments = [], speakers = [], selectionRange = null, searchTicks = [], commentPins = [], onSeek }: AudioPlayerProps) {
+export function AudioPlayer({ source, recordingState, callLabel, segments = [], speakers = [], selectionRange = null, searchTicks = [], commentPins = [], seekRequest = null, onSeek, onTimeChange }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -64,12 +66,13 @@ export function AudioPlayer({ source, recordingState, callLabel, segments = [], 
   const setTime = useCallback((nextTime: number) => {
     const audio = audioRef.current
     if (!audio) return
-    const max = Number.isFinite(audio.duration) ? audio.duration : duration
+    const max = Number.isFinite(audio.duration) ? audio.duration : Number.POSITIVE_INFINITY
     const safeTime = clamp(nextTime, 0, Math.max(0, max))
     audio.currentTime = safeTime
     setCurrentTime(safeTime)
     onSeek?.(safeTime)
-  }, [duration, onSeek])
+    onTimeChange?.(safeTime)
+  }, [onSeek, onTimeChange])
 
   const seekBy = useCallback((seconds: number) => setTime((audioRef.current?.currentTime ?? currentTime) + seconds), [currentTime, setTime])
 
@@ -126,6 +129,10 @@ export function AudioPlayer({ source, recordingState, callLabel, segments = [], 
     setIsPlaying(false)
     setBufferedRanges([])
   }, [source.url])
+
+  useEffect(() => {
+    if (seekRequest) setTime(seekRequest.atMs / 1_000)
+  }, [seekRequest, setTime])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -197,6 +204,7 @@ export function AudioPlayer({ source, recordingState, callLabel, segments = [], 
         }}
         onTimeUpdate={(event) => {
           setCurrentTime(event.currentTarget.currentTime)
+          onTimeChange?.(event.currentTarget.currentTime)
           setBufferedRanges(readBufferedRanges(event.currentTarget))
         }}
         onProgress={(event) => setBufferedRanges(readBufferedRanges(event.currentTarget))}

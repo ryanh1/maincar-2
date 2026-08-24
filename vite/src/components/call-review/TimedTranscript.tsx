@@ -20,7 +20,7 @@ export interface TimedTranscriptProps {
   segments: readonly TimedTranscriptSegment[]
   speakerLabels: Readonly<Record<string, string>>
   currentTimeMs: number
-  onSeek: (atMs: number) => void
+  onSeek?: (atMs: number) => void
   onSearchTicksChange: (ticks: SpeakerRibbonSearchTick[]) => void
   onSelectionChange: (selection: TimedTranscriptSelection | null) => void
 }
@@ -59,7 +59,7 @@ export function TimedTranscript({ segments, speakerLabels, currentTimeMs, onSeek
     const match = matches[nextIndex]
     if (!match) return
     setActiveMatchIndex(nextIndex)
-    onSeek(match.startMs)
+    onSeek?.(match.startMs)
     const target = [...(contentRef.current?.querySelectorAll<HTMLElement>('[data-search-match-id]') ?? [])]
       .find((element) => element.dataset.searchMatchId === match.id)
     target?.scrollIntoView({ block: 'center' })

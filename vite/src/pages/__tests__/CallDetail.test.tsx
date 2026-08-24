@@ -69,8 +69,21 @@ function review() {
       deal: { id: 'deal-1', name: 'Renewal', status: 'open' },
     },
     recording: { state: 'ready', source: { kind: 'audio', url: 'https://recordings.example/signed/call-1.mp3', expiresAt: '2026-08-01T13:00:00.000Z' } },
-    transcript: { state: 'ready', pass: { id: 'pass-1', provider: 'test', plainText: 'Hello, this is a test transcript.', segments: [{ id: 'segment-1', position: 0, speakerKey: 'rep', startMs: 0, endMs: 1200, text: 'Hello, this is a test transcript.', words: [] }] } },
-    speakers: [],
+    transcript: { state: 'ready', pass: { id: 'pass-1', provider: 'test', plainText: 'Hello there.\nThe renewal works.', segments: [
+      { id: 'segment-1', position: 0, speakerKey: 'rep', startMs: 0, endMs: 1_200, text: 'Hello there.', words: [
+        { word: 'Hello', punctuatedWord: 'Hello', startMs: 0, endMs: 400 },
+        { word: 'there', punctuatedWord: 'there.', startMs: 500, endMs: 1_000 },
+      ] },
+      { id: 'segment-2', position: 1, speakerKey: 'buyer', startMs: 1_400, endMs: 2_600, text: 'The renewal works.', words: [
+        { word: 'The', punctuatedWord: 'The', startMs: 1_400, endMs: 1_600 },
+        { word: 'renewal', punctuatedWord: 'renewal', startMs: 1_650, endMs: 2_000 },
+        { word: 'works', punctuatedWord: 'works.', startMs: 2_050, endMs: 2_500 },
+      ] },
+    ] } },
+    speakers: [
+      { id: 'speaker-1', speakerKey: 'rep', displayName: 'Fixture Rep', source: 'call-user', confidence: 1, confirmedAt: null, manualOverride: false, person: null },
+      { id: 'speaker-2', speakerKey: 'buyer', displayName: 'Morgan Lee', source: 'manual', confidence: 1, confirmedAt: null, manualOverride: true, person: null },
+    ],
   }
 }
 
@@ -225,6 +238,37 @@ describe('the transcript', () => {
     await waitFor(() =>
       expect(toastErrorMock).toHaveBeenCalledWith('Could not copy the transcript. Copy it by hand.'),
     )
+  })
+
+  it('keeps timed transcript seeks, playback state, search ticks, and selections on the shared timeline', async () => {
+    const user = userEvent.setup()
+    useGetCallDetailMock.mockReturnValue(detailState({ data: { call: callDetail({ review: review() }) } }))
+    renderDetail()
+    const audio = screen.getByLabelText('Recording of the call to +12015550111') as HTMLAudioElement
+    Object.defineProperty(audio, 'duration', { configurable: true, value: 10 })
+    Object.defineProperty(audio, 'currentTime', { configurable: true, writable: true, value: 0 })
+    fireEvent.loadedMetadata(audio)
+
+    await user.click(screen.getByRole('button', { name: 'renewal, 00:01' }))
+    expect(audio.currentTime).toBe(1.65)
+
+    audio.currentTime = 1.7
+    fireEvent.timeUpdate(audio)
+    expect(screen.getByRole('button', { name: 'renewal, 00:01' })).toHaveAttribute('aria-current', 'true')
+
+    await user.type(screen.getByRole('searchbox', { name: 'Search transcript' }), 'renewal')
+    expect(screen.getByTestId('speaker-ribbon-marker-transcript-search-0')).toBeInTheDocument()
+
+    const renewal = screen.getByRole('button', { name: 'renewal, 00:01' }).querySelector('mark')?.firstChild
+    if (!renewal) throw new Error('Timed renewal word did not render')
+    const range = document.createRange()
+    range.setStart(renewal, 0)
+    range.setEnd(renewal, 7)
+    window.getSelection()?.removeAllRanges()
+    window.getSelection()?.addRange(range)
+    fireEvent.mouseUp(screen.getByTestId('timed-transcript-content'))
+
+    expect(screen.getByTestId('speaker-ribbon-selection-range')).toBeInTheDocument()
   })
 })
 
