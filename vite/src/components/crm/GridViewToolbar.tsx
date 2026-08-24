@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from 'react'
-import { ChevronDown, Columns3Cog, History, LayoutList, Palette, PanelsTopLeft, Rows3, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
+import { ChevronDown, Columns3Cog, Grid3X3, History, LayoutList, Palette, PanelsTopLeft, Rows3, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -390,16 +390,20 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
               {rowHeight.slice(0, 1).toUpperCase() + rowHeight.slice(1)}
             </DropdownMenuItem>
           ))}
-          <DropdownMenuSeparator />
-          <DropdownMenuCheckboxItem
-            checked={config.gridLines}
-            onSelect={(event) => event.preventDefault()}
-            onCheckedChange={(gridLines) => onConfigChange((current) => ({ ...current, gridLines }))}
-          >
-            Show grid lines
-          </DropdownMenuCheckboxItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        aria-label={config.gridLines ? 'Hide grid lines' : 'Show grid lines'}
+        aria-pressed={config.gridLines}
+        onClick={() => onConfigChange((current) => ({ ...current, gridLines: !current.gridLines }))}
+      >
+        <Grid3X3 size={16} />
+        Grid lines
+      </Button>
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

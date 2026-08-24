@@ -4,6 +4,7 @@ import type {
   DataEditorRef,
   DataEditorProps,
   DrawCellCallback,
+  DrawHeaderCallback,
   EditableGridCell,
   GridCell,
   GridColumn,
@@ -73,6 +74,31 @@ const BASE_FONT_SIZE = 13
 // rows of the end of what is loaded, so the fetch lands before blank rows do.
 const PREFETCH_MARGIN = 60
 const JUST_CALLED_MARKER_MS = 5_000
+
+function drawFiniteCellBorders(
+  ctx: CanvasRenderingContext2D,
+  rect: Rectangle,
+  rightColor: string | undefined,
+  bottomColor: string | undefined,
+  extendBottomThroughRowMarker: boolean,
+) {
+  if (rightColor) {
+    const right = rect.x + rect.width - 0.5
+    ctx.beginPath()
+    ctx.moveTo(right, rect.y)
+    ctx.lineTo(right, rect.y + rect.height)
+    ctx.strokeStyle = rightColor
+    ctx.stroke()
+  }
+  if (bottomColor) {
+    const bottom = rect.y + rect.height - 0.5
+    ctx.beginPath()
+    ctx.moveTo(extendBottomThroughRowMarker ? 0 : rect.x, bottom)
+    ctx.lineTo(rect.x + rect.width, bottom)
+    ctx.strokeStyle = bottomColor
+    ctx.stroke()
+  }
+}
 
 interface FindMatch {
   col: number
@@ -282,12 +308,6 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
       }),
     [visibleColumns, config.columnWidths, configuredColumns, config.columns, config.columnStyles, zoomFactor, colors],
   )
-  const firstGridColumn = gridColumns[0]
-  const leadingColumnWidth =
-    firstGridColumn && 'width' in firstGridColumn && typeof firstGridColumn.width === 'number'
-      ? firstGridColumn.width
-      : LEADING_COLUMN_WIDTH
-
   const listQuery = useMemo(() => toRecordListQuery(config, attributes), [config, attributes])
   const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
     useRecordWindow(orgId, object.id, { ...listQuery, includeArchived })
@@ -485,6 +505,9 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
 
   const drawCell = useCallback<DrawCellCallback>((args, drawContent) => {
     drawContent()
+    if (config.gridLines) {
+      drawFiniteCellBorders(args.ctx, args.rect, colors.border, colors.border, args.col === 0)
+    }
     const record = recordAtRow(args.row)
     const attribute = visibleColumns[args.col]
     if (!record || !attribute) return
@@ -492,7 +515,22 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     if (change) drawChangeDots(args.ctx, args.rect, change.changeCount, colors.changeHighlightDot)
     const rule = matchColorRule(rulesByAttribute.get(attribute.id) ?? [], cellValue(record, attribute))
     if (rule && rule.target === 'dot') drawColorRuleDot(args.ctx, args.rect, colors.paintColors[rule.color] ?? rule.color)
-  }, [recordAtRow, visibleColumns, changesByCell, colors.changeHighlightDot, rulesByAttribute, cellValue, colors.paintColors])
+  }, [config.gridLines, recordAtRow, visibleColumns, changesByCell, colors.border, colors.changeHighlightDot, rulesByAttribute, cellValue, colors.paintColors])
+
+  const drawHeader = useCallback<DrawHeaderCallback>((args, drawContent) => {
+    drawContent()
+    const headerAccent = args.theme.headerBottomBorderColor
+    const bottomColor = headerAccent && headerAccent !== 'transparent'
+      ? headerAccent
+      : config.gridLines ? colors.border : undefined
+    drawFiniteCellBorders(
+      args.ctx,
+      args.rect,
+      config.gridLines ? colors.border : undefined,
+      bottomColor,
+      args.columnIndex === 0,
+    )
+  }, [config.gridLines, colors.border])
 
   // The single coercion seam: runs for a typed commit AND a paste (glide
   // calls this before either lands). Never returns `false` — the raw text
@@ -802,12 +840,13 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
       bgHeaderHasFocus: colors.headerBg,
       bgHeaderHovered: colors.headerBg,
       borderColor: colors.border,
-      horizontalBorderColor: config.gridLines ? colors.border : 'transparent',
+      horizontalBorderColor: 'transparent',
+      headerBottomBorderColor: 'transparent',
       fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
       baseFontStyle: `${scaledFontSize}px`,
       headerFontStyle: `600 ${scaledFontSize}px`,
     }),
-    [colors, config.gridLines, scaledFontSize],
+    [colors, scaledFontSize],
   )
 
   // --- Row focus (controlled selection) + the peek drawer (MAI-167) ---
@@ -1120,12 +1159,12 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [gridSelection, fillRange])
 
-  // The ⤢ hover affordance (DECISIONS D3): a small button pinned to the
-  // frozen leading column, following whichever row the pointer is over.
-  const [hoveredRow, setHoveredRow] = useState<{ row: number; y: number; height: number } | null>(null)
+  // Keep row actions anchored to the row marker while the open-record action
+  // follows the hovered cell, so each affordance stays attached to its target.
+  const [hoveredCell, setHoveredCell] = useState<{ row: number; x: number; y: number; width: number; height: number } | null>(null)
   const [changeHighlightHover, setChangeHighlightHover] = useState<ChangeHighlightTarget | null>(null)
   const [historyTarget, setHistoryTarget] = useState<ChangeHighlightTarget | null>(null)
-  const gridRowCount = groupAttribute || (changeHighlightEnabled && config.changeHighlight.onlyChangedRows) ? displayRows.length : totalCount
+  const gridRowCount = displayRows.length
 
   const onMouseMove = useCallback((args: GridMouseEventArgs) => {
     setExpandedCell((current) => {
@@ -1133,12 +1172,12 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
       return args.location[0] === current.column && args.location[1] === current.row ? current : null
     })
     if (args.kind !== 'cell') {
-      setHoveredRow(null)
+      setHoveredCell(null)
       setChangeHighlightHover(null)
       return
     }
     const [col, row] = args.location
-    setHoveredRow({ row, y: args.bounds.y, height: args.bounds.height })
+    setHoveredCell({ row, x: args.bounds.x, y: args.bounds.y, width: args.bounds.width, height: args.bounds.height })
     const record = recordAtRow(row)
     const attribute = visibleColumns[col]
     const change = record && attribute ? changesByCell.get(`${record.id}:${attribute.id}`) : undefined
@@ -1397,7 +1436,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           reorderDisabled={sortActive}
         />
       )}
-      <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => { setHoveredRow(null); setExpandedCell(null); setChangeHighlightHover(null) }}>
+      <div ref={gridRef} className="relative min-h-0 flex-1" onMouseLeave={() => { setHoveredCell(null); setExpandedCell(null); setChangeHighlightHover(null) }}>
         <DataEditor
         ref={dataEditorRef}
         columns={gridColumns}
@@ -1410,11 +1449,12 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         onFillPattern={onFillPattern}
         customRenderers={[chipCellRenderer, fieldEditorCellRenderer]}
         drawCell={drawCell}
+        drawHeader={drawHeader}
         rows={gridRowCount}
         freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
         rowHeight={rowHeightPx}
         headerHeight={headerHeightPx}
-        verticalBorder={config.gridLines}
+        verticalBorder={false}
         onColumnMoved={sortActive || config.columns.some((column) => column.group) ? undefined : onColumnMoved}
         onColumnResize={onColumnResize}
         rowMarkers={{ kind: 'checkbox-visible', width: ROW_MARKER_WIDTH }}
@@ -1646,6 +1686,7 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
               className="record-grid-frozen-rows"
               columns={gridColumns}
               getCellContent={getCellContent}
+              drawCell={drawCell}
               rows={config.frozenRows}
               freezeColumns={Math.min(config.frozenCols, gridColumns.length)}
               rowMarkers={{ kind: 'clickable-number', width: ROW_MARKER_WIDTH }}
@@ -1655,25 +1696,25 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
               smoothScrollX
               getRowThemeOverride={getRowThemeOverride}
               theme={theme}
-              verticalBorder={config.gridLines}
+              verticalBorder={false}
               width="100%"
               height="100%"
             />
           </div>
         )}
 
-        {hoveredRow && (
+        {hoveredCell && (
         <IconButton
           type="button"
-          tooltip={`Show actions for row ${hoveredRow.row + 1}`}
+          tooltip={`Show actions for row ${hoveredCell.row + 1}`}
           variant="ghost"
           className="absolute z-20 size-5 p-0"
-          style={{ top: hoveredRow.y + hoveredRow.height / 2 - 10, left: 4 }}
+          style={{ top: hoveredCell.y + hoveredCell.height / 2 - 10, left: 4 }}
           onClick={() => {
             const bounds = gridRef.current?.getBoundingClientRect()
             setRowFreezeMenu({
-              row: hoveredRow.row,
-              anchor: { x: bounds?.left ?? 0, y: (bounds?.top ?? 0) + hoveredRow.y, width: ROW_MARKER_WIDTH, height: hoveredRow.height },
+              row: hoveredCell.row,
+              anchor: { x: bounds?.left ?? 0, y: (bounds?.top ?? 0) + hoveredCell.y, width: ROW_MARKER_WIDTH, height: hoveredCell.height },
             })
           }}
         >
@@ -1723,22 +1764,20 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           />
         )}
 
-        {hoveredRow && (
-        <button
+        {hoveredCell && (
+        <IconButton
           type="button"
-          aria-label="Open record"
-          title="Open record (Space)"
-          className="absolute z-10 flex items-center justify-center rounded-sm border border-border bg-background text-muted-foreground shadow-sm hover:bg-accent hover:text-foreground"
+          tooltip={`Open ${object.name.toLowerCase()} on row ${hoveredCell.row + 1}`}
+          variant="ghost"
+          className="absolute z-20 size-5 p-0"
           style={{
-            top: hoveredRow.y + hoveredRow.height / 2 - 10,
-            left: leadingColumnWidth - 26,
-            width: 20,
-            height: 20,
+            top: hoveredCell.y + hoveredCell.height / 2 - 10,
+            left: hoveredCell.x + hoveredCell.width - 26,
           }}
-          onClick={() => openPeek(hoveredRow.row)}
+          onClick={() => openPeek(hoveredCell.row)}
         >
-          <CornerRightUp className="size-3.5" />
-        </button>
+          <CornerRightUp className="size-4" />
+        </IconButton>
         )}
 
         <RecordPeekDrawer

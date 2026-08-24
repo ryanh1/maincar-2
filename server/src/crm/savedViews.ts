@@ -225,7 +225,7 @@ export function repairSavedViewConfig(raw: unknown, attributes: ViewAttribute[])
     ...(teamScope ? { teamScope } : {}),
     groupBy: uniqueByAttribute((source.groupBy ?? []).filter((group) => knownIds.has(group.attributeId))),
     rowHeight: source.rowHeight ?? 'compact',
-    gridLines: source.gridLines ?? true,
+    gridLines: source.gridLines ?? false,
     frozenRows: source.frozenRows ?? 0,
     frozenCols: source.frozenCols ?? 1,
     zoom: source.zoom ?? 100,

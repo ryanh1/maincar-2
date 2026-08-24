@@ -17,6 +17,10 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 describe('viewConfig', () => {
+  it('defaults new views to grid lines off', () => {
+    expect(createViewConfig(attributes).gridLines).toBe(false)
+  })
+
   it('maps durable attribute ids to the list API sort and filter fields', () => {
     const query = toRecordListQuery(
       {
