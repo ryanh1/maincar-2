@@ -24,6 +24,7 @@ import { Tasks } from '@/pages/Tasks'
 import { Settings, SettingsLegacyRedirect } from '@/pages/Settings'
 import { Welcome } from '@/pages/Welcome'
 import { VoicemailDetail } from '@/pages/VoicemailDetail'
+import { VoicemailDrops } from '@/pages/VoicemailDrops'
 import { Voicemails } from '@/pages/Voicemails'
 import { AdminSyncHealth } from '@/pages/AdminSyncHealth'
 
@@ -46,6 +47,7 @@ const router = createBrowserRouter([
       { path: 'calls/:id', element: <CallDetail /> },
       { path: 'voicemails/:id', element: <VoicemailDetail /> },
       { path: 'voicemails', element: <Voicemails /> },
+      { path: 'voicemail-drops', element: <VoicemailDrops /> },
       { path: 'records/:slug', element: <Records /> },
       { path: 'records/:slug/:recordId', element: <RecordPage /> },
       { path: 'reports', element: <Reports /> },

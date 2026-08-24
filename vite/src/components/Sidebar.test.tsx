@@ -69,6 +69,7 @@ describe('Sidebar', () => {
     renderSidebar()
 
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Voicemail drops' })).toHaveAttribute('href', '/voicemail-drops')
     expect(screen.getByRole('button', { name: 'Inbox' })).toBeInTheDocument()
   })
 

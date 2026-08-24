@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, Home, List, ListChecks, LogOut, Phone, Settings, Voicemail } from 'lucide-react'
+import { AudioLines, BarChart3, CalendarDays, Home, List, ListChecks, LogOut, Phone, Settings, Voicemail } from 'lucide-react'
 import { Link, NavLink } from 'react-router-dom'
 
 import { APP_NAME } from '@/config'
@@ -18,6 +18,7 @@ const NAV = [
   { to: '/calendar', label: 'Calendar', icon: CalendarDays },
   { to: '/tasks', label: 'Tasks', icon: ListChecks },
   { to: '/voicemails', label: 'Voicemails', icon: Voicemail },
+  { to: '/voicemail-drops', label: 'Voicemail drops', icon: AudioLines },
   { to: '/reports', label: 'Reports', icon: BarChart3 },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
