@@ -148,6 +148,7 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
   }
 
   const kanbanGroupFields = attributes.filter(isKanbanGroupAttribute)
+  const isKanban = layout === 'kanban'
   const hasGrouping = layout === 'kanban' ? Boolean(config.kanban) : config.groupBy.length > 0
 
   function applyCustomChangeWindow() {
@@ -169,53 +170,55 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
           </Button>
         </div>
       )}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="secondary" size="sm">
-            <Columns3Cog size={16} />
-            Fields
-            <ChevronDown size={16} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuLabel>Visible fields</DropdownMenuLabel>
-          {attributes.map((attribute) => {
-            const visible = config.columns.find((column) => column.attributeId === attribute.id)?.visible ?? true
-            return (
-              <DropdownMenuCheckboxItem
-                key={attribute.id}
-                checked={visible}
-                onSelect={(event) => event.preventDefault()}
-                onCheckedChange={(checked) => setColumnVisible(attribute.id, checked)}
-              >
-                {attribute.name}
-              </DropdownMenuCheckboxItem>
-            )
-          })}
-          <DropdownMenuSeparator />
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>Set exact width</DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-56 p-2">
-              {attributes.map((attribute) => (
-                <label key={attribute.id} className="mb-2 flex items-center gap-2 text-xs text-text-muted last:mb-0">
-                  <span className="min-w-0 flex-1 truncate">{attribute.name}</span>
-                  <Input
-                    aria-label={`${attribute.name} width in pixels`}
-                    className="h-7 w-20"
-                    min={50}
-                    max={500}
-                    type="number"
-                    value={config.columnWidths[attribute.id] ?? ''}
-                    onChange={(event) => setColumnWidth(attribute.id, event.target.value)}
-                  />
-                </label>
-              ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {!isKanban && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="secondary" size="sm">
+              <Columns3Cog size={16} />
+              Fields
+              <ChevronDown size={16} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuLabel>Visible fields</DropdownMenuLabel>
+            {attributes.map((attribute) => {
+              const visible = config.columns.find((column) => column.attributeId === attribute.id)?.visible ?? true
+              return (
+                <DropdownMenuCheckboxItem
+                  key={attribute.id}
+                  checked={visible}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={(checked) => setColumnVisible(attribute.id, checked)}
+                >
+                  {attribute.name}
+                </DropdownMenuCheckboxItem>
+              )
+            })}
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Set exact width</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-56 p-2">
+                {attributes.map((attribute) => (
+                  <label key={attribute.id} className="mb-2 flex items-center gap-2 text-xs text-text-muted last:mb-0">
+                    <span className="min-w-0 flex-1 truncate">{attribute.name}</span>
+                    <Input
+                      aria-label={`${attribute.name} width in pixels`}
+                      className="h-7 w-20"
+                      min={50}
+                      max={500}
+                      type="number"
+                      value={config.columnWidths[attribute.id] ?? ''}
+                      onChange={(event) => setColumnWidth(attribute.id, event.target.value)}
+                    />
+                  </label>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
 
-      {onFormat && (
+      {!isKanban && onFormat && (
         <Button
           variant="secondary"
           size="sm"
@@ -229,7 +232,7 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
         </Button>
       )}
 
-      {selectedColumnIds.length >= 2 && (
+      {!isKanban && selectedColumnIds.length >= 2 && (
         <div className="flex items-center gap-1">
           <Input
             aria-label="Column group name"
@@ -375,69 +378,73 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
         </>
       )}
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="secondary" size="sm">
-            <Rows3 size={16} />
-            Row height
-            <ChevronDown size={16} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuLabel>Row height</DropdownMenuLabel>
-          {(['compact', 'comfortable', 'tall'] as const).map((rowHeight) => (
-            <DropdownMenuItem key={rowHeight} onSelect={() => onConfigChange((current) => ({ ...current, rowHeight }))}>
-              {rowHeight.slice(0, 1).toUpperCase() + rowHeight.slice(1)}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {!isKanban && (
+        <>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="secondary" size="sm">
+                <Rows3 size={16} />
+                Row height
+                <ChevronDown size={16} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel>Row height</DropdownMenuLabel>
+              {(['compact', 'comfortable', 'tall'] as const).map((rowHeight) => (
+                <DropdownMenuItem key={rowHeight} onSelect={() => onConfigChange((current) => ({ ...current, rowHeight }))}>
+                  {rowHeight.slice(0, 1).toUpperCase() + rowHeight.slice(1)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        aria-label={config.gridLines ? 'Hide grid lines' : 'Show grid lines'}
-        aria-pressed={config.gridLines}
-        onClick={() => onConfigChange((current) => ({ ...current, gridLines: !current.gridLines }))}
-      >
-        <Grid3X3 size={16} />
-        Grid lines
-      </Button>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="secondary" size="sm">
-            <PanelsTopLeft size={16} />
-            Freeze
-            <ChevronDown size={16} />
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            aria-label={config.gridLines ? 'Hide grid lines' : 'Show grid lines'}
+            aria-pressed={config.gridLines}
+            onClick={() => onConfigChange((current) => ({ ...current, gridLines: !current.gridLines }))}
+          >
+            <Grid3X3 size={16} />
+            Grid lines
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56 p-2">
-          <label className="mb-2 flex items-center gap-2 text-xs text-text-muted">
-            Frozen rows
-            <Input
-              aria-label="Frozen rows"
-              className="h-7 w-20"
-              min={0}
-              type="number"
-              value={config.frozenRows}
-              onChange={(event) => setFrozenCount('frozenRows', event.target.value)}
-            />
-          </label>
-          <label className="flex items-center gap-2 text-xs text-text-muted">
-            Frozen columns
-            <Input
-              aria-label="Frozen columns"
-              className="h-7 w-20"
-              min={0}
-              type="number"
-              value={config.frozenCols}
-              onChange={(event) => setFrozenCount('frozenCols', event.target.value)}
-            />
-          </label>
-        </DropdownMenuContent>
-      </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="secondary" size="sm">
+                <PanelsTopLeft size={16} />
+                Freeze
+                <ChevronDown size={16} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56 p-2">
+              <label className="mb-2 flex items-center gap-2 text-xs text-text-muted">
+                Frozen rows
+                <Input
+                  aria-label="Frozen rows"
+                  className="h-7 w-20"
+                  min={0}
+                  type="number"
+                  value={config.frozenRows}
+                  onChange={(event) => setFrozenCount('frozenRows', event.target.value)}
+                />
+              </label>
+              <label className="flex items-center gap-2 text-xs text-text-muted">
+                Frozen columns
+                <Input
+                  aria-label="Frozen columns"
+                  className="h-7 w-20"
+                  min={0}
+                  type="number"
+                  value={config.frozenCols}
+                  onChange={(event) => setFrozenCount('frozenCols', event.target.value)}
+                />
+              </label>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      )}
     </div>
   )
 }

@@ -106,7 +106,7 @@ function SortableKanbanCard({
   onCancel: () => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: cardDndId(record.id), data: { type: 'card', recordId: record.id, columnKey } satisfies KanbanDragData })
-  const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition }
+  const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition, touchAction: 'none' }
   const setRefs = (element: HTMLDivElement | null) => {
     setNodeRef(element)
     onCardRef(element)
@@ -341,24 +341,15 @@ export function KanbanBoard({ attributes, config, rows, onRecordMove, selectedRe
     const positions = new Map((ordering[column.key] ?? []).map((recordId, index) => [recordId, index]))
     return column.rows.slice().sort((left, right) => (positions.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (positions.get(right.id) ?? Number.MAX_SAFE_INTEGER))
   }
-  const reorder = (sourceColumnKey: string, targetColumnKey: string, recordId: string, overRecordId: string | null) => {
+  const reorder = (columnKey: string, recordId: string, overRecordId: string | null) => {
     setManualOrder((previous) => {
-      const sourceColumn = columns.find((column) => column.key === sourceColumnKey)
-      const targetColumn = columns.find((column) => column.key === targetColumnKey)
-      if (!sourceColumn || !targetColumn) return previous
-      const sourceIds = rowsForColumn(sourceColumn, previous).map((row) => row.id)
-      const targetIds = sourceColumnKey === targetColumnKey ? sourceIds : rowsForColumn(targetColumn, previous).map((row) => row.id)
-      const sourceIndex = sourceIds.indexOf(recordId)
+      const column = columns.find((candidate) => candidate.key === columnKey)
+      if (!column) return previous
+      const orderedIds = rowsForColumn(column, previous).map((row) => row.id)
+      const sourceIndex = orderedIds.indexOf(recordId)
       if (sourceIndex < 0) return previous
-      if (sourceColumnKey === targetColumnKey) {
-        const targetIndex = overRecordId ? sourceIds.indexOf(overRecordId) : sourceIds.length - 1
-        return targetIndex < 0 ? previous : { ...previous, [sourceColumnKey]: arrayMove(sourceIds, sourceIndex, targetIndex) }
-      }
-      sourceIds.splice(sourceIndex, 1)
-      const nextTargetIds = targetIds.filter((id) => id !== recordId)
-      const targetIndex = overRecordId ? nextTargetIds.indexOf(overRecordId) : nextTargetIds.length
-      nextTargetIds.splice(targetIndex < 0 ? nextTargetIds.length : targetIndex, 0, recordId)
-      return { ...previous, [sourceColumnKey]: sourceIds, [targetColumnKey]: nextTargetIds }
+      const targetIndex = overRecordId ? orderedIds.indexOf(overRecordId) : orderedIds.length - 1
+      return targetIndex < 0 ? previous : { ...previous, [columnKey]: arrayMove(orderedIds, sourceIndex, targetIndex) }
     })
   }
 
@@ -370,11 +361,12 @@ export function KanbanBoard({ attributes, config, rows, onRecordMove, selectedRe
       if (!activeData || activeData.type !== 'card' || !overData) return
       const targetColumnKey = overData.columnKey
       if (activeData.columnKey !== targetColumnKey && !onRecordMove) return
-      reorder(activeData.columnKey, targetColumnKey, activeData.recordId, overData.type === 'card' ? overData.recordId : null)
-      if (activeData.columnKey !== targetColumnKey) {
-        const record = rows.find((candidate) => candidate.id === activeData.recordId)
-        if (record) onRecordMove?.(record, targetColumnKey === '__no-value__' ? null : targetColumnKey)
+      if (activeData.columnKey === targetColumnKey) {
+        reorder(activeData.columnKey, activeData.recordId, overData.type === 'card' ? overData.recordId : null)
+        return
       }
+      const record = rows.find((candidate) => candidate.id === activeData.recordId)
+      if (record) onRecordMove?.(record, targetColumnKey === '__no-value__' ? null : targetColumnKey)
       }}>
         <div className="min-h-0 flex-1 overflow-x-auto bg-surface p-3"><div className="flex min-h-full min-w-max gap-3">
           {columns.map((column) => (
