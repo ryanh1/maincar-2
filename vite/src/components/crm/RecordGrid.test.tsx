@@ -1391,14 +1391,20 @@ describe('RecordGrid', () => {
 
     renderWithProviders(<RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={config} onViewConfigChange={onViewConfigChange} />)
 
-    const controls = screen.getByRole('region', { name: 'Grid controls' })
-    const recordCount = within(controls).getByLabelText('Record count')
+    const viewBar = screen.getByRole('region', { name: 'View bar' })
+    const commandBar = screen.getByRole('region', { name: 'Command bar' })
+    const recordCount = within(viewBar).getByLabelText('Record count')
     expect(recordCount).toHaveTextContent('1 records')
     expect(recordCount.parentElement).toHaveClass('ml-auto')
     expect(screen.queryByRole('button', { name: '100%' })).not.toBeInTheDocument()
 
-    await user.click(within(controls).getByRole('button', { name: 'View options' }))
-    await user.click(await screen.findByRole('menuitem', { name: '125%' }))
+    await user.click(within(commandBar).getByRole('button', { name: 'Search' }))
+    expect(screen.getByRole('searchbox', { name: 'Find in grid' })).toHaveFocus()
+
+    await user.click(within(commandBar).getByRole('button', { name: 'View options' }))
+    ;(await screen.findByRole('menuitem', { name: 'Zoom' })).focus()
+    await user.keyboard('{ArrowRight}')
+    await user.click(await screen.findByRole('menuitemradio', { name: '125%' }))
     const update = onViewConfigChange.mock.calls[0][0] as (current: typeof config) => typeof config
     expect(update(config).zoom).toBe(125)
   })
