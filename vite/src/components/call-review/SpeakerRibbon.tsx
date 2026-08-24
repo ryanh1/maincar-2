@@ -1,6 +1,7 @@
 import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 
 import { formatElapsed } from '@/lib/duration'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   buildSpeakerRibbonGeometry,
   getSpeakerColorToken,
@@ -40,6 +41,7 @@ export interface SpeakerRibbonProps {
   searchTicks?: readonly SpeakerRibbonSearchTick[]
   commentPins?: readonly SpeakerRibbonCommentPin[]
   onSeek: (time: number) => void
+  onCommentActivate?: (commentId: string, time: number) => void
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -73,6 +75,7 @@ export function SpeakerRibbon({
   searchTicks = [],
   commentPins = [],
   onSeek,
+  onCommentActivate,
 }: SpeakerRibbonProps) {
   const activePointerId = useRef<number | null>(null)
   const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 0
@@ -125,33 +128,34 @@ export function SpeakerRibbon({
         <h3 className="text-xs font-medium text-text-muted">Speaker activity</h3>
         <span className="text-xs tabular-nums text-text-muted">{formatElapsed(safeCurrentTime)} / {formatElapsed(safeDuration)}</span>
       </div>
-      <div
-        role="slider"
-        aria-label="Seek call recording"
-        aria-valuemin={0}
-        aria-valuemax={safeDuration}
-        aria-valuenow={safeCurrentTime}
-        aria-valuetext={`${formatElapsed(safeCurrentTime)} of ${formatElapsed(safeDuration)}`}
-        tabIndex={0}
-        className="relative flex min-h-16 flex-col gap-1 border border-border bg-surface p-2 outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary"
-        onKeyDown={(event) => {
-          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
-          event.preventDefault()
-          seekByKeyboard(event.key)
-        }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={stopPointer}
-        onPointerCancel={stopPointer}
-      >
+      <div className="relative">
+        <div
+          role="slider"
+          aria-label="Seek call recording"
+          aria-valuemin={0}
+          aria-valuemax={safeDuration}
+          aria-valuenow={safeCurrentTime}
+          aria-valuetext={`${formatElapsed(safeCurrentTime)} of ${formatElapsed(safeDuration)}`}
+          tabIndex={0}
+          className="relative flex min-h-16 flex-col gap-1 border border-border bg-surface p-2 outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary"
+          onKeyDown={(event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+            event.preventDefault()
+            seekByKeyboard(event.key)
+          }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={stopPointer}
+          onPointerCancel={stopPointer}
+        >
         <div aria-hidden="true" className="pointer-events-none absolute inset-x-2 top-2 h-2 border border-border bg-surface-2">
           {geometry.bufferedRanges.map((range) => <span key={`${range.startMs}-${range.endMs}`} data-testid="speaker-ribbon-buffered-range" className="absolute inset-y-0 bg-surface-2" style={rangeStyle(range.left, range.width)} />)}
           {geometry.playedRanges.map((range) => <span key={`${range.startMs}-${range.endMs}`} data-testid="speaker-ribbon-played-range" className="absolute inset-y-0 bg-primary/40" style={rangeStyle(range.left, range.width)} />)}
           {geometry.selectionRange && <span data-testid="speaker-ribbon-selection-range" className="absolute inset-y-[-1px] border border-primary bg-primary/10" style={rangeStyle(geometry.selectionRange.left, geometry.selectionRange.width)} />}
         </div>
-        {geometry.markers.map((marker) => marker.kind === 'search'
-          ? <span key={marker.id} data-testid={`speaker-ribbon-marker-${marker.id}`} aria-hidden="true" className="pointer-events-none absolute top-1 h-4 w-px bg-text-muted" style={{ left: `calc(${marker.left}% + 0.5rem)` }} />
-          : <span key={marker.id} data-testid={`speaker-ribbon-marker-${marker.id}`} aria-hidden="true" className="pointer-events-none absolute top-0 h-3 w-1 rounded-md bg-accent-brand" style={{ left: `calc(${marker.left}% + 0.5rem)` }} />)}
+        {geometry.markers.filter((marker) => marker.kind === 'search').map((marker) => (
+          <span key={marker.id} data-testid={`speaker-ribbon-marker-${marker.id}`} aria-hidden="true" className="pointer-events-none absolute top-1 h-4 w-px bg-text-muted" style={{ left: `calc(${marker.left}% + 0.5rem)` }} />
+        ))}
         <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-10 w-px bg-primary" style={{ left: `calc(${geometry.playhead}% + 0.5rem)` }} />
         {geometry.lanes.length > 0 ? geometry.lanes.map((lane) => (
           <div key={lane.speakerKey} className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-3 pt-3">
@@ -161,6 +165,33 @@ export function SpeakerRibbon({
             </div>
           </div>
         )) : <p className="pt-3 text-xs text-text-muted">Call duration is not available.</p>}
+        </div>
+        {geometry.markers.filter((marker) => marker.kind === 'comment').map((marker) => {
+          const pin = commentPins.find((candidate) => candidate.id === marker.id)
+          if (!pin || !onCommentActivate) {
+            return <span key={marker.id} data-testid={`speaker-ribbon-marker-${marker.id}`} aria-hidden="true" className="pointer-events-none absolute top-0 h-3 w-1 rounded-md bg-accent-brand" style={{ left: `calc(${marker.left}% + 0.5rem)` }} />
+          }
+          const label = `Open comment at ${formatElapsed(pin.time)}`
+          return (
+            <Tooltip key={marker.id}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={label}
+                  data-testid={`speaker-ribbon-marker-${marker.id}`}
+                  className="absolute top-0 z-20 h-3 w-2 rounded-md bg-accent-brand outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                  style={{ left: `calc(${marker.left}% + 0.5rem)` }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onCommentActivate(pin.id, pin.time)
+                  }}
+                />
+              </TooltipTrigger>
+              <TooltipContent>{label}</TooltipContent>
+            </Tooltip>
+          )
+        })}
       </div>
     </section>
   )

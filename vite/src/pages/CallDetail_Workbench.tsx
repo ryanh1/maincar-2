@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import { Check, Copy, Download, MessageSquarePlus, Phone } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { AudioPlayer, type AudioMediaSource } from '@/components/call-review/AudioPlayer'
@@ -7,6 +8,7 @@ import { CallCommentsRail } from '@/components/call-review/CallCommentsRail'
 import type { SpeakerRibbonSpeaker } from '@/components/call-review/SpeakerRibbon'
 import { TimedTranscript, type TimedTranscriptSelection } from '@/components/call-review/TimedTranscript'
 import { Button } from '@/components/ui/button'
+import { useGetCallComments } from '@/hooks/callComments'
 import type { CallDetail } from '@/hooks/dialer'
 import type { CallCommentDraftAnchor } from '@/lib/callCommentTypes'
 import { getCallDirectionLabel, getCallStatusLabel } from '@/lib/callLabels'
@@ -49,17 +51,65 @@ export function CallDetail_Workbench({
   timeZone: string | null | undefined
   userId: string
 }) {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [layout, setLayout] = useState<CallReviewLayout>(() => getStoredCallReviewLayout(userId))
-  const [activePane, setActivePane] = useState<Pane>('playback')
+  const [activePane, setActivePane] = useState<Pane>(() => searchParams.get('mode') === 'comments' ? 'comments' : 'playback')
   const [currentTimeMs, setCurrentTimeMs] = useState(0)
   const [selection, setSelection] = useState<TimedTranscriptSelection | null>(null)
   const [seekRequest, setSeekRequest] = useState<{ atMs: number; sequence: number } | null>(null)
   const [commentDraft, setCommentDraft] = useState<CallCommentDraftAnchor | null>(null)
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
+  const comments = useGetCallComments(orgId, call.id)
   const workbenchRef = useRef<HTMLDivElement>(null)
+  const handledDeepLinkRef = useRef<string | null>(null)
   const requestSeek = useCallback((atMs: number) => {
     setSeekRequest((current) => ({ atMs, sequence: (current?.sequence ?? 0) + 1 }))
   }, [])
+  const threads = useMemo(() => comments.data?.comments ?? [], [comments.data?.comments])
+  const commentPins = useMemo(
+    () => threads.flatMap((thread) => thread.atMs === null ? [] : [{ id: thread.id, time: thread.atMs / 1_000 }]),
+    [threads],
+  )
+  const nearestCommentId = useMemo(() => {
+    let nearest: { id: string; distance: number } | null = null
+    for (const thread of threads) {
+      if (thread.atMs === null) continue
+      const distance = Math.abs(thread.atMs - currentTimeMs)
+      if (!nearest || distance < nearest.distance) nearest = { id: thread.id, distance }
+    }
+    return nearest?.id ?? null
+  }, [currentTimeMs, threads])
+
+  const activateComment = useCallback((commentId: string, atMs: number) => {
+    handledDeepLinkRef.current = `${call.id}:${commentId}`
+    setActiveCommentId(commentId)
+    setActivePane('comments')
+    setCurrentTimeMs(atMs)
+    requestSeek(atMs)
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.set('mode', 'comments')
+      next.set('commentId', commentId)
+      return next
+    })
+  }, [call.id, requestSeek, setSearchParams])
+
+  const deepLinkCommentId = searchParams.get('commentId')
+  useEffect(() => {
+    if (!deepLinkCommentId) return
+    const thread = threads.find((candidate) =>
+      candidate.id === deepLinkCommentId ||
+      candidate.replies.some((reply) => reply.id === deepLinkCommentId),
+    )
+    if (!thread || thread.atMs === null) return
+    const key = `${call.id}:${thread.id}`
+    if (handledDeepLinkRef.current === key) return
+    handledDeepLinkRef.current = key
+    setActiveCommentId(thread.id)
+    setActivePane('comments')
+    setCurrentTimeMs(thread.atMs)
+    requestSeek(thread.atMs)
+  }, [call.id, deepLinkCommentId, requestSeek, threads])
 
   function updateLayout(next: CallReviewLayout): void {
     setLayout(next)
@@ -132,6 +182,7 @@ export function CallDetail_Workbench({
             currentTimeMs={currentTimeMs}
             selection={selection}
             seekRequest={seekRequest}
+            commentPins={commentPins}
             onTimeChange={setCurrentTimeMs}
             onSelectionChange={setSelection}
             onSeek={requestSeek}
@@ -139,6 +190,7 @@ export function CallDetail_Workbench({
               setCommentDraft(draft)
               setActivePane('comments')
             }}
+            onCommentActivate={activateComment}
           />
         </section>
         <div role="separator" aria-label="Resize playback and comments panes" aria-orientation="vertical" aria-valuemin={30} aria-valuemax={70} aria-valuenow={layout.playbackWidth} tabIndex={0} className="hidden w-2 shrink-0 cursor-col-resize border-x border-border bg-surface focus-visible:bg-surface-2 focus-visible:outline-none md:block" onPointerDown={startResize} onKeyDown={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); resizeWithKeyboard(event.key) } }} />
@@ -151,11 +203,9 @@ export function CallDetail_Workbench({
             currentTimeMs={currentTimeMs}
             draft={commentDraft}
             activeCommentId={activeCommentId}
+            nearestCommentId={nearestCommentId}
             onDraftChange={setCommentDraft}
-            onActivate={(commentId, atMs) => {
-              setActiveCommentId(commentId)
-              requestSeek(atMs)
-            }}
+            onActivate={activateComment}
           />
         </section>
       </div>
@@ -169,20 +219,24 @@ function PlaybackPane({
   currentTimeMs,
   selection,
   seekRequest,
+  commentPins,
   onTimeChange,
   onSelectionChange,
   onSeek,
   onCommentSelection,
+  onCommentActivate,
 }: {
   call: CallDetail
   timeZone: string | null | undefined
   currentTimeMs: number
   selection: TimedTranscriptSelection | null
   seekRequest: { atMs: number; sequence: number } | null
+  commentPins: Array<{ id: string; time: number }>
   onTimeChange: (atMs: number) => void
   onSelectionChange: (selection: TimedTranscriptSelection | null) => void
   onSeek: (atMs: number) => void
   onCommentSelection: (draft: CallCommentDraftAnchor) => void
+  onCommentActivate: (commentId: string, atMs: number) => void
 }) {
   const [searchTicks, setSearchTicks] = useState<Array<{ id: string; time: number }>>([])
   const review = call.review
@@ -206,7 +260,7 @@ function PlaybackPane({
   const selectionRange = selection ? { start: selection.startMs / 1_000, end: selection.endMs / 1_000 } : null
   return <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
     <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">Playback</h2></div>
-    <section aria-labelledby="recording-title" className="border border-border bg-surface p-3"><h3 id="recording-title" className="text-sm font-semibold">Recording</h3>{source ? <div className="mt-3 flex flex-col gap-3"><AudioPlayer source={source} recordingState={review?.recording.state ?? 'ready'} callLabel={call.toE164} segments={segments} speakers={ribbonSpeakers} selectionRange={selectionRange} searchTicks={searchTicks} seekRequest={seekRequest} onTimeChange={handleTimeChange} /><div><Button asChild variant="secondary" size="sm"><a href={source.url} download><Download size={16} aria-hidden />Download</a></Button></div></div> : <p className="mt-3 text-sm text-text-muted">{recordingMessage(call)}</p>}</section>
+    <section aria-labelledby="recording-title" className="border border-border bg-surface p-3"><h3 id="recording-title" className="text-sm font-semibold">Recording</h3>{source ? <div className="mt-3 flex flex-col gap-3"><AudioPlayer source={source} recordingState={review?.recording.state ?? 'ready'} callLabel={call.toE164} segments={segments} speakers={ribbonSpeakers} selectionRange={selectionRange} searchTicks={searchTicks} commentPins={commentPins} seekRequest={seekRequest} onCommentActivate={onCommentActivate} onTimeChange={handleTimeChange} /><div><Button asChild variant="secondary" size="sm"><a href={source.url} download><Download size={16} aria-hidden />Download</a></Button></div></div> : <p className="mt-3 text-sm text-text-muted">{recordingMessage(call)}</p>}</section>
     <CallFacts call={call} timeZone={timeZone} />
     <section aria-labelledby="transcript-title" className="flex min-h-64 flex-1 flex-col border border-border p-3">
       <div className="flex items-center justify-between gap-2"><h3 id="transcript-title" className="text-sm font-semibold">Transcript</h3>{transcript?.trim() && <CopyTranscriptButton text={transcript} />}</div>
@@ -232,7 +286,7 @@ function PlaybackPane({
           </Button>
         </div>
       )}
-      <div className="mt-3 flex min-h-0 flex-1 flex-col">{segments.length > 0 ? <TimedTranscript segments={segments} speakerLabels={speakerLabelRecord} currentTimeMs={currentTimeMs} onSeek={source ? onSeek : undefined} onSearchTicksChange={setSearchTicks} onSelectionChange={onSelectionChange} /> : transcript?.trim() ? <p className="text-sm whitespace-pre-wrap">{transcript}</p> : <p className="text-sm text-text-muted">{transcriptMessage(call)}</p>}</div>
+      <div className="mt-3 flex min-h-0 flex-1 flex-col">{segments.length > 0 ? <TimedTranscript segments={segments} speakerLabels={speakerLabelRecord} currentTimeMs={currentTimeMs} scrollRequest={seekRequest} onSeek={source ? onSeek : undefined} onSearchTicksChange={setSearchTicks} onSelectionChange={onSelectionChange} /> : transcript?.trim() ? <p className="text-sm whitespace-pre-wrap">{transcript}</p> : <p className="text-sm text-text-muted">{transcriptMessage(call)}</p>}</div>
     </section>
   </div>
 }

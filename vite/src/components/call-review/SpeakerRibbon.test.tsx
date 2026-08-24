@@ -60,6 +60,19 @@ describe('SpeakerRibbon', () => {
     expect(slider).toHaveAttribute('aria-valuenow', '3')
   })
 
+  it('activates a comment pin once without also seeking through the ribbon surface', () => {
+    const onSeek = vi.fn()
+    const onCommentActivate = vi.fn()
+    renderRibbon({ onSeek, onCommentActivate })
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Open comment at 00:07' }), { pointerId: 1 })
+    fireEvent.click(screen.getByRole('button', { name: 'Open comment at 00:07' }))
+
+    expect(onCommentActivate).toHaveBeenCalledWith('comment-1', 7)
+    expect(onCommentActivate).toHaveBeenCalledTimes(1)
+    expect(onSeek).not.toHaveBeenCalled()
+  })
+
   it('keeps the seek surface honest when duration is unavailable', () => {
     renderRibbon({ duration: 0, currentTime: 0, segments: [] })
 

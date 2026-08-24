@@ -195,7 +195,14 @@ router.get(
       recipientUserId: authReq.user!.id,
       ...(read === undefined ? {} : { readAt: read ? { not: null } : null }),
       ...(type || objectType
-        ? { notificationObject: { ...(type ? { verb: type } : {}), ...(objectType ? { objectType } : {}) } }
+        ? {
+            notificationObject: {
+              ...(type ? { verb: type } : {}),
+              ...(objectType
+                ? { objectType: objectType === 'call' ? { in: ['call', 'call_comment'] } : objectType }
+                : {}),
+            },
+          }
         : {}),
       ...(view === 'archived'
         ? { archivedAt: { not: null } }
@@ -234,6 +241,27 @@ router.get(
     const accessibleCallIds = new Set(
       (await prisma.call.findMany({ where: { orgId, id: { in: callIds } }, select: { id: true } })).map((call) => call.id),
     )
+    const callCommentIds = notifications
+      .filter((notification) => notification.notificationObject.objectType === 'call_comment')
+      .map((notification) => notification.notificationObject.objectId)
+    const callCommentTargetById = new Map(
+      (await prisma.callComment.findMany({
+        where: { orgId, id: { in: callCommentIds }, deletedAt: null },
+        select: {
+          id: true,
+          callId: true,
+          parentId: true,
+          atMs: true,
+          parent: { select: { id: true, atMs: true } },
+        },
+      })).flatMap((comment) => {
+        const rootId = comment.parentId ? comment.parent?.id : comment.id
+        const atMs = comment.parentId ? comment.parent?.atMs : comment.atMs
+        return rootId && atMs !== null && atMs !== undefined
+          ? [[comment.id, { callId: comment.callId, rootId }] as const]
+          : []
+      }),
+    )
     const noteIds = notifications
       .filter((notification) => notification.notificationObject.objectType === 'note')
       .map((notification) => notification.notificationObject.objectId)
@@ -258,12 +286,16 @@ router.get(
         }
         const snapshot = snapshotFields(object.sourceSnapshot)
         const noteTarget = noteTargetById.get(object.objectId)
+        const callCommentTarget = callCommentTargetById.get(object.objectId)
         const available =
           (object.objectType === 'call' && accessibleCallIds.has(object.objectId)) ||
+          (object.objectType === 'call_comment' && !!callCommentTarget) ||
           (object.objectType === 'note' && !!noteTarget)
         const route =
           object.objectType === 'call'
             ? `/orgs/${orgId}/calls/${object.objectId}`
+            : object.objectType === 'call_comment' && callCommentTarget
+              ? `/orgs/${orgId}/calls/${callCommentTarget.callId}?mode=comments&commentId=${encodeURIComponent(callCommentTarget.rootId)}`
             : object.objectType === 'note' && noteTarget
               ? `/orgs/${orgId}/records/${encodeURIComponent(noteTarget.toObject)}?recordId=${encodeURIComponent(noteTarget.toId)}`
               : undefined
@@ -278,7 +310,7 @@ router.get(
           summary: bundleSummary(objects, object),
           source: {
             status: available ? 'available' : 'unavailable',
-            type: object.objectType,
+            type: object.objectType === 'call_comment' ? 'call' : object.objectType,
             title: snapshot.title,
             preview: snapshot.preview,
             // A stored object ID is not a navigable target. Emit the route only

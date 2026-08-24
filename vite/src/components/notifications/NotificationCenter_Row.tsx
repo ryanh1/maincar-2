@@ -33,6 +33,7 @@ export function NotificationRow({
   onFocus,
   onSelect,
   onAction,
+  onOpenSource,
 }: {
   notification: Notification
   view: NotificationView
@@ -43,6 +44,7 @@ export function NotificationRow({
   onFocus: () => void
   onSelect: (checked: boolean) => void
   onAction: (action: NotificationAction, snoozeDurationMs?: SnoozeDuration) => void
+  onOpenSource: () => void
 }) {
   const sourcePath = sourcePathFor(notification)
   const sourceLabel = sourceLabelFor(notification.source.type)
@@ -66,7 +68,7 @@ export function NotificationRow({
           <p className="min-w-0 flex-1 text-sm">{notification.summary}</p>
           {!notification.readAt && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
         </div>
-        {sourcePath && <Link to={sourcePath} className="mt-1 inline-block text-xs font-medium text-primary underline-offset-4 hover:underline">Open {sourceLabel}</Link>}
+        {sourcePath && <Link to={sourcePath} className="mt-1 inline-block text-xs font-medium text-primary underline-offset-4 hover:underline" onClick={onOpenSource}>Open {sourceLabel}</Link>}
         {notification.source.preview && <p className="mt-1 line-clamp-2 text-sm text-text-muted">{notification.source.preview}</p>}
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted">
           <span className="tabular-nums">{formatDateTime(notification.createdAt, timeZone)}</span>

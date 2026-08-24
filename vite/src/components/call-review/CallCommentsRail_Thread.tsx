@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CallCommentComposer } from '@/components/call-review/CallCommentComposer'
 import { CallCommentsRail_Comment } from '@/components/call-review/CallCommentsRail_Comment'
 import { formatCallCommentTimestamp } from '@/components/call-review/callCommentTimestamp'
@@ -52,11 +52,17 @@ export function CallCommentsRail_Thread({
   const [replying, setReplying] = useState(false)
   const [editing, setEditing] = useState<CallComment | null>(null)
   const [deleting, setDeleting] = useState<CallComment | null>(null)
+  const threadRef = useRef<HTMLElement>(null)
   const error = reply.error ?? update.error ?? remove.error ?? reaction.error
   const atMs = thread.atMs ?? 0
 
+  useEffect(() => {
+    if (isActive) threadRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [isActive])
+
   return (
     <article
+      ref={threadRef}
       data-comment-id={thread.id}
       data-active={isActive ? 'true' : undefined}
       data-nearest={isNearest ? 'true' : undefined}

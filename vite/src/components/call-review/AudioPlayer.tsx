@@ -26,6 +26,7 @@ export interface AudioPlayerProps {
   searchTicks?: readonly SpeakerRibbonSearchTick[]
   commentPins?: readonly SpeakerRibbonCommentPin[]
   seekRequest?: { atMs: number; sequence: number } | null
+  onCommentActivate?: (commentId: string, time: number) => void
   onSeek?: (time: number) => void
   onTimeChange?: (time: number) => void
 }
@@ -52,7 +53,7 @@ function readBufferedRanges(audio: HTMLAudioElement): SpeakerRibbonTimeRange[] {
 }
 
 /** Compact audio-only playback controls; the source contract intentionally leaves room for later video. */
-export function AudioPlayer({ source, recordingState, callLabel, segments = [], speakers = [], selectionRange = null, searchTicks = [], commentPins = [], seekRequest = null, onSeek, onTimeChange }: AudioPlayerProps) {
+export function AudioPlayer({ source, recordingState, callLabel, segments = [], speakers = [], selectionRange = null, searchTicks = [], commentPins = [], seekRequest = null, onCommentActivate, onSeek, onTimeChange }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -251,6 +252,7 @@ export function AudioPlayer({ source, recordingState, callLabel, segments = [], 
         selectionRange={selectionRange}
         searchTicks={searchTicks}
         commentPins={commentPins}
+        onCommentActivate={onCommentActivate}
         onSeek={setTime}
       />
     </div>

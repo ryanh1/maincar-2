@@ -20,6 +20,7 @@ export interface TimedTranscriptProps {
   segments: readonly TimedTranscriptSegment[]
   speakerLabels: Readonly<Record<string, string>>
   currentTimeMs: number
+  scrollRequest?: { atMs: number; sequence: number } | null
   onSeek?: (atMs: number) => void
   onSearchTicksChange: (ticks: SpeakerRibbonSearchTick[]) => void
   onSelectionChange: (selection: TimedTranscriptSelection | null) => void
@@ -28,7 +29,7 @@ export interface TimedTranscriptProps {
 const MANUAL_SCROLL_KEYS = new Set(['ArrowDown', 'ArrowUp', 'End', 'Home', 'PageDown', 'PageUp', ' '])
 
 /** Searchable, selectable transcript synchronized to one durable millisecond timeline. */
-export function TimedTranscript({ segments, speakerLabels, currentTimeMs, onSeek, onSearchTicksChange, onSelectionChange }: TimedTranscriptProps) {
+export function TimedTranscript({ segments, speakerLabels, currentTimeMs, scrollRequest = null, onSeek, onSearchTicksChange, onSelectionChange }: TimedTranscriptProps) {
   const [query, setQuery] = useState('')
   const [activeMatchIndex, setActiveMatchIndex] = useState(0)
   const [following, setFollowing] = useState(true)
@@ -50,6 +51,26 @@ export function TimedTranscript({ segments, speakerLabels, currentTimeMs, onSeek
   useEffect(() => {
     if (following) scrollToCurrent()
   }, [following, scrollToCurrent])
+
+  useEffect(() => {
+    if (!scrollRequest || segments.length === 0) return
+    const targetSegment = segments.find(
+      (segment) => scrollRequest.atMs >= segment.startMs && scrollRequest.atMs < segment.endMs,
+    ) ?? segments.reduce((nearest, segment) => {
+      const nearestDistance = Math.min(
+        Math.abs(scrollRequest.atMs - nearest.startMs),
+        Math.abs(scrollRequest.atMs - nearest.endMs),
+      )
+      const segmentDistance = Math.min(
+        Math.abs(scrollRequest.atMs - segment.startMs),
+        Math.abs(scrollRequest.atMs - segment.endMs),
+      )
+      return segmentDistance < nearestDistance ? segment : nearest
+    })
+    const target = [...(contentRef.current?.querySelectorAll<HTMLElement>('[data-transcript-segment-id]') ?? [])]
+      .find((element) => element.dataset.transcriptSegmentId === targetSegment.id)
+    target?.scrollIntoView({ block: 'center' })
+  }, [scrollRequest, segments])
 
   useEffect(() => {
     onSearchTicksChange(matches.map((match) => ({ id: match.id, time: match.startMs / 1_000 })))
