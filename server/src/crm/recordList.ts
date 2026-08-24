@@ -138,6 +138,8 @@ export interface SortSpec {
 
 export interface ListQuery {
   filter?: FilterNode | null
+  /** Ephemeral full-set substring search. Callers must not persist this in saved view state. */
+  search?: string
   /** A single sort remains supported for existing callers; new callers send priority-ordered specs. */
   sort?: SortSpec | SortSpec[] | null
   /** One or two field slugs whose full filtered result set is returned as grouped section descriptors. */
@@ -166,6 +168,8 @@ export interface ListResult {
   rows: Record<string, unknown>[]
   nextCursor: string | null
   totalCount: number
+  /** Count after structural filters but before ephemeral search. */
+  totalCountBeforeSearch: number
   /** Present only for a grouped request; aggregates are over the complete filtered set, not this page. */
   groups?: GroupDescriptor[]
 }
@@ -382,6 +386,21 @@ function compileFilterNode(node: FilterNode, ctx: FieldContext): Prisma.Sql {
     throw new ListQueryError(`Operator "${node.operator}" is not supported on field "${node.field}".`)
   }
   return compileCondition(field, node.operator, node.value)
+}
+
+function compileSearch(search: string, attributes: AttributeDef[], ctx: FieldContext): Prisma.Sql {
+  const pattern = `%${escapeLike(search)}%`
+  const searchableFields = attributes.flatMap((attribute) => {
+    if (attribute.isMulti || attribute.storage === 'list' || UNFILTERABLE_TYPES.has(attribute.type)) return []
+    const field = resolveField(ctx, attribute.slug)
+    return field ? [field] : []
+  })
+
+  if (searchableFields.length === 0) return Prisma.sql`FALSE`
+  return Prisma.sql`(${Prisma.join(
+    searchableFields.map((field) => Prisma.sql`CAST(${field.sqlIdent} AS TEXT) ILIKE ${pattern}`),
+    ' OR ',
+  )})`
 }
 
 function clampLimit(limit: number | undefined): number {
@@ -646,6 +665,10 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
   })
 
   const limit = clampLimit(query.limit)
+  const search = query.search?.trim()
+  if (query.search !== undefined && (!search || search.length > 200)) {
+    throw new ListQueryError('Search must be between 1 and 200 characters.')
+  }
 
   const whereParts: Prisma.Sql[] = [Prisma.sql`"orgId" = ${orgId}`, Prisma.sql`"deletedAt" IS NULL`]
   if (!query.includeArchived) whereParts.push(Prisma.sql`"isArchived" = FALSE`)
@@ -668,6 +691,8 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
     }
   }
 
+  const countBeforeSearchWhereSql = Prisma.join(whereParts, ' AND ')
+  if (search) whereParts.push(compileSearch(search, attributes, ctx))
   const countWhereSql = Prisma.join(whereParts, ' AND ')
 
   if (query.cursor) {
@@ -694,15 +719,23 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
     FROM ${fromTable}
     WHERE ${countWhereSql}
   `
+  const countBeforeSearchQuery = search
+    ? Prisma.sql`
+        SELECT COUNT(*)::text AS count
+        FROM ${fromTable}
+        WHERE ${countBeforeSearchWhereSql}
+      `
+    : null
 
   const groupQuery = groupFields.length
     ? buildGroupedSectionsQuery(fromTable, countWhereSql, groupFields, numericAggregateFields)
     : null
 
-  const [rawRows, countRows, groupRows] = await Promise.all([
+  const [rawRows, countRows, groupRows, countBeforeSearchRows] = await Promise.all([
     prisma.$queryRaw<Record<string, unknown>[]>(rowsQuery),
     prisma.$queryRaw<{ count: string }[]>(countQuery),
     groupQuery ? prisma.$queryRaw<Record<string, unknown>[]>(groupQuery) : Promise.resolve(null),
+    countBeforeSearchQuery ? prisma.$queryRaw<{ count: string }[]>(countBeforeSearchQuery) : Promise.resolve(null),
   ])
 
   const hasMore = rawRows.length > limit
@@ -712,10 +745,12 @@ export async function listRecords(prisma: PrismaClient, args: ListRecordsArgs): 
     ? encodeCursor(sortFields.map((_, index) => lastRow[`__sortKey${index}`]), String(lastRow.id))
     : null
 
+  const totalCount = Number(countRows[0]?.count ?? 0)
   return {
     rows: pageRows.map((row) => mapRow(mode, attributes, jsonColumnName, row)),
     nextCursor,
-    totalCount: Number(countRows[0]?.count ?? 0),
+    totalCount,
+    totalCountBeforeSearch: Number(countBeforeSearchRows?.[0]?.count ?? totalCount),
     ...(groupRows ? { groups: mapGroupRows(groupRows, numericAggregateAttributes.map((attribute) => attribute.slug)) } : {}),
   }
 }

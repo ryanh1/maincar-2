@@ -193,6 +193,47 @@ describe('POST /api/orgs/:orgId/objects/:id/list (integration, real Postgres)', 
     ])
   }, 60_000)
 
+  it('searches the full filtered result set before paging and reports the count before search', async () => {
+    const { orgId, adminFirebaseUid } = await seedOrgWithAdmin(prisma)
+    const objectId = await seedWidgetObject(orgId)
+
+    await prisma.record.createMany({
+      data: Array.from({ length: 60 }, (_, rank) => ({
+        orgId,
+        objectId,
+        valuesJson: {
+          name: rank === 59 ? 'Needle beyond the first window' : `Widget ${rank}`,
+          rank,
+          status: rank < 30 ? 'active' : 'done',
+        } as unknown as Prisma.InputJsonValue,
+      })),
+    })
+
+    const res = await request(app)
+      .post(`/api/orgs/${orgId}/objects/${objectId}/list`)
+      .set('Authorization', as(adminFirebaseUid))
+      .send({ search: '  NEEDLE  ', sort: { field: 'rank', direction: 'asc' }, limit: 50 })
+
+    expect(res.status).toBe(200)
+    expect(res.body.rows).toEqual([expect.objectContaining({ rank: 59, name: 'Needle beyond the first window' })])
+    expect(res.body.totalCount).toBe(1)
+    expect(res.body.totalCountBeforeSearch).toBe(60)
+  })
+
+  it('rejects blank or oversized record searches at the request boundary', async () => {
+    const { orgId, adminFirebaseUid } = await seedOrgWithAdmin(prisma)
+    const objectId = await seedWidgetObject(orgId)
+
+    for (const search of ['   ', 'x'.repeat(201)]) {
+      const res = await request(app)
+        .post(`/api/orgs/${orgId}/objects/${objectId}/list`)
+        .set('Authorization', as(adminFirebaseUid))
+        .send({ search })
+
+      expect(res.status).toBe(400)
+    }
+  })
+
   it('returns counted related rails without changing the root record query', async () => {
     const { orgId, adminFirebaseUid } = await seedOrgWithAdmin(prisma)
     const objects = await Promise.all([

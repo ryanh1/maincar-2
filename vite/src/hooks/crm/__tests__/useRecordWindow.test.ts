@@ -27,6 +27,7 @@ describe('useRecordWindow', () => {
       rows: [{ id: 'r1' }, { id: 'r2' }],
       nextCursor: null,
       totalCount: 2,
+      totalCountBeforeSearch: 8,
     })
 
     const { result } = renderRecordWindow('org-1', 'obj-1')
@@ -34,6 +35,7 @@ describe('useRecordWindow', () => {
     await waitFor(() => expect(result.current.isPending).toBe(false))
     expect(result.current.rows).toEqual([{ id: 'r1' }, { id: 'r2' }])
     expect(result.current.totalCount).toBe(2)
+    expect(result.current.totalCountBeforeSearch).toBe(8)
     expect(result.current.hasNextPage).toBe(false)
   })
 

@@ -230,6 +230,7 @@ export interface ListRecordsResponse {
   rows: RecordRow[]
   nextCursor: string | null
   totalCount: number
+  totalCountBeforeSearch: number
 }
 
 export type RecordBulkSelection =

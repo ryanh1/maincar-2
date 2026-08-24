@@ -1,8 +1,9 @@
 import { type ReactNode, useState } from 'react'
-import { ChevronDown, Columns3Cog, LayoutList, Search, SlidersHorizontal, Table2, UsersRound } from 'lucide-react'
+import { ChevronDown, Columns3Cog, LayoutList, Search, SlidersHorizontal, Table2, UsersRound, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { IconButton } from '@/components/ui/icon-button'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -34,7 +35,10 @@ interface GridViewToolbarProps {
   selectedColumnIds?: string[]
   layout?: 'grid' | 'kanban'
   onLayoutChange?: (layout: 'grid' | 'kanban') => void
-  onSearch?: () => void
+  searchValue?: string
+  searchPending?: boolean
+  onSearchChange?: (value: string) => void
+  onFindInGrid?: () => void
   onFormat?: (anchor: GridMenuAnchor) => void
   trailing?: ReactNode
 }
@@ -114,7 +118,7 @@ function TeamScopeChip({ orgId, config }: Pick<TeamScopeControlProps, 'orgId' | 
 }
 
 /** Stable saved-view controls above task-oriented grid commands. */
-export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange, onSearch, onFormat, trailing }: GridViewToolbarProps) {
+export function GridViewToolbar({ leading, orgId, attributes, config, onConfigChange, teamScopeSupported = false, selectedColumnIds = [], layout = 'grid', onLayoutChange, searchValue = '', searchPending = false, onSearchChange, onFindInGrid, onFormat, trailing }: GridViewToolbarProps) {
   const [columnGroupName, setColumnGroupName] = useState('')
   function setColumnVisible(attributeId: string, visible: boolean) {
     onConfigChange((current) => ({
@@ -169,10 +173,35 @@ export function GridViewToolbar({ leading, orgId, attributes, config, onConfigCh
       </div>
 
       <div role="region" aria-label="Command bar" className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto whitespace-nowrap border-b border-border bg-surface px-3">
-      {onSearch && (
-        <Button type="button" variant="secondary" size="sm" onClick={onSearch}>
+      {onSearchChange && (
+        <div className="relative w-56 shrink-0">
+          <Search className={`pointer-events-none absolute top-1/2 left-2 z-10 size-4 -translate-y-1/2 ${searchValue ? 'text-primary' : 'text-text-muted'}`} />
+          <Input
+            type="search"
+            aria-label="Search all records"
+            aria-busy={searchPending}
+            maxLength={200}
+            placeholder="Search all records"
+            value={searchValue}
+            onChange={(event) => onSearchChange(event.target.value)}
+            className={`h-8 px-8 text-sm ${searchValue ? 'border-primary bg-bg' : 'bg-bg'}`}
+          />
+          {searchValue && (
+            <IconButton
+              type="button"
+              tooltip="Clear the record search"
+              className="absolute top-0 right-0 h-8 w-8"
+              onClick={() => onSearchChange('')}
+            >
+              <X size={16} />
+            </IconButton>
+          )}
+        </div>
+      )}
+      {onFindInGrid && (
+        <Button type="button" variant="secondary" size="sm" onClick={onFindInGrid}>
           <Search size={16} />
-          Search
+          Find in grid
         </Button>
       )}
       {!isKanban && (

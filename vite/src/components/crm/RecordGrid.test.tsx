@@ -152,6 +152,73 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('RecordGrid', () => {
+  it('debounces server search without saving it as view config, then clears it immediately', async () => {
+    vi.useFakeTimers()
+    const onViewConfigChange = vi.fn()
+    useRecordWindow.mockReturnValue({
+      rows: [{ id: 'r1', firstName: 'Ada' }],
+      totalCount: 2,
+      totalCountBeforeSearch: 42,
+      isPending: false,
+      isFetching: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+
+    renderWithProviders(
+      <RecordGrid
+        orgId="org-1"
+        object={TEST_OBJECT}
+        attributes={ATTRIBUTES}
+        viewConfig={createViewConfig(ATTRIBUTES)}
+        onViewConfigChange={onViewConfigChange}
+      />,
+    )
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search all records' }), { target: { value: 'Ada' } })
+    expect(useRecordWindow).toHaveBeenLastCalledWith('org-1', 'obj-1', expect.not.objectContaining({ search: 'Ada' }))
+
+    act(() => vi.advanceTimersByTime(300))
+
+    expect(useRecordWindow).toHaveBeenLastCalledWith('org-1', 'obj-1', expect.objectContaining({ search: 'Ada' }))
+    expect(screen.getByText('2 of 42')).toBeInTheDocument()
+    expect(onViewConfigChange).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the record search' }))
+    expect(screen.getByRole('searchbox', { name: 'Search all records' })).toHaveValue('')
+    expect(useRecordWindow).toHaveBeenLastCalledWith('org-1', 'obj-1', expect.not.objectContaining({ search: expect.anything() }))
+  })
+
+  it('uses the filtered-empty state for a server search with no matches', () => {
+    vi.useFakeTimers()
+    useRecordWindow.mockImplementation((_orgId, _objectId, params: { search?: string }) => ({
+      rows: params.search ? [] : [{ id: 'r1', firstName: 'Ada' }],
+      totalCount: params.search ? 0 : 1,
+      totalCountBeforeSearch: 1,
+      isPending: false,
+      isFetching: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    }))
+
+    renderWithProviders(
+      <RecordGrid orgId="org-1" object={TEST_OBJECT} attributes={ATTRIBUTES} viewConfig={createViewConfig(ATTRIBUTES)} onViewConfigChange={vi.fn()} />,
+    )
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search all records' }), { target: { value: 'missing' } })
+    act(() => vi.advanceTimersByTime(300))
+
+    expect(screen.getByText('No records match this search.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+    expect(screen.queryByText('No records match this search.')).not.toBeInTheDocument()
+  })
+
   it('renders only loaded rows while another page is available', () => {
     useRecordWindow.mockReturnValue({
       rows: [{ id: 'r1', firstName: 'Ada' }, { id: 'r2', firstName: 'Grace' }],
@@ -1398,7 +1465,7 @@ describe('RecordGrid', () => {
     expect(recordCount.parentElement).toHaveClass('ml-auto')
     expect(screen.queryByRole('button', { name: '100%' })).not.toBeInTheDocument()
 
-    await user.click(within(commandBar).getByRole('button', { name: 'Search' }))
+    await user.click(within(commandBar).getByRole('button', { name: 'Find in grid' }))
     expect(screen.getByRole('searchbox', { name: 'Find in grid' })).toHaveFocus()
 
     await user.click(within(commandBar).getByRole('button', { name: 'View options' }))
