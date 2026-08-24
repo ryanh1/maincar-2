@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
-const { prismaMock, verifyTokenMock, googleCalendarMock, microsoftCalendarMock, syncCalendarSourceMock, persistCalendarEventSnapshotMock, saveCalendarEventMetadataMock, verifyLinkTargetsMock } = vi.hoisted(() => ({
+const { prismaMock, verifyTokenMock, getHealthyPrimaryMailboxMock, googleCalendarMock, microsoftCalendarMock, syncCalendarInventoryMock, syncCalendarSourceMock, persistCalendarEventSnapshotMock, saveCalendarEventMetadataMock, verifyLinkTargetsMock } = vi.hoisted(() => ({
   prismaMock: {
     user: { findUnique: vi.fn() },
     membership: { findFirst: vi.fn() },
@@ -9,8 +9,10 @@ const { prismaMock, verifyTokenMock, googleCalendarMock, microsoftCalendarMock, 
     calendarEvent: { findMany: vi.fn(), count: vi.fn(), findFirst: vi.fn(), updateMany: vi.fn() },
   },
   verifyTokenMock: vi.fn(),
+  getHealthyPrimaryMailboxMock: vi.fn(),
   googleCalendarMock: vi.fn(),
   microsoftCalendarMock: vi.fn(),
+  syncCalendarInventoryMock: vi.fn(),
   syncCalendarSourceMock: vi.fn(),
   persistCalendarEventSnapshotMock: vi.fn(),
   saveCalendarEventMetadataMock: vi.fn(),
@@ -25,7 +27,11 @@ vi.mock('../../../dependencies/firebaseAdmin.js', () => ({
 }))
 vi.mock('../../lib/calendar/googleCalendar.js', () => ({ googleCalendar: googleCalendarMock }))
 vi.mock('../../lib/calendar/microsoftCalendar.js', () => ({ microsoftCalendar: microsoftCalendarMock }))
-vi.mock('../../lib/calendar/calendarSync.js', () => ({ syncCalendarSource: syncCalendarSourceMock, persistCalendarEventSnapshot: persistCalendarEventSnapshotMock }))
+vi.mock('../../lib/calendar/calendarSync.js', () => ({ syncCalendarInventory: syncCalendarInventoryMock, syncCalendarSource: syncCalendarSourceMock, persistCalendarEventSnapshot: persistCalendarEventSnapshotMock }))
+vi.mock('../../lib/mail/mailAccounts.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../lib/mail/mailAccounts.js')>(),
+  getHealthyPrimaryMailbox: getHealthyPrimaryMailboxMock,
+}))
 vi.mock('../../lib/calendar/calendarEventMetadata.js', () => ({ saveCalendarEventMetadata: saveCalendarEventMetadataMock }))
 vi.mock('../../crm/workLinks.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../crm/workLinks.js')>(),
@@ -87,6 +93,11 @@ function authAs(member = true) {
 beforeEach(() => {
   vi.clearAllMocks()
   authAs()
+  getHealthyPrimaryMailboxMock.mockResolvedValue({
+    id: 'mailbox-1', orgId: ORG_ID, userId: 'user-a', connectionId: 'connection-1',
+    provider: 'google', emailAddress: 'rep@example.test',
+  })
+  syncCalendarInventoryMock.mockResolvedValue([])
   prismaMock.calendarSource.findMany.mockResolvedValue([])
   prismaMock.calendarSource.findFirst.mockResolvedValue(null)
   prismaMock.calendarSource.updateMany.mockResolvedValue({ count: 0 })
@@ -109,10 +120,36 @@ beforeEach(() => {
 
 describe('Calendar workspace routes', () => {
   it('makes Calendar unavailability explicit instead of returning an empty source list', async () => {
+    const { NoHealthyPrimaryMailboxError } = await import('../../lib/mail/mailAccounts.js')
+    getHealthyPrimaryMailboxMock.mockRejectedValue(new NoHealthyPrimaryMailboxError())
+
     const res = await request(app).get(`${URL}/sources`).set('Authorization', AUTH)
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ calendar: { state: 'not-connected' }, sources: [] })
+    expect(syncCalendarInventoryMock).not.toHaveBeenCalled()
+  })
+
+  it('initializes Calendar inventory from the current healthy primary account', async () => {
+    prismaMock.calendarSource.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([source({ connection: { emailAddress: 'rep@example.test' } })])
+
+    const res = await request(app).get(`${URL}/sources`).set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(syncCalendarInventoryMock).toHaveBeenCalledWith(
+      { orgId: ORG_ID, userId: 'user-a', connectionId: 'connection-1' },
+      expect.objectContaining({ capabilities: expect.any(Object) }),
+    )
+    expect(syncCalendarSourceMock).toHaveBeenCalledWith(
+      { orgId: ORG_ID, userId: 'user-a', connectionId: 'connection-1', sourceId: 'source-1' },
+      expect.objectContaining({ capabilities: expect.any(Object) }),
+    )
+    expect(prismaMock.calendarSource.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { orgId: ORG_ID, userId: 'user-a', connectionId: 'connection-1' },
+    }))
+    expect(res.body.calendar.state).toBe('connected')
   })
 
   it('reports scheduling capabilities and supported recurrence scopes for each source', async () => {
@@ -141,7 +178,7 @@ describe('Calendar workspace routes', () => {
     expect(res.body.events).toHaveLength(1)
     expect(res.body.events[0]).toMatchObject({ id: 'event-1', sourceId: 'source-1', title: 'Planning' })
     expect(prismaMock.calendarEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ orgId: ORG_ID, userId: 'user-a', sourceId: { in: ['source-1'] } }),
+      where: expect.objectContaining({ orgId: ORG_ID, userId: 'user-a', connectionId: 'connection-1', sourceId: { in: ['source-1'] } }),
     }))
   })
 
@@ -153,7 +190,7 @@ describe('Calendar workspace routes', () => {
 
     expect(res.status).toBe(404)
     expect(prismaMock.calendarSource.updateMany).toHaveBeenCalledWith({
-      where: { id: 'foreign-source', orgId: ORG_ID, userId: 'user-a' }, data: { isSelected: true },
+      where: { id: 'foreign-source', orgId: ORG_ID, userId: 'user-a', connectionId: 'connection-1' }, data: { isSelected: true },
     })
   })
 
@@ -217,6 +254,27 @@ describe('Calendar workspace routes', () => {
     expect(res.body.event).toMatchObject({ availability: 'busy', privacy: 'default', links: [{ object: 'company', id: 'company-1' }] })
   })
 
+  it('prevents a duplicate retry when the provider saved a create but the projection did not', async () => {
+    const createEvent = vi.fn().mockResolvedValue(providerEvent())
+    googleCalendarMock.mockReturnValue({ updateEvent: vi.fn(), createEvent, deleteEvent: vi.fn(), respondToEvent: vi.fn() })
+    prismaMock.calendarSource.findFirst.mockResolvedValue(source({ connection: { emailAddress: 'rep@example.test' } }))
+    persistCalendarEventSnapshotMock.mockResolvedValue(null)
+
+    const res = await request(app).post(`${URL}/events`).set('Authorization', AUTH).send({
+      sourceId: 'source-1',
+      title: 'Planning',
+      timeZone: 'America/New_York',
+      time: { kind: 'timed', startsAt: NOW.toISOString(), endsAt: '2026-08-23T13:00:00.000Z' },
+    })
+
+    expect(res.status).toBe(502)
+    expect(res.body).toEqual({
+      error: 'Google saved this event, but Maincar could not refresh it. Refresh Calendar before trying again.',
+      code: 'calendar_projection_stale',
+    })
+    expect(saveCalendarEventMetadataMock).not.toHaveBeenCalled()
+  })
+
   it('returns actionable provider failure feedback without persisting a failed update', async () => {
     const { CalendarApiError } = await import('../../lib/calendar/calendarErrors.js')
     googleCalendarMock.mockReturnValue({ updateEvent: vi.fn().mockRejectedValue(new CalendarApiError()), createEvent: vi.fn(), deleteEvent: vi.fn(), respondToEvent: vi.fn() })
@@ -263,7 +321,7 @@ describe('Calendar workspace routes', () => {
 
     expect(res.status).toBe(204)
     expect(prismaMock.calendarEvent.updateMany).toHaveBeenCalledWith({
-      where: { id: 'event-1', orgId: ORG_ID, userId: 'user-a' },
+      where: { id: 'event-1', orgId: ORG_ID, userId: 'user-a', connectionId: 'connection-1' },
       data: { status: 'cancelled', cancelledAt: expect.any(Date) },
     })
   })

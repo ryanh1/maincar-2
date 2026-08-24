@@ -1,5 +1,5 @@
 import { addDays, addMonths, endOfMonth, endOfWeek, format, isSameDay, isSameMonth, startOfDay, startOfMonth, startOfWeek, subDays, subMonths } from 'date-fns'
-import { CalendarDays, ChevronLeft, ChevronRight, GripHorizontal, Plus, Settings2 } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, GripHorizontal, Plus, RefreshCw, Settings2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -9,7 +9,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useCreateCalendarEvent, useDeleteCalendarEvent, useGetCalendarEvents, useGetCalendarSources, useRespondToCalendarEvent, useUpdateCalendarEvent, useUpdateCalendarSource } from '@/hooks/calendar'
+import { useCreateCalendarEvent, useDeleteCalendarEvent, useGetCalendarEvents, useGetCalendarSources, useRefreshCalendarSources, useRespondToCalendarEvent, useUpdateCalendarEvent, useUpdateCalendarSource } from '@/hooks/calendar'
 import type { CalendarAttendeeResponse, CalendarEvent, CalendarEventCreateInput, CalendarEventPatch, CalendarRecurrenceScope } from '@/lib/calendarTypes'
 import { ApiError } from '@/lib/api'
 import { formatDate, formatDateTime, formatTime, formatTimeZoneName, zonedDateTimeParts, zonedDateTimeToIso } from '@/lib/datetime'
@@ -24,15 +24,28 @@ const VIEWS: Array<{ id: CalendarView; label: string }> = [
   { id: 'day', label: 'Day' }, { id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }, { id: 'agenda', label: 'Agenda' },
 ]
 
-function visibleRange(date: Date, view: CalendarView): { startsAt: Date; endsAt: Date } {
+function dateAtStartOfDay(date: Date, timeZone: string | null | undefined): Date {
+  const value = zonedDateTimeToIso(date, '00:00', timeZone)
+  return value ? new Date(value) : startOfDay(date)
+}
+
+function visibleRange(date: Date, view: CalendarView, timeZone: string | null | undefined): { startsAt: Date; endsAt: Date } {
+  let startsOn: Date
+  let endsBefore: Date
   if (view === 'day') {
-    const startsAt = startOfDay(date)
-    return { startsAt, endsAt: addDays(startsAt, 1) }
+    startsOn = date
+    endsBefore = addDays(date, 1)
+  } else if (view === 'week') {
+    startsOn = startOfWeek(date, { weekStartsOn: 0 })
+    endsBefore = addDays(endOfWeek(date, { weekStartsOn: 0 }), 1)
+  } else if (view === 'month') {
+    startsOn = startOfWeek(startOfMonth(date), { weekStartsOn: 0 })
+    endsBefore = addDays(endOfWeek(endOfMonth(date), { weekStartsOn: 0 }), 1)
+  } else {
+    startsOn = date
+    endsBefore = addDays(date, 30)
   }
-  if (view === 'week') return { startsAt: startOfWeek(date, { weekStartsOn: 0 }), endsAt: addDays(endOfWeek(date, { weekStartsOn: 0 }), 1) }
-  if (view === 'month') return { startsAt: startOfWeek(startOfMonth(date), { weekStartsOn: 0 }), endsAt: addDays(endOfWeek(endOfMonth(date), { weekStartsOn: 0 }), 1) }
-  const startsAt = startOfDay(date)
-  return { startsAt, endsAt: addDays(startsAt, 30) }
+  return { startsAt: dateAtStartOfDay(startsOn, timeZone), endsAt: dateAtStartOfDay(endsBefore, timeZone) }
 }
 
 function rangeLabel(date: Date, view: CalendarView): string {
@@ -44,7 +57,23 @@ function rangeLabel(date: Date, view: CalendarView): string {
 }
 
 function eventDate(event: CalendarEvent, timeZone: string | null | undefined): Date | undefined {
+  if (event.kind === 'all-day') {
+    const [year, month, day] = event.startsAt.slice(0, 10).split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
   return zonedDateTimeParts(event.startsAt, timeZone).date
+}
+
+function eventAccessibleName(event: CalendarEvent, timeZone: string | null | undefined): string {
+  const title = event.title ?? 'Untitled event'
+  if (event.kind === 'all-day') return `${title}, All day, ${formatDate(event.startsAt.slice(0, 10), undefined)}`
+  return `${title}, ${formatDateTime(event.startsAt, event.timeZone ?? timeZone)}`
+}
+
+function calendarErrorCode(error: Error): string | undefined {
+  if (!(error instanceof ApiError) || !error.body || typeof error.body !== 'object') return error instanceof ApiError ? error.code : undefined
+  const code = (error.body as { code?: unknown }).code
+  return typeof code === 'string' ? code : error.code
 }
 
 function movedEventTime(event: CalendarEvent, day: Date, viewingTimeZone: string | null | undefined): CalendarEventPatch['time'] | null {
@@ -77,7 +106,7 @@ function EventCard({ event, timeZone, onOpen, onResize }: { event: CalendarEvent
       draggable
       onDragStart={(drag) => drag.dataTransfer.setData('application/x-maincar-calendar-event', event.id)}
     >
-      <button type="button" className="w-full px-2 py-1 text-left text-xs" onClick={() => onOpen(event)} aria-label={`${event.title ?? 'Untitled event'}, ${formatDateTime(event.startsAt, timeZone)}`}>
+      <button type="button" className="w-full px-2 py-1 text-left text-xs" onClick={() => onOpen(event)} aria-label={eventAccessibleName(event, timeZone)}>
         <p className="truncate font-medium text-text">{event.title ?? 'Untitled event'}</p>
         <p className="truncate text-text-muted">{event.kind === 'all-day' ? 'All day' : formatDateTime(event.startsAt, event.timeZone ?? timeZone)}</p>
       </button>
@@ -121,9 +150,10 @@ function MiniMonth({ date, onSelect }: { date: Date; onSelect: (date: Date) => v
 }
 
 function SourceRail() {
-  const { org } = useAuth()
+  const { org, user } = useAuth()
   const sources = useGetCalendarSources(org?.id)
   const updateSource = useUpdateCalendarSource()
+  const refreshSources = useRefreshCalendarSources()
   if (sources.isLoading) return <Skeleton className="h-32 w-full" />
   if (sources.isError) return <p className="text-sm text-danger">Could not load calendars. Refresh the page and try again.</p>
   return (
@@ -131,12 +161,24 @@ function SourceRail() {
       <div className="mb-2 flex items-center justify-between"><h2 id="calendar-sources-heading" className="text-sm font-semibold">Calendars</h2><Settings2 size={16} aria-hidden className="text-text-muted" /></div>
       <div className="flex flex-col gap-1">
         {(sources.data?.sources ?? []).map((source) => (
-          <Button key={source.id} type="button" variant={source.isPrimary || source.isSelected ? 'secondary' : 'ghost'} size="sm" className="justify-start" aria-pressed={source.isSelected} disabled={source.isPrimary || updateSource.isPending} onClick={() => org && updateSource.mutate({ orgId: org.id, sourceId: source.id, isSelected: !source.isSelected })}>
+          <Button key={source.id} type="button" variant={source.isPrimary || source.isSelected ? 'secondary' : 'ghost'} size="sm" className="justify-start" aria-pressed={source.isSelected} disabled={source.isPrimary || updateSource.isPending} onClick={() => org && updateSource.mutate({ orgId: org.id, sourceId: source.id, isSelected: !source.isSelected }, { onError: () => toast.error('Could not update visible calendars. Refresh Calendar and try again.') })}>
             <span className="truncate">{source.name}</span>{source.isPrimary && <span className="ml-auto text-xs text-text-muted">Primary</span>}
           </Button>
         ))}
       </div>
       <p className="mt-2 text-xs text-text-muted">Your primary calendar is always visible. Select another calendar to add it.</p>
+      <Button type="button" variant="secondary" size="sm" className="mt-3 w-full" disabled={!org || refreshSources.isPending} onClick={() => {
+        if (!org) return
+        const visibleSourceIds = (sources.data?.sources ?? []).filter((source) => source.isPrimary || source.isSelected).map((source) => source.id)
+        refreshSources.mutate({ orgId: org.id, sourceIds: visibleSourceIds }, {
+          onSuccess: (results) => toast.success(results.some((result) => result.recovered) ? 'Calendar recovered from stale provider sync state.' : 'Calendar refreshed.'),
+          onError: (error) => toast.error(calendarErrorCode(error) === 'calendar_auth_failed' ? 'Reconnect Calendar in Settings → Integrations.' : 'Could not refresh Calendar. Check the provider and try again.'),
+        })
+      }}><RefreshCw size={16} />{refreshSources.isPending ? 'Refreshing' : 'Refresh calendar'}</Button>
+      {(() => {
+        const lastSyncedAt = (sources.data?.sources ?? []).flatMap((source) => source.lastSyncedAt ? [source.lastSyncedAt] : []).sort().at(-1)
+        return lastSyncedAt ? <p className="mt-2 text-xs text-text-muted">Last refreshed {formatDateTime(lastSyncedAt, user?.timeZone)}</p> : null
+      })()}
     </section>
   )
 }
@@ -145,7 +187,7 @@ function CalendarGrid({ date, view, events, timeZone, onCreate, onOpen, onMove, 
   if (view === 'agenda') return <Agenda events={events} timeZone={timeZone} onOpen={onOpen} />
   const days = view === 'day' ? [date] : view === 'week' ? Array.from({ length: 7 }, (_, index) => addDays(startOfWeek(date, { weekStartsOn: 0 }), index)) : Array.from({ length: 42 }, (_, index) => addDays(startOfWeek(startOfMonth(date), { weekStartsOn: 0 }), index))
   return (
-    <section className={cn('grid border border-border bg-bg', view === 'month' ? 'grid-cols-7' : view === 'week' ? 'grid-cols-7' : 'grid-cols-1')} aria-label={`${view} calendar`}>
+    <section className={cn('grid border border-border bg-bg', view === 'month' ? 'min-w-[42rem] grid-cols-7' : view === 'week' ? 'min-w-[42rem] grid-cols-7' : 'grid-cols-1')} aria-label={`${view} calendar`}>
       {days.map((day) => {
         const dayEvents = events.filter((event) => { const starts = eventDate(event, timeZone); return starts && isSameDay(starts, day) })
         return <section
@@ -170,13 +212,14 @@ function CalendarGrid({ date, view, events, timeZone, onCreate, onOpen, onMove, 
 
 function Agenda({ events, timeZone, onOpen }: { events: CalendarEvent[]; timeZone: string | null | undefined; onOpen: (event: CalendarEvent) => void }) {
   if (!events.length) return <EmptyState title="No events in this range">Change the range or select another calendar.</EmptyState>
-  return <section className="border border-border bg-bg" aria-label="Agenda"><div className="divide-y divide-border">{events.map((event) => <button type="button" key={event.id} className="flex w-full flex-col gap-1 p-3 text-left sm:flex-row sm:items-center sm:justify-between" onClick={() => onOpen(event)}><div><h3 className="text-sm font-medium">{event.title ?? 'Untitled event'}</h3><p className="text-xs text-text-muted">{event.kind === 'all-day' ? formatDate(event.startsAt, timeZone) : formatDateTime(event.startsAt, timeZone)}</p></div><span className="text-xs text-text-muted">{event.kind === 'all-day' ? 'All day' : formatTime(new Date(event.startsAt), timeZone)}</span></button>)}</div></section>
+  return <section className="border border-border bg-bg" aria-label="Agenda"><div className="divide-y divide-border">{events.map((event) => <button type="button" key={event.id} className="flex w-full flex-col gap-1 p-3 text-left sm:flex-row sm:items-center sm:justify-between" onClick={() => onOpen(event)}><div><h3 className="text-sm font-medium">{event.title ?? 'Untitled event'}</h3><p className="text-xs text-text-muted">{event.kind === 'all-day' ? formatDate(event.startsAt.slice(0, 10), undefined) : formatDateTime(event.startsAt, event.timeZone ?? timeZone)}</p></div><span className="text-xs text-text-muted">{event.kind === 'all-day' ? 'All day' : formatTime(new Date(event.startsAt), event.timeZone ?? timeZone)}</span></button>)}</div></section>
 }
 
 export function CalendarWorkspace() {
   const { org, user } = useAuth()
+  const timeZone = user?.timeZone
   const [view, setView] = useState<CalendarView>('week')
-  const [date, setDate] = useState(() => new Date())
+  const [date, setDate] = useState(() => zonedDateTimeParts(new Date().toISOString(), timeZone).date ?? new Date())
   const [quickCreateDate, setQuickCreateDate] = useState<Date | null>(null)
   const [editor, setEditor] = useState<{ event: CalendarEvent | null; date: Date; initialTitle?: string } | null>(null)
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
@@ -186,17 +229,25 @@ export function CalendarWorkspace() {
   const updateEvent = useUpdateCalendarEvent()
   const deleteEvent = useDeleteCalendarEvent()
   const respondToEvent = useRespondToCalendarEvent()
-  const range = visibleRange(date, view)
-  const eventsQuery = useGetCalendarEvents(org?.id, { startsAt: range.startsAt.toISOString(), endsAt: range.endsAt.toISOString() })
-  const timeZone = user?.timeZone
+  const range = visibleRange(date, view, timeZone)
+  const eventsQuery = useGetCalendarEvents(org?.id, { startsAt: range.startsAt.toISOString(), endsAt: range.endsAt.toISOString() }, sourceQuery.data?.calendar.state === 'connected')
   const changeRange = (direction: -1 | 1) => setDate((current) => view === 'month' ? (direction === 1 ? addMonths(current, 1) : subMonths(current, 1)) : (direction === 1 ? addDays(current, view === 'week' ? 7 : view === 'agenda' ? 30 : 1) : subDays(current, view === 'week' ? 7 : view === 'agenda' ? 30 : 1)))
   const sources = sourceQuery.data?.sources ?? []
   const pending = createEvent.isPending || updateEvent.isPending || deleteEvent.isPending || respondToEvent.isPending
   const selectedSourceId = sources.find((source) => source.isPrimary)?.id ?? sources[0]?.id
   const showError = (action: string, error: Error) => {
-    if (error instanceof ApiError && error.status === 409) {
+    const code = calendarErrorCode(error)
+    if (code === 'calendar_version_conflict') {
       toast.error('Event changed in Calendar. Refreshing the latest version.')
       void eventsQuery.refetch()
+      return
+    }
+    if (code === 'calendar_auth_failed' || code === 'calendar_not_connected') {
+      toast.error(`Could not ${action}. Reconnect Calendar in Settings → Integrations.`)
+      return
+    }
+    if (code === 'calendar_projection_stale') {
+      toast.error(`Could not ${action}. The provider saved the change. Refresh Calendar before trying again.`)
       return
     }
     toast.error(`Could not ${action}. ${error.message}`)
@@ -254,5 +305,5 @@ export function CalendarWorkspace() {
   if (sourceQuery.isError) return <main className="flex min-h-0 flex-1 flex-col"><PageHeader icon={CalendarDays} title="Calendar" /><div className="p-6"><EmptyState title="Could not load Calendar">Refresh the page and try again.</EmptyState></div></main>
   if (sourceQuery.data?.calendar.state === 'not-connected') return <main className="flex min-h-0 flex-1 flex-col"><PageHeader icon={CalendarDays} title="Calendar" /><div className="p-6"><EmptyState title="Connect Calendar"><p>Connect Google or Microsoft Calendar to see your schedule.</p><Button asChild><Link to="/settings/integrations">Open Integrations</Link></Button></EmptyState></div></main>
 
-  return <main className="flex min-h-0 flex-1 flex-col"><PageHeader icon={CalendarDays} title="Calendar" count={eventsQuery.data?.total} /><div className="grid min-h-0 flex-1 grid-cols-1 gap-6 overflow-auto p-6 lg:grid-cols-[224px_minmax(0,1fr)]"><aside className="flex flex-col gap-3"><MiniMonth date={date} onSelect={setDate} /><SourceRail /></aside><section className="min-w-0"><div className="mb-3 flex flex-wrap items-center gap-2"><div className="flex border border-border bg-surface p-1">{VIEWS.map((item) => <Button key={item.id} type="button" variant={view === item.id ? 'default' : 'ghost'} size="sm" onClick={() => setView(item.id)} aria-label={`Show ${item.label.toLowerCase()} view`}>{item.label}</Button>)}</div><Button type="button" variant="secondary" size="sm" onClick={() => setDate(new Date())}>Today</Button><IconButton tooltip="Show previous time range" onClick={() => changeRange(-1)}><ChevronLeft size={16} /></IconButton><IconButton tooltip="Show next time range" onClick={() => changeRange(1)}><ChevronRight size={16} /></IconButton><h2 className="text-sm font-semibold" aria-live="polite">{rangeLabel(date, view)}</h2><span className="ml-auto text-xs text-text-muted">Times shown in {formatTimeZoneName(range.startsAt, timeZone)}</span></div>{eventsQuery.isLoading ? <Skeleton className="h-96 w-full" /> : eventsQuery.isError ? <EmptyState title="Could not load events">Change the range or refresh the page and try again.</EmptyState> : <CalendarGrid date={date} view={view} events={eventsQuery.data?.events ?? []} timeZone={timeZone} onCreate={setQuickCreateDate} onOpen={setSelectedEvent} onMove={moveEvent} onResize={resizeEvent} />}</section></div>{quickCreateDate ? <CalendarWorkspace_QuickCreate open date={quickCreateDate} busy={pending} onOpenChange={(open) => !open && setQuickCreateDate(null)} onCreate={createQuick} onMoreDetails={(initialTitle) => { setEditor({ event: null, date: quickCreateDate, initialTitle }); setQuickCreateDate(null) }} /> : null}{editor ? <CalendarWorkspace_EventEditor event={editor.event} date={editor.date} sources={sources} orgId={org?.id} timeZone={timeZone} initialTitle={editor.initialTitle} open busy={pending} onOpenChange={(open) => !open && setEditor(null)} onSave={saveEvent} /> : null}{selectedEvent ? <CalendarWorkspace_EventDetails event={selectedEvent} source={sources.find((source) => source.id === selectedEvent.sourceId)} userEmail={user?.email} timeZone={timeZone} busy={pending} onOpenChange={(open) => !open && setSelectedEvent(null)} onEdit={() => { setEditor({ event: selectedEvent, date: eventDate(selectedEvent, timeZone) ?? date }); setSelectedEvent(null) }} onDuplicate={() => duplicateEvent(selectedEvent)} onDelete={(scope) => removeEvent(selectedEvent, scope)} onRespond={(response, scope) => respondToInvitation(selectedEvent, response, scope)} /> : null}{recurringAction ? <CalendarWorkspace_RecurringActionDialog action={recurringAction.action} source={sources.find((source) => source.id === recurringAction.event.sourceId)} busy={pending} onCancel={() => setRecurringAction(null)} onConfirm={applyRecurringAction} /> : null}</main>
+  return <main className="flex min-h-0 flex-1 flex-col"><PageHeader icon={CalendarDays} title="Calendar" count={eventsQuery.data?.total} /><div className="grid min-h-0 flex-1 grid-cols-1 gap-6 overflow-auto p-6 lg:grid-cols-[224px_minmax(0,1fr)]"><aside className="flex flex-col gap-3"><MiniMonth date={date} onSelect={setDate} /><SourceRail /></aside><section className="min-w-0 overflow-x-auto"><div className="mb-3 flex flex-wrap items-center gap-2"><div className="flex border border-border bg-surface p-1" role="group" aria-label="Calendar view">{VIEWS.map((item) => <Button key={item.id} type="button" variant={view === item.id ? 'default' : 'ghost'} size="sm" onClick={() => setView(item.id)} aria-label={`Show ${item.label.toLowerCase()} view`} aria-pressed={view === item.id}>{item.label}</Button>)}</div><Button type="button" variant="secondary" size="sm" onClick={() => setDate(zonedDateTimeParts(new Date().toISOString(), timeZone).date ?? new Date())}>Today</Button><IconButton tooltip="Show previous time range" onClick={() => changeRange(-1)}><ChevronLeft size={16} /></IconButton><IconButton tooltip="Show next time range" onClick={() => changeRange(1)}><ChevronRight size={16} /></IconButton><h2 className="text-sm font-semibold" aria-live="polite">{rangeLabel(date, view)}</h2><span className="ml-auto text-xs text-text-muted">Times shown in {formatTimeZoneName(range.startsAt, timeZone)}</span></div>{eventsQuery.isLoading ? <Skeleton className="h-96 w-full" /> : eventsQuery.isError ? <EmptyState title="Could not load events">Change the range or refresh the page and try again.</EmptyState> : <CalendarGrid date={date} view={view} events={eventsQuery.data?.events ?? []} timeZone={timeZone} onCreate={setQuickCreateDate} onOpen={setSelectedEvent} onMove={moveEvent} onResize={resizeEvent} />}</section></div>{quickCreateDate ? <CalendarWorkspace_QuickCreate open date={quickCreateDate} busy={pending} onOpenChange={(open) => !open && setQuickCreateDate(null)} onCreate={createQuick} onMoreDetails={(initialTitle) => { setEditor({ event: null, date: quickCreateDate, initialTitle }); setQuickCreateDate(null) }} /> : null}{editor ? <CalendarWorkspace_EventEditor event={editor.event} date={editor.date} sources={sources} orgId={org?.id} timeZone={timeZone} initialTitle={editor.initialTitle} open busy={pending} onOpenChange={(open) => !open && setEditor(null)} onSave={saveEvent} /> : null}{selectedEvent ? <CalendarWorkspace_EventDetails event={selectedEvent} source={sources.find((source) => source.id === selectedEvent.sourceId)} userEmail={user?.email} timeZone={timeZone} busy={pending} onOpenChange={(open) => !open && setSelectedEvent(null)} onEdit={() => { setEditor({ event: selectedEvent, date: eventDate(selectedEvent, timeZone) ?? date }); setSelectedEvent(null) }} onDuplicate={() => duplicateEvent(selectedEvent)} onDelete={(scope) => removeEvent(selectedEvent, scope)} onRespond={(response, scope) => respondToInvitation(selectedEvent, response, scope)} /> : null}{recurringAction ? <CalendarWorkspace_RecurringActionDialog action={recurringAction.action} source={sources.find((source) => source.id === recurringAction.event.sourceId)} busy={pending} onCancel={() => setRecurringAction(null)} onConfirm={applyRecurringAction} /> : null}</main>
 }

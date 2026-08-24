@@ -101,6 +101,12 @@ export interface CalendarEventsResponse {
   limit: number
 }
 
+export interface CalendarSyncResult {
+  events: number
+  nextCursor: string | null
+  recovered: boolean
+}
+
 export type CalendarAvailabilityResponse = {
   availability:
     | { state: 'available'; busy: Array<{ sourceId: string; startsAt: string; endsAt: string }> }
