@@ -53,7 +53,7 @@ const CalendarListSchema = z.object({
   nextSyncToken: z.string().nullish(),
 })
 
-const EventDateSchema = z.object({ date: z.string().nullish(), dateTime: z.string().nullish() })
+const EventDateSchema = z.object({ date: z.string().nullish(), dateTime: z.string().nullish(), timeZone: z.string().nullish() })
 
 const EventSchema = z.object({
   id: z.string(),
@@ -63,6 +63,12 @@ const EventSchema = z.object({
   description: z.string().nullish(),
   location: z.string().nullish(),
   htmlLink: z.string().nullish(),
+  hangoutLink: z.string().nullish(),
+  conferenceData: z.object({
+    entryPoints: z.array(z.object({ entryPointType: z.string().nullish(), uri: z.string().nullish() })).nullish(),
+  }).nullish(),
+  transparency: z.enum(['opaque', 'transparent']).nullish(),
+  visibility: z.enum(['default', 'public', 'private', 'confidential']).nullish(),
   attendees: z.array(z.object({
     email: z.string().nullish(),
     displayName: z.string().nullish(),
@@ -186,6 +192,9 @@ function mapEvent(event: z.infer<typeof EventSchema>, providerCalendarId: string
     description: event.description ?? null,
     location: event.location ?? null,
     webLink: event.htmlLink ?? null,
+    meetingLink: event.hangoutLink ?? event.conferenceData?.entryPoints?.find((entry) => entry.entryPointType === 'video')?.uri ?? null,
+    availability: event.transparency === 'transparent' ? 'free' as const : 'busy' as const,
+    privacy: event.visibility === 'public' ? 'public' as const : event.visibility === 'private' || event.visibility === 'confidential' ? 'private' as const : 'default' as const,
     attendees: (event.attendees ?? []).flatMap((attendee) => attendee.email ? [{
       email: attendee.email,
       ...(attendee.displayName ? { name: attendee.displayName } : {}),
@@ -204,7 +213,7 @@ function mapEvent(event: z.infer<typeof EventSchema>, providerCalendarId: string
     if (!event.end?.date) throw new CalendarApiError('Google Calendar returned an all-day event without an end date.')
     return { ...common, kind: 'all-day', startDate: calendarDate(event.start.date), endDateExclusive: calendarDate(event.end.date) }
   }
-  return { ...common, kind: 'timed', startsAt: new Date(start), endsAt: new Date(end) }
+  return { ...common, kind: 'timed', startsAt: new Date(start), endsAt: new Date(end), timeZone: event.start?.timeZone ?? null }
 }
 
 function googleAttendees(attendees: CalendarAttendee[]) {
@@ -220,7 +229,7 @@ function googleAttendees(attendees: CalendarAttendee[]) {
 function googleTime(time: CreateCalendarEventInput | NonNullable<CalendarEventPatch['time']>) {
   return time.kind === 'all-day'
     ? { start: { date: time.startDate }, end: { date: time.endDateExclusive } }
-    : { start: { dateTime: time.startsAt.toISOString(), timeZone: 'UTC' }, end: { dateTime: time.endsAt.toISOString(), timeZone: 'UTC' } }
+    : { start: { dateTime: time.startsAt.toISOString(), timeZone: time.timeZone ?? 'UTC' }, end: { dateTime: time.endsAt.toISOString(), timeZone: time.timeZone ?? 'UTC' } }
 }
 
 function recurrence(recurrenceValue: CreateCalendarEventInput['recurrence']) {
@@ -234,6 +243,8 @@ function createRequest(input: CreateCalendarEventInput) {
     location: input.location ?? undefined,
     attendees: googleAttendees(input.attendees),
     status: input.status,
+    transparency: input.availability === 'free' ? 'transparent' : 'opaque',
+    visibility: input.privacy === 'public' || input.privacy === 'private' ? input.privacy : 'default',
     recurrence: recurrence(input.recurrence),
     ...googleTime(input),
   }
@@ -245,6 +256,8 @@ function patchRequest(patch: CalendarEventPatch) {
   if (patch.description !== undefined) request.description = patch.description
   if (patch.location !== undefined) request.location = patch.location
   if (patch.status !== undefined) request.status = patch.status
+  if (patch.availability !== undefined) request.transparency = patch.availability === 'free' ? 'transparent' : 'opaque'
+  if (patch.privacy !== undefined) request.visibility = patch.privacy
   if (patch.attendees !== undefined) request.attendees = googleAttendees(patch.attendees)
   if (patch.recurrence !== undefined) request.recurrence = recurrence(patch.recurrence)
   if (patch.time !== undefined) Object.assign(request, googleTime(patch.time))
@@ -276,6 +289,8 @@ function eventRequest(event: z.infer<typeof EventSchema>) {
       responseStatus: attendee.responseStatus ?? 'needsAction',
     }] : []),
     status: event.status ?? 'confirmed',
+    transparency: event.transparency ?? 'opaque',
+    visibility: event.visibility ?? 'default',
     recurrence: event.recurrence ?? [],
     ...eventTimeRequest(event),
   }

@@ -6,12 +6,14 @@ import { Router, type Response } from 'express'
 import { z } from 'zod'
 
 import prisma from '../db.js'
+import { dedupeLinkTargets, verifyLinkTargets } from '../crm/workLinks.js'
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js'
 import { wrapRoute } from '../lib/fnWrapper.js'
 import { requireMembership } from '../lib/membership.js'
 import { googleCalendar } from '../lib/calendar/googleCalendar.js'
 import { microsoftCalendar } from '../lib/calendar/microsoftCalendar.js'
-import { syncCalendarSource } from '../lib/calendar/calendarSync.js'
+import { saveCalendarEventMetadata } from '../lib/calendar/calendarEventMetadata.js'
+import { persistCalendarEventSnapshot, syncCalendarSource } from '../lib/calendar/calendarSync.js'
 import {
   CalendarApiError,
   CalendarAuthError,
@@ -32,8 +34,27 @@ const sourceSelect = {
   connection: { select: { emailAddress: true } },
 } satisfies Prisma.CalendarSourceSelect
 
+const eventInclude = {
+  attendees: { orderBy: { email: 'asc' as const } },
+  links: { orderBy: [{ createdAt: 'asc' as const }, { id: 'asc' as const }] },
+  source: { select: { id: true, name: true, provider: true } },
+} satisfies Prisma.CalendarEventInclude
+
 const responseSchema = z.enum(['accepted', 'declined', 'tentative'])
 const scopeSchema = z.enum(['this-event', 'this-and-following', 'series']).default('this-event')
+const linkSchema = z.object({ object: z.string().trim().min(1).max(100), id: z.string().trim().min(1).max(200) })
+const timeZoneSchema = z.string().trim().min(1).max(100).refine((value) => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format()
+    return true
+  } catch {
+    return false
+  }
+}, 'Provide a valid IANA timezone.')
+const meetingLinkSchema = z.string().trim().max(2_000).url().refine((value) => {
+  const protocol = new URL(value).protocol
+  return protocol === 'http:' || protocol === 'https:'
+}, 'Provide an http or https meeting link.')
 const attendeeSchema = z.object({
   email: z.string().trim().email().max(320), name: z.string().trim().max(200).optional(),
   isOptional: z.boolean().default(false), isResource: z.boolean().default(false),
@@ -46,15 +67,32 @@ const recurrenceSchema = z.union([
   z.object({ kind: z.literal('none') }),
   z.object({ kind: z.literal('series'), providerSeriesId: z.string().trim().min(1), recurrenceRule: z.string().trim().min(1), originalStart: z.union([z.coerce.date(), z.string().regex(/^\d{4}-\d{2}-\d{2}$/)]).nullable() }),
 ])
-const createSchema = z.object({
-  sourceId: z.string().trim().min(1), title: z.string().trim().max(500).nullable().optional(),
-  description: z.string().max(10_000).nullable().optional(), location: z.string().trim().max(500).nullable().optional(),
-  attendees: z.array(attendeeSchema).max(500).default([]), status: z.enum(['confirmed', 'tentative', 'cancelled']).default('confirmed'),
-  recurrence: recurrenceSchema.default({ kind: 'none' }), time: timeSchema,
+const eventFieldsSchema = z.object({
+  title: z.string().trim().max(500).nullable().optional(),
+  description: z.string().max(10_000).nullable().optional(),
+  location: z.string().trim().max(500).nullable().optional(),
+  attendees: z.array(attendeeSchema).max(500).optional(),
+  status: z.enum(['confirmed', 'tentative', 'cancelled']).optional(),
+  recurrence: recurrenceSchema.optional(),
+  availability: z.enum(['busy', 'free']).optional(),
+  privacy: z.enum(['default', 'public', 'private']).optional(),
+  meetingLink: meetingLinkSchema.nullable().optional(),
+  timeZone: timeZoneSchema.nullable().optional(),
+  links: z.array(linkSchema).max(50).optional(),
+})
+const createSchema = eventFieldsSchema.extend({
+  sourceId: z.string().trim().min(1),
+  attendees: z.array(attendeeSchema).max(500).default([]),
+  status: z.enum(['confirmed', 'tentative', 'cancelled']).default('confirmed'),
+  recurrence: recurrenceSchema.default({ kind: 'none' }),
+  availability: z.enum(['busy', 'free']).default('busy'),
+  privacy: z.enum(['default', 'public', 'private']).default('default'),
+  links: z.array(linkSchema).max(50).default([]),
+  time: timeSchema,
 })
 const patchSchema = z.object({
   expectedVersion: z.string().nullable(), scope: scopeSchema,
-  patch: z.object({ title: z.string().trim().max(500).nullable().optional(), description: z.string().max(10_000).nullable().optional(), location: z.string().trim().max(500).nullable().optional(), attendees: z.array(attendeeSchema).max(500).optional(), status: z.enum(['confirmed', 'tentative', 'cancelled']).optional(), recurrence: recurrenceSchema.optional(), time: timeSchema.optional() }),
+  patch: eventFieldsSchema.extend({ time: timeSchema.optional() }),
 })
 const listSchema = z.object({
   startsAt: z.coerce.date().optional(), endsAt: z.coerce.date().optional(), q: z.string().trim().min(1).max(200).optional(),
@@ -65,10 +103,27 @@ function serializeSource(source: Prisma.CalendarSourceGetPayload<{ select: typeo
   return { id: source.id, provider: source.provider, providerCalendarId: source.providerCalendarId, name: source.name, description: source.description, timeZone: source.timeZone, accessRole: source.accessRole, isPrimary: source.isPrimary, isSelected: source.isSelected, lastSyncedAt: source.lastSyncedAt?.toISOString() ?? null }
 }
 
-type CalendarEventRow = Prisma.CalendarEventGetPayload<{ include: { attendees: true; source: { select: { id: true; name: true; provider: true } } } }>
+type CalendarEventRow = Prisma.CalendarEventGetPayload<{ include: typeof eventInclude }>
 
 function serializeEvent(event: CalendarEventRow) {
-  return { id: event.id, sourceId: event.sourceId, providerEventId: event.providerEventId, providerVersion: event.providerVersion, title: event.title, description: event.description, location: event.location, webLink: event.webLink, kind: event.kind, startsAt: event.startsAt.toISOString(), endsAt: event.endsAt.toISOString(), timeZone: event.timeZone, status: event.status, recurrenceKind: event.recurrenceKind, providerSeriesId: event.providerSeriesId, recurrenceRule: event.recurrenceRule, originalStartAt: event.originalStartAt?.toISOString() ?? null, originalStartDate: event.originalStartDate, attendees: event.attendees.map((attendee) => ({ email: attendee.email, name: attendee.name, isOptional: attendee.isOptional, isResource: attendee.isResource, response: attendee.response })), source: { id: event.source.id, name: event.source.name, provider: event.source.provider } }
+  return {
+    id: event.id, sourceId: event.sourceId, providerEventId: event.providerEventId,
+    providerVersion: event.providerVersion, title: event.title, description: event.description,
+    location: event.location, webLink: event.webLink,
+    meetingLink: event.meetingLinkOverride ?? event.meetingLink, kind: event.kind,
+    startsAt: event.startsAt.toISOString(), endsAt: event.endsAt.toISOString(),
+    timeZone: event.timeZoneOverride ?? event.timeZone, availability: event.availability,
+    privacy: event.privacy, status: event.status, recurrenceKind: event.recurrenceKind,
+    providerSeriesId: event.providerSeriesId, recurrenceRule: event.recurrenceRule,
+    originalStartAt: event.originalStartAt?.toISOString() ?? null,
+    originalStartDate: event.originalStartDate,
+    attendees: event.attendees.map((attendee) => ({
+      email: attendee.email, name: attendee.name, isOptional: attendee.isOptional,
+      isResource: attendee.isResource, response: attendee.response,
+    })),
+    links: event.links.map((link) => ({ object: link.toObject, id: link.toId })),
+    source: { id: event.source.id, name: event.source.name, provider: event.source.provider },
+  }
 }
 
 function providerFor(source: Prisma.CalendarSourceGetPayload<{ select: typeof sourceSelect }>): CalendarProvider {
@@ -88,6 +143,10 @@ function respondProviderError(res: Response, error: unknown): boolean {
 
 async function ownedSource(sourceId: string, orgId: string, userId: string) {
   return prisma.calendarSource.findFirst({ where: { id: sourceId, orgId, userId }, select: sourceSelect })
+}
+
+function loadEvent(eventId: string, orgId: string, userId: string) {
+  return prisma.calendarEvent.findFirst({ where: { id: eventId, orgId, userId }, include: eventInclude })
 }
 
 router.get('/sources', wrapRoute('GET /api/calendar/orgs/:orgId/sources', async (req, res) => {
@@ -118,7 +177,7 @@ router.get('/events', wrapRoute('GET /api/calendar/orgs/:orgId/events', async (r
     ? { AND: [{ startsAt: { lt: endsAt } }, { endsAt: { gt: startsAt } }] }
     : startsAt ? { endsAt: { gt: startsAt } } : endsAt ? { startsAt: { lt: endsAt } } : {}
   const where: Prisma.CalendarEventWhereInput = { orgId, userId: authReq.user!.id, sourceId: { in: sources.map((source) => source.id) }, status: { not: 'cancelled' }, ...range, ...(q ? { OR: [{ title: { contains: q, mode: 'insensitive' } }, { description: { contains: q, mode: 'insensitive' } }, { location: { contains: q, mode: 'insensitive' } }] } : {}) }
-  const [total, events] = await Promise.all([prisma.calendarEvent.count({ where }), prisma.calendarEvent.findMany({ where, orderBy: [{ startsAt: 'asc' }, { createdAt: 'asc' }], skip: (page - 1) * limit, take: limit, include: { attendees: { orderBy: { email: 'asc' } }, source: { select: { id: true, name: true, provider: true } } } })])
+  const [total, events] = await Promise.all([prisma.calendarEvent.count({ where }), prisma.calendarEvent.findMany({ where, orderBy: [{ startsAt: 'asc' }, { createdAt: 'asc' }], skip: (page - 1) * limit, take: limit, include: eventInclude })])
   res.json({ calendar: { state: 'connected' }, events: events.map(serializeEvent), total, page, limit })
 }))
 
@@ -131,31 +190,69 @@ router.post('/sources/:sourceId/sync', wrapRoute('POST /api/calendar/orgs/:orgId
 }))
 
 router.post('/events', wrapRoute('POST /api/calendar/orgs/:orgId/events', async (req, res) => {
-  const authReq = req as AuthenticatedRequest; const orgId = String(req.params.orgId)
+  const authReq = req as AuthenticatedRequest; const orgId = String(req.params.orgId); const userId = authReq.user!.id
   if (!await requireMembership(authReq, res, orgId)) return
   const parsed = createSchema.safeParse(req.body ?? {}); if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
   if (parsed.data.time.kind === 'timed' && parsed.data.time.endsAt <= parsed.data.time.startsAt) return void res.status(400).json({ error: 'endsAt must be after startsAt.' })
   if (parsed.data.time.kind === 'all-day' && parsed.data.time.endDateExclusive <= parsed.data.time.startDate) return void res.status(400).json({ error: 'endDateExclusive must be after startDate.' })
-  const source = await ownedSource(parsed.data.sourceId, orgId, authReq.user!.id); if (!source) return void res.status(404).json({ error: 'Calendar source not found' })
-  const { sourceId: _sourceId, time, ...eventFields } = parsed.data
-  const createInput = { ...eventFields, providerCalendarId: source.providerCalendarId, ...time } as unknown as CreateCalendarEventInput
-  try { const created = await providerFor(source).createEvent(createInput); await syncCalendarSource({ orgId, userId: authReq.user!.id, connectionId: source.connectionId, sourceId: source.id }, providerFor(source)); res.status(201).json({ event: created }) } catch (error) { if (!respondProviderError(res, error)) throw error }
+  const links = dedupeLinkTargets(parsed.data.links)
+  const badTarget = await verifyLinkTargets(prisma, orgId, links)
+  if (badTarget) return void res.status(422).json({ error: badTarget })
+  const source = await ownedSource(parsed.data.sourceId, orgId, userId); if (!source) return void res.status(404).json({ error: 'Calendar source not found' })
+  const { sourceId: _sourceId, meetingLink, timeZone, links: _links, time, ...providerFields } = parsed.data
+  const providerTime = time.kind === 'timed' ? { ...time, timeZone } : time
+  const createInput = { ...providerFields, providerCalendarId: source.providerCalendarId, ...providerTime } as CreateCalendarEventInput
+  try {
+    const created = await providerFor(source).createEvent(createInput)
+    const stored = await persistCalendarEventSnapshot({ orgId, userId, connectionId: source.connectionId, sourceId: source.id }, created)
+    if (!stored) throw new Error('Calendar event projection could not be saved.')
+    await saveCalendarEventMetadata({ orgId, userId, eventId: stored.id, meetingLink, timeZone, links })
+    const event = await loadEvent(stored.id, orgId, userId)
+    if (!event) throw new Error('Calendar event projection could not be loaded.')
+    res.status(201).json({ event: serializeEvent(event) })
+  } catch (error) { if (!respondProviderError(res, error)) throw error }
 }))
 
 router.patch('/events/:eventId', wrapRoute('PATCH /api/calendar/orgs/:orgId/events/:eventId', async (req, res) => {
-  const authReq = req as AuthenticatedRequest; const orgId = String(req.params.orgId)
+  const authReq = req as AuthenticatedRequest; const orgId = String(req.params.orgId); const userId = authReq.user!.id
   if (!await requireMembership(authReq, res, orgId)) return
   const parsed = patchSchema.safeParse(req.body ?? {}); if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message })
-  const event = await prisma.calendarEvent.findFirst({ where: { id: String(req.params.eventId), orgId, userId: authReq.user!.id }, include: { source: { select: sourceSelect } } }); if (!event) return void res.status(404).json({ error: 'Calendar event not found' })
-  try { const updated = await providerFor(event.source).updateEvent({ providerCalendarId: event.source.providerCalendarId, providerEventId: event.providerEventId, expectedVersion: parsed.data.expectedVersion, scope: parsed.data.scope as RecurrenceScope, patch: parsed.data.patch as CalendarEventPatch }); await syncCalendarSource({ orgId, userId: authReq.user!.id, connectionId: event.source.connectionId, sourceId: event.source.id }, providerFor(event.source)); res.json({ event: updated }) } catch (error) { if (!respondProviderError(res, error)) throw error }
+  if (parsed.data.patch.time?.kind === 'timed' && parsed.data.patch.time.endsAt <= parsed.data.patch.time.startsAt) return void res.status(400).json({ error: 'endsAt must be after startsAt.' })
+  if (parsed.data.patch.time?.kind === 'all-day' && parsed.data.patch.time.endDateExclusive <= parsed.data.patch.time.startDate) return void res.status(400).json({ error: 'endDateExclusive must be after startDate.' })
+  const event = await prisma.calendarEvent.findFirst({ where: { id: String(req.params.eventId), orgId, userId }, include: { source: { select: sourceSelect } } }); if (!event) return void res.status(404).json({ error: 'Calendar event not found' })
+  const { links: requestedLinks, meetingLink, timeZone, time, ...providerFields } = parsed.data.patch
+  const links = requestedLinks === undefined ? undefined : dedupeLinkTargets(requestedLinks)
+  if (links) {
+    const badTarget = await verifyLinkTargets(prisma, orgId, links)
+    if (badTarget) return void res.status(422).json({ error: badTarget })
+  }
+  const providerTime = time?.kind === 'timed' ? { ...time, timeZone } : time
+  const providerPatch = { ...providerFields, ...(providerTime ? { time: providerTime } : {}) } as CalendarEventPatch
+  try {
+    let eventId = event.id
+    if (Object.keys(providerPatch).length > 0) {
+      const updated = await providerFor(event.source).updateEvent({ providerCalendarId: event.source.providerCalendarId, providerEventId: event.providerEventId, expectedVersion: parsed.data.expectedVersion, scope: parsed.data.scope as RecurrenceScope, patch: providerPatch })
+      const stored = await persistCalendarEventSnapshot({ orgId, userId, connectionId: event.source.connectionId, sourceId: event.source.id }, updated)
+      if (!stored) throw new Error('Calendar event projection could not be saved.')
+      eventId = stored.id
+    }
+    await saveCalendarEventMetadata({ orgId, userId, eventId, meetingLink, timeZone, links })
+    const saved = await loadEvent(eventId, orgId, userId)
+    if (!saved) throw new Error('Calendar event projection could not be loaded.')
+    res.json({ event: serializeEvent(saved) })
+  } catch (error) { if (!respondProviderError(res, error)) throw error }
 }))
 
 router.delete('/events/:eventId', wrapRoute('DELETE /api/calendar/orgs/:orgId/events/:eventId', async (req, res) => {
-  const authReq = req as AuthenticatedRequest; const orgId = String(req.params.orgId)
+  const authReq = req as AuthenticatedRequest; const orgId = String(req.params.orgId); const userId = authReq.user!.id
   if (!await requireMembership(authReq, res, orgId)) return
   const parsed = z.object({ expectedVersion: z.string().nullable(), scope: scopeSchema }).safeParse(req.body ?? {}); if (!parsed.success) return void res.status(400).json({ error: 'Provide expectedVersion and an optional scope.' })
-  const event = await prisma.calendarEvent.findFirst({ where: { id: String(req.params.eventId), orgId, userId: authReq.user!.id }, include: { source: { select: sourceSelect } } }); if (!event) return void res.status(404).json({ error: 'Calendar event not found' })
-  try { await providerFor(event.source).deleteEvent({ providerCalendarId: event.source.providerCalendarId, providerEventId: event.providerEventId, expectedVersion: parsed.data.expectedVersion, scope: parsed.data.scope as RecurrenceScope }); await syncCalendarSource({ orgId, userId: authReq.user!.id, connectionId: event.source.connectionId, sourceId: event.source.id }, providerFor(event.source)); res.status(204).end() } catch (error) { if (!respondProviderError(res, error)) throw error }
+  const event = await prisma.calendarEvent.findFirst({ where: { id: String(req.params.eventId), orgId, userId }, include: { source: { select: sourceSelect } } }); if (!event) return void res.status(404).json({ error: 'Calendar event not found' })
+  try {
+    await providerFor(event.source).deleteEvent({ providerCalendarId: event.source.providerCalendarId, providerEventId: event.providerEventId, expectedVersion: parsed.data.expectedVersion, scope: parsed.data.scope as RecurrenceScope })
+    await prisma.calendarEvent.updateMany({ where: { id: event.id, orgId, userId }, data: { status: 'cancelled', cancelledAt: new Date() } })
+    res.status(204).end()
+  } catch (error) { if (!respondProviderError(res, error)) throw error }
 }))
 
 router.post('/events/:eventId/rsvp', wrapRoute('POST /api/calendar/orgs/:orgId/events/:eventId/rsvp', async (req, res) => {

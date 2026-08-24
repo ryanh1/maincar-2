@@ -48,6 +48,12 @@ type CalendarEventBase = {
   description: string | null
   location: string | null
   webLink: string | null
+  /** Provider-created meeting URL when one exists. */
+  meetingLink?: string | null
+  /** Whether the provider blocks this interval in free/busy results. */
+  availability?: 'busy' | 'free'
+  /** Provider-neutral event visibility. */
+  privacy?: 'default' | 'public' | 'private'
   attendees: CalendarAttendee[]
   organizer: CalendarOrganizer | null
   status: 'confirmed' | 'tentative' | 'cancelled'
@@ -59,6 +65,8 @@ export type TimedCalendarEvent = CalendarEventBase & {
   kind: 'timed'
   startsAt: Date
   endsAt: Date
+  /** The event's editing timezone when the provider exposes it. */
+  timeZone?: string | null
 }
 
 /** An all-day event intentionally has no time or timezone. The end date is exclusive. */
@@ -71,7 +79,7 @@ export type AllDayCalendarEvent = CalendarEventBase & {
 export type CalendarEvent = TimedCalendarEvent | AllDayCalendarEvent
 
 export type CalendarEventTime =
-  | Pick<TimedCalendarEvent, 'kind' | 'startsAt' | 'endsAt'>
+  | Pick<TimedCalendarEvent, 'kind' | 'startsAt' | 'endsAt' | 'timeZone'>
   | Pick<AllDayCalendarEvent, 'kind' | 'startDate' | 'endDateExclusive'>
 
 export type CreateCalendarEventInput = Omit<
@@ -81,7 +89,7 @@ export type CreateCalendarEventInput = Omit<
   CalendarEventTime
 
 export type CalendarEventPatch = Partial<
-  Pick<CalendarEventBase, 'title' | 'description' | 'location' | 'attendees' | 'status' | 'recurrence'>
+  Pick<CalendarEventBase, 'title' | 'description' | 'location' | 'attendees' | 'status' | 'recurrence' | 'availability' | 'privacy'>
 > & { time?: CalendarEventTime }
 
 /** Which portion of a recurring event a lifecycle operation targets. */

@@ -33,8 +33,11 @@ function client(overrides: Partial<GoogleCalendarClient> = {}): GoogleCalendarCl
           etag: 'etag-timed',
           iCalUID: 'timed@example.com',
           summary: 'Planning',
-          start: { dateTime: '2026-08-23T09:00:00-04:00' },
+          start: { dateTime: '2026-08-23T09:00:00-04:00', timeZone: 'America/New_York' },
           end: { dateTime: '2026-08-23T10:00:00-04:00' },
+          transparency: 'transparent',
+          visibility: 'private',
+          hangoutLink: 'https://meet.google.com/example',
           attendees: [{ email: 'guest@example.com', responseStatus: 'accepted' }],
           organizer: { email: 'owner@example.com' },
           status: 'confirmed',
@@ -130,6 +133,10 @@ describe('googleCalendar', () => {
       providerCalendarId: 'primary',
       version: 'etag-timed',
       attendees: [{ email: 'guest@example.com', response: 'accepted' }],
+      availability: 'free',
+      privacy: 'private',
+      meetingLink: 'https://meet.google.com/example',
+      timeZone: 'America/New_York',
     })
     expect(page.events[0]).toMatchObject({ startsAt: new Date('2026-08-23T13:00:00.000Z') })
     expect(page.events[1]).toMatchObject({ kind: 'all-day', startDate: '2026-12-25', endDateExclusive: '2026-12-26' })
@@ -149,7 +156,7 @@ describe('googleCalendar', () => {
 
     await provider.createEvent({
       providerCalendarId: 'primary', title: 'Holiday', description: null,
-      location: null, attendees: [], status: 'confirmed', recurrence: { kind: 'none' },
+      location: null, attendees: [], status: 'confirmed', availability: 'free', privacy: 'private', recurrence: { kind: 'none' },
       kind: 'all-day', startDate: '2026-12-25', endDateExclusive: '2026-12-26',
     })
     await provider.updateEvent({
@@ -162,7 +169,7 @@ describe('googleCalendar', () => {
       providerCalendarIds: ['primary'], startsAt: new Date('2026-08-23T13:00:00Z'), endsAt: new Date('2026-08-23T15:00:00Z'),
     })).resolves.toEqual({ busy: [{ providerCalendarId: 'primary', startsAt: new Date('2026-08-23T13:00:00Z'), endsAt: new Date('2026-08-23T14:00:00Z') }] })
 
-    expect(google.createCalendarEvent).toHaveBeenCalledWith(expect.objectContaining({ start: { date: '2026-12-25' }, end: { date: '2026-12-26' } }), 'primary')
+    expect(google.createCalendarEvent).toHaveBeenCalledWith(expect.objectContaining({ start: { date: '2026-12-25' }, end: { date: '2026-12-26' }, transparency: 'transparent', visibility: 'private' }), 'primary')
     expect(google.patchEvent).toHaveBeenCalledWith('primary', 'timed', { summary: 'Moved' }, 'etag-timed')
     expect(google.deleteEvent).toHaveBeenCalledWith('primary', 'timed', 'etag-timed')
     expect(google.patchEvent).toHaveBeenLastCalledWith('primary', 'timed', {

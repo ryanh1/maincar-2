@@ -13,6 +13,9 @@ const EVENT = {
   body: { content: '<p>Discuss forecast</p>' },
   location: { displayName: 'Room 2' },
   webLink: 'https://outlook.example/event-1',
+  onlineMeeting: { joinUrl: 'https://teams.example/event-1' },
+  sensitivity: 'private',
+  showAs: 'free',
   start: { dateTime: '2026-08-23T14:00:00.000', timeZone: 'UTC' },
   end: { dateTime: '2026-08-23T15:00:00.000', timeZone: 'UTC' },
   attendees: [{ emailAddress: { address: 'guest@example.com', name: 'Guest' }, type: 'optional', status: { response: 'accepted' } }],
@@ -97,7 +100,7 @@ describe('microsoftCalendar', () => {
     })
     expect(page.nextCursor).toBe('https://graph.example/calendarView?$skiptoken=next')
     expect(page.events).toMatchObject([
-      { kind: 'timed', providerEventId: 'event-1', providerCalendarId: 'calendar-1', version: 'version-1' },
+      { kind: 'timed', providerEventId: 'event-1', providerCalendarId: 'calendar-1', version: 'version-1', availability: 'free', privacy: 'private', meetingLink: 'https://teams.example/event-1', timeZone: 'UTC' },
       { kind: 'all-day', providerEventId: 'holiday', startDate: '2026-12-25', endDateExclusive: '2026-12-26' },
     ])
   })
@@ -114,7 +117,7 @@ describe('microsoftCalendar', () => {
 
     await provider.createEvent({
       providerCalendarId: 'calendar-1', kind: 'timed', startsAt: new Date('2026-08-23T14:00:00.000Z'), endsAt: new Date('2026-08-23T15:00:00.000Z'),
-      title: 'Pipeline review', description: '<p>Discuss forecast</p>', location: 'Room 2', attendees: [], status: 'confirmed', recurrence: { kind: 'none' },
+      title: 'Pipeline review', description: '<p>Discuss forecast</p>', location: 'Room 2', attendees: [], status: 'confirmed', availability: 'free', privacy: 'private', recurrence: { kind: 'none' },
     })
     await provider.updateEvent({
       providerCalendarId: 'calendar-1', providerEventId: 'occurrence-1', expectedVersion: 'version-1', scope: 'series', patch: { title: 'Updated' },
@@ -122,7 +125,7 @@ describe('microsoftCalendar', () => {
     await provider.deleteEvent({ providerCalendarId: 'calendar-1', providerEventId: 'occurrence-1', expectedVersion: 'version-2', scope: 'series' })
     await provider.respondToEvent({ providerCalendarId: 'calendar-1', providerEventId: 'occurrence-1', scope: 'series', response: 'tentative', comment: 'Maybe' })
 
-    expect(createCalendarEvent).toHaveBeenCalledWith('calendar-1', expect.objectContaining({ subject: 'Pipeline review', isAllDay: false }))
+    expect(createCalendarEvent).toHaveBeenCalledWith('calendar-1', expect.objectContaining({ subject: 'Pipeline review', isAllDay: false, showAs: 'free', sensitivity: 'private' }))
     expect(updateCalendarEvent).toHaveBeenCalledWith(expect.objectContaining({ calendarId: 'calendar-1', eventId: 'series-master', expectedVersion: 'version-1', event: { subject: 'Updated' } }))
     expect(deleteCalendarEvent).toHaveBeenCalledWith({ calendarId: 'calendar-1', eventId: 'series-master', expectedVersion: 'version-2' })
     expect(respondToCalendarEvent).toHaveBeenCalledWith({ calendarId: 'calendar-1', eventId: 'series-master', response: 'tentativelyAccept', comment: 'Maybe' })
