@@ -98,9 +98,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                   onClick={onClose}
                   className={({ isActive }) =>
                     cn(
-                      'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                      'flex items-center gap-3 rounded-md px-3 py-2 text-[13px] transition-colors',
                       isActive
-                        ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                        ? 'bg-primary/8 font-medium text-primary'
                         : 'hover:bg-white/5',
                       // Keep the label clear of the badge floating on the right.
                       showBrokenBadge && 'pr-12',
@@ -171,7 +171,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               </span>
             </button>
           ) : null}
-          <p className="truncate px-1 pb-2 text-xs text-sidebar-foreground/70">{displayName}</p>
+          <p className="truncate px-1 pb-2 text-[11px] text-sidebar-foreground/70">{displayName}</p>
           <Button
             variant="ghost"
             size="sm"
@@ -190,7 +190,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 function NavSection({ children, label }: { children: React.ReactNode; label: string }) {
   return (
     <section className="flex flex-col gap-1" aria-label={label}>
-      <h2 className="px-3 text-xs font-medium text-sidebar-foreground/70">{label}</h2>
+      <h2 className="px-3 text-[11px] font-medium text-sidebar-foreground/70">{label}</h2>
       {children}
     </section>
   )
@@ -198,7 +198,7 @@ function NavSection({ children, label }: { children: React.ReactNode; label: str
 
 function navRowClass(isActive: boolean): string {
   return cn(
-    'flex h-8 items-center gap-3 rounded-md px-3 text-sm transition-colors',
-    isActive ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'hover:bg-white/5',
+    'flex h-8 items-center gap-3 rounded-md px-3 text-[13px] transition-colors',
+    isActive ? 'bg-primary/8 font-medium text-primary' : 'hover:bg-white/5',
   )
 }

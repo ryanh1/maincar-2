@@ -77,7 +77,7 @@ export function OrgSwitcher() {
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-sm text-sidebar-foreground transition-colors hover:bg-white/5"
+            className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-[13px] text-sidebar-foreground transition-colors hover:bg-white/5"
             disabled={switchOrg.isPending}
           >
             <span className="truncate font-medium">{org.name ?? 'Untitled'}</span>
