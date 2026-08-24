@@ -70,6 +70,7 @@ export const queryKeys = {
     // Keyed by org and call id: the detail route scopes the lookup to both, so
     // the cache entry does too.
     detail: (orgId: string, callId: string) => ['calls', 'detail', orgId, callId] as const,
+    comments: (orgId: string, callId: string) => ['calls', 'comments', orgId, callId] as const,
     // Keyed by org only: one Voice SDK Device per rep per org, so one cached
     // token per org is what the Device lifecycle actually needs.
     voiceToken: (orgId: string) => ['calls', 'voiceToken', orgId] as const,

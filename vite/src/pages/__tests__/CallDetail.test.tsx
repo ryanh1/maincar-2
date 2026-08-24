@@ -32,6 +32,23 @@ vi.mock('@/hooks/dialer', () => ({
   useGetCallDetail: useGetCallDetailMock,
   useLogCallDisposition: useLogCallDispositionMock,
 }))
+vi.mock('@/hooks/callComments', () => ({
+  useGetCallComments: () => ({
+    data: { comments: [], total: 0, page: 1, limit: 100 },
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(),
+  }),
+  useCreateCallComment: () => ({ mutateAsync: vi.fn(), error: null }),
+  useDeleteCallComment: () => ({ mutate: vi.fn(), error: null }),
+  useReplyToCallComment: () => ({ mutateAsync: vi.fn(), error: null }),
+  useToggleCallCommentReaction: () => ({ mutate: vi.fn(), error: null }),
+  useUpdateCallComment: () => ({ mutateAsync: vi.fn(), error: null }),
+}))
+vi.mock('@/hooks/orgs', () => ({
+  useGetMembers: () => ({ data: { members: [] }, isError: false }),
+  memberDisplayName: vi.fn(),
+}))
 vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }))
 
 import { CallDetail } from '@/pages/CallDetail'
@@ -269,6 +286,9 @@ describe('the transcript', () => {
     fireEvent.mouseUp(screen.getByTestId('timed-transcript-content'))
 
     expect(screen.getByTestId('speaker-ribbon-selection-range')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Comment on selection' }))
+    expect(screen.getAllByText('“renewal”').length).toBeGreaterThan(0)
+    expect(screen.getByRole('textbox', { name: 'Comment on selected transcript text' })).toBeInTheDocument()
   })
 })
 

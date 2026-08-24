@@ -96,9 +96,41 @@ test('shows the final transcript for an eligible recording and an honest unavail
     recordingUrl: audioUrl,
     review: { ...detail.review, recording: { ...detail.review.recording, source: { ...detail.review.recording.source, url: audioUrl } } },
   }
+  const comments: Array<Record<string, unknown>> = []
+  const createdBodies: Array<Record<string, unknown>> = []
 
   await page.route('**/api/orgs/org-fixture/calls**', async (route) => {
     const pathname = new URL(route.request().url()).pathname
+    if (pathname.endsWith('/calls/call-eligible/comments')) {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ json: { comments, total: comments.length, page: 1, limit: 100 } })
+      }
+      const body = route.request().postDataJSON() as Record<string, unknown>
+      createdBodies.push(body)
+      const comment = {
+        id: `comment-${comments.length + 1}`,
+        parentId: null,
+        atMs: body.atMs,
+        anchorEndMs: body.anchorEndMs ?? null,
+        anchorQuote: body.anchorQuote ?? null,
+        selectionStartChar: body.selectionStartChar ?? null,
+        selectionEndChar: body.selectionEndChar ?? null,
+        transcriptId: body.transcriptId ?? null,
+        bodyJson: body.bodyJson,
+        bodyText: 'Browser comment',
+        deletedAt: null,
+        createdAt: '2026-08-24T01:00:00.000Z',
+        updatedAt: '2026-08-24T01:00:00.000Z',
+        author: { id: 'user-fixture', name: 'Fixture Rep', imageUrl: null },
+        reactions: [],
+        replies: [],
+      }
+      comments.push(comment)
+      return route.fulfill({ status: 201, json: { comment } })
+    }
+    if (pathname.endsWith('/comments')) {
+      return route.fulfill({ json: { comments: [], total: 0, page: 1, limit: 100 } })
+    }
     if (pathname.endsWith('/calls')) {
       return route.fulfill({ json: { calls, total: calls.length, page: 1, limit: 25 } })
     }
@@ -108,6 +140,27 @@ test('shows the final transcript for an eligible recording and an honest unavail
   })
   await page.route('**/api/orgs/org-fixture/dispositions', (route) =>
     route.fulfill({ json: { dispositions: [] } }),
+  )
+  await page.route('**/api/orgs/org-fixture/members**', (route) =>
+    route.fulfill({
+      json: {
+        members: [{
+          userId: 'user-teammate',
+          email: 'ada@example.com',
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          enabled: true,
+          roles: ['basic'],
+          joinedAt: '2026-08-01T12:00:00.000Z',
+          isSelf: false,
+        }],
+        total: 1,
+        page: 1,
+        limit: 200,
+        meta: { activeAdminCount: 1 },
+        viewerRoles: ['basic'],
+      },
+    }),
   )
 
   await page.goto('/__fixtures/call-transcript')
@@ -124,6 +177,12 @@ test('shows the final transcript for an eligible recording and an honest unavail
   await renewalWord.click()
   await expect.poll(() => page.locator('audio').evaluate((audio) => (audio as HTMLAudioElement).currentTime)).toBeCloseTo(1.65, 2)
 
+  await page.getByRole('button', { name: 'Comment at 00:01' }).click()
+  await page.getByRole('textbox', { name: 'Comment at 00:01' }).fill('Playhead note')
+  await page.getByRole('button', { name: 'Post comment' }).click()
+  await expect(page.getByText('Playhead note')).toBeVisible()
+  expect(createdBodies[0]).toMatchObject({ atMs: 1_650 })
+
   await page.getByRole('searchbox', { name: 'Search transcript' }).fill('renewal')
   await expect(page.getByText('1 of 1')).toBeVisible()
   await expect(page.getByTestId('speaker-ribbon-marker-transcript-search-0')).toBeVisible()
@@ -133,6 +192,30 @@ test('shows the final transcript for an eligible recording and an honest unavail
   await expect(page.getByRole('button', { name: 'Jump to current' })).toBeVisible()
   await page.getByRole('button', { name: 'Jump to current' }).click()
   await expect(page.getByRole('button', { name: 'Jump to current' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'renewal, 00:01' }).evaluate((button) => {
+    const piece = button.querySelector<HTMLElement>('[data-transcript-piece]')
+    const text = piece && document.createTreeWalker(piece, NodeFilter.SHOW_TEXT).nextNode()
+    if (!piece || !text) throw new Error('Timed word text did not render')
+    const range = document.createRange()
+    range.setStart(text, 0)
+    range.setEnd(text, text.textContent?.length ?? 0)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    piece.closest('[data-testid="timed-transcript-content"]')?.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+  })
+  await page.getByRole('button', { name: 'Comment on selection' }).click()
+  await expect(page.getByRole('tabpanel', { name: 'Comments' }).getByText('“renewal”')).toBeVisible()
+  await page.getByRole('textbox', { name: 'Comment on selected transcript text' }).fill('Selection note')
+  await page.getByRole('button', { name: 'Post comment' }).click()
+  await expect(page.getByText('Selection note')).toBeVisible()
+  expect(createdBodies[1]).toMatchObject({
+    atMs: 1_650,
+    anchorEndMs: 2_000,
+    anchorQuote: 'renewal',
+    transcriptId: 'pass-fixture',
+  })
 
   await page.getByRole('link', { name: 'Back' }).click()
   await page.getByRole('link', { name: '+12015550122' }).click()

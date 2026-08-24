@@ -1,12 +1,14 @@
 import { useCallback, useRef, useState, type PointerEvent } from 'react'
-import { Check, Copy, Download, Phone } from 'lucide-react'
+import { Check, Copy, Download, MessageSquarePlus, Phone } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { AudioPlayer, type AudioMediaSource } from '@/components/call-review/AudioPlayer'
+import { CallCommentsRail } from '@/components/call-review/CallCommentsRail'
 import type { SpeakerRibbonSpeaker } from '@/components/call-review/SpeakerRibbon'
 import { TimedTranscript, type TimedTranscriptSelection } from '@/components/call-review/TimedTranscript'
 import { Button } from '@/components/ui/button'
 import type { CallDetail } from '@/hooks/dialer'
+import type { CallCommentDraftAnchor } from '@/lib/callCommentTypes'
 import { getCallDirectionLabel, getCallStatusLabel } from '@/lib/callLabels'
 import { formatDateTime } from '@/lib/datetime'
 import { formatElapsed } from '@/lib/duration'
@@ -36,10 +38,28 @@ function getSpeakerLabel(speakerKey: string, speaker: NonNullable<CallDetail['re
 }
 
 /** The call-review frame keeps both panes mounted across responsive navigation. */
-export function CallDetail_Workbench({ call, timeZone, userId }: { call: CallDetail; timeZone: string | null | undefined; userId: string | null | undefined }) {
+export function CallDetail_Workbench({
+  call,
+  orgId,
+  timeZone,
+  userId,
+}: {
+  call: CallDetail
+  orgId: string
+  timeZone: string | null | undefined
+  userId: string
+}) {
   const [layout, setLayout] = useState<CallReviewLayout>(() => getStoredCallReviewLayout(userId))
   const [activePane, setActivePane] = useState<Pane>('playback')
+  const [currentTimeMs, setCurrentTimeMs] = useState(0)
+  const [selection, setSelection] = useState<TimedTranscriptSelection | null>(null)
+  const [seekRequest, setSeekRequest] = useState<{ atMs: number; sequence: number } | null>(null)
+  const [commentDraft, setCommentDraft] = useState<CallCommentDraftAnchor | null>(null)
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
   const workbenchRef = useRef<HTMLDivElement>(null)
+  const requestSeek = useCallback((atMs: number) => {
+    setSeekRequest((current) => ({ atMs, sequence: (current?.sequence ?? 0) + 1 }))
+  }, [])
 
   function updateLayout(next: CallReviewLayout): void {
     setLayout(next)
@@ -104,19 +124,67 @@ export function CallDetail_Workbench({ call, timeZone, userId }: { call: CallDet
         <button type="button" role="tab" id="call-review-comments-tab" aria-controls="call-review-comments" aria-selected={activePane === 'comments'} className={cn('h-8 flex-1 rounded-md text-sm font-medium', activePane === 'comments' && 'bg-bg')} onClick={() => setActivePane('comments')}>Comments</button>
       </div>
       <div ref={workbenchRef} className="flex min-h-0 flex-1 flex-col overflow-hidden border border-border bg-bg md:flex-row">
-        <section id="call-review-playback" role="tabpanel" aria-labelledby="call-review-playback-tab" className={cn('min-h-0 flex-col overflow-y-auto md:flex', activePane === 'playback' ? 'flex' : 'hidden')} style={{ flexBasis: `${layout.playbackWidth}%` }}><PlaybackPane key={call.id} call={call} timeZone={timeZone} /></section>
+        <section id="call-review-playback" role="tabpanel" aria-labelledby="call-review-playback-tab" className={cn('min-h-0 flex-col overflow-y-auto md:flex', activePane === 'playback' ? 'flex' : 'hidden')} style={{ flexBasis: `${layout.playbackWidth}%` }}>
+          <PlaybackPane
+            key={call.id}
+            call={call}
+            timeZone={timeZone}
+            currentTimeMs={currentTimeMs}
+            selection={selection}
+            seekRequest={seekRequest}
+            onTimeChange={setCurrentTimeMs}
+            onSelectionChange={setSelection}
+            onSeek={requestSeek}
+            onCommentSelection={(draft) => {
+              setCommentDraft(draft)
+              setActivePane('comments')
+            }}
+          />
+        </section>
         <div role="separator" aria-label="Resize playback and comments panes" aria-orientation="vertical" aria-valuemin={30} aria-valuemax={70} aria-valuenow={layout.playbackWidth} tabIndex={0} className="hidden w-2 shrink-0 cursor-col-resize border-x border-border bg-surface focus-visible:bg-surface-2 focus-visible:outline-none md:block" onPointerDown={startResize} onKeyDown={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); resizeWithKeyboard(event.key) } }} />
-        <section id="call-review-comments" role="tabpanel" aria-labelledby="call-review-comments-tab" className={cn('min-h-0 flex-1 flex-col overflow-y-auto md:flex', activePane === 'comments' ? 'flex' : 'hidden')}><CommentsPane /></section>
+        <section id="call-review-comments" role="tabpanel" aria-labelledby="call-review-comments-tab" className={cn('min-h-0 flex-1 flex-col overflow-y-auto md:flex', activePane === 'comments' ? 'flex' : 'hidden')}>
+          <CallCommentsRail
+            orgId={orgId}
+            callId={call.id}
+            currentUserId={userId}
+            timeZone={timeZone}
+            currentTimeMs={currentTimeMs}
+            draft={commentDraft}
+            activeCommentId={activeCommentId}
+            onDraftChange={setCommentDraft}
+            onActivate={(commentId, atMs) => {
+              setActiveCommentId(commentId)
+              requestSeek(atMs)
+            }}
+          />
+        </section>
       </div>
     </div>
   )
 }
 
-function PlaybackPane({ call, timeZone }: { call: CallDetail; timeZone: string | null | undefined }) {
-  const [currentTimeMs, setCurrentTimeMs] = useState(0)
+function PlaybackPane({
+  call,
+  timeZone,
+  currentTimeMs,
+  selection,
+  seekRequest,
+  onTimeChange,
+  onSelectionChange,
+  onSeek,
+  onCommentSelection,
+}: {
+  call: CallDetail
+  timeZone: string | null | undefined
+  currentTimeMs: number
+  selection: TimedTranscriptSelection | null
+  seekRequest: { atMs: number; sequence: number } | null
+  onTimeChange: (atMs: number) => void
+  onSelectionChange: (selection: TimedTranscriptSelection | null) => void
+  onSeek: (atMs: number) => void
+  onCommentSelection: (draft: CallCommentDraftAnchor) => void
+}) {
   const [searchTicks, setSearchTicks] = useState<Array<{ id: string; time: number }>>([])
-  const [selection, setSelection] = useState<TimedTranscriptSelection | null>(null)
-  const [seekRequest, setSeekRequest] = useState<{ atMs: number; sequence: number } | null>(null)
   const review = call.review
   const source = review?.recording.source?.kind === 'audio'
     ? review.recording.source as AudioMediaSource
@@ -133,21 +201,41 @@ function PlaybackPane({ call, timeZone }: { call: CallDetail; timeZone: string |
     speakerLabels.set(speakerKey, label)
   }
   const ribbonSpeakers: SpeakerRibbonSpeaker[] = speakerKeys.map((speakerKey) => ({ speakerKey, label: speakerLabels.get(speakerKey) ?? speakerKey }))
-  const requestSeek = useCallback((atMs: number) => {
-    setSeekRequest((current) => ({ atMs, sequence: (current?.sequence ?? 0) + 1 }))
-  }, [])
-  const handleTimeChange = useCallback((time: number) => setCurrentTimeMs(Math.round(time * 1_000)), [])
+  const handleTimeChange = useCallback((time: number) => onTimeChange(Math.round(time * 1_000)), [onTimeChange])
   const speakerLabelRecord = Object.fromEntries(speakerLabels)
   const selectionRange = selection ? { start: selection.startMs / 1_000, end: selection.endMs / 1_000 } : null
   return <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
     <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">Playback</h2></div>
     <section aria-labelledby="recording-title" className="border border-border bg-surface p-3"><h3 id="recording-title" className="text-sm font-semibold">Recording</h3>{source ? <div className="mt-3 flex flex-col gap-3"><AudioPlayer source={source} recordingState={review?.recording.state ?? 'ready'} callLabel={call.toE164} segments={segments} speakers={ribbonSpeakers} selectionRange={selectionRange} searchTicks={searchTicks} seekRequest={seekRequest} onTimeChange={handleTimeChange} /><div><Button asChild variant="secondary" size="sm"><a href={source.url} download><Download size={16} aria-hidden />Download</a></Button></div></div> : <p className="mt-3 text-sm text-text-muted">{recordingMessage(call)}</p>}</section>
     <CallFacts call={call} timeZone={timeZone} />
-    <section aria-labelledby="transcript-title" className="flex min-h-64 flex-1 flex-col border border-border p-3"><div className="flex items-center justify-between gap-2"><h3 id="transcript-title" className="text-sm font-semibold">Transcript</h3>{transcript?.trim() && <CopyTranscriptButton text={transcript} />}</div><div className="mt-3 flex min-h-0 flex-1 flex-col">{segments.length > 0 ? <TimedTranscript segments={segments} speakerLabels={speakerLabelRecord} currentTimeMs={currentTimeMs} onSeek={source ? requestSeek : undefined} onSearchTicksChange={setSearchTicks} onSelectionChange={setSelection} /> : transcript?.trim() ? <p className="text-sm whitespace-pre-wrap">{transcript}</p> : <p className="text-sm text-text-muted">{transcriptMessage(call)}</p>}</div></section>
+    <section aria-labelledby="transcript-title" className="flex min-h-64 flex-1 flex-col border border-border p-3">
+      <div className="flex items-center justify-between gap-2"><h3 id="transcript-title" className="text-sm font-semibold">Transcript</h3>{transcript?.trim() && <CopyTranscriptButton text={transcript} />}</div>
+      {selection && review?.transcript.pass?.id && (
+        <div className="mt-2 flex items-center justify-between gap-2 border border-primary bg-surface p-2">
+          <p className="truncate text-xs text-text-muted">“{selection.quote}”</p>
+          <Button
+            type="button"
+            size="sm"
+            className="shrink-0"
+            onClick={() => onCommentSelection({
+              kind: 'selection',
+              atMs: selection.atMs,
+              anchorEndMs: selection.endMs,
+              anchorQuote: selection.quote,
+              selectionStartChar: selection.startChar,
+              selectionEndChar: selection.endChar,
+              transcriptId: review.transcript.pass!.id,
+            })}
+          >
+            <MessageSquarePlus size={16} aria-hidden />
+            Comment on selection
+          </Button>
+        </div>
+      )}
+      <div className="mt-3 flex min-h-0 flex-1 flex-col">{segments.length > 0 ? <TimedTranscript segments={segments} speakerLabels={speakerLabelRecord} currentTimeMs={currentTimeMs} onSeek={source ? onSeek : undefined} onSearchTicksChange={setSearchTicks} onSelectionChange={onSelectionChange} /> : transcript?.trim() ? <p className="text-sm whitespace-pre-wrap">{transcript}</p> : <p className="text-sm text-text-muted">{transcriptMessage(call)}</p>}</div>
+    </section>
   </div>
 }
-
-function CommentsPane() { return <div className="flex min-h-0 flex-1 flex-col gap-3 p-4"><h2 className="text-sm font-semibold">Comments</h2><div className="border border-border bg-surface p-3"><p className="text-sm text-text-muted">Comments will appear here.</p></div></div> }
 
 function CallFacts({ call, timeZone }: { call: CallDetail; timeZone: string | null | undefined }) {
   const facts: { label: string; value: string; numeric?: boolean }[] = [
