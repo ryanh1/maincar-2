@@ -2,12 +2,14 @@ import { expect, test } from '@playwright/test'
 
 import type { CalendarEvent } from '@/lib/calendarTypes'
 
-test('creates, edits, moves, resizes, and deletes an event in Chromium', async ({ page }) => {
+test('schedules a recurring meeting with invitees and manages its scope in Chromium', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   const consoleErrors: string[] = []
   const mutationMethods: string[] = []
+  let createdRequest: Record<string, unknown> | null = null
   let events: CalendarEvent[] = [{
     id: 'event-1',
+    providerEventId: 'provider-event-1',
     sourceId: 'source-1',
     title: 'Customer kickoff',
     startsAt: '2026-08-24T13:00:00.000Z',
@@ -22,6 +24,10 @@ test('creates, edits, moves, resizes, and deletes an event in Chromium', async (
     webLink: null,
     meetingLink: 'https://meet.example.com/kickoff',
     providerVersion: 'v1',
+    recurrenceKind: 'none',
+    providerSeriesId: null,
+    recurrenceRule: null,
+    attendees: [],
     links: [],
     source: { id: 'source-1', name: 'Primary calendar', provider: 'google' },
   }]
@@ -41,18 +47,25 @@ test('creates, edits, moves, resizes, and deletes an event in Chromium', async (
           id: 'source-1', provider: 'google', providerCalendarId: 'primary', name: 'Primary calendar',
           description: null, timeZone: 'America/New_York', accessRole: 'owner', isPrimary: true,
           isSelected: true, lastSyncedAt: '2026-08-23T12:00:00.000Z',
+          capabilities: { recurrence: true, rsvp: true, availability: true },
+          recurrenceScopes: ['this-event', 'this-and-following', 'series'],
         }],
       } })
     }
     if (url.pathname === '/api/calendar/orgs/org-fixture/events' && method === 'GET') {
       return route.fulfill({ json: { calendar: { state: 'connected' }, events, total: events.length, page: 1, limit: 200 } })
     }
+    if (url.pathname === '/api/calendar/orgs/org-fixture/sources/source-1/availability' && method === 'GET') {
+      return route.fulfill({ json: { availability: { state: 'available', busy: [{ sourceId: 'source-1', startsAt: '2026-08-25T13:00:00.000Z', endsAt: '2026-08-25T14:00:00.000Z' }] } } })
+    }
     if (url.pathname === '/api/calendar/orgs/org-fixture/events' && method === 'POST') {
       mutationMethods.push(method)
       const body = request.postDataJSON()
+      createdRequest = body
       const time = body.time
       const event: CalendarEvent = {
         id: `event-${events.length + 1}`,
+        providerEventId: `provider-event-${events.length + 1}`,
         sourceId: body.sourceId,
         title: body.title,
         startsAt: time.kind === 'timed' ? time.startsAt : time.startDate,
@@ -67,6 +80,10 @@ test('creates, edits, moves, resizes, and deletes an event in Chromium', async (
         webLink: null,
         meetingLink: body.meetingLink ?? null,
         providerVersion: 'v1',
+        recurrenceKind: body.recurrence?.kind ?? 'none',
+        providerSeriesId: body.recurrence?.providerSeriesId ?? null,
+        recurrenceRule: body.recurrence?.recurrenceRule ?? null,
+        attendees: body.attendees ?? [],
         links: body.links ?? [],
         source: { id: 'source-1', name: 'Primary calendar', provider: 'google' },
       }
@@ -116,11 +133,21 @@ test('creates, edits, moves, resizes, and deletes an event in Chromium', async (
   await page.getByLabel('Location').fill('Conference room 2')
   await page.getByLabel('Description').fill('Review launch readiness')
   await page.getByLabel('Meeting link').fill('https://meet.example.com/planning')
+  await page.getByLabel('Guests').fill('guest@example.com')
+  await page.getByLabel('Repeat event').click()
+  await page.getByRole('option', { name: 'Weekly' }).click()
+  await page.getByRole('button', { name: 'Find a time' }).click()
+  await page.locator('[aria-label="Available times"] button').first().click()
   await page.getByRole('button', { name: 'Create event' }).click()
   await expect(page.getByRole('button', { name: /^Planning review,/ })).toBeVisible()
+  expect(createdRequest).toMatchObject({
+    attendees: [{ email: 'guest@example.com', response: 'needs-action' }],
+    recurrence: { kind: 'series', recurrenceRule: 'RRULE:FREQ=WEEKLY;BYDAY=TU' },
+  })
 
   await page.getByRole('button', { name: /^Planning review,/ }).click()
   await expect(page.getByText('Open meeting link')).toBeVisible()
+  await expect(page.getByText('guest@example.com')).toBeVisible()
   await page.getByRole('button', { name: 'Edit event' }).click()
   await page.getByLabel('Title').fill('Planning review updated')
   await page.getByRole('button', { name: 'Save changes' }).click()
@@ -128,12 +155,19 @@ test('creates, edits, moves, resizes, and deletes an event in Chromium', async (
 
   const eventCard = page.getByRole('button', { name: /^Planning review updated,/ }).locator('..')
   await eventCard.dragTo(page.locator('section[aria-label="Wednesday, August 26"]'))
+  await expect(page.getByRole('heading', { name: 'Move recurring event' })).toBeVisible()
+  await page.getByRole('button', { name: 'Move events' }).click()
   await expect(page.locator('section[aria-label="Wednesday, August 26"]')).toContainText('Planning review updated')
   await page.getByRole('button', { name: 'Resize Planning review updated' }).press('ArrowDown')
-  await expect.poll(() => events.find((event) => event.title === 'Planning review updated')?.endsAt).toBe('2026-08-26T15:00:00.000Z')
+  await expect(page.getByRole('heading', { name: 'Resize recurring event' })).toBeVisible()
+  await page.getByRole('button', { name: 'Resize events' }).click()
+  await expect.poll(() => {
+    const event = events.find((item) => item.title === 'Planning review updated')
+    return event ? (new Date(event.endsAt).getTime() - new Date(event.startsAt).getTime()) / 60_000 : null
+  }).toBe(45)
 
   await page.mouse.move(0, 0)
-  await page.screenshot({ path: 'test-results/mai-423-calendar-workspace.png', fullPage: true })
+  await page.screenshot({ path: 'test-results/mai-424-calendar-scheduling-collaboration.png', fullPage: true })
   await page.getByRole('button', { name: /^Planning review updated,/ }).focus()
   await page.keyboard.press('Enter')
   await page.getByRole('button', { name: 'Delete' }).click()

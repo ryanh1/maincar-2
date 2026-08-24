@@ -14,8 +14,10 @@ import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/com
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useMentionSuggestions } from '@/components/editor/useMentionSuggestions'
-import type { CalendarEvent, CalendarEventCreateInput, CalendarEventPatch, CalendarRecordLink, CalendarSource } from '@/lib/calendarTypes'
+import type { CalendarAttendeeResponse, CalendarEvent, CalendarEventCreateInput, CalendarEventPatch, CalendarRecordLink, CalendarRecurrenceScope, CalendarSource } from '@/lib/calendarTypes'
 import { formatDate, formatDateTime, formatTimeZoneName, zonedDateTimeParts, zonedDateTimeToIso } from '@/lib/datetime'
+import { CalendarWorkspace_EventCollaboration, CalendarWorkspace_RecurrenceScopeSelect } from './CalendarWorkspace_EventCollaboration'
+import { CalendarWorkspace_SchedulingFields, type CalendarRepeatMode } from './CalendarWorkspace_SchedulingFields'
 
 type EditorValue = {
   title: string
@@ -31,6 +33,18 @@ type EditorValue = {
   privacy: CalendarEvent['privacy']
   meetingLink: string
   links: string[]
+  guestEmails: string
+  repeatMode: CalendarRepeatMode
+  recurrenceRule: string
+}
+
+function repeatMode(event: CalendarEvent): CalendarRepeatMode {
+  const rule = event.recurrenceRule ?? ''
+  if (event.recurrenceKind !== 'series') return 'none'
+  if (/^RRULE:FREQ=DAILY(?:;|$)/.test(rule)) return 'daily'
+  if (/^RRULE:FREQ=WEEKLY(?:;|$)/.test(rule)) return 'weekly'
+  if (/^RRULE:FREQ=MONTHLY(?:;|$)/.test(rule)) return 'monthly'
+  return 'custom'
 }
 
 function linkValue(link: CalendarRecordLink): string {
@@ -76,6 +90,9 @@ function toEditorValue(
       privacy: 'default',
       meetingLink: '',
       links: [],
+      guestEmails: '',
+      repeatMode: 'none',
+      recurrenceRule: '',
     }
   }
   const start = zonedDateTimeParts(event.startsAt, timeZone)
@@ -94,6 +111,9 @@ function toEditorValue(
     privacy: event.privacy ?? 'default',
     meetingLink: event.meetingLink ?? '',
     links: (event.links ?? []).map(linkValue),
+    guestEmails: event.attendees.map((attendee) => attendee.email).join(', '),
+    repeatMode: repeatMode(event),
+    recurrenceRule: event.recurrenceRule ?? '',
   }
 }
 
@@ -108,11 +128,42 @@ function validTimeZone(value: string): boolean {
 
 function eventPayload(
   value: EditorValue,
+  event: CalendarEvent | null,
 ): { input: CalendarEventCreateInput | CalendarEventPatch } | { error: string } {
   const links = value.links.flatMap((item) => {
     const parsed = parseLinkValue(item)
     return parsed ? [parsed] : []
   })
+  const attendeeByEmail = new Map((event?.attendees ?? []).map((attendee) => [attendee.email.toLowerCase(), attendee]))
+  const guestEmails = [...new Set(value.guestEmails.split(/[\s,;]+/).map((email) => email.trim().toLowerCase()).filter(Boolean))]
+  const invalidGuest = guestEmails.find((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+  if (invalidGuest) return { error: `Enter a valid email address for ${invalidGuest}.` }
+  const attendees = guestEmails.map((email) => attendeeByEmail.get(email) ?? {
+    email,
+    isOptional: false,
+    isResource: false,
+    response: 'needs-action' as const,
+  })
+  const dayCode = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'][value.date.getDay()]
+  const preserveProviderRule = !!event?.recurrenceRule
+    && value.repeatMode === repeatMode(event)
+    && value.recurrenceRule === event.recurrenceRule
+  const recurrenceRule = preserveProviderRule ? value.recurrenceRule
+    : value.repeatMode === 'daily' ? 'RRULE:FREQ=DAILY'
+      : value.repeatMode === 'weekly' ? `RRULE:FREQ=WEEKLY;BYDAY=${dayCode}`
+        : value.repeatMode === 'monthly' ? `RRULE:FREQ=MONTHLY;BYMONTHDAY=${value.date.getDate()}`
+          : value.repeatMode === 'custom' ? value.recurrenceRule.trim() : ''
+  if (value.repeatMode === 'custom' && !/^RRULE:FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)(?:;|$)/i.test(recurrenceRule)) {
+    return { error: 'Enter a supported provider recurrence rule.' }
+  }
+  const recurrence = value.repeatMode === 'none'
+    ? { kind: 'none' as const }
+    : {
+        kind: 'series' as const,
+        providerSeriesId: event?.providerSeriesId ?? 'new-series',
+        recurrenceRule,
+        originalStart: event?.originalStartAt ?? event?.originalStartDate ?? null,
+      }
   const common = {
     title: value.title.trim() || null,
     location: value.location.trim() || null,
@@ -122,6 +173,8 @@ function eventPayload(
     meetingLink: value.meetingLink.trim() || null,
     timeZone: value.timeZone,
     links,
+    attendees,
+    recurrence,
   }
 
   if (!validTimeZone(value.timeZone)) return { error: 'Enter a valid IANA timezone.' }
@@ -156,7 +209,7 @@ interface FullEditorProps {
   open: boolean
   busy: boolean
   onOpenChange: (open: boolean) => void
-  onSave: (input: CalendarEventCreateInput | CalendarEventPatch, event: CalendarEvent | null) => void
+  onSave: (input: CalendarEventCreateInput | CalendarEventPatch, event: CalendarEvent | null, scope: CalendarRecurrenceScope) => void
 }
 
 export function CalendarWorkspace_EventEditor({
@@ -174,6 +227,7 @@ export function CalendarWorkspace_EventEditor({
   const defaultSourceId = sources.find((source) => source.isPrimary)?.id ?? sources[0]?.id ?? ''
   const [value, setValue] = useState(() => toEditorValue(event, date, defaultSourceId, timeZone, initialTitle))
   const [error, setError] = useState('')
+  const [scope, setScope] = useState<CalendarRecurrenceScope>('this-event')
   const mentions = useMentionSuggestions(orgId)
   const recordOptions = useMemo(() => mentions.items.flatMap((item) => {
     if (item.kind === 'teammate') return []
@@ -183,6 +237,7 @@ export function CalendarWorkspace_EventEditor({
 
   const update = (patch: Partial<EditorValue>) => setValue((current) => ({ ...current, ...patch }))
   const selectedProvider = sources.find((source) => source.id === value.sourceId)?.provider
+  const selectedSource = sources.find((source) => source.id === value.sourceId)
   const selectSource = (sourceId: string) => {
     const provider = sources.find((source) => source.id === sourceId)?.provider
     update({ sourceId, ...(provider === 'microsoft' && value.privacy === 'public' ? { privacy: 'default' } : {}) })
@@ -192,9 +247,9 @@ export function CalendarWorkspace_EventEditor({
   if (Number.isFinite(currentDuration) && !durationOptions.includes(currentDuration)) durationOptions.push(currentDuration)
   durationOptions.sort((left, right) => left - right)
   const submit = () => {
-    const result = eventPayload(value)
+    const result = eventPayload(value, event)
     if ('error' in result) return setError(result.error)
-    onSave(event ? result.input : { ...result.input, sourceId: value.sourceId } as CalendarEventCreateInput, event)
+    onSave(event ? result.input : { ...result.input, sourceId: value.sourceId } as CalendarEventCreateInput, event, scope)
   }
 
   return (
@@ -246,6 +301,21 @@ export function CalendarWorkspace_EventEditor({
               <p className="text-xs text-text-muted">Times use {validTimeZone(value.timeZone) ? formatTimeZoneName(value.date, value.timeZone) : 'the selected IANA timezone'}.</p>
             </div>
           ) : null}
+          <CalendarWorkspace_SchedulingFields
+            orgId={orgId}
+            source={selectedSource}
+            date={value.date}
+            timeZone={value.timeZone}
+            durationMinutes={Number(value.durationMinutes)}
+            guestEmails={value.guestEmails}
+            repeatMode={value.repeatMode}
+            recurrenceRule={value.recurrenceRule}
+            onGuestEmailsChange={(guestEmails) => update({ guestEmails })}
+            onRepeatChange={(repeatMode) => update({ repeatMode })}
+            onRecurrenceRuleChange={(recurrenceRule) => update({ recurrenceRule })}
+            onChooseTime={(startTime) => update({ startTime })}
+          />
+          {event?.recurrenceKind === 'series' ? <CalendarWorkspace_RecurrenceScopeSelect label="Apply changes to" source={selectedSource} value={scope} onValueChange={setScope} /> : null}
           <div className="flex flex-col gap-1">
             <Label htmlFor="calendar-event-location">Location</Label>
             <Input id="calendar-event-location" className="h-8" value={value.location} onChange={(input) => update({ location: input.target.value })} />
@@ -322,16 +392,21 @@ export function CalendarWorkspace_QuickCreate({ open, date, onOpenChange, onCrea
 
 interface DetailsProps {
   event: CalendarEvent | null
+  source: CalendarSource | undefined
+  userEmail: string | null | undefined
   timeZone: string | null | undefined
   busy: boolean
   onOpenChange: (open: boolean) => void
   onEdit: () => void
   onDuplicate: () => void
-  onDelete: () => void
+  onDelete: (scope: CalendarRecurrenceScope) => void
+  onRespond: (response: Exclude<CalendarAttendeeResponse, 'needs-action'>, scope: CalendarRecurrenceScope) => void
 }
 
-export function CalendarWorkspace_EventDetails({ event, timeZone, busy, onOpenChange, onEdit, onDuplicate, onDelete }: DetailsProps) {
+export function CalendarWorkspace_EventDetails({ event, source, userEmail, timeZone, busy, onOpenChange, onEdit, onDuplicate, onDelete, onRespond }: DetailsProps) {
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleteScope, setDeleteScope] = useState<CalendarRecurrenceScope>('this-event')
+  const [responseScope, setResponseScope] = useState<CalendarRecurrenceScope>('this-event')
   return (
     <>
       <Sheet open={!!event} onOpenChange={onOpenChange}>
@@ -345,6 +420,7 @@ export function CalendarWorkspace_EventDetails({ event, timeZone, busy, onOpenCh
               {event.meetingLink ? <a className="text-sm text-primary underline" href={event.meetingLink} target="_blank" rel="noreferrer">Open meeting link</a> : null}
               {event.description ? <p className="whitespace-pre-wrap text-sm">{event.description}</p> : null}
               {event.links.length ? <p className="text-xs text-text-muted">{event.links.length} linked CRM {event.links.length === 1 ? 'record' : 'records'}</p> : null}
+              <CalendarWorkspace_EventCollaboration event={event} source={source} userEmail={userEmail} busy={busy} responseScope={responseScope} onResponseScopeChange={setResponseScope} onRespond={(response) => onRespond(response, responseScope)} />
             </div>
           ) : null}
           <SheetFooter className="border-t border-border">
@@ -362,9 +438,10 @@ export function CalendarWorkspace_EventDetails({ event, timeZone, busy, onOpenCh
             <AlertDialogTitle>Delete {event?.title ?? 'this event'}?</AlertDialogTitle>
             <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
           </AlertDialogHeader>
+          {event?.recurrenceKind === 'series' ? <CalendarWorkspace_RecurrenceScopeSelect label="Delete" source={source} value={deleteScope} onValueChange={setDeleteScope} /> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" disabled={busy} onClick={() => { setConfirmDelete(false); onDelete() }}>Delete event</AlertDialogAction>
+            <AlertDialogAction variant="destructive" disabled={busy} onClick={() => { setConfirmDelete(false); onDelete(deleteScope) }}>Delete event</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -216,5 +216,6 @@ export const queryKeys = {
     all: (orgId: string) => ['calendar', orgId] as const,
     sources: (orgId: string) => ['calendar', orgId, 'sources'] as const,
     events: (orgId: string, query: Record<string, unknown>) => ['calendar', orgId, 'events', query] as const,
+    availability: (orgId: string, sourceId: string, query: Record<string, unknown>) => ['calendar', orgId, 'availability', sourceId, query] as const,
   },
 } as const

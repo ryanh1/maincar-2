@@ -2,9 +2,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { jsonFetch } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
-import type { CalendarEventPatch } from '@/lib/calendarTypes'
+import type { CalendarEventPatch, CalendarRecurrenceScope } from '@/lib/calendarTypes'
 
-export interface UpdateCalendarEventVariables { orgId: string; eventId: string; expectedVersion: string | null; patch: CalendarEventPatch }
+export interface UpdateCalendarEventVariables { orgId: string; eventId: string; expectedVersion: string | null; scope: CalendarRecurrenceScope; patch: CalendarEventPatch }
 
 /** Updates one provider event conditionally, preserving conflict feedback from the API. */
 export function useUpdateCalendarEvent() {
