@@ -223,6 +223,7 @@ const teamScopeSchema = z.object({
 const sortSpecSchema = z.object({ field: z.string().min(1), direction: z.enum(['asc', 'desc']) })
 const listBodySchema = z.object({
   filter: filterNodeSchema.nullish(),
+  search: z.string().trim().min(1).max(200).optional(),
   // Accept the MAI-163 shape while callers move to MAI-326's ordered sort array.
   sort: z.union([sortSpecSchema, z.array(sortSpecSchema).min(1)]).nullish(),
   groupBy: z.array(z.string().min(1)).min(1).max(2).nullish(),

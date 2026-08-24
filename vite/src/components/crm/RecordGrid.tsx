@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { EmptyState } from '@/components/EmptyState'
 import { useCreateRecord, useGetFieldChanges, useRecordWindow, useUpdateRecordValue } from '@/hooks/crm'
 import { useGetCellStyles, useSetCellStyle } from '@/hooks/cellStyles'
 import { useGetColorRules, type ColorRule } from '@/hooks/colorRules'
@@ -78,6 +79,7 @@ const JUST_CALLED_MARKER_MS = 5_000
 const GRID_HEADER_ICONS: NonNullable<DataEditorProps['headerIcons']> = {
   activeFilter: ({ fgColor }) => `<svg width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 5h12l-4.5 5v4l-3 1v-5L4 5Z" stroke="${fgColor}" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
 }
+const SEARCH_DEBOUNCE_MS = 300
 
 function drawFiniteCellBorders(
   ctx: CanvasRenderingContext2D,
@@ -340,8 +342,20 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     [visibleColumns, config, configuredColumns, zoomFactor, colors],
   )
   const listQuery = useMemo(() => toRecordListQuery(config, attributes), [config, attributes])
-  const { rows, totalCount, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
-    useRecordWindow(orgId, object.id, { ...listQuery, includeArchived })
+  const [searchValue, setSearchValue] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const search = searchValue.trim()
+    if (!search) return
+    const timeout = window.setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timeout)
+  }, [searchValue])
+  const updateSearchValue = (value: string) => {
+    setSearchValue(value)
+    if (!value.trim()) setDebouncedSearch('')
+  }
+  const { rows, totalCount, totalCountBeforeSearch, isPending, isFetching, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } =
+    useRecordWindow(orgId, object.id, { ...listQuery, ...(debouncedSearch ? { search: debouncedSearch } : {}), includeArchived })
   const cellStylesQuery = useGetCellStyles(orgId, viewId ?? null)
   const setCellStyle = useSetCellStyle()
   const paintByCell = useMemo(
@@ -1386,6 +1400,18 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
     }
     onLayoutChange?.(nextLayout)
   }
+  const searchPending = searchValue.trim() !== debouncedSearch || (Boolean(debouncedSearch) && isFetching)
+  const searchEmpty = Boolean(debouncedSearch) && !isFetching && totalCount === 0
+  const searchCount = (
+    <RecordCount filteredCount={totalCount} isFiltered={Boolean(debouncedSearch)} totalCount={totalCountBeforeSearch ?? totalCount} />
+  )
+  const searchEmptyState = (
+    <div className="flex min-h-0 flex-1 items-start justify-center p-6">
+      <EmptyState title="No records match this search.">
+        <Button type="button" variant="secondary" size="sm" onClick={() => updateSearchValue('')}>Clear search</Button>
+      </EmptyState>
+    </div>
+  )
 
   if (layout === 'kanban') {
     return (
@@ -1400,19 +1426,25 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
             teamScopeSupported={teamScopeSupported}
             layout={layout}
             onLayoutChange={setLayout}
+            searchValue={searchValue}
+            searchPending={searchPending}
+            onSearchChange={updateSearchValue}
+            onFindInGrid={() => { setFindOpen(true); setReplaceOpen(false) }}
             onFormat={(anchor) => setFormatPanel({ anchor, attributeId: null })}
-            trailing={<RecordCount filteredCount={totalCount} isFiltered={false} totalCount={totalCount} />}
+            trailing={searchCount}
           />
         )}
         {onViewConfigChange && <AppliedGridConstraints attributes={columns} config={config} onConfigChange={onViewConfigChange} />}
-        <KanbanBoard
-          attributes={columns}
-          config={config}
-          rows={kanbanRows}
-          onRecordMove={kanbanGroupAttribute?.isReadOnly ? undefined : moveKanbanRecord}
-          selectedRecordIds={rowSelection.selectedIds}
-          onToggleRecordSelection={rowSelection.toggle}
-        />
+        {searchEmpty ? searchEmptyState : (
+          <KanbanBoard
+            attributes={columns}
+            config={config}
+            rows={kanbanRows}
+            onRecordMove={kanbanGroupAttribute?.isReadOnly ? undefined : moveKanbanRecord}
+            selectedRecordIds={rowSelection.selectedIds}
+            onToggleRecordSelection={rowSelection.toggle}
+          />
+        )}
       </div>
     )
   }
@@ -1430,9 +1462,12 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
           selectedColumnIds={selectedColumnIds}
           layout={layout}
           onLayoutChange={setLayout}
-          onSearch={() => { setFindOpen(true); setReplaceOpen(false) }}
+          searchValue={searchValue}
+          searchPending={searchPending}
+          onSearchChange={updateSearchValue}
+          onFindInGrid={() => { setFindOpen(true); setReplaceOpen(false) }}
           onFormat={(anchor) => setFormatPanel({ anchor, attributeId: null })}
-          trailing={<RecordCount filteredCount={totalCount} isFiltered={false} totalCount={totalCount} />}
+          trailing={searchCount}
         />
       )}
       {onViewConfigChange && <AppliedGridConstraints attributes={columns} config={config} onConfigChange={onViewConfigChange} />}
@@ -1520,6 +1555,8 @@ export function RecordGrid({ orgId, object, attributes, viewId, initialRecordId,
         width="100%"
         height="100%"
         />
+
+        {searchEmpty && <div className="absolute inset-0 z-10 bg-bg">{searchEmptyState}</div>}
 
         <ChangeHighlightOverlay
           hover={changeHighlightHover}

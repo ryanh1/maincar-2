@@ -22,7 +22,9 @@ export function useRecordWindow(
   return {
     rows,
     totalCount: lastPage?.totalCount ?? 0,
+    totalCountBeforeSearch: lastPage?.totalCountBeforeSearch ?? lastPage?.totalCount ?? 0,
     isPending: query.isPending,
+    isFetching: query.isFetching,
     isError: query.isError,
     hasNextPage: query.hasNextPage ?? false,
     isFetchingNextPage: query.isFetchingNextPage,

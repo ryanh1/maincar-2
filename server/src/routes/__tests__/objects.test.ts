@@ -673,6 +673,36 @@ describe('DELETE /api/orgs/:orgId/objects/:id', () => {
   })
 })
 
+describe('POST /api/orgs/:orgId/objects/:id/list — ephemeral search', () => {
+  it('returns searched and before-search counts without putting search in the route path', async () => {
+    prismaMock.objectDef.findFirst.mockResolvedValueOnce(objectRow())
+    prismaMock.attributeDef.findMany.mockResolvedValueOnce([attributeRow()])
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([{ id: 'record-1', createdAt: NOW, updatedAt: NOW, isArchived: false, valuesJson: { name: 'Ada' }, __sortKey0: NOW }])
+      .mockResolvedValueOnce([{ count: '1' }])
+      .mockResolvedValueOnce([{ count: '42' }])
+
+    const res = await request(app)
+      .post(`${URL_A}/obj-1/list`)
+      .set('Authorization', AUTH)
+      .send({ search: '  Ada  ' })
+
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ totalCount: 1, totalCountBeforeSearch: 42 })
+    expect(res.request.url).not.toContain('Ada')
+  })
+
+  it.each(['   ', 'x'.repeat(201)])('rejects an invalid search value before querying records', async (search) => {
+    const res = await request(app)
+      .post(`${URL_A}/obj-1/list`)
+      .set('Authorization', AUTH)
+      .send({ search })
+
+    expect(res.status).toBe(400)
+    expect(prismaMock.$queryRaw).not.toHaveBeenCalled()
+  })
+})
+
 // ============================================================
 // GET — related peek rails (MAI-184)
 // ============================================================

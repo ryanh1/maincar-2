@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { fireEvent, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/utils'
@@ -59,7 +59,8 @@ describe('GridViewToolbar', () => {
   it('separates stable view controls from task commands and structured view options', async () => {
     const user = userEvent.setup()
     const config = createViewConfig(attributes)
-    const onSearch = vi.fn()
+    const onSearchChange = vi.fn()
+    const onFindInGrid = vi.fn()
     const onFormat = vi.fn()
 
     renderWithProviders(
@@ -70,7 +71,9 @@ describe('GridViewToolbar', () => {
         config={config}
         onConfigChange={vi.fn()}
         onLayoutChange={vi.fn()}
-        onSearch={onSearch}
+        searchValue="Ada"
+        onSearchChange={onSearchChange}
+        onFindInGrid={onFindInGrid}
         onFormat={onFormat}
       />,
     )
@@ -82,13 +85,18 @@ describe('GridViewToolbar', () => {
     expect(within(viewBar).getByText('42 records')).toBeInTheDocument()
 
     const commandBar = screen.getByRole('region', { name: 'Command bar' })
-    for (const name of ['Search', 'Fields', 'Sort', 'Filter', 'Group', 'View options']) {
+    expect(within(commandBar).getByRole('searchbox', { name: 'Search all records' })).toHaveValue('Ada')
+    for (const name of ['Find in grid', 'Fields', 'Sort', 'Filter', 'Group', 'View options']) {
       expect(within(commandBar).getByRole('button', { name })).toBeInTheDocument()
     }
     expect(within(commandBar).queryByRole('button', { name: 'Table' })).not.toBeInTheDocument()
 
-    await user.click(within(commandBar).getByRole('button', { name: 'Search' }))
-    expect(onSearch).toHaveBeenCalledOnce()
+    fireEvent.change(within(commandBar).getByRole('searchbox', { name: 'Search all records' }), { target: { value: 'Ada Lovelace' } })
+    expect(onSearchChange).toHaveBeenLastCalledWith('Ada Lovelace')
+    await user.click(within(commandBar).getByRole('button', { name: 'Clear the record search' }))
+    expect(onSearchChange).toHaveBeenLastCalledWith('')
+    await user.click(within(commandBar).getByRole('button', { name: 'Find in grid' }))
+    expect(onFindInGrid).toHaveBeenCalledOnce()
 
     await user.click(within(commandBar).getByRole('button', { name: 'View options' }))
     for (const name of ['Format', 'Change highlighting', 'Density', 'Freeze', 'Zoom']) {

@@ -36,7 +36,23 @@ describe('useListRecords', () => {
     expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/objects/obj-1/list', {
       method: 'POST',
       body: JSON.stringify({ cursor: null }),
+      signal: expect.any(AbortSignal),
     })
+  })
+
+  it('sends ephemeral search text in the POST body and never in the URL', async () => {
+    jsonFetch.mockResolvedValue({ rows: [], nextCursor: null, totalCount: 0, totalCountBeforeSearch: 42 })
+
+    renderListRecords('org-1', 'obj-1', { search: 'Ada' })
+
+    await waitFor(() =>
+      expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/objects/obj-1/list', {
+        method: 'POST',
+        body: JSON.stringify({ cursor: null, search: 'Ada' }),
+        signal: expect.any(AbortSignal),
+      }),
+    )
+    expect(String(jsonFetch.mock.calls[0][0])).not.toContain('Ada')
   })
 
   it('sends the sort spec when one is given', async () => {
@@ -49,6 +65,7 @@ describe('useListRecords', () => {
       expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/objects/obj-1/list', {
         method: 'POST',
         body: JSON.stringify({ cursor: null, sort }),
+        signal: expect.any(AbortSignal),
       }),
     )
   })
@@ -63,6 +80,7 @@ describe('useListRecords', () => {
       expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/objects/obj-1/list', {
         method: 'POST',
         body: JSON.stringify({ cursor: null, filter }),
+        signal: expect.any(AbortSignal),
       }),
     )
   })
@@ -76,6 +94,7 @@ describe('useListRecords', () => {
       expect(jsonFetch).toHaveBeenCalledWith('/api/orgs/org-1/objects/obj-1/list', {
         method: 'POST',
         body: JSON.stringify({ cursor: null, includeArchived: true }),
+        signal: expect.any(AbortSignal),
       }),
     )
   })
@@ -96,6 +115,7 @@ describe('useListRecords', () => {
     expect(jsonFetch).toHaveBeenLastCalledWith('/api/orgs/org-1/objects/obj-1/list', {
       method: 'POST',
       body: JSON.stringify({ cursor: 'cursor-1' }),
+      signal: expect.any(AbortSignal),
     })
     expect(result.current.hasNextPage).toBe(false)
   })

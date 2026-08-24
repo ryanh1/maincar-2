@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query'
 
 import { jsonFetch } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
@@ -8,6 +8,7 @@ import type { RecordListFilter } from '@/components/crm/viewConfig'
 export interface UseListRecordsParams {
   sort?: RecordSort[]
   filter?: RecordListFilter
+  search?: string
   includeArchived?: boolean
 }
 
@@ -27,16 +28,19 @@ export function useListRecords(
     queryKey: queryKeys.records.list(orgId ?? 'none', objectId ?? 'none', params as Record<string, unknown>),
     enabled: !!orgId && !!objectId,
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) =>
+    queryFn: ({ pageParam, signal }) =>
       jsonFetch<ListRecordsResponse>(`/api/orgs/${orgId}/objects/${objectId}/list`, {
         method: 'POST',
         body: JSON.stringify({
           cursor: pageParam,
           ...(params.sort ? { sort: params.sort } : {}),
           ...(params.filter ? { filter: params.filter } : {}),
+          ...(params.search ? { search: params.search } : {}),
           ...(params.includeArchived ? { includeArchived: true } : {}),
         }),
+        signal,
       }),
     getNextPageParam: (lastPage) => lastPage.nextCursor,
+    placeholderData: keepPreviousData,
   })
 }
