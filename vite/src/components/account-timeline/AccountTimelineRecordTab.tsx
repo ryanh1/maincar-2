@@ -137,9 +137,12 @@ export function AccountTimelineRecordTab({
         open={selectedEventId !== null}
         onOpenChange={(open) => { if (!open) setSelectedEventId(null) }}
         orgId={orgId}
+        timeZone={timeZone}
         detail={detailQuery.data?.detail ?? null}
+        state={detailQuery.isError ? 'error' : detailQuery.data ? 'ready' : 'loading'}
         navigation={detailQuery.data?.navigation ?? null}
         onNavigate={selectEvent}
+        onRetry={() => void detailQuery.refetch()}
       />
     </section>
   )

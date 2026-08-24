@@ -28,7 +28,7 @@ describe('task hooks', () => {
     expect(client.getQueryData(queryKeys.tasks.list('org-1', { isDone: false }))).toEqual({ tasks: [], total: 0, page: 1, limit: 100 })
   })
 
-  it('PATCHes one task and refreshes task lists', async () => {
+  it('PATCHes one task and refreshes task lists and timeline detail', async () => {
     jsonFetch.mockResolvedValue({ task: { id: 'task-1' } })
     const client = makeTestQueryClient()
     const invalidate = vi.spyOn(client, 'invalidateQueries')
@@ -40,5 +40,6 @@ describe('task hooks', () => {
       method: 'PATCH', body: JSON.stringify({ priority: 'high' }),
     })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.tasks.all('org-1') })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.accountTimeline.all('org-1') })
   })
 })

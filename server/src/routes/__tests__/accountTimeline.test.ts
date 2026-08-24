@@ -16,7 +16,7 @@ const { prismaMock, verifyTokenMock } = vi.hoisted(() => ({
     activityEntry: { findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn() },
     call: { findFirst: vi.fn() },
     email: { findFirst: vi.fn() },
-    smsMessage: { findFirst: vi.fn() },
+    smsMessage: { findFirst: vi.fn(), findMany: vi.fn() },
     meeting: { findFirst: vi.fn() },
     note: { findFirst: vi.fn() },
     task: { findFirst: vi.fn() },
@@ -436,5 +436,42 @@ describe('GET /api/orgs/:orgId/account-timeline/:eventId — typed detail', () =
 
     expect(outsideScope.status).toBe(404)
     expect(stale.status).toBe(404)
+  })
+
+  it('loads the source-authoritative SMS conversation only after the selected event passes account scope', async () => {
+    const older = {
+      id: 'sms-1', orgId: ORG_A, personId: 'person-1', companyId: 'co-1', dealId: null,
+      mailboxUserId: USER_A, phoneNumberId: 'phone-1', fromE164: '+12025550123', toE164: '+12025550100',
+      direction: 'inbound', body: 'Can we renew?', status: 'received', errorCode: null, errorMessage: null,
+      channel: 'sms', numSegments: 1, numMedia: 0, twilioSid: 'SM1', messagingServiceSid: null,
+      sentAt: new Date('2026-08-20T09:29:00.000Z'), deliveredAt: null,
+      createdAt: new Date('2026-08-20T09:29:00.000Z'), updatedAt: NOW, media: [],
+    }
+    const selected = {
+      ...older, id: 'sms-2', direction: 'outbound', body: 'Yes, sending terms now.', status: 'delivered',
+      fromE164: '+12025550100', toE164: '+12025550123', twilioSid: 'SM2', sentAt: OCCURRED, createdAt: OCCURRED,
+    }
+    prismaMock.activityEntry.findFirst.mockResolvedValue(eventRow({ sourceType: 'sms', sourceId: 'sms-2' }))
+    prismaMock.smsMessage.findFirst.mockResolvedValue(selected)
+    prismaMock.smsMessage.findMany.mockResolvedValue([selected, older])
+
+    const res = await request(app)
+      .get(`${URL_A}/event-1?rootType=company&rootId=co-1`)
+      .set('Authorization', AUTH)
+
+    expect(res.status).toBe(200)
+    expect(prismaMock.smsMessage.findFirst).toHaveBeenCalledWith({
+      where: { id: 'sms-2', orgId: ORG_A },
+      include: { media: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } },
+    })
+    expect(prismaMock.smsMessage.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { orgId: ORG_A, personId: 'person-1' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 100,
+    }))
+    expect(res.body.detail).toMatchObject({
+      type: 'sms', id: 'sms-2', occurredAt: OCCURRED.toISOString(), actorName: 'Al Pha',
+      conversation: [{ id: 'sms-1', body: 'Can we renew?' }, { id: 'sms-2', body: 'Yes, sending terms now.' }],
+    })
   })
 })
