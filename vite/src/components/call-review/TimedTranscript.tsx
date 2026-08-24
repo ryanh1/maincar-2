@@ -32,17 +32,19 @@ export function TimedTranscript({ segments, speakerLabels, currentTimeMs, onSeek
   const [query, setQuery] = useState('')
   const [activeMatchIndex, setActiveMatchIndex] = useState(0)
   const [following, setFollowing] = useState(true)
-  const scrollRootRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const model = useMemo(() => buildTimedTranscriptModel(segments), [segments])
   const matches = useMemo(() => findTimedTranscriptMatches(model, query), [model, query])
   const activeMatch = matches[activeMatchIndex] ?? null
   const speakerKeys = useMemo(() => [...new Set(segments.map((segment) => segment.speakerKey))], [segments])
   const activeSegmentId = segments.find((segment) => currentTimeMs >= segment.startMs && currentTimeMs < segment.endMs)?.id ?? null
+  const activeWordId = model.timedPieces.find((piece) => piece.word && currentTimeMs >= piece.word.startMs && currentTimeMs < piece.word.endMs)?.id ?? null
 
   const scrollToCurrent = useCallback(() => {
     if (!activeSegmentId) return
-    contentRef.current?.querySelector<HTMLElement>(`[data-testid="transcript-segment-${activeSegmentId}"]`)?.scrollIntoView({ block: 'center' })
+    const target = [...(contentRef.current?.querySelectorAll<HTMLElement>('[data-transcript-segment-id]') ?? [])]
+      .find((element) => element.dataset.transcriptSegmentId === activeSegmentId)
+    target?.scrollIntoView({ block: 'center' })
   }, [activeSegmentId])
 
   useEffect(() => {
@@ -83,6 +85,7 @@ export function TimedTranscript({ segments, speakerLabels, currentTimeMs, onSeek
           type="search"
           aria-label="Search transcript"
           placeholder="Search transcript"
+          maxLength={200}
           value={query}
           className="h-8 min-w-48 flex-1 text-sm"
           onChange={(event) => {
@@ -102,7 +105,6 @@ export function TimedTranscript({ segments, speakerLabels, currentTimeMs, onSeek
         {!following && <Button variant="secondary" size="sm" onClick={() => setFollowing(true)}>Jump to current</Button>}
       </div>
       <div
-        ref={scrollRootRef}
         role="region"
         aria-label="Timed transcript"
         tabIndex={0}
@@ -119,7 +121,8 @@ export function TimedTranscript({ segments, speakerLabels, currentTimeMs, onSeek
               segment={segment}
               speakerLabel={speakerLabels[segment.source.speakerKey] ?? segment.source.speakerKey}
               speakerKeys={speakerKeys}
-              currentTimeMs={currentTimeMs}
+              isCurrent={segment.source.id === activeSegmentId}
+              activeWordId={activeWordId}
               matches={matches}
               activeMatchId={activeMatch?.id ?? null}
               onSeek={onSeek}

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { formatElapsed } from '@/lib/duration'
@@ -11,7 +11,8 @@ interface Props {
   segment: TimedTranscriptModelSegment
   speakerLabel: string
   speakerKeys: readonly string[]
-  currentTimeMs: number
+  isCurrent: boolean
+  activeWordId: string | null
   matches: readonly TimedTranscriptMatch[]
   activeMatchId: string | null
   onSeek?: (atMs: number) => void
@@ -50,12 +51,12 @@ function PieceText({ piece, matches, activeMatchId }: { piece: TimedTranscriptPi
   return <>{content}</>
 }
 
-export function TimedTranscript_Segment({ segment, speakerLabel, speakerKeys, currentTimeMs, matches, activeMatchId, onSeek }: Props) {
+export const TimedTranscript_Segment = memo(function TimedTranscript_Segment({ segment, speakerLabel, speakerKeys, isCurrent, activeWordId, matches, activeMatchId, onSeek }: Props) {
   const [visibleWordTime, setVisibleWordTime] = useState<string | null>(null)
-  const isCurrent = currentTimeMs >= segment.source.startMs && currentTimeMs < segment.source.endMs
   return (
     <article
       data-testid={`transcript-segment-${segment.source.id}`}
+      data-transcript-segment-id={segment.source.id}
       data-current={isCurrent ? 'true' : undefined}
       className={cn('border-l-2 border-transparent py-2 pl-3', isCurrent && 'border-primary bg-surface')}
     >
@@ -76,7 +77,7 @@ export function TimedTranscript_Segment({ segment, speakerLabel, speakerKeys, cu
           }
           if (!piece.word) return <span key={piece.id} {...data}>{piece.text}</span>
           const timeLabel = formatElapsed(piece.word.startMs / 1_000)
-          const currentWord = currentTimeMs >= piece.word.startMs && currentTimeMs < piece.word.endMs
+          const currentWord = activeWordId === piece.id
           return (
             <Button
               key={piece.id}
@@ -100,4 +101,4 @@ export function TimedTranscript_Segment({ segment, speakerLabel, speakerKeys, cu
       </p>
     </article>
   )
-}
+})

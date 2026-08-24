@@ -182,4 +182,22 @@ describe('TimedTranscript', () => {
     expect(screen.getByTestId('transcript-segment-long-119')).toHaveAttribute('data-current', 'true')
     expect(within(screen.getByTestId('transcript-segment-long-119')).getByRole('button', { name: 'Word, 01:59' })).toHaveAttribute('aria-current', 'true')
   })
+
+  it('keeps malformed provider words and opaque segment ids from breaking the transcript', () => {
+    const malformedSegments = [{
+      id: 'segment"]#opaque',
+      position: 0,
+      speakerKey: 'rep',
+      startMs: 0,
+      endMs: 1_000,
+      text: 'Provider text remains readable.',
+      words: { unexpected: true } as unknown as TimedTranscriptSegment['words'],
+    }]
+
+    renderWithProviders(transcript({ segments: malformedSegments, currentTimeMs: 100 }))
+
+    expect(screen.getByText('Provider text remains readable.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Provider,/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('searchbox', { name: 'Search transcript' })).toHaveAttribute('maxlength', '200')
+  })
 })

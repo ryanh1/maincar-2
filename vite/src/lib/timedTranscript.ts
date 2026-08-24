@@ -40,6 +40,24 @@ function wordText(word: TimedTranscriptWord): string {
   return word.punctuatedWord?.trim() || word.word
 }
 
+function timedWords(value: unknown): TimedTranscriptWord[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((candidate) => {
+    if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) return []
+    const word = Reflect.get(candidate, 'word')
+    const punctuatedWord = Reflect.get(candidate, 'punctuatedWord')
+    const startMs = Reflect.get(candidate, 'startMs')
+    const endMs = Reflect.get(candidate, 'endMs')
+    if (
+      typeof word !== 'string' || word.trim() === '' ||
+      (punctuatedWord !== undefined && typeof punctuatedWord !== 'string') ||
+      typeof startMs !== 'number' || !Number.isFinite(startMs) || startMs < 0 ||
+      typeof endMs !== 'number' || !Number.isFinite(endMs) || endMs < startMs
+    ) return []
+    return [{ word, punctuatedWord, startMs, endMs }]
+  })
+}
+
 function findWordStart(text: string, word: TimedTranscriptWord, from: number): number {
   const candidates = [wordText(word), word.word].filter((value, index, values) => value && values.indexOf(value) === index)
   for (const candidate of candidates) {
@@ -62,7 +80,7 @@ export function buildTimedTranscriptModel(segments: readonly TimedTranscriptSegm
     const pieces: TimedTranscriptPiece[] = []
     let cursor = 0
 
-    for (const [wordIndex, word] of segment.words.entries()) {
+    for (const [wordIndex, word] of timedWords(segment.words).entries()) {
       const start = findWordStart(segment.text, word, cursor)
       if (start < 0) continue
       if (start > cursor) {

@@ -88,7 +88,7 @@ export interface TimedTranscriptSegment {
   startMs: number
   endMs: number
   text: string
-  words: TimedTranscriptWord[]
+  words: unknown
 }
 
 /** Provider-normalized timing used for word-level review interactions. */
