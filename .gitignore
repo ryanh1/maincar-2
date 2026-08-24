@@ -1,4 +1,10 @@
 # Dependencies
+# No trailing slash on these two: mc-clone reuses the primary checkout's
+# dependency tree via a `node_modules` SYMLINK, and a trailing-slash pattern
+# only matches a real directory, not a symlink — so `node_modules/` alone
+# left every issue clone's symlinks showing as untracked.
+node_modules
+**/node_modules
 node_modules/
 **/node_modules/
 
