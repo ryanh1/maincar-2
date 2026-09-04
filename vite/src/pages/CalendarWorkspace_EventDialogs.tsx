@@ -313,7 +313,6 @@ export function CalendarWorkspace_EventEditor({
             repeatError={repeatError}
             onGuestEmailsChange={(guestEmails) => update({ guestEmails })}
             onRepeatChange={(repeatMode, recurrenceRule) => update({ repeatMode, recurrenceRule })}
-            onRecurrenceRuleChange={(recurrenceRule) => update({ recurrenceRule })}
             onChooseTime={(startTime) => update({ startTime })}
           />
           {event?.recurrenceKind === 'series' ? <CalendarWorkspace_RecurrenceScopeSelect label="Apply changes to" source={selectedSource} value={scope} onValueChange={setScope} /> : null}

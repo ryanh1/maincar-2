@@ -19,6 +19,20 @@ const DAYS = [
   { code: 'SA', name: 'Saturday' },
 ] as const
 
+export type RRuleFrequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY'
+export type RRuleEndMode = 'never' | 'on' | 'after'
+export type RRuleMonthlyMode = 'month-day' | 'weekday'
+
+export interface CustomRepeatDraft {
+  interval: string
+  frequency: RRuleFrequency
+  daysOfWeek: string[]
+  monthlyMode: RRuleMonthlyMode
+  endMode: RRuleEndMode
+  endDate: Date | string | undefined
+  count: string
+}
+
 const ORDINALS: Record<string, string> = {
   '1': 'first',
   '2': 'second',
@@ -30,6 +44,80 @@ const ORDINALS: Record<string, string> = {
 function weekdayPosition(date: Date): number {
   if (date.getDate() >= 29) return -1
   return Math.ceil(date.getDate() / 7)
+}
+
+function orderedDays(days: string[]): string[] {
+  return DAYS.map((day) => day.code).filter((code) => days.includes(code))
+}
+
+function entryDate(value: string | undefined): Date | undefined {
+  const match = value ? /^(\d{4})(\d{2})(\d{2})/.exec(value) : null
+  if (!match) return undefined
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  return date.getFullYear() === Number(match[1])
+    && date.getMonth() === Number(match[2]) - 1
+    && date.getDate() === Number(match[3])
+    ? date
+    : undefined
+}
+
+export function createCustomRepeatDraft(date: Date, rule?: string | null): CustomRepeatDraft {
+  const entries = rule ? ruleEntries(rule) : {}
+  const frequency = ['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].includes(entries.FREQ?.toUpperCase())
+    ? entries.FREQ.toUpperCase() as RRuleFrequency
+    : 'WEEKLY'
+  const savedDays = entries.BYDAY?.split(',').map((code) => code.replace(/^[+-]?\d+/, '').toUpperCase()) ?? []
+  const fallbackDay = DAYS[date.getDay()].code
+  const endMode: RRuleEndMode = entries.COUNT ? 'after' : entries.UNTIL ? 'on' : 'never'
+
+  return {
+    interval: entries.INTERVAL ?? '1',
+    frequency,
+    daysOfWeek: orderedDays(savedDays.length ? savedDays : [fallbackDay]),
+    monthlyMode: entries.BYMONTHDAY ? 'month-day' : 'weekday',
+    endMode,
+    endDate: entryDate(entries.UNTIL),
+    count: entries.COUNT ?? '1',
+  }
+}
+
+function validBoundedInteger(value: string): boolean {
+  return /^\d{1,3}$/.test(value) && Number(value) >= 1 && Number(value) <= 999
+}
+
+function validDate(value: Date | string | undefined): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime())
+}
+
+export function rruleError(draft: CustomRepeatDraft, startsOn: Date): string | null {
+  if (!validBoundedInteger(draft.interval)) return 'Choose a number from 1 to 999.'
+  if (draft.frequency === 'WEEKLY' && draft.daysOfWeek.length === 0) return 'Choose at least one weekday.'
+  if (draft.endMode === 'after' && !validBoundedInteger(draft.count)) return 'Choose 1 to 999 times.'
+  if (draft.endMode === 'on') {
+    const startDay = new Date(startsOn.getFullYear(), startsOn.getMonth(), startsOn.getDate())
+    if (!validDate(draft.endDate) || draft.endDate.getTime() < startDay.getTime()) {
+      return 'The end date must be on or after the first event.'
+    }
+  }
+  return null
+}
+
+export function customRepeatRule(draft: CustomRepeatDraft, startsOn: Date): string {
+  const parts = [`FREQ=${draft.frequency}`]
+  if (draft.interval !== '1') parts.push(`INTERVAL=${draft.interval}`)
+  if (draft.frequency === 'WEEKLY') parts.push(`BYDAY=${orderedDays(draft.daysOfWeek).join(',')}`)
+  if (draft.frequency === 'MONTHLY') {
+    if (draft.monthlyMode === 'month-day') parts.push(`BYMONTHDAY=${startsOn.getDate()}`)
+    else parts.push(`BYDAY=${DAYS[startsOn.getDay()].code}`, `BYSETPOS=${weekdayPosition(startsOn)}`)
+  }
+  if (draft.frequency === 'YEARLY') parts.push(`BYMONTH=${startsOn.getMonth() + 1}`, `BYMONTHDAY=${startsOn.getDate()}`)
+  if (draft.endMode === 'after') parts.push(`COUNT=${draft.count}`)
+  if (draft.endMode === 'on' && validDate(draft.endDate)) parts.push(`UNTIL=${format(draft.endDate, 'yyyyMMdd')}`)
+  return `RRULE:${parts.join(';')}`
+}
+
+export function customRepeatSummary(draft: CustomRepeatDraft, startsOn: Date): string {
+  return recurrenceSummary(customRepeatRule(draft, startsOn))
 }
 
 function skippedMonthsNote(day: number): string {
@@ -113,19 +201,21 @@ export function recurrenceSummary(rule: string | null | undefined): string {
     const cadence = interval === 1 ? 'Weekly' : `Every ${interval} weeks`
     summary = days.length ? `${cadence} on ${days.join(', ')}` : cadence
   } else if (frequency === 'MONTHLY') {
+    const cadence = interval === 1 ? 'Monthly' : `Every ${interval} months`
     const position = ORDINALS[entries.BYSETPOS]
-    if (position && days[0]) summary = `Monthly on the ${position} ${days[0]}`
-    else if (entries.BYMONTHDAY) summary = `Monthly on day ${entries.BYMONTHDAY}`
-    else summary = interval === 1 ? 'Monthly' : `Every ${interval} months`
+    if (position && days[0]) summary = `${cadence} on the ${position} ${days[0]}`
+    else if (entries.BYMONTHDAY) summary = `${cadence} on day ${entries.BYMONTHDAY}`
+    else summary = cadence
   } else if (frequency === 'YEARLY') {
     const month = Number(entries.BYMONTH)
     const day = Number(entries.BYMONTHDAY)
     const validDate = new Date(2028, month - 1, day)
+    const cadence = interval === 1 ? 'Yearly' : `Every ${interval} years`
     summary = month >= 1 && month <= 12
       && validDate.getMonth() === month - 1
       && validDate.getDate() === day
-      ? `Yearly on ${format(validDate, 'MMMM d')}`
-      : 'Yearly'
+      ? `${cadence} on ${format(validDate, 'MMMM d')}`
+      : cadence
   } else {
     return 'Custom repeat'
   }
