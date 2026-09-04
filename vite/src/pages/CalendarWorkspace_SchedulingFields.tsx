@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useGetCalendarAvailability } from '@/hooks/calendar'
 import type { CalendarSource } from '@/lib/calendarTypes'
 import { formatTime, zonedDateTimeParts, zonedDateTimeToIso } from '@/lib/datetime'
+import { CalendarWorkspace_CustomRepeatDialog } from './CalendarWorkspace_CustomRepeatDialog'
 import { calendarRepeatPresets, recurrenceSummary, type CalendarRepeatMode } from './calendarRecurrence'
 
 export type { CalendarRepeatMode } from './calendarRecurrence'
@@ -23,7 +24,6 @@ interface SchedulingFieldsProps {
   repeatError?: string
   onGuestEmailsChange: (guestEmails: string) => void
   onRepeatChange: (repeatMode: CalendarRepeatMode, recurrenceRule: string) => void
-  onRecurrenceRuleChange: (recurrenceRule: string) => void
   onChooseTime: (startTime: string) => void
 }
 
@@ -39,10 +39,11 @@ export function CalendarWorkspace_SchedulingFields({
   repeatError,
   onGuestEmailsChange,
   onRepeatChange,
-  onRecurrenceRuleChange,
   onChooseTime,
 }: SchedulingFieldsProps) {
   const [showAvailability, setShowAvailability] = useState(false)
+  const [customRepeatOpen, setCustomRepeatOpen] = useState(false)
+  const repeatRowRef = useRef<HTMLButtonElement>(null)
   const window = useMemo(() => {
     const startsAt = zonedDateTimeToIso(date, '09:00', timeZone)
     const endsAt = zonedDateTimeToIso(date, '17:00', timeZone)
@@ -99,11 +100,13 @@ export function CalendarWorkspace_SchedulingFields({
           <Select
             value={repeatMode === 'custom' && recurrenceRule ? 'custom-existing' : repeatMode}
             onValueChange={(next) => {
+              if (next === 'custom') return setCustomRepeatOpen(true)
               const preset = repeatPresets.find((candidate) => candidate.id === next)
               if (preset) onRepeatChange(preset.id, preset.recurrenceRule ?? recurrenceRule)
             }}
           >
             <SelectTrigger
+              ref={repeatRowRef}
               className="min-h-8 h-auto w-full whitespace-normal py-1 text-left text-[13px] *:data-[slot=select-value]:line-clamp-none"
               aria-label={repeatSummary}
               aria-haspopup="listbox"
@@ -129,11 +132,17 @@ export function CalendarWorkspace_SchedulingFields({
         {source && source.capabilities.recurrence && !canEditRepeat ? <p className="text-xs text-text-muted">This calendar cannot be edited here.</p> : null}
         {repeatError ? <p className="text-xs text-danger" role="alert">{repeatError}</p> : null}
       </div>
-      {repeatMode === 'custom' ? (
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="calendar-event-recurrence-rule">Provider recurrence rule</Label>
-          <Input id="calendar-event-recurrence-rule" className="h-8" value={recurrenceRule} onChange={(input) => onRecurrenceRuleChange(input.target.value)} placeholder="RRULE:FREQ=WEEKLY;BYDAY=MO,WE" />
-        </div>
+      {customRepeatOpen ? (
+        <CalendarWorkspace_CustomRepeatDialog
+          date={date}
+          recurrenceRule={repeatMode === 'custom' ? recurrenceRule : ''}
+          returnFocusRef={repeatRowRef}
+          onCancel={() => setCustomRepeatOpen(false)}
+          onSave={(rule) => {
+            onRepeatChange('custom', rule)
+            setCustomRepeatOpen(false)
+          }}
+        />
       ) : null}
       <div className="flex flex-col gap-2 border border-border bg-surface p-3">
         <div className="flex items-center justify-between gap-3">

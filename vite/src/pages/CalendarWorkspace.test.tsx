@@ -271,6 +271,43 @@ describe('CalendarWorkspace', () => {
     }), expect.anything())
   })
 
+  it('saves the custom repeat sentence and RRULE through the event editor', async () => {
+    const mutate = vi.fn()
+    useUpdateCalendarEventMock.mockReturnValue({ mutate, isPending: false })
+    const user = userEvent.setup()
+    renderWithProviders(<CalendarWorkspace />)
+
+    await user.click(screen.getByRole('button', { name: /^Discovery call,/i }))
+    await user.click(screen.getByRole('button', { name: 'Edit event' }))
+    await user.click(screen.getByRole('combobox', { name: 'Does not repeat' }))
+    await user.click(screen.getByRole('option', { name: 'Custom' }))
+    const interval = screen.getByRole('spinbutton', { name: 'Repeat interval' })
+    await user.clear(interval)
+    await user.type(interval, '2')
+    await user.click(screen.getByRole('button', { name: 'Sunday' }))
+    await user.click(screen.getByRole('button', { name: 'Thursday' }))
+    await user.click(screen.getByRole('button', { name: 'Tuesday' }))
+    await user.click(screen.getByRole('radio', { name: 'After' }))
+    const count = screen.getByRole('spinbutton', { name: 'Number of occurrences' })
+    await user.clear(count)
+    await user.type(count, '13')
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+
+    expect(screen.getByRole('combobox', { name: 'Every 2 weeks on Tuesday, Thursday, 13 times' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    expect(mutate).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: 'org-1',
+      eventId: 'event-1',
+      patch: expect.objectContaining({
+        recurrence: expect.objectContaining({
+          kind: 'series',
+          recurrenceRule: 'RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,TH;COUNT=13',
+        }),
+      }),
+    }), expect.anything())
+  })
+
   it('preserves the exact provider recurrence rule when editing another field', async () => {
     const mutate = vi.fn()
     useUpdateCalendarEventMock.mockReturnValue({ mutate, isPending: false })
