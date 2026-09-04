@@ -7,8 +7,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useGetCalendarAvailability } from '@/hooks/calendar'
 import type { CalendarSource } from '@/lib/calendarTypes'
 import { formatTime, zonedDateTimeParts, zonedDateTimeToIso } from '@/lib/datetime'
+import { calendarRepeatPresets, recurrenceSummary, type CalendarRepeatMode } from './calendarRecurrence'
 
-export type CalendarRepeatMode = 'none' | 'daily' | 'weekly' | 'monthly' | 'custom'
+export type { CalendarRepeatMode } from './calendarRecurrence'
 
 interface SchedulingFieldsProps {
   orgId: string | null | undefined
@@ -19,8 +20,9 @@ interface SchedulingFieldsProps {
   guestEmails: string
   repeatMode: CalendarRepeatMode
   recurrenceRule: string
+  repeatError?: string
   onGuestEmailsChange: (guestEmails: string) => void
-  onRepeatChange: (repeatMode: CalendarRepeatMode) => void
+  onRepeatChange: (repeatMode: CalendarRepeatMode, recurrenceRule: string) => void
   onRecurrenceRuleChange: (recurrenceRule: string) => void
   onChooseTime: (startTime: string) => void
 }
@@ -34,6 +36,7 @@ export function CalendarWorkspace_SchedulingFields({
   guestEmails,
   repeatMode,
   recurrenceRule,
+  repeatError,
   onGuestEmailsChange,
   onRepeatChange,
   onRecurrenceRuleChange,
@@ -68,6 +71,14 @@ export function CalendarWorkspace_SchedulingFields({
   const fallback = source?.provider === 'microsoft'
     ? 'Availability is not available for this connected Microsoft account. Choose a time manually.'
     : 'Availability is not available for this connected Google account. Choose a time manually.'
+  const repeatPresets = useMemo(() => calendarRepeatPresets(date), [date])
+  const repeatSummary = repeatMode === 'none'
+    ? 'Does not repeat'
+    : repeatMode === 'custom' && !recurrenceRule
+      ? 'Custom'
+      : recurrenceSummary(recurrenceRule)
+  const canEditRepeat = source?.capabilities.recurrence === true
+    && (source.accessRole === 'owner' || source.accessRole === 'writer')
 
   return (
     <>
@@ -84,17 +95,39 @@ export function CalendarWorkspace_SchedulingFields({
       </div>
       <div className="flex flex-col gap-1">
         <Label>Repeat</Label>
-        <Select value={repeatMode} onValueChange={(next) => onRepeatChange(next as CalendarRepeatMode)} disabled={!source?.capabilities.recurrence}>
-          <SelectTrigger className="h-8 w-full" aria-label="Repeat event"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">Does not repeat</SelectItem>
-            <SelectItem value="daily">Daily</SelectItem>
-            <SelectItem value="weekly">Weekly</SelectItem>
-            <SelectItem value="monthly">Monthly</SelectItem>
-            <SelectItem value="custom">Custom provider rule</SelectItem>
-          </SelectContent>
-        </Select>
+        {canEditRepeat ? (
+          <Select
+            value={repeatMode === 'custom' && recurrenceRule ? 'custom-existing' : repeatMode}
+            onValueChange={(next) => {
+              const preset = repeatPresets.find((candidate) => candidate.id === next)
+              if (preset) onRepeatChange(preset.id, preset.recurrenceRule ?? recurrenceRule)
+            }}
+          >
+            <SelectTrigger
+              className="min-h-8 h-auto w-full whitespace-normal py-1 text-left text-[13px] *:data-[slot=select-value]:line-clamp-none"
+              aria-label={repeatSummary}
+              aria-haspopup="listbox"
+              aria-invalid={!!repeatError}
+            >
+              <SelectValue>{repeatSummary}</SelectValue>
+            </SelectTrigger>
+            <SelectContent position="popper" align="start">
+              {repeatPresets.map((preset) => (
+                <SelectItem key={preset.id} value={preset.id}>
+                  <span className="flex flex-col items-start">
+                    <span>{preset.label}</span>
+                    {preset.note ? <span className="text-xs text-text-muted">{preset.note}</span> : null}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <div className="min-h-8 rounded-md border border-border bg-surface px-3 py-1 text-[13px]">{repeatSummary}</div>
+        )}
         {!source?.capabilities.recurrence ? <p className="text-xs text-text-muted">This connected calendar cannot create recurring events.</p> : null}
+        {source && source.capabilities.recurrence && !canEditRepeat ? <p className="text-xs text-text-muted">This calendar cannot be edited here.</p> : null}
+        {repeatError ? <p className="text-xs text-danger" role="alert">{repeatError}</p> : null}
       </div>
       {repeatMode === 'custom' ? (
         <div className="flex flex-col gap-1">
