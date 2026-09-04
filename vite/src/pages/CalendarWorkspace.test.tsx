@@ -57,6 +57,8 @@ const calendarEvent = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  vi.setSystemTime(new Date('2026-08-23T16:00:00.000Z'))
   useAuthMock.mockReturnValue({ org: { id: 'org-1' }, user: { email: 'rep@example.test', timeZone: 'America/New_York' } })
   useGetCalendarSourcesMock.mockReturnValue({ data: { calendar: { state: 'connected' }, sources: [source] }, isLoading: false, isError: false })
   useGetCalendarEventsMock.mockReturnValue({ data: { calendar: { state: 'connected' }, events: [calendarEvent], total: 1 }, isLoading: false, isError: false, refetch: vi.fn() })
@@ -254,8 +256,8 @@ describe('CalendarWorkspace', () => {
     await user.click(screen.getByRole('button', { name: /^Discovery call,/i }))
     await user.click(screen.getByRole('button', { name: 'Edit event' }))
     await user.type(screen.getByLabelText('Guests'), 'guest@example.test')
-    await user.click(screen.getByRole('combobox', { name: 'Repeat event' }))
-    await user.click(screen.getByRole('option', { name: 'Weekly' }))
+    await user.click(screen.getByRole('combobox', { name: 'Does not repeat' }))
+    await user.click(screen.getByRole('option', { name: 'Weekly on Sunday' }))
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
     expect(mutate).toHaveBeenCalledWith(expect.objectContaining({
@@ -301,6 +303,83 @@ describe('CalendarWorkspace', () => {
         recurrence: expect.objectContaining({ recurrenceRule: 'RRULE:FREQ=WEEKLY;BYDAY=SU;COUNT=4' }),
       }),
     }), expect.anything())
+  })
+
+  it('uses the identical recurrence sentence in details and the editor row', async () => {
+    const recurrenceRule = 'RRULE:FREQ=WEEKLY;BYDAY=TH;UNTIL=20261123'
+    const sentence = 'Weekly on Thursday, until Nov 23, 2026'
+    useGetCalendarEventsMock.mockReturnValue({
+      data: {
+        calendar: { state: 'connected' },
+        events: [{
+          ...calendarEvent,
+          recurrenceKind: 'series',
+          providerSeriesId: 'series-1',
+          recurrenceRule,
+        }],
+        total: 1,
+      },
+      isLoading: false, isError: false, refetch: vi.fn(),
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<CalendarWorkspace />)
+
+    await user.click(screen.getByRole('button', { name: /^Discovery call,/i }))
+    const detailSentence = screen.getByText(`Main calendar · ${sentence}`)
+    await user.click(screen.getByRole('button', { name: 'Edit event' }))
+    const editorSentence = screen.getByRole('combobox', { name: sentence })
+
+    expect(editorSentence).toHaveTextContent(sentence)
+    expect(detailSentence.textContent?.replace('Main calendar · ', '')).toBe(editorSentence.textContent)
+  })
+
+  it('reads an existing custom rule without marking a preset as current', async () => {
+    useGetCalendarEventsMock.mockReturnValue({
+      data: {
+        calendar: { state: 'connected' },
+        events: [{
+          ...calendarEvent,
+          recurrenceKind: 'series',
+          providerSeriesId: 'series-1',
+          recurrenceRule: 'RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,TH;COUNT=13',
+        }],
+        total: 1,
+      },
+      isLoading: false, isError: false, refetch: vi.fn(),
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<CalendarWorkspace />)
+
+    await user.click(screen.getByRole('button', { name: /^Discovery call,/i }))
+    await user.click(screen.getByRole('button', { name: 'Edit event' }))
+    await user.click(screen.getByRole('combobox', { name: 'Every 2 weeks on Tuesday, Thursday, 13 times' }))
+
+    expect(screen.getAllByRole('option')).toHaveLength(6)
+    expect(screen.getAllByRole('option').every((option) => option.getAttribute('aria-selected') === 'false')).toBe(true)
+  })
+
+  it("keeps a rejected recurrence rule in the open editor with the provider's reason", async () => {
+    const providerReason = 'This calendar only allows repeats through Nov 1, 2026.'
+    const mutate = vi.fn((_variables, options) => options.onError(new ApiError(
+      providerReason,
+      400,
+      undefined,
+      { error: providerReason },
+    )))
+    useUpdateCalendarEventMock.mockReturnValue({ mutate, isPending: false })
+    const user = userEvent.setup()
+    renderWithProviders(<CalendarWorkspace />)
+
+    await user.click(screen.getByRole('button', { name: /^Discovery call,/i }))
+    await user.click(screen.getByRole('button', { name: 'Edit event' }))
+    await user.click(screen.getByRole('combobox', { name: 'Does not repeat' }))
+    await user.click(screen.getByRole('option', { name: 'Weekly on Sunday' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    expect(screen.getByRole('dialog', { name: 'Edit event' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Weekly on Sunday' })).toBeInTheDocument()
+    expect(screen.getByText(providerReason)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
   })
 
   it('shows guest RSVP state and responds to a recurring invitation with an explicit scope', async () => {

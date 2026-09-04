@@ -18,6 +18,7 @@ import type { CalendarAttendeeResponse, CalendarEvent, CalendarEventCreateInput,
 import { formatDate, formatDateTime, formatTimeZoneName, zonedDateTimeParts, zonedDateTimeToIso } from '@/lib/datetime'
 import { CalendarWorkspace_EventCollaboration, CalendarWorkspace_RecurrenceScopeSelect } from './CalendarWorkspace_EventCollaboration'
 import { CalendarWorkspace_SchedulingFields, type CalendarRepeatMode } from './CalendarWorkspace_SchedulingFields'
+import { recurrenceSummary } from './calendarRecurrence'
 
 type EditorValue = {
   title: string
@@ -41,9 +42,10 @@ type EditorValue = {
 function repeatMode(event: CalendarEvent): CalendarRepeatMode {
   const rule = event.recurrenceRule ?? ''
   if (event.recurrenceKind !== 'series') return 'none'
-  if (/^RRULE:FREQ=DAILY(?:;|$)/.test(rule)) return 'daily'
-  if (/^RRULE:FREQ=WEEKLY(?:;|$)/.test(rule)) return 'weekly'
-  if (/^RRULE:FREQ=MONTHLY(?:;|$)/.test(rule)) return 'monthly'
+  if (/^RRULE:FREQ=DAILY$/i.test(rule)) return 'daily'
+  if (/^RRULE:FREQ=WEEKLY;BYDAY=(?:SU|MO|TU|WE|TH|FR|SA)$/i.test(rule)) return 'weekly'
+  if (/^RRULE:FREQ=MONTHLY;BYDAY=(?:SU|MO|TU|WE|TH|FR|SA);BYSETPOS=(?:1|2|3|4|-1)$/i.test(rule)) return 'monthly'
+  if (/^RRULE:FREQ=YEARLY;BYMONTH=\d{1,2};BYMONTHDAY=\d{1,2}$/i.test(rule)) return 'yearly'
   return 'custom'
 }
 
@@ -144,15 +146,11 @@ function eventPayload(
     isResource: false,
     response: 'needs-action' as const,
   })
-  const dayCode = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'][value.date.getDay()]
   const preserveProviderRule = !!event?.recurrenceRule
     && value.repeatMode === repeatMode(event)
     && value.recurrenceRule === event.recurrenceRule
   const recurrenceRule = preserveProviderRule ? value.recurrenceRule
-    : value.repeatMode === 'daily' ? 'RRULE:FREQ=DAILY'
-      : value.repeatMode === 'weekly' ? `RRULE:FREQ=WEEKLY;BYDAY=${dayCode}`
-        : value.repeatMode === 'monthly' ? `RRULE:FREQ=MONTHLY;BYMONTHDAY=${value.date.getDate()}`
-          : value.repeatMode === 'custom' ? value.recurrenceRule.trim() : ''
+    : value.repeatMode === 'none' ? '' : value.recurrenceRule.trim()
   if (value.repeatMode === 'custom' && !/^RRULE:FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)(?:;|$)/i.test(recurrenceRule)) {
     return { error: 'Enter a supported provider recurrence rule.' }
   }
@@ -208,6 +206,7 @@ interface FullEditorProps {
   initialTitle?: string
   open: boolean
   busy: boolean
+  repeatError?: string
   onOpenChange: (open: boolean) => void
   onSave: (input: CalendarEventCreateInput | CalendarEventPatch, event: CalendarEvent | null, scope: CalendarRecurrenceScope) => void
 }
@@ -221,6 +220,7 @@ export function CalendarWorkspace_EventEditor({
   initialTitle,
   open,
   busy,
+  repeatError,
   onOpenChange,
   onSave,
 }: FullEditorProps) {
@@ -310,8 +310,9 @@ export function CalendarWorkspace_EventEditor({
             guestEmails={value.guestEmails}
             repeatMode={value.repeatMode}
             recurrenceRule={value.recurrenceRule}
+            repeatError={repeatError}
             onGuestEmailsChange={(guestEmails) => update({ guestEmails })}
-            onRepeatChange={(repeatMode) => update({ repeatMode })}
+            onRepeatChange={(repeatMode, recurrenceRule) => update({ repeatMode, recurrenceRule })}
             onRecurrenceRuleChange={(recurrenceRule) => update({ recurrenceRule })}
             onChooseTime={(startTime) => update({ startTime })}
           />
@@ -411,7 +412,15 @@ export function CalendarWorkspace_EventDetails({ event, source, userEmail, timeZ
     <>
       <Sheet open={!!event} onOpenChange={onOpenChange}>
         <SheetContent side="right" className="w-full gap-0 bg-bg p-0 sm:max-w-xl">
-          <SheetHeader className="border-b border-border p-4 pr-12"><SheetTitle>{event?.title ?? 'Untitled event'}</SheetTitle></SheetHeader>
+          <SheetHeader className="border-b border-border p-4 pr-12">
+            <SheetTitle>{event?.title ?? 'Untitled event'}</SheetTitle>
+            {event ? (
+              <p className="text-xs text-text-muted">
+                {event.source?.name ?? source?.name ?? 'Calendar'}
+                {event.recurrenceKind === 'series' ? ` · ${recurrenceSummary(event.recurrenceRule)}` : ''}
+              </p>
+            ) : null}
+          </SheetHeader>
           {event ? (
             <div className="flex flex-col gap-3 overflow-auto p-4">
               <p className="text-sm">{event.kind === 'all-day' ? 'All day' : formatDateTime(event.startsAt, event.timeZone ?? timeZone)}</p>
